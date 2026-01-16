@@ -13,3 +13,6 @@ build/
 # Test outputs
 test_output/
 *.log
+
+# Large test data (downloaded by integration tests)
+data/Ler.chr.all.v2.0.fasta.gz

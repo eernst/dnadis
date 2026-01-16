@@ -32,6 +32,67 @@ def have_exe(exe: str) -> bool:
     return shutil.which(exe) is not None
 
 
+def normalize_ref_id(ref_id: str) -> str:
+    """Normalize reference IDs to a lowercase 'chr' prefix when present.
+
+    Handles various case patterns: Chr1 -> chr1, CHR1 -> chr1, etc.
+    IDs already starting with lowercase 'chr' are unchanged.
+    """
+    if len(ref_id) >= 3 and ref_id[:3].upper() == "CHR" and not ref_id.startswith("chr"):
+        return "chr" + ref_id[3:]
+    return ref_id
+
+
+def build_ref_id_maps(ref_ids) -> tuple[dict[str, str], dict[str, str]]:
+    """Build bidirectional mappings between original and normalized reference IDs.
+
+    Args:
+        ref_ids: Iterable of original reference IDs from the reference FASTA.
+
+    Returns:
+        Tuple of (orig_to_norm, norm_to_orig) dictionaries.
+        - orig_to_norm: Maps each original ID to its normalized form
+        - norm_to_orig: Maps each normalized ID back to an original ID
+
+    Note:
+        If multiple original IDs normalize to the same value (e.g., "ChrM" and "Mt"
+        both normalize to "chrM"), the first encountered ID is used for the
+        reverse mapping (norm_to_orig). This preserves the reference's primary
+        naming convention in output files.
+    """
+    orig_to_norm: dict[str, str] = {}
+    norm_to_orig: dict[str, str] = {}
+    for ref_id in ref_ids:
+        norm = normalize_ref_id(ref_id)
+        organelle = normalize_organelle_id(ref_id)
+        if organelle:
+            norm = organelle
+        orig_to_norm[ref_id] = norm
+        if norm not in norm_to_orig:
+            norm_to_orig[norm] = ref_id
+    return orig_to_norm, norm_to_orig
+
+
+def normalize_ref_lengths(ref_lengths: Dict[str, int], orig_to_norm: Dict[str, str]) -> Dict[str, int]:
+    normalized: Dict[str, int] = {}
+    for ref_id, length in ref_lengths.items():
+        norm_id = orig_to_norm.get(ref_id, normalize_ref_id(ref_id))
+        if norm_id not in normalized:
+            normalized[norm_id] = int(length)
+        else:
+            normalized[norm_id] = max(int(length), normalized[norm_id])
+    return normalized
+
+
+def read_fasta_lengths_with_map(
+    fasta_path: Path,
+) -> tuple[Dict[str, int], Dict[str, str], Dict[str, str]]:
+    lengths = read_fasta_lengths(fasta_path)
+    orig_to_norm, norm_to_orig = build_ref_id_maps(lengths.keys())
+    normalized = normalize_ref_lengths(lengths, orig_to_norm)
+    return normalized, orig_to_norm, norm_to_orig
+
+
 def run_to_gzip(cmd: list[str], gz_out: Path, err_path: Path) -> None:
     """
     Run a command, streaming stdout into a gzipped file. Stderr -> err_path.
@@ -305,6 +366,60 @@ _NUCLEAR_RE = re.compile(r"^(?P<chrom>chr\d+)(?P<sg>[A-Z])$")
 
 # Organelles (plant convention)
 _ORGANELLE = {"chrC", "chrM"}
+_ORGANELLE_ALIASES = {
+    "chrC": {"chrc", "cpdna", "chloroplast", "plastid", "pt"},
+    "chrM": {"chrm", "mt", "mitochondrion", "mitochondria", "mitochondrial"},
+}
+
+# Reference naming presets (tried in order when pattern not provided)
+_REF_ID_PATTERNS = [
+    re.compile(r"^(?P<chrom>chr\d+)(?P<sg>[A-Z])$", re.IGNORECASE),
+    re.compile(r"^(?P<chrom>chr\d+)(?P<sg>At|Dt)$", re.IGNORECASE),
+    re.compile(r"^(?P<chrom>chr\d+)$", re.IGNORECASE),
+]
+_ACTIVE_REF_ID_PATTERNS: Optional[List[re.Pattern[str]]] = None
+
+
+def normalize_organelle_id(ref_id: str) -> Optional[str]:
+    if not ref_id:
+        return None
+    norm = normalize_ref_id(ref_id)
+    if norm in _ORGANELLE:
+        return norm
+    norm_l = norm.lower()
+    if norm_l in _ORGANELLE_ALIASES["chrC"]:
+        return "chrC"
+    if norm_l in _ORGANELLE_ALIASES["chrM"]:
+        return "chrM"
+    return None
+
+
+def get_ref_id_patterns() -> List[re.Pattern[str]]:
+    """Return active reference ID patterns (custom if set, else defaults)."""
+    return _ACTIVE_REF_ID_PATTERNS if _ACTIVE_REF_ID_PATTERNS else _REF_ID_PATTERNS
+
+
+def set_ref_id_patterns(patterns: Optional[List[re.Pattern[str]]]) -> None:
+    """Set custom reference ID patterns. Pass None to reset to defaults.
+
+    This is called once at startup from main() if --ref-id-pattern is provided.
+    For testing, call with None to reset to default patterns.
+    """
+    global _ACTIVE_REF_ID_PATTERNS
+    _ACTIVE_REF_ID_PATTERNS = patterns
+
+
+def compile_ref_id_patterns(patterns: List[str]) -> List[re.Pattern[str]]:
+    compiled: List[re.Pattern[str]] = []
+    for pat in patterns:
+        try:
+            c = re.compile(pat, re.IGNORECASE)
+        except re.error as exc:
+            raise ValueError(f"Invalid --ref-id-pattern regex: {pat} ({exc})") from exc
+        if "chrom" not in c.groupindex:
+            raise ValueError(f"--ref-id-pattern must define a (?P<chrom>...) group: {pat}")
+        compiled.append(c)
+    return compiled
 
 
 def get_min_nuclear_chrom_length(ref_lengths: Dict[str, int]) -> int:
@@ -314,26 +429,49 @@ def get_min_nuclear_chrom_length(ref_lengths: Dict[str, int]) -> int:
     """
     nuclear_lengths = [
         length for ref_id, length in ref_lengths.items()
-        if ref_id not in _ORGANELLE
+        if normalize_organelle_id(ref_id) is None
     ]
     return min(nuclear_lengths) if nuclear_lengths else 0
 
 
-def split_chrom_subgenome(ref_id: str) -> tuple[str, str]:
+def split_chrom_subgenome(
+    ref_id: str,
+    patterns: Optional[List[re.Pattern[str]]] = None,
+) -> tuple[str, str]:
+    """Split reference ID into chromosome and subgenome components.
+
+    Args:
+        ref_id: Reference sequence ID (e.g., "chr1A", "Chr5", "chrM")
+        patterns: Optional list of compiled regex patterns to use. If None,
+                  uses get_ref_id_patterns() (global/default patterns).
+
+    Returns:
+        Tuple of (chrom_id, subgenome). Subgenome is "NA" if not present.
+        Preserves original case style (Chr vs chr) in output.
+    """
     if not ref_id:
         return "", "NA"
 
-    if ref_id in _ORGANELLE:
-        return ref_id, "NA"
+    style = "Chr" if ref_id.startswith("Chr") else "chr" if ref_id.startswith("chr") else ""
+    norm_id = normalize_ref_id(ref_id)
 
-    m = _NUCLEAR_RE.match(ref_id)
-    if m:
-        return m.group("chrom"), m.group("sg")
+    organelle = normalize_organelle_id(norm_id)
+    if organelle:
+        chrom_id = organelle
+        if style == "Chr" and chrom_id.startswith("chr"):
+            chrom_id = "Chr" + chrom_id[3:]
+        return chrom_id, "NA"
 
-    m2 = _NUCLEAR_SINGLE_RE.match(ref_id)
-    if m2:
-        # single-set reference chromosome; not a "subgenome"
-        return m2.group("chrom"), "NA"
+    active_patterns = patterns if patterns is not None else get_ref_id_patterns()
+    for pat in active_patterns:
+        m = pat.match(norm_id)
+        if not m:
+            continue
+        chrom_id = m.groupdict().get("chrom", norm_id)
+        sub = m.groupdict().get("sg", "NA")
+        if style == "Chr" and chrom_id.startswith("chr"):
+            chrom_id = "Chr" + chrom_id[3:]
+        return chrom_id, sub
 
     return ref_id, "NA"
 
@@ -503,7 +641,10 @@ def write_stats_tsv(
 # ----------------------------
 # GFF3 transcript coordinate mapping
 # ----------------------------
-def parse_gff3_transcript_coords(gff3_path: Path):
+def parse_gff3_transcript_coords(
+    gff3_path: Path,
+    ref_id_map: Optional[Dict[str, str]] = None,
+):
     """
     Parse GFF3 to map transcript IDs (mRNA/transcript) -> (ref_chrom, start, end, strand)
     AND transcript IDs -> gene ID (from Parent=...; fallback to transcript ID).
@@ -552,7 +693,8 @@ def parse_gff3_transcript_coords(gff3_path: Path):
             parent = ad.get("Parent", "")
             gene_id = parent.split(",")[0] if parent else tid
 
-            tx2loc[tid] = (seqid, s, e, strand if strand in ("+", "-") else "+")
+            ref_id = ref_id_map.get(seqid, normalize_ref_id(seqid)) if ref_id_map else seqid
+            tx2loc[tid] = (ref_id, s, e, strand if strand in ("+", "-") else "+")
             tx2gene[tid] = gene_id
 
     return tx2loc, tx2gene
@@ -919,15 +1061,23 @@ def extract_organelle_from_ref(
     ref_fasta: Path,
     organelle_id: str,
     output_path: Path,
+    ref_norm_to_orig: Optional[Dict[str, str]] = None,
 ) -> bool:
     """Extract a specific sequence (chrC or chrM) from reference FASTA.
 
     Returns True if found and extracted, False otherwise.
     """
     sequences = read_fasta_sequences(ref_fasta)
-    if organelle_id in sequences:
-        write_fasta({organelle_id: sequences[organelle_id]}, output_path)
-        return True
+    if ref_norm_to_orig:
+        candidate = ref_norm_to_orig.get(organelle_id)
+        if candidate and candidate in sequences:
+            write_fasta({candidate: sequences[candidate]}, output_path)
+            return True
+
+    for name, seq in sequences.items():
+        if normalize_organelle_id(name) == organelle_id:
+            write_fasta({name: seq}, output_path)
+            return True
     return False
 
 
@@ -936,6 +1086,7 @@ def prepare_organelle_references(
     chrC_ref_arg: Optional[str],
     chrM_ref_arg: Optional[str],
     work_dir: Path,
+    ref_norm_to_orig: Optional[Dict[str, str]] = None,
 ) -> Tuple[Optional[Path], Optional[Path]]:
     """Prepare organelle reference FASTAs.
 
@@ -962,7 +1113,7 @@ def prepare_organelle_references(
     else:
         # Try to extract from reference
         chrC_extracted = work_dir / "chrC_ref.fa"
-        if extract_organelle_from_ref(ref_fasta, "chrC", chrC_extracted):
+        if extract_organelle_from_ref(ref_fasta, "chrC", chrC_extracted, ref_norm_to_orig):
             chrC_path = chrC_extracted
             print(f"[info] Extracted chrC from reference: {chrC_path}", file=sys.stderr)
         else:
@@ -979,7 +1130,7 @@ def prepare_organelle_references(
     else:
         # Try to extract from reference
         chrM_extracted = work_dir / "chrM_ref.fa"
-        if extract_organelle_from_ref(ref_fasta, "chrM", chrM_extracted):
+        if extract_organelle_from_ref(ref_fasta, "chrM", chrM_extracted, ref_norm_to_orig):
             chrM_path = chrM_extracted
             print(f"[info] Extracted chrM from reference: {chrM_path}", file=sys.stderr)
         else:
@@ -1648,7 +1799,10 @@ def determine_contig_orientations(
 # ----------------------------
 # Gene count statistics
 # ----------------------------
-def count_genes_per_ref_chrom(gff3_path: Path) -> Dict[str, int]:
+def count_genes_per_ref_chrom(
+    gff3_path: Path,
+    ref_id_map: Optional[Dict[str, str]] = None,
+) -> Dict[str, int]:
     """Count genes per reference chromosome from GFF3.
 
     Counts unique gene IDs per chromosome.
@@ -1678,7 +1832,8 @@ def count_genes_per_ref_chrom(gff3_path: Path) -> Dict[str, int]:
                     break
 
             if gene_id:
-                chrom_genes[seqid].add(gene_id)
+                ref_id = ref_id_map.get(seqid, normalize_ref_id(seqid)) if ref_id_map else seqid
+                chrom_genes[ref_id].add(gene_id)
 
     return {chrom: len(genes) for chrom, genes in chrom_genes.items()}
 
@@ -1837,6 +1992,7 @@ def generate_contig_names(
     classifications: List[ContigClassification],
     query_lengths: Dict[str, int],
     add_subgenome_suffix: Optional[str],
+    ref_norm_to_orig: Optional[Dict[str, str]] = None,
 ) -> Dict[str, str]:
     """Generate new contig names based on classification.
 
@@ -1861,10 +2017,10 @@ def generate_contig_names(
         # Sort by length descending
         contigs.sort(key=lambda c: query_lengths.get(c, 0), reverse=True)
 
-        base_name = ref_id
+        base_name = ref_norm_to_orig.get(ref_id, ref_id) if ref_norm_to_orig else ref_id
         # Add subgenome suffix if reference doesn't have one and user requested it
         if add_subgenome_suffix:
-            chrom_id, sub = split_chrom_subgenome(ref_id)
+            chrom_id, sub = split_chrom_subgenome(base_name)
             if sub == "NA":
                 base_name = f"{chrom_id}{add_subgenome_suffix}"
 
@@ -1955,7 +2111,7 @@ def write_classified_fastas(
         # Sort by chromosome number or contig number
         def sort_key(name: str):
             # Extract numeric parts for sorting
-            m = re.match(r"chr(\d+)", name)
+            m = re.match(r"[cC]hr(\d+)", name)
             if m:
                 return (0, int(m.group(1)), name)
             m = re.match(r"contig_(\d+)", name)
@@ -1989,6 +2145,7 @@ def classify_all_contigs(
     chromosome_debris: Set[str],
     other_debris: Set[str],
     add_subgenome_suffix: Optional[str],
+    ref_norm_to_orig: Optional[Dict[str, str]] = None,
 ) -> List[ContigClassification]:
     """Classify all contigs and generate classifications list.
 
@@ -2168,7 +2325,12 @@ def classify_all_contigs(
             ))
 
     # Generate names
-    name_mapping = generate_contig_names(classifications, query_lengths, add_subgenome_suffix)
+    name_mapping = generate_contig_names(
+        classifications,
+        query_lengths,
+        add_subgenome_suffix,
+        ref_norm_to_orig=ref_norm_to_orig,
+    )
 
     # Update classifications with names
     for clf in classifications:
@@ -2204,6 +2366,7 @@ def write_contig_summary_tsv(
     chimera_secondary_frac: float,
     assign_min_frac: float,
     assign_min_ratio: float,
+    ref_norm_to_orig: Optional[Dict[str, str]] = None,
 ) -> None:
     """Write enhanced contig_summary.tsv with classification columns.
 
@@ -2304,8 +2467,8 @@ def write_contig_summary_tsv(
                 score_ratio = 0.0
                 assigned_ref_id_out = "NA"
             else:
-                assigned_chrom_id, assigned_subgenome = split_chrom_subgenome(assigned_ref_id)
-                assigned_ref_id_out = assigned_ref_id
+                assigned_ref_id_out = _denormalize_ref_id(assigned_ref_id, ref_norm_to_orig)
+                assigned_chrom_id, assigned_subgenome = split_chrom_subgenome(assigned_ref_id_out)
                 best_ref_union_frac = (best_union_bp / contig_len) if contig_len > 0 else 0.0
                 score_ratio = (bs / sr) if sr > 0 else (float("inf") if bs > 0 else 0.0)
 
@@ -2370,7 +2533,7 @@ def write_contig_summary_tsv(
                         str(int(al_b)),
                         (f"{ident_b:.6f}" if ident_b is not None else ""),
                         (f"{dist_b:.6f}" if dist_b is not None else ""),
-                        (second_ref_id if second_ref_id else "NA"),
+                        (_denormalize_ref_id(second_ref_id, ref_norm_to_orig) if second_ref_id else "NA"),
                         str(int(second_union_bp)),
                         str(int(m_s)),
                         str(int(al_s)),
@@ -2433,6 +2596,7 @@ def parse_paf_chain_evidence_and_segments(
     assign_chain_score: str,
     assign_chain_min_bp: int,
     assign_ref_score: str,
+    ref_id_map: Optional[Dict[str, str]] = None,
 ) -> ChainEvidenceResult:
     """
     Original nucleotide-chain mode (mm2plus PAF):
@@ -2461,7 +2625,7 @@ def parse_paf_chain_evidence_and_segments(
                 qs = int(fields[2])
                 qe = int(fields[3])
                 strand = fields[4]
-                ref_id = fields[5]
+                ref_id_raw = fields[5]
                 rs = int(fields[7])
                 re_ = int(fields[8])
                 matches = int(fields[9])
@@ -2469,6 +2633,7 @@ def parse_paf_chain_evidence_and_segments(
                 mapq = int(fields[11])
             except ValueError:
                 continue
+            ref_id = ref_id_map.get(ref_id_raw, normalize_ref_id(ref_id_raw)) if ref_id_map else normalize_ref_id(ref_id_raw)
 
             if aln_len < assign_minlen:
                 continue
@@ -2889,7 +3054,26 @@ def _chains_to_evidence_and_segments(
     )
 
 
-def write_macro_blocks_tsv(out_tsv: Path, rows) -> None:
+def _denormalize_ref_id(ref_id: str, ref_norm_to_orig: Optional[Dict[str, str]]) -> str:
+    if not ref_norm_to_orig:
+        return ref_id
+    return ref_norm_to_orig.get(ref_id, ref_id)
+
+
+def _ref_fields_for_output(
+    ref_id: str,
+    ref_norm_to_orig: Optional[Dict[str, str]],
+) -> tuple[str, str, str]:
+    ref_id_out = _denormalize_ref_id(ref_id, ref_norm_to_orig)
+    chrom_id_out, sub_out = split_chrom_subgenome(ref_id_out)
+    return ref_id_out, chrom_id_out, sub_out
+
+
+def write_macro_blocks_tsv(
+    out_tsv: Path,
+    rows,
+    ref_norm_to_orig: Optional[Dict[str, str]] = None,
+) -> None:
     with out_tsv.open("w") as out:
         out.write(
             "\t".join(
@@ -2916,10 +3100,60 @@ def write_macro_blocks_tsv(out_tsv: Path, rows) -> None:
             + "\n"
         )
         for r in rows:
-            out.write("\t".join(map(str, r)) + "\n")
+            (
+                q,
+                qlen,
+                ref_id,
+                chrom_id,
+                sub,
+                strand,
+                chain_id,
+                qstart,
+                qend,
+                qspan,
+                qbp,
+                msum,
+                alnsum,
+                ident,
+                score,
+                nseg,
+                gene_count_chain,
+            ) = r
+            ref_id_out, chrom_id_out, sub_out = _ref_fields_for_output(ref_id, ref_norm_to_orig)
+            out.write(
+                "\t".join(
+                    map(
+                        str,
+                        [
+                            q,
+                            qlen,
+                            ref_id_out,
+                            chrom_id_out,
+                            sub_out,
+                            strand,
+                            chain_id,
+                            qstart,
+                            qend,
+                            qspan,
+                            qbp,
+                            msum,
+                            alnsum,
+                            ident,
+                            score,
+                            nseg,
+                            gene_count_chain,
+                        ],
+                    )
+                )
+                + "\n"
+            )
 
 
-def write_chain_segments_tsv(out_tsv: Path, rows) -> None:
+def write_chain_segments_tsv(
+    out_tsv: Path,
+    rows,
+    ref_norm_to_orig: Optional[Dict[str, str]] = None,
+) -> None:
     with out_tsv.open("w") as out:
         out.write(
             "\t".join(
@@ -2937,10 +3171,16 @@ def write_chain_segments_tsv(out_tsv: Path, rows) -> None:
             + "\n"
         )
         for (q, qlen, chrom_id, sub, strand, chain_id, s, e) in rows:
-            out.write(f"{q}\t{qlen}\t{chrom_id}\t{sub}\t{strand}\t{chain_id}\t{s}\t{e}\n")
+            ref_id = _miniprot_ref_from_segment_row(str(chrom_id), str(sub))
+            _ref_out, chrom_out, sub_out = _ref_fields_for_output(ref_id, ref_norm_to_orig)
+            out.write(f"{q}\t{qlen}\t{chrom_out}\t{sub_out}\t{strand}\t{chain_id}\t{s}\t{e}\n")
 
 
-def write_chain_summary_tsv(out_tsv: Path, rows) -> None:
+def write_chain_summary_tsv(
+    out_tsv: Path,
+    rows,
+    ref_norm_to_orig: Optional[Dict[str, str]] = None,
+) -> None:
     with out_tsv.open("w") as out:
         out.write(
             "\t".join(
@@ -2981,13 +3221,14 @@ def write_chain_summary_tsv(out_tsv: Path, rows) -> None:
             bqbp,
             bident,
         ) in sorted(rows):
+            ref_id_out, chrom_id_out, sub_out = _ref_fields_for_output(ref_id, ref_norm_to_orig)
             out.write(
                 "\t".join(
                     [
                         q,
-                        ref_id,
-                        chrom_id,
-                        sub,
+                        ref_id_out,
+                        chrom_id_out,
+                        sub_out,
                         str(int(ubp)),
                         str(int(msum)),
                         str(int(alnsum)),
@@ -3180,12 +3421,25 @@ def compute_summary(
 
 
 def _miniprot_ref_from_segment_row(chrom_id: str, sub: str) -> str:
+    """Reconstruct reference ID from chromosome and subgenome components.
+
+    Args:
+        chrom_id: Chromosome identifier (e.g., "chr1", "Chr5")
+        sub: Subgenome identifier (e.g., "A", "B", "At", "Dt") or "NA" if none
+
+    Returns:
+        Full reference ID. If sub is "NA", returns just chrom_id.
+        Otherwise returns chrom_id + sub (e.g., "chr1A", "chr5At").
+
+    This supports both single-letter subgenomes (Arabidopsis: A/B) and
+    multi-character subgenomes (cotton: At/Dt).
+    """
     if not chrom_id:
         return ""
     sub = str(sub)
-    if re.fullmatch(r"[A-Z]", sub):
-        return f"{chrom_id}{sub}"
-    return chrom_id
+    if sub == "NA":
+        return chrom_id
+    return f"{chrom_id}{sub}"
 
 
 def build_segment_support_from_rows(segment_rows):
@@ -3324,6 +3578,17 @@ def main():
     common.add_argument(
         "--add-subgenome-suffix", type=str, default=None,
         help="Add this suffix to contig names when reference has no subgenome identifiers (e.g., 'A' -> chr5A)",
+    )
+    common.add_argument(
+        "--ref-id-pattern",
+        action="append",
+        default=None,
+        help=(
+            "Regex for reference IDs with named group 'chrom' and optional 'sg'. "
+            "May be provided multiple times; tried in order. "
+            "Example: --ref-id-pattern '^(?P<chrom>chr\\d+)(?P<sg>[AB])$' for chr1A/chr1B style. "
+            "If unset, presets handle chrN[A-Z], chrN(At|Dt), and chrN patterns."
+        ),
     )
 
     # =========================================================================
@@ -3542,9 +3807,17 @@ def main():
 
     args = p.parse_args()
 
+    if args.ref_id_pattern:
+        set_ref_id_patterns(compile_ref_id_patterns(args.ref_id_pattern))
+
+    # --- Phase 1: Reading reference and query FASTA ---
+    print("[info] Phase 1: Reading reference and query FASTA", file=sys.stderr)
     ref = Path(args.ref)
     qry = Path(args.query)
     outprefix = Path(args.outprefix)
+    ref_lengths_norm, ref_orig_to_norm, ref_norm_to_orig = read_fasta_lengths_with_map(ref)
+    qry_lengths = read_fasta_lengths(qry)
+    print(f"[info] Query contigs: {len(qry_lengths)}", file=sys.stderr)
 
     # Outputs (shared)
     ref_lengths_tsv = Path(str(outprefix) + ".ref_lengths.tsv")
@@ -3563,19 +3836,14 @@ def main():
     miniprot_paf_gz = Path(str(outprefix) + ".miniprot.paf.gz")
     miniprot_err = Path(str(outprefix) + ".miniprot.err")
 
-    # 0) Reference lengths
     if not ref_lengths_tsv.exists():
         print(f"[info] Writing reference lengths: {ref_lengths_tsv}", file=sys.stderr)
         write_ref_lengths_tsv(ref_lengths_tsv, ref)
     else:
         print(f"[info] Reference lengths TSV exists, reusing: {ref_lengths_tsv}", file=sys.stderr)
 
-    # 0b) Read query FASTA lengths
-    print(f"[info] Reading query FASTA lengths: {qry}", file=sys.stderr)
-    qry_lengths = read_fasta_lengths(qry)
-    print(f"[info] Query contigs: {len(qry_lengths)}", file=sys.stderr)
-
-    # Optional: nucleotide synteny QA
+    # --- Phase 2: Nucleotide synteny analysis (optional QA) ---
+    print("[info] Phase 2: Nucleotide synteny analysis (optional QA)", file=sys.stderr)
     if args.nt_synteny:
         run_minimap2_synteny(ref, qry, paf_gz, args.threads, args.preset, args.kmer, args.window, err_log)
         (
@@ -3595,11 +3863,12 @@ def main():
     else:
         print("[info] --nt-synteny not set: skipping nucleotide alignments + primary-only QA stats.", file=sys.stderr)
 
-    # Protein-anchor mode (required)
+    # --- Phase 3: Protein-anchor synteny analysis ---
+    print("[info] Phase 3: Protein-anchor synteny analysis", file=sys.stderr)
     ref_gff3 = Path(args.ref_gff3)
     print(f"[info] Protein-anchor mode enabled (ref GFF3: {ref_gff3})", file=sys.stderr)
 
-    tx2loc, tx2gene = parse_gff3_transcript_coords(ref_gff3)
+    tx2loc, tx2gene = parse_gff3_transcript_coords(ref_gff3, ref_id_map=ref_orig_to_norm)
     if not (tx2loc and tx2gene):
         raise RuntimeError(f"No transcript features found in GFF3 (mRNA/transcript with ID=...). File: {ref_gff3}")
 
@@ -3734,17 +4003,17 @@ def main():
     print(f"[done] miniprot err:     {miniprot_err}", file=sys.stderr)
 
     # Write segments + evidence summary TSVs
-    write_chain_segments_tsv(segments_tsv, ev.chain_segments_rows)
-    write_chain_summary_tsv(chain_summary_tsv, ev.chain_summary_rows)
+    write_chain_segments_tsv(segments_tsv, ev.chain_segments_rows, ref_norm_to_orig=ref_norm_to_orig)
+    write_chain_summary_tsv(chain_summary_tsv, ev.chain_summary_rows, ref_norm_to_orig=ref_norm_to_orig)
     print(f"[done] Segments TSV:      {segments_tsv}", file=sys.stderr)
     print(f"[done] Evidence TSV:      {chain_summary_tsv}", file=sys.stderr)
 
     # Write macro blocks TSV
-    write_macro_blocks_tsv(macro_blocks_tsv, ev.macro_block_rows)
+    write_macro_blocks_tsv(macro_blocks_tsv, ev.macro_block_rows, ref_norm_to_orig=ref_norm_to_orig)
     print(f"[done] Macro blocks TSV:  {macro_blocks_tsv}", file=sys.stderr)
 
     # --- Compute chr_like_minlen if not provided ---
-    ref_lengths = read_fasta_lengths(ref)
+    ref_lengths = ref_lengths_norm
     if args.chr_like_minlen is None:
         min_nuclear = get_min_nuclear_chrom_length(ref_lengths)
         chr_like_minlen = int(min_nuclear * 0.8) if min_nuclear > 0 else 1_000_000
@@ -3789,6 +4058,7 @@ def main():
             chrC_ref_arg=getattr(args, 'chrC_ref', None),
             chrM_ref_arg=getattr(args, 'chrM_ref', None),
             work_dir=work_dir / "organelles",
+            ref_norm_to_orig=ref_norm_to_orig,
         )
 
         if chrC_ref or chrM_ref:
@@ -3910,7 +4180,7 @@ def main():
 
     # --- Phase 9: Gene count statistics ---
     print("[info] Phase 9: Gene count statistics", file=sys.stderr)
-    ref_gene_counts = count_genes_per_ref_chrom(ref_gff3)
+    ref_gene_counts = count_genes_per_ref_chrom(ref_gff3, ref_id_map=ref_orig_to_norm)
     compute_mean_genes_per_Mbp(
         qr_gene_count=ev.qr_gene_count,
         query_lengths=qry_lengths,
@@ -3943,6 +4213,7 @@ def main():
         chromosome_debris=chromosome_debris,
         other_debris=other_debris,
         add_subgenome_suffix=args.add_subgenome_suffix,
+        ref_norm_to_orig=ref_norm_to_orig,
     )
 
     # Update orientation info in classifications
@@ -3985,6 +4256,7 @@ def main():
         chimera_secondary_frac=args.chimera_secondary_frac,
         assign_min_frac=args.assign_min_frac,
         assign_min_ratio=args.assign_min_ratio,
+        ref_norm_to_orig=ref_norm_to_orig,
     )
 
     print(f"[done] Summary:           {summary_tsv}", file=sys.stderr)
