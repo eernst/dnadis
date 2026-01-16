@@ -502,6 +502,44 @@ def read_fasta_lengths(fasta_path: Path) -> dict[str, int]:
     return lengths
 
 
+def filter_gff3_by_ref(
+    gff3_path: Path,
+    ref_ids: Set[str],
+    output_path: Path,
+    ref_norm_to_orig: Optional[Dict[str, str]] = None,
+) -> Path:
+    """Write a filtered GFF3 containing only records whose seqid is in ref_ids.
+
+    Comment/pragma lines are preserved. Returns the output path.
+    """
+    if output_path.exists():
+        return output_path
+
+    with open_maybe_gzip(gff3_path, "rt") as fh_in, output_path.open("w") as fh_out:
+        for line in fh_in:
+            if not line or line.startswith("#"):
+                fh_out.write(line)
+                continue
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) != 9:
+                continue
+            seqid = parts[0]
+            if seqid in ref_ids:
+                fh_out.write(line)
+                continue
+
+            norm_id = normalize_ref_id(seqid)
+            organelle = normalize_organelle_id(seqid)
+            if organelle:
+                norm_id = organelle
+
+            if ref_norm_to_orig and norm_id in ref_norm_to_orig:
+                parts[0] = ref_norm_to_orig[norm_id]
+                fh_out.write("\t".join(parts) + "\n")
+
+    return output_path
+
+
 def write_ref_lengths_tsv(ref_lengths_path: Path, ref_fasta: Path) -> None:
     lengths = read_fasta_lengths(ref_fasta)
     with ref_lengths_path.open("w") as out:
@@ -2679,6 +2717,92 @@ def parse_paf_chain_evidence_and_segments(
     )
 
 
+def _filter_overlapping_hits_by_identity(
+    blocks: dict[tuple[str, str, str], list[Block]],
+) -> tuple[dict[tuple[str, str, str], list[Block]], int, int]:
+    """
+    Filter overlapping hits on each contig, keeping only the highest-identity hit.
+
+    When multiple hits overlap (1+ bp) on the same query contig, only the hit with
+    the highest identity (matches/aln_len) is retained. This removes "shadow" hits
+    from homeologous genes that map to the same query region with lower identity.
+
+    Args:
+        blocks: Dict mapping (contig, ref_id, strand) -> list of Block objects
+
+    Returns:
+        Tuple of (filtered_blocks, total_hits_before, total_hits_removed)
+    """
+    # Group all blocks by contig (across all ref_ids)
+    contig_hits: dict[str, list[tuple[tuple[str, str, str], Block]]] = defaultdict(list)
+    for key, blk_list in blocks.items():
+        contig = key[0]
+        for blk in blk_list:
+            contig_hits[contig].append((key, blk))
+
+    total_before = sum(len(v) for v in contig_hits.values())
+    total_removed = 0
+
+    filtered_blocks: dict[tuple[str, str, str], list[Block]] = defaultdict(list)
+
+    for contig, hits in contig_hits.items():
+        if not hits:
+            continue
+
+        # Calculate identity for each hit and sort by (qs, -identity)
+        # so higher identity comes first when starts are equal
+        hits_with_ident = []
+        for key, blk in hits:
+            ident = blk.matches / blk.aln_len if blk.aln_len > 0 else 0.0
+            hits_with_ident.append((blk.qs, -ident, key, blk, ident))
+
+        hits_with_ident.sort(key=lambda x: (x[0], x[1]))
+
+        # Sweep through hits, keeping track of covered intervals
+        # For each hit, check if it overlaps with any kept hit that has higher identity
+        kept_intervals: list[tuple[int, int, float]] = []  # (qs, qe, identity)
+        kept_hits: list[tuple[tuple[str, str, str], Block]] = []
+
+        for qs, neg_ident, key, blk, ident in hits_with_ident:
+            qe = blk.qe
+            # Check if this hit overlaps with any kept interval
+            dominated = False
+            for kept_qs, kept_qe, kept_ident in kept_intervals:
+                # Check for 1+ bp overlap
+                if qs < kept_qe and qe > kept_qs:
+                    # Overlap exists - keep only if this has strictly higher identity
+                    if ident <= kept_ident:
+                        dominated = True
+                        break
+
+            if not dominated:
+                # Remove any previously kept intervals that this one dominates
+                new_kept_intervals = []
+                new_kept_hits = []
+                for i, (kept_qs, kept_qe, kept_ident) in enumerate(kept_intervals):
+                    if qs < kept_qe and qe > kept_qs and ident > kept_ident:
+                        # This new hit dominates the kept one - remove it
+                        total_removed += 1
+                    else:
+                        new_kept_intervals.append((kept_qs, kept_qe, kept_ident))
+                        new_kept_hits.append(kept_hits[i])
+
+                kept_intervals = new_kept_intervals
+                kept_hits = new_kept_hits
+
+                # Add this hit
+                kept_intervals.append((qs, qe, ident))
+                kept_hits.append((key, blk))
+            else:
+                total_removed += 1
+
+        # Add kept hits to filtered_blocks
+        for key, blk in kept_hits:
+            filtered_blocks[key].append(blk)
+
+    return filtered_blocks, total_before, total_removed
+
+
 def parse_miniprot_synteny_evidence_and_segments(
     miniprot_paf_gz: Path,
     contig_lengths: dict,
@@ -2776,6 +2900,14 @@ def parse_miniprot_synteny_evidence_and_segments(
                     gene_id=gene_id,
                 )
             )
+
+    # Filter overlapping hits, keeping only highest-identity hit at each position
+    blocks, n_before, n_removed = _filter_overlapping_hits_by_identity(blocks)
+    if n_removed > 0:
+        print(
+            f"[info] Filtered {n_removed}/{n_before} overlapping protein hits by identity",
+            file=sys.stderr,
+        )
 
     return _chains_to_evidence_and_segments(
         blocks=blocks,
@@ -3823,6 +3955,7 @@ def main():
     qry = Path(args.query)
     outprefix = Path(args.outprefix)
     ref_lengths_norm, ref_orig_to_norm, ref_norm_to_orig = read_fasta_lengths_with_map(ref)
+    ref_ids_raw = set(read_fasta_lengths(ref).keys())
     qry_lengths = read_fasta_lengths(qry)
     print(f"[info] Query contigs: {len(qry_lengths)}", file=sys.stderr)
 
@@ -3873,6 +4006,13 @@ def main():
     # --- Phase 3: Protein-anchor synteny analysis ---
     print("[info] Phase 3: Protein-anchor synteny analysis", file=sys.stderr)
     ref_gff3 = Path(args.ref_gff3)
+    filtered_ref_gff3 = Path(str(outprefix) + ".ref_gff3.filtered.gff3")
+    ref_gff3 = filter_gff3_by_ref(
+        ref_gff3,
+        ref_ids_raw,
+        filtered_ref_gff3,
+        ref_norm_to_orig=ref_norm_to_orig,
+    )
     print(f"[info] Protein-anchor mode enabled (ref GFF3: {ref_gff3})", file=sys.stderr)
 
     tx2loc, tx2gene = parse_gff3_transcript_coords(ref_gff3, ref_id_map=ref_orig_to_norm)

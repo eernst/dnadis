@@ -218,3 +218,56 @@ def test_parse_paf_chain_evidence_for_subgenome_assignment(tmp_path):
     assert ev.best_ref["contigA"] == "chr1A"
     assert ev.best_bp["contigA"] == 400
     assert ev.contig_total["contigA"] == 550
+
+
+def test_filter_overlapping_hits_by_identity():
+    """Test that overlapping hits are filtered, keeping highest identity."""
+    # Create overlapping blocks from two different ref_ids (simulating homeologs)
+    blocks = {
+        ("contigA", "chr1A", "+"): [
+            ff.Block(qs=100, qe=200, rs=1000, re=1100, matches=95, aln_len=100, mapq=60, strand="+", gene_id="geneA1"),
+            ff.Block(qs=300, qe=400, rs=2000, re=2100, matches=90, aln_len=100, mapq=60, strand="+", gene_id="geneA2"),
+        ],
+        ("contigA", "chr1P", "+"): [
+            # Overlaps with geneA1 at same position but lower identity
+            ff.Block(qs=100, qe=200, rs=1000, re=1100, matches=85, aln_len=100, mapq=60, strand="+", gene_id="geneP1"),
+            # Non-overlapping hit should be kept
+            ff.Block(qs=500, qe=600, rs=3000, re=3100, matches=80, aln_len=100, mapq=60, strand="+", gene_id="geneP2"),
+        ],
+    }
+
+    filtered, n_before, n_removed = ff._filter_overlapping_hits_by_identity(blocks)
+
+    assert n_before == 4
+    assert n_removed == 1  # geneP1 should be removed (overlaps geneA1 with lower identity)
+
+    # chr1A should keep both its hits
+    assert len(filtered[("contigA", "chr1A", "+")]) == 2
+
+    # chr1P should keep only geneP2 (non-overlapping)
+    assert len(filtered[("contigA", "chr1P", "+")]) == 1
+    assert filtered[("contigA", "chr1P", "+")][0].gene_id == "geneP2"
+
+
+def test_filter_overlapping_hits_higher_identity_wins():
+    """Test that when P subgenome has higher identity, it wins."""
+    blocks = {
+        ("contigA", "chr1A", "+"): [
+            ff.Block(qs=100, qe=200, rs=1000, re=1100, matches=80, aln_len=100, mapq=60, strand="+", gene_id="geneA1"),
+        ],
+        ("contigA", "chr1P", "+"): [
+            # Overlaps with geneA1 but has HIGHER identity - should win
+            ff.Block(qs=100, qe=200, rs=1000, re=1100, matches=95, aln_len=100, mapq=60, strand="+", gene_id="geneP1"),
+        ],
+    }
+
+    filtered, n_before, n_removed = ff._filter_overlapping_hits_by_identity(blocks)
+
+    assert n_before == 2
+    assert n_removed == 1  # geneA1 should be removed
+
+    # chr1P should keep its hit (higher identity)
+    assert len(filtered[("contigA", "chr1P", "+")]) == 1
+
+    # chr1A should have no hits left
+    assert len(filtered.get(("contigA", "chr1A", "+"), [])) == 0
