@@ -1,0 +1,131 @@
+name: Scheduled CI and README Updates
+
+on:
+  schedule:
+    - cron: "0 8 * * 1"
+  workflow_dispatch:
+
+jobs:
+  resolve-python:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Setup micromamba
+        uses: mamba-org/setup-micromamba@v1
+        with:
+          micromamba-version: "latest"
+          environment-name: resolver
+          create-args: >-
+            python=3.10
+            -c conda-forge
+      - name: Resolve latest Python from conda-forge
+        id: matrix
+        run: |
+          latest=$(micromamba repoquery search python -c conda-forge --json \
+            | python - <<'PY'
+import json, sys, re
+data = json.load(sys.stdin)
+versions = set()
+for pkg in data:
+    ver = pkg.get("version", "")
+    m = re.match(r"^(\d+)\.(\d+)\.\d+$", ver)
+    if m:
+        versions.add(f"{m.group(1)}.{m.group(2)}")
+latest = sorted(versions, key=lambda s: tuple(map(int, s.split("."))))[-1]
+print(latest)
+PY
+          )
+          python - <<PY
+import json
+oldest = "3.8"
+latest = "${latest}"
+versions = []
+for v in (oldest, latest):
+    if v not in versions:
+        versions.append(v)
+print(f"matrix={json.dumps({'python-version': versions})}")
+PY >> "$GITHUB_OUTPUT"
+
+  tests:
+    needs: resolve-python
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.resolve-python.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup micromamba
+        uses: mamba-org/setup-micromamba@v1
+        with:
+          micromamba-version: "latest"
+          environment-name: final_finalizer
+          create-args: >-
+            python=${{ matrix.python-version }}
+            miniprot gffread blast minimap2 centrifuger pytest
+            -c conda-forge -c bioconda
+      - name: Run tests
+        run: micromamba run -n final_finalizer pytest -q
+      - name: Record passing python
+        if: success()
+        run: |
+          mkdir -p passed
+          echo "${{ matrix.python-version }}" > "passed/python-${{ matrix.python-version }}.txt"
+      - name: Upload passing python marker
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: passed-${{ matrix.python-version }}
+          path: passed/python-${{ matrix.python-version }}.txt
+
+  update-readme:
+    needs: tests
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download pass markers
+        uses: actions/download-artifact@v4
+        with:
+          pattern: passed-*
+          merge-multiple: true
+          path: passed
+      - name: Determine latest passing Python
+        id: latest
+        run: |
+          if ls passed/python-*.txt 1> /dev/null 2>&1; then
+            latest=$(ls passed/python-*.txt | sed -E 's/.*python-([0-9]+\.[0-9]+)\.txt/\1/' | sort -V | tail -n 1)
+            echo "python=${latest}" >> "$GITHUB_OUTPUT"
+          else
+            echo "No passing Python versions found; skipping README update."
+            echo "python=" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Setup micromamba
+        if: steps.latest.outputs.python != ''
+        uses: mamba-org/setup-micromamba@v1
+        with:
+          micromamba-version: "latest"
+          environment-name: final_finalizer
+          create-args: >-
+            python=${{ steps.latest.outputs.python }}
+            miniprot gffread blast minimap2 centrifuger pytest
+            -c conda-forge -c bioconda
+      - name: Capture conda versions
+        if: steps.latest.outputs.python != ''
+        run: |
+          micromamba run -n final_finalizer conda list > conda-list.txt
+      - name: Update README with Python and package versions
+        if: steps.latest.outputs.python != ''
+        run: |
+          python scripts/update_readme_python.py --python "${{ steps.latest.outputs.python }}"
+          python scripts/update_readme_conda_versions.py \
+            --packages python miniprot gffread blast minimap2 centrifuger \
+            --conda-list conda-list.txt
+      - name: Create PR for README updates
+        if: steps.latest.outputs.python != ''
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "Update README conda python and package versions"
+          title: "Update README conda python and package versions"
+          branch: "ci/update-readme-conda-versions"
+          delete-branch: true

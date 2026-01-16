@@ -18,7 +18,9 @@ ARAPORT11_GFF3 = Path(
     "/home/eernst/reference/phytozome/PhytozomeV13/Athaliana/Araport11/annotation/Athaliana_447_Araport11.gene.gff3.gz"
 )
 LER_URL = "https://1001genomes.org/data/MPIPZ/MPIPZJiao2020/releases/current/strains/Ler/Ler.chr.all.v2.0.fasta.gz"
-LER_FASTA = Path("data/Ler.chr.all.v2.0.fasta.gz")
+LER_FASTA = Path("tests/data/Ler.chr.all.v2.0.fasta.gz")
+CMV_FASTA = Path("tests/data/GCF_000864745.1_ViralMultiSegProj15470_genomic.fna.gz")
+CMV_INDEX_PREFIX = Path("tests/data/cmv_refseq")
 
 
 def _download_if_missing(url: str, dest: Path) -> None:
@@ -61,13 +63,17 @@ def _first_transcript_record(gff3_path: Path):
 
 
 @pytest.mark.integration
-def test_arabidopsis_full_chromosomes():
+def test_arabidopsis_full_chromosomes(tmp_path):
     if not TAIR10_FASTA.exists():
         pytest.skip(f"missing TAIR10 FASTA: {TAIR10_FASTA}")
     if not ARAPORT11_GFF3.exists():
         pytest.skip(f"missing Araport11 GFF3: {ARAPORT11_GFF3}")
 
     _download_if_missing(LER_URL, LER_FASTA)
+    if not CMV_FASTA.exists():
+        pytest.skip(f"missing CMV FASTA: {CMV_FASTA}")
+    if not CMV_INDEX_PREFIX.with_suffix(".1.cfr").exists():
+        pytest.skip(f"missing CMV centrifuger index: {CMV_INDEX_PREFIX}.1.cfr")
 
     ref_lengths = ff.read_fasta_lengths(TAIR10_FASTA)
     for chrom in ("Chr1", "Chr2", "Chr3", "Chr4", "Chr5", "ChrC", "ChrM"):
@@ -89,6 +95,20 @@ def test_arabidopsis_full_chromosomes():
     assert len(ler_lengths) >= 5
     top5 = sorted(ler_lengths.values(), reverse=True)[:5]
     assert all(length > 1_000_000 for length in top5)
+
+    cmv_lengths = ff.read_fasta_lengths(CMV_FASTA)
+    assert cmv_lengths
+    assert all(length > 0 for length in cmv_lengths.values())
+
+    combined_fasta = tmp_path / "ler_plus_cmv.fasta.gz"
+    with gzip.open(combined_fasta, "wb") as out_fh:
+        with gzip.open(LER_FASTA, "rb") as in_fh:
+            shutil.copyfileobj(in_fh, out_fh)
+        with gzip.open(CMV_FASTA, "rb") as in_fh:
+            shutil.copyfileobj(in_fh, out_fh)
+
+    combined_lengths = ff.read_fasta_lengths(combined_fasta)
+    assert any(name in combined_lengths for name in cmv_lengths.keys())
 
 
 @pytest.mark.integration

@@ -19,6 +19,7 @@
 ## Installation
 
 ### Dependencies
+[![CI](https://github.com/eernst/final_finalizer/actions/workflows/ci.yml/badge.svg)](https://github.com/eernst/final_finalizer/actions/workflows/ci.yml)
 
 **Required:**
 - Python 3.8+
@@ -38,6 +39,21 @@
 conda create -n final_finalizer python=3.10 miniprot gffread blast minimap2 centrifuger -c bioconda -c conda-forge
 conda activate final_finalizer
 ```
+
+Optional (plotting):
+```bash
+conda install -n final_finalizer -c conda-forge r-base r-ggplot2 r-dplyr r-readr r-stringr r-tibble r-tidyr r-patchwork r-ggnewscale r-pacman r-ggiraph r-htmlwidgets pandoc
+```
+
+Latest tested conda package versions (CI):
+<!-- conda-versions-start -->
+- python: 3.10
+- miniprot: unknown
+- gffread: unknown
+- blast: unknown
+- minimap2: unknown
+- centrifuger: unknown
+<!-- conda-versions-end -->
 
 ## Quick Start
 

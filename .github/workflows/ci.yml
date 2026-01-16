@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  resolve-python:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Setup micromamba
+        uses: mamba-org/setup-micromamba@v1
+        with:
+          micromamba-version: "latest"
+          environment-name: resolver
+          create-args: >-
+            python=3.10
+            -c conda-forge
+      - name: Resolve latest Python from conda-forge
+        id: matrix
+        run: |
+          latest=$(micromamba repoquery search python -c conda-forge --json \
+            | python - <<'PY'
+import json, sys, re
+data = json.load(sys.stdin)
+versions = set()
+for pkg in data:
+    ver = pkg.get("version", "")
+    m = re.match(r"^(\d+)\.(\d+)\.\d+$", ver)
+    if m:
+        versions.add(f"{m.group(1)}.{m.group(2)}")
+latest = sorted(versions, key=lambda s: tuple(map(int, s.split("."))))[-1]
+print(latest)
+PY
+          )
+          python - <<PY
+import json
+oldest = "3.8"
+latest = "${latest}"
+versions = []
+for v in (oldest, latest):
+    if v not in versions:
+        versions.append(v)
+print(f"matrix={json.dumps({'python-version': versions})}")
+PY >> "$GITHUB_OUTPUT"
+
+  tests:
+    needs: resolve-python
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.resolve-python.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup micromamba
+        uses: mamba-org/setup-micromamba@v1
+        with:
+          micromamba-version: "latest"
+          environment-name: final_finalizer
+          create-args: >-
+            python=${{ matrix.python-version }}
+            miniprot gffread blast minimap2 centrifuger pytest
+            -c conda-forge -c bioconda
+      - name: Run tests
+        run: micromamba run -n final_finalizer pytest -q
