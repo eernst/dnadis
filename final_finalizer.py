@@ -3496,16 +3496,18 @@ def run_plot(
     outprefix: Path,
     chr_like_minlen: int,
     plot_title_suffix: str,
+    plot_html: bool,
 ):
     if not have_rscript():
         print("[warn] --plot specified, but Rscript not found in PATH; skipping plot.", file=sys.stderr)
         return
 
-    plot_pdf = Path(str(outprefix) + ".subgenome_assignment_overview.pdf")
-    r_script_path = Path(str(outprefix) + ".subgenome_assignment_overview.R")
+    plot_pdf = Path(str(outprefix) + ".chromosome_overview.pdf")
+    plot_html_path = Path(str(outprefix) + ".chromosome_overview.html")
+    r_script_path = Path(str(outprefix) + ".chromosome_overview.R")
 
     # Template expected alongside this Python file
-    tmpl_path = Path(__file__).resolve().with_name("subgenome_assignment_overview.tmpl.R")
+    tmpl_path = Path(__file__).resolve().with_name("visual_reporting.tmpl.R")
     if not tmpl_path.exists():
         raise FileNotFoundError(
             f"Missing R template: {tmpl_path}\n"
@@ -3526,6 +3528,8 @@ def run_plot(
         .replace("__EVIDENCE__", esc(chain_summary_tsv))
         .replace("__MACRO__", esc(macro_blocks_tsv))
         .replace("__OUTPDF__", esc(plot_pdf))
+        .replace("__OUTHTML__", esc(plot_html_path))
+        .replace("__PLOTHTML__", "TRUE" if plot_html else "FALSE")
         .replace("__CHRLIKE__", str(int(chr_like_minlen)))
         .replace("__SUFFIX__", str(plot_title_suffix).replace('"', '\\"'))
     )
@@ -3540,6 +3544,8 @@ def run_plot(
         print(f"[warn] Rscript failed with code {e.returncode}; plot not generated.", file=sys.stderr)
     else:
         print(f"[done] Plot written to: {plot_pdf}", file=sys.stderr)
+        if plot_html:
+            print(f"[done] Plot written to: {plot_html_path}", file=sys.stderr)
 
 
 # ----------------------------
@@ -3571,6 +3577,7 @@ def main():
     common = p.add_argument_group("Common options")
     common.add_argument("-t", "--threads", type=int, default=8, help="Threads for minimap2/miniprot [8]")
     common.add_argument("--plot", action="store_true", help="Generate overview plots with R/ggplot2")
+    common.add_argument("--plot-html", action="store_true", help="Also generate interactive HTML plot (ggiraph)")
     common.add_argument(
         "-C", "--chr-like-minlen", type=int, default=None,
         help="Minimum contig length (bp) to be considered chromosome-like. Default: 80%% of smallest nuclear ref chromosome.",
@@ -4280,6 +4287,7 @@ def main():
             outprefix,
             chr_like_minlen,
             plot_suffix,
+            args.plot_html,
         )
 
 

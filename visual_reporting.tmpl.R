@@ -6,7 +6,7 @@ if (!requireNamespace("pacman", quietly = TRUE)) {
 library(pacman)
 pacman::p_load(
   readr, dplyr, stringr, ggplot2, ggnewscale, tibble, tidyr, patchwork,
-  grid
+  grid, ggiraph, htmlwidgets
 )
 
 summary_file <- "__SUMMARY__"
@@ -15,13 +15,26 @@ seg_file     <- "__SEGMENTS__"
 ev_file      <- "__EVIDENCE__"
 macro_file   <- "__MACRO__"
 out_pdf      <- "__OUTPDF__"
+out_html     <- "__OUTHTML__"
+plot_html    <- as.logical("__PLOTHTML__")
 chr_like_minlen <- as.numeric("__CHRLIKE__")
 plot_title_suffix <- "__SUFFIX__"
+base_family <- "Helvetica"
+base_font_pt <- 8
+axis_title_margin_pt <- 4
+axis_text_margin_pt <- 4
 
-apply_legend_theme <- function(p, text_pt = 6, key_pt = 6, tight = TRUE) {
+axis_theme <- theme(
+  axis.title.x = element_text(size = base_font_pt, family = base_family, margin = margin(t = axis_title_margin_pt)),
+  axis.title.y = element_text(size = base_font_pt, family = base_family, margin = margin(r = axis_title_margin_pt)),
+  axis.text.x = element_text(size = base_font_pt, family = base_family, margin = margin(t = axis_text_margin_pt)),
+  axis.text.y = element_text(size = base_font_pt, family = base_family)
+)
+
+apply_legend_theme <- function(p, text_pt = base_font_pt, key_pt = base_font_pt, tight = TRUE) {
   base <- theme(
-    legend.title = element_text(size = text_pt),
-    legend.text  = element_text(size = text_pt),
+    legend.title = element_text(size = text_pt, family = base_family),
+    legend.text  = element_text(size = text_pt, family = base_family),
     legend.key.height = grid::unit(key_pt, "pt"),
     legend.key.width  = grid::unit(key_pt, "pt"),
     legend.direction = "horizontal",
@@ -261,6 +274,16 @@ seg_plot <- seg %>%
     xmax = x_plot + band_xw/2,
     ymin = qstart_mb,
     ymax = qend_mb
+  ) %>%
+  mutate(
+    tooltip = paste0(
+      "contig: ", contig,
+      "\nassigned: ", assigned_chrom_id,
+      "\nsegment: ", target_chrom_id, " ", target_subgenome,
+      "\nqstart: ", sprintf("%.3f", qstart_mb), " Mbp",
+      "\nqend: ", sprintf("%.3f", qend_mb), " Mbp",
+      "\nchain: ", chain_id
+    )
   )
 
 macro_plot <- macro %>%
@@ -294,6 +317,18 @@ macro_plot <- macro %>%
     xmax = x_plot + band_xw/2,
     ymin = qstart_mb,
     ymax = qend_mb
+  ) %>%
+  mutate(
+    tooltip = paste0(
+      "contig: ", contig,
+      "\nassigned: ", assigned_chrom_id,
+      "\nmacro: ", target_chrom_id, " ", target_subgenome,
+      "\nqstart: ", sprintf("%.3f", qstart_mb), " Mbp",
+      "\nqend: ", sprintf("%.3f", qend_mb), " Mbp",
+      "\nidentity: ", sprintf("%.4f", identity),
+      "\nscore: ", sprintf("%.3f", score),
+      "\nchain: ", chain_id
+    )
   )
 
 p_comp <- ggplot() +
@@ -375,13 +410,11 @@ p_comp <- ggplot() +
     labels = str_replace(as.character(x_tbl$chrom_id), "^chr", ""),
     expand = expansion(mult = c(0.01, 0.01))
   ) +
-  theme_classic() +
+  theme_classic(base_family = base_family, base_size = base_font_pt) +
+  axis_theme +
   theme(
-    axis.title.x = element_text(size = 6),
-    axis.title.y = element_text(size = 6),
-    axis.text = element_text(size = 6),
     axis.ticks = element_blank(),
-    plot.title  = element_text(hjust = 0.5, size = 6),
+    plot.title  = element_text(hjust = 0.5, size = base_font_pt, family = base_family),
     panel.grid = element_blank(),
     legend.position = c(0.985, 0.985),
     legend.justification = c(1, 1)
@@ -394,6 +427,106 @@ p_comp <- ggplot() +
 
 p_comp <- apply_legend_theme(p_comp, text_pt = 6, key_pt = 6, tight = TRUE) +
   theme(legend.margin = margin(1, 1, 1, 1))
+
+# Interactive version (tooltips on segment/macro blocks)
+if (plot_html) {
+  p_comp_html <- ggplot() +
+    geom_segment(
+      data = ref_lines,
+      aes(
+        x = x_index - 0.38, xend = x_index + 0.38,
+        y = ref_len_mb, yend = ref_len_mb,
+        color = subgenome
+      ),
+      linewidth = 0.6,
+      alpha = 0.9,
+      show.legend = FALSE
+    ) +
+    scale_color_manual(values = col_light, guide = "none", drop = FALSE) +
+    ggnewscale::new_scale_color() +
+    geom_linerange(
+      data = df_slots %>% filter(assigned_subgenome %in% plot_levels),
+      aes(x = x_plot, ymin = 0, ymax = contig_len_mb, color = assigned_subgenome),
+      linewidth = pill_lwd,
+      lineend = "round",
+      alpha = 1.0,
+      show.legend = FALSE
+    ) +
+    scale_color_manual(values = col_light, guide = "none", drop = FALSE) +
+    ggnewscale::new_scale_color() +
+    geom_linerange(
+      data = df_slots %>% filter(assigned_subgenome == "NA"),
+      aes(x = x_plot, ymin = 0, ymax = contig_len_mb),
+      linewidth = pill_lwd,
+      lineend = "round",
+      color = "grey82",
+      alpha = 1.0,
+      show.legend = FALSE
+    ) +
+    ggnewscale::new_scale_fill() +
+    ggiraph::geom_rect_interactive(
+      data = seg_plot %>% filter(!off_target),
+      aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax, fill = target_subgenome, tooltip = tooltip),
+      color = NA,
+      alpha = 1.0
+    ) +
+    ggiraph::geom_rect_interactive(
+      data = seg_plot %>% filter(off_target),
+      aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax, fill = target_subgenome, tooltip = tooltip),
+      color = "red",
+      linewidth = 0.05,
+      alpha = 0.35
+    ) +
+    scale_fill_manual(values = col_light, guide = "none", drop = FALSE) +
+    ggnewscale::new_scale_fill() +
+    ggiraph::geom_rect_interactive(
+      data = macro_plot %>% filter(!off_target),
+      aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax, fill = target_subgenome, tooltip = tooltip),
+      color = NA,
+      alpha = 1.0,
+      show.legend = FALSE
+    ) +
+    ggiraph::geom_rect_interactive(
+      data = macro_plot %>% filter(off_target),
+      aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax, fill = target_subgenome, tooltip = tooltip),
+      color = "red",
+      linewidth = 0.05,
+      alpha = 0.5,
+      show.legend = FALSE
+    ) +
+    scale_fill_manual(values = col_dark, guide = "none", drop = FALSE) +
+    guides(
+      fill = guide_legend(
+        title.position = "top",
+        title.hjust = 0.5,
+        nrow = 1,
+        byrow = TRUE,
+        override.aes = list(alpha = 1)
+      )
+    ) +
+    scale_x_continuous(
+      breaks = x_tbl$x_index,
+      labels = str_replace(as.character(x_tbl$chrom_id), "^chr", ""),
+      expand = expansion(mult = c(0.01, 0.01))
+    ) +
+    theme_classic(base_family = base_family, base_size = base_font_pt) +
+    axis_theme +
+    theme(
+      axis.ticks = element_blank(),
+      plot.title  = element_text(hjust = 0.5, size = base_font_pt, family = base_family),
+      panel.grid = element_blank(),
+      legend.position = c(0.985, 0.985),
+      legend.justification = c(1, 1)
+    ) +
+    labs(
+      x = "assigned chromosome",
+      y = "Contig position (Mbp)",
+      title = paste0("Contig composition (", plot_title_suffix, ")")
+    )
+
+  p_comp_html <- apply_legend_theme(p_comp_html, text_pt = 6, key_pt = 6, tight = TRUE) +
+    theme(legend.margin = margin(1, 1, 1, 1))
+}
 
 # ----------------------------
 # Bottom-left: radar scatter (hybrid only)
@@ -452,7 +585,7 @@ if (has_subgenomes) {
   p_radar <- ggplot() +
     geom_path(data = frame, aes(x = x, y = y), linewidth = 0.4, color = "grey40") +
     geom_text(data = verts, aes(x = vx, y = vy, label = subgenome),
-              color = "grey20", size = 6 / .pt,
+              color = "grey20", size = base_font_pt / .pt, family = base_family,
               nudge_x = if (n_sets == 2) c(-0.03, 0.03) else 0,
               nudge_y = if (n_sets == 2) c( 0.03, 0.03) else 0) +
     geom_point(
@@ -462,9 +595,9 @@ if (has_subgenomes) {
     ) +
     scale_color_manual(values = col_dark, drop = FALSE) +
     coord_equal(clip = "off") +
-    theme_classic() +
+    theme_classic(base_family = base_family, base_size = base_font_pt) +
     theme(
-      plot.title = element_text(hjust = 0.5, size = 6),
+      plot.title = element_text(hjust = 0.5, size = base_font_pt, family = base_family),
       axis.title = element_blank(),
       axis.text  = element_blank(),
       axis.ticks = element_blank(),
@@ -476,7 +609,7 @@ if (has_subgenomes) {
   p_radar <- apply_legend_theme(p_radar, text_pt = 6, key_pt = 6, tight = TRUE)
 
 } else {
-  p_radar <- ggplot() + theme_void() + labs(title = "Subgenome support (n/a)")
+  p_radar <- ggplot() + theme_void(base_family = base_family, base_size = base_font_pt) + labs(title = "Subgenome support (n/a)")
 }
 
 # ----------------------------
@@ -493,12 +626,10 @@ if (has_subgenomes) {
     stat_summary(fun = median, geom = "point", shape = 95, size = 7, show.legend = FALSE) +
     scale_color_manual(values = col_dark, drop = FALSE) +
     scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
-    theme_classic() +
+    theme_classic(base_family = base_family, base_size = base_font_pt) +
+    axis_theme +
     theme(
-      plot.title = element_text(hjust = 0.5, size = 6),
-      axis.title.x = element_text(size = 6),
-      axis.title.y = element_text(size = 6),
-      axis.text = element_text(size = 6),
+      plot.title = element_text(hjust = 0.5, size = base_font_pt, family = base_family),
       axis.ticks = element_blank(),
       panel.grid.major.y = element_line(color = "grey85", linewidth = 0.4),
       panel.grid.major.x = element_blank(),
@@ -523,12 +654,11 @@ if (has_subgenomes) {
     geom_jitter(width = 0.18, height = 0, alpha = 0.55, size = 1.2, color = "grey35", show.legend = FALSE) +
     stat_summary(fun = median, geom = "point", shape = 95, size = 7, color = "grey15", show.legend = FALSE) +
     scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
-    theme_classic() +
+    theme_classic(base_family = base_family, base_size = base_font_pt) +
+    axis_theme +
     theme(
-      plot.title = element_text(hjust = 0.5, size = 6),
+      plot.title = element_text(hjust = 0.5, size = base_font_pt, family = base_family),
       axis.title.x = element_blank(),
-      axis.title.y = element_text(size = 6),
-      axis.text = element_text(size = 6),
       axis.ticks = element_blank(),
       panel.grid.major.y = element_line(color = "grey85", linewidth = 0.4),
       panel.grid.major.x = element_blank(),
@@ -551,5 +681,27 @@ if (has_subgenomes) {
   full_plot <- p_comp / p_id + plot_layout(heights = c(1, 1))
 }
 
-message("macro rows: ", nrow(macro_plot), "  seg rows: ", nrow(seg_plot))
+#message("macro rows: ", nrow(macro_plot), "  seg rows: ", nrow(seg_plot))
 ggsave(out_pdf, plot = full_plot, width = 6, height = 6, units = "in", dpi = 300)
+
+if (plot_html) {
+  if (has_subgenomes) {
+    bottom_row_html <- (p_radar + p_id + plot_layout(widths = c(1, 1.35), guides = "collect")) &
+      theme(legend.position = "bottom")
+    full_plot_html <- p_comp_html / bottom_row_html + plot_layout(heights = c(1, 1))
+  } else {
+    full_plot_html <- p_comp_html / p_id + plot_layout(heights = c(1, 1))
+  }
+
+  girafe_obj <- ggiraph::girafe(ggobj = full_plot_html)
+  girafe_obj <- ggiraph::girafe_options(
+    girafe_obj,
+    opts_tooltip(css = paste0(
+      "font-family: ", base_family, "; ",
+      "font-size: ", base_font_pt, "pt; ",
+      "background: white; padding: 4px; border: 1px solid #666;"
+    )),
+    opts_hover(css = paste0("font-family: ", base_family, ";"))
+  )
+  htmlwidgets::saveWidget(girafe_obj, out_html, selfcontained = TRUE)
+}

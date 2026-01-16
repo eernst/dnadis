@@ -29,14 +29,14 @@
 **Optional:**
 - [minimap2](https://github.com/lh3/minimap2) or [mm2plus](https://github.com/lh3/mm2plus) - nucleotide synteny QA
 - [centrifuger](https://github.com/mourisl/centrifuger) - contaminant detection
-- R with ggplot2, dplyr, patchwork - visualization (`--plot`)
+- R with ggplot2, dplyr, readr, stringr, tibble, tidyr, patchwork, ggnewscale, pacman - visualization (`--plot`)
+- R with ggiraph, htmlwidgets, pandoc - interactive visualization (`--plot-html`)
 
 ### Conda environment
 
 ```bash
-conda create -n assembly python=3.10 miniprot gffread blast minimap2 -c bioconda -c conda-forge
-conda activate assembly
-pip install centrifuger  # or install from source
+conda create -n final_finalizer python=3.10 miniprot gffread blast minimap2 centrifuger -c bioconda -c conda-forge
+conda activate final_finalizer
 ```
 
 ## Quick Start
@@ -48,6 +48,7 @@ pip install centrifuger  # or install from source
     -o output_prefix \
     --ref-gff3 reference.gff3 \
     --plot
+    --plot-html
 ```
 
 ## Usage
@@ -67,6 +68,7 @@ pip install centrifuger  # or install from source
 |----------|-------------|---------|
 | `-t, --threads` | Number of threads | 8 |
 | `--plot` | Generate PDF visualization | off |
+| `--plot-html` | Also generate interactive HTML visualization | off |
 | `-C, --chr-like-minlen` | Min contig length for chromosome classification | 80% of smallest ref chromosome |
 | `--add-subgenome-suffix` | Suffix for non-polyploid references (e.g., 'A') | none |
 
@@ -128,7 +130,7 @@ pip install centrifuger  # or install from source
 
 | File | Description |
 |------|-------------|
-| `*.subgenome_assignment_overview.pdf` | Multi-panel plot showing contig composition, subgenome support, and alignment identity |
+| `*.chromosome_overview.pdf` | Multi-panel plot showing contig composition, subgenome support, and alignment identity |
 
 ## Classification Pipeline
 
@@ -205,6 +207,7 @@ The tool runs these phases in order:
     --ref-gff3 TAIR10.gff3 \
     -t 32 \
     --plot
+    --plot-html
 ```
 
 ### Polyploid genome with contaminant screening
@@ -219,6 +222,7 @@ The tool runs these phases in order:
     --rdna-ref default \
     -t 64 \
     --plot
+    --plot-html
 ```
 
 ### Non-polyploid with subgenome suffix
@@ -231,6 +235,7 @@ The tool runs these phases in order:
     --ref-gff3 rice_ref.gff3 \
     --add-subgenome-suffix A \
     --plot
+    --plot-html
 ```
 
 ## Algorithm Details
