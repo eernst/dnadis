@@ -1,0 +1,555 @@
+#!/usr/bin/env Rscript
+
+if (!requireNamespace("pacman", quietly = TRUE)) {
+  install.packages("pacman", repos = "https://cloud.r-project.org")
+}
+library(pacman)
+pacman::p_load(
+  readr, dplyr, stringr, ggplot2, ggnewscale, tibble, tidyr, patchwork,
+  grid
+)
+
+summary_file <- "__SUMMARY__"
+ref_file     <- "__REF__"
+seg_file     <- "__SEGMENTS__"
+ev_file      <- "__EVIDENCE__"
+macro_file   <- "__MACRO__"
+out_pdf      <- "__OUTPDF__"
+chr_like_minlen <- as.numeric("__CHRLIKE__")
+plot_title_suffix <- "__SUFFIX__"
+
+apply_legend_theme <- function(p, text_pt = 6, key_pt = 6, tight = TRUE) {
+  base <- theme(
+    legend.title = element_text(size = text_pt),
+    legend.text  = element_text(size = text_pt),
+    legend.key.height = grid::unit(key_pt, "pt"),
+    legend.key.width  = grid::unit(key_pt, "pt"),
+    legend.direction = "horizontal",
+    legend.box = "horizontal"
+  )
+  if (tight) {
+    base <- base + theme(
+      legend.box.margin = margin(0, 0, 0, 0),
+      legend.margin = margin(0, 0, 0, 0),
+      legend.spacing.y = grid::unit(0, "pt"),
+      legend.spacing.x = grid::unit(2, "pt")
+    )
+  }
+  p + base
+}
+
+df <- read_tsv(summary_file, show_col_types = FALSE)
+
+ref_lengths <- read_tsv(ref_file, show_col_types = FALSE)
+
+seg <- readr::read_tsv(
+  seg_file,
+  show_col_types = FALSE,
+  col_types = cols(
+    contig = col_character(),
+    contig_len = col_double(),
+    target_chrom_id = col_character(),
+    target_subgenome = col_character(),
+    strand = col_character(),
+    chain_id = col_double(),
+    qstart = col_double(),
+    qend = col_double()
+  )
+)
+
+macro <- readr::read_tsv(
+  macro_file,
+  show_col_types = FALSE,
+  col_types = cols(
+    contig = col_character(),
+    contig_len = col_double(),
+    ref_id = col_character(),
+    chrom_id = col_character(),
+    subgenome = col_character(),
+    strand = col_character(),
+    chain_id = col_double(),
+    qstart = col_double(),
+    qend = col_double(),
+    qspan_bp = col_double(),
+    union_bp = col_double(),
+    matches = col_double(),
+    aln_len = col_double(),
+    identity = col_double(),
+    score = col_double(),
+    n_segments = col_double(),
+    gene_count_chain = col_double()
+  )
+) %>%
+  mutate(
+    target_chrom_id = chrom_id,
+    target_subgenome = subgenome
+  )
+
+ev <- readr::read_tsv(
+  ev_file,
+  show_col_types = FALSE,
+  col_types = cols(
+    contig = col_character(),
+    ref_id = col_character(),
+    chrom_id = col_character(),
+    subgenome = col_character(),
+    union_bp = col_double(),
+    identity = col_double(),
+    score_all = col_double()
+  )
+)
+
+# Subgenome suffix labels present in the ref lengths file (single-letter A-Z)
+sg_levels <- ref_lengths %>%
+  distinct(subgenome) %>%
+  pull(subgenome) %>%
+  as.character()
+
+sg_levels <- sg_levels[grepl("^[A-Z]$", sg_levels)]
+sg_levels <- sort(sg_levels)
+
+n_sets <- length(sg_levels)
+
+if (n_sets > 4) {
+  warning(paste0("Reference has ", n_sets, " chromosome sets; plotting supports up to 4. ",
+                 "Will use first 4: ", paste(sg_levels[1:4], collapse=",")))
+  sg_levels <- sg_levels[1:4]
+  n_sets <- 4
+}
+
+has_subgenomes <- (n_sets >= 2)
+
+# Custom palettes for up to 4 subgenomes
+pal_dark  <- c("#1F77B4", "#FF7F0E", "#5B2333", "#00A676")
+pal_light <- c("#9ECAE1", "#FDD0A2", "#CFA7B0", "#7FFFD4")
+
+plot_levels <- if (has_subgenomes) sg_levels else c("G")
+
+# Named color vectors
+sg_cols_dark  <- setNames(pal_dark [seq_along(plot_levels)], plot_levels)
+sg_cols_light <- setNames(pal_light[seq_along(plot_levels)], plot_levels)
+
+col_dark  <- c(sg_cols_dark,  "NA"="grey45")
+col_light <- c(sg_cols_light, "NA"="grey82")
+
+if (has_subgenomes) {
+  ref_sg <- ref_lengths %>%
+    filter(subgenome %in% sg_levels) %>%
+    mutate(
+      chrom_label = chrom_id %>%
+        str_replace("^chr", "") %>%
+        str_replace("^Chr", ""),
+      chrom_index = suppressWarnings(as.integer(chrom_label)),
+      chrom_index = if_else(is.na(chrom_index), 9999L, chrom_index)
+    )
+
+  chrom_levels <- ref_sg %>%
+    distinct(chrom_id, chrom_index) %>%
+    arrange(chrom_index, chrom_id) %>%
+    pull(chrom_id)
+
+} else {
+  # Non-hybrid reference: use chrom_id directly (chr1, chr2, ...)
+  ref_sg <- ref_lengths %>%
+    filter(!(ref_id %in% c("chrC","chrM"))) %>%
+    mutate(
+      chrom_label = chrom_id %>%
+        str_replace("^chr", "") %>%
+        str_replace("^Chr", ""),
+      chrom_index = suppressWarnings(as.integer(chrom_label)),
+      chrom_index = if_else(is.na(chrom_index), 9999L, chrom_index),
+      subgenome = "G"
+    )
+
+  chrom_levels <- ref_sg %>%
+    distinct(chrom_id, chrom_index) %>%
+    arrange(chrom_index, chrom_id) %>%
+    pull(chrom_id)
+
+  seg <- seg %>%
+    mutate(target_subgenome = "G")
+
+  macro <- macro %>%
+    mutate(target_subgenome = "G")
+}
+
+x_levels <- c(chrom_levels, "Un")
+x_tbl <- tibble(chrom_id = factor(x_levels, levels = x_levels),
+                x_index = seq_along(x_levels))
+
+ref_lines <- ref_sg %>%
+  mutate(chrom_id = factor(chrom_id, levels = x_levels)) %>%
+  left_join(x_tbl, by = "chrom_id") %>%
+  filter(!is.na(x_index)) %>%
+  mutate(ref_len_mb = ref_len / 1e6)
+
+df_plot <- df %>%
+  mutate(
+    contig_len = if_else(is.na(length), 0, as.numeric(length)),
+
+    assigned_subgenome = if_else(assigned_subgenome %in% plot_levels, assigned_subgenome, "NA"),
+    assigned_chrom_id  = if_else(assigned_chrom_id %in% chrom_levels, assigned_chrom_id, "Un"),
+
+    chrom_id = factor(assigned_chrom_id, levels = x_levels),
+
+    best_identity = as.numeric(best_identity)
+  ) %>%
+  filter(contig_len >= chr_like_minlen)
+
+# Evidence (for radar)
+ev <- ev %>%
+  mutate(
+    subgenome = if_else(subgenome %in% sg_levels, subgenome, "NA")
+  ) %>%
+  filter(subgenome %in% sg_levels)
+
+# ----------------------------
+# Top: Contig composition from segments
+# ----------------------------
+df_slots <- df_plot %>%
+  mutate(contig_len_mb = contig_len / 1e6) %>%
+  left_join(x_tbl, by = "chrom_id") %>%
+  filter(!is.na(x_index)) %>%
+  group_by(chrom_id) %>%
+  arrange(assigned_subgenome, desc(contig_len), contig, .by_group = TRUE) %>%
+  mutate(
+    n_in_bin = n(),
+    slot = row_number(),
+    total_width = 0.80,
+    dx = if_else(n_in_bin > 1, total_width / n_in_bin, 0),
+    x_offset = if_else(n_in_bin > 1, (slot - (n_in_bin + 1) / 2) * dx, 0),
+    x_plot = x_index + x_offset
+  ) %>%
+  ungroup()
+
+n_per_chrom <- df_slots %>% count(chrom_id, name = "n_contigs")
+max_n <- max(n_per_chrom$n_contigs, na.rm = TRUE)
+if (!is.finite(max_n) || max_n <= 0) max_n <- 1
+band_xw <- max(0.02, min(0.08, 0.80 / max_n * 0.80))
+
+pill_lwd <- dplyr::case_when(
+  max_n <= 3  ~ 4,
+  max_n <= 6  ~ 3,
+  max_n <= 10 ~ 2.5,
+  max_n <= 18 ~ 1.5,
+  TRUE        ~ 1
+) * 0.5
+
+seg_plot <- seg %>%
+  filter(contig %in% df_slots$original_name) %>%
+  mutate(
+    qstart_mb = qstart / 1e6,
+    qend_mb   = qend   / 1e6,
+    contig_len_mb = contig_len / 1e6
+  ) %>%
+  left_join(
+    df_slots %>% select(original_name, chrom_id, x_plot, contig_len_mb_slot = contig_len_mb),
+    by = c("contig" = "original_name")
+  ) %>%
+  filter(!is.na(x_plot)) %>%
+  mutate(
+    assigned_chrom_id = as.character(chrom_id),
+    off_target = (target_chrom_id != assigned_chrom_id),
+
+    max_len_mb = if_else(is.na(contig_len_mb_slot), contig_len_mb, contig_len_mb_slot),
+    qstart_mb = pmax(0, pmin(qstart_mb, max_len_mb)),
+    qend_mb   = pmax(0, pmin(qend_mb,   max_len_mb))
+  ) %>%
+  filter(qend_mb > qstart_mb) %>%
+  mutate(
+    xmin = x_plot - band_xw/2,
+    xmax = x_plot + band_xw/2,
+    ymin = qstart_mb,
+    ymax = qend_mb
+  )
+
+macro_plot <- macro %>%
+  filter(contig %in% df_slots$original_name) %>%
+  mutate(
+    qstart_mb = qstart / 1e6,
+    qend_mb   = qend   / 1e6,
+    contig_len_mb = contig_len / 1e6
+  ) %>%
+  left_join(
+    df_slots %>%
+      transmute(
+        original_name,
+        assigned_chrom_id = as.character(chrom_id),
+        x_plot,
+        contig_len_mb_slot = contig_len_mb
+      ),
+    by = c("contig" = "original_name")
+  ) %>%
+  filter(!is.na(x_plot)) %>%
+  mutate(
+    off_target = (target_chrom_id != assigned_chrom_id),
+
+    max_len_mb = if_else(is.na(contig_len_mb_slot), contig_len_mb, contig_len_mb_slot),
+    qstart_mb = pmax(0, pmin(qstart_mb, max_len_mb)),
+    qend_mb   = pmax(0, pmin(qend_mb,   max_len_mb))
+  ) %>%
+  filter(qend_mb > qstart_mb) %>%
+  mutate(
+    xmin = x_plot - band_xw/2,
+    xmax = x_plot + band_xw/2,
+    ymin = qstart_mb,
+    ymax = qend_mb
+  )
+
+p_comp <- ggplot() +
+  geom_segment(
+    data = ref_lines,
+    aes(
+      x = x_index - 0.38, xend = x_index + 0.38,
+      y = ref_len_mb, yend = ref_len_mb,
+      color = subgenome
+    ),
+    linewidth = 0.6,
+    alpha = 0.9,
+    show.legend = FALSE
+  ) +
+  scale_color_manual(values = col_light, guide = "none", drop = FALSE) +
+  ggnewscale::new_scale_color() +
+  geom_linerange(
+    data = df_slots %>% filter(assigned_subgenome %in% plot_levels),
+    aes(x = x_plot, ymin = 0, ymax = contig_len_mb, color = assigned_subgenome),
+    linewidth = pill_lwd,
+    lineend = "round",
+    alpha = 1.0,
+    show.legend = FALSE
+  ) +
+  scale_color_manual(values = col_light, guide = "none", drop = FALSE) +
+  ggnewscale::new_scale_color() +
+  geom_linerange(
+    data = df_slots %>% filter(assigned_subgenome == "NA"),
+    aes(x = x_plot, ymin = 0, ymax = contig_len_mb),
+    linewidth = pill_lwd,
+    lineend = "round",
+    color = "grey82",
+    alpha = 1.0,
+    show.legend = FALSE
+  ) +
+  ggnewscale::new_scale_fill() +
+  geom_rect(
+    data = seg_plot %>% filter(!off_target),
+    aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax, fill = target_subgenome),
+    color = NA,
+    alpha = 1.0
+  ) +
+  geom_rect(
+    data = seg_plot %>% filter(off_target),
+    aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax, fill = target_subgenome),
+    color = "red",
+    linewidth = 0.05,
+    alpha = 0.35
+  ) +
+  scale_fill_manual(values = col_light, guide = "none", drop = FALSE) +
+  ggnewscale::new_scale_fill() +
+  geom_rect(
+    data = macro_plot %>% filter(!off_target),
+    aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax, fill = target_subgenome),
+    color = NA,
+    alpha = 1.0,
+    show.legend = FALSE
+  ) +
+  geom_rect(
+    data = macro_plot %>% filter(off_target),
+    aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax, fill = target_subgenome),
+    color = "red",
+    linewidth = 0.05,
+    alpha = 0.5,
+    show.legend = FALSE
+  ) +
+  scale_fill_manual(values = col_dark, guide = "none", drop = FALSE) +
+  guides(
+    fill = guide_legend(
+      title.position = "top",
+      title.hjust = 0.5,
+      nrow = 1,
+      byrow = TRUE,
+      override.aes = list(alpha = 1)
+    )
+  ) +
+  scale_x_continuous(
+    breaks = x_tbl$x_index,
+    labels = str_replace(as.character(x_tbl$chrom_id), "^chr", ""),
+    expand = expansion(mult = c(0.01, 0.01))
+  ) +
+  theme_classic() +
+  theme(
+    axis.title.x = element_text(size = 6),
+    axis.title.y = element_text(size = 6),
+    axis.text = element_text(size = 6),
+    axis.ticks = element_blank(),
+    plot.title  = element_text(hjust = 0.5, size = 6),
+    panel.grid = element_blank(),
+    legend.position = c(0.985, 0.985),
+    legend.justification = c(1, 1)
+  ) +
+  labs(
+    x = "assigned chromosome",
+    y = "Contig position (Mbp)",
+    title = paste0("Contig composition (", plot_title_suffix, ")")
+  )
+
+p_comp <- apply_legend_theme(p_comp, text_pt = 6, key_pt = 6, tight = TRUE) +
+  theme(legend.margin = margin(1, 1, 1, 1))
+
+# ----------------------------
+# Bottom-left: radar scatter (hybrid only)
+# ----------------------------
+if (has_subgenomes) {
+
+  # Support metric: union_bp * identity
+  radar_support <- ev %>%
+    mutate(support = pmax(0, union_bp) * pmax(0, pmin(1, identity))) %>%
+    group_by(contig, subgenome) %>%
+    summarise(support = sum(support, na.rm = TRUE), .groups = "drop") %>%
+    tidyr::complete(contig, subgenome = plot_levels, fill = list(support = 0)) %>%
+    group_by(contig) %>%
+    mutate(
+      wsum = sum(support),
+      w = if_else(wsum > 0, support / wsum, NA_real_)
+    ) %>%
+    ungroup()
+
+  get_vertices <- function(plot_levels) {
+    n <- length(plot_levels)
+    if (n == 2) {
+      tibble(subgenome = plot_levels, vx = c(-0.5, 0.5), vy = c(0, 0))
+    } else if (n == 3) {
+      tibble(subgenome = plot_levels,
+             vx = c(-0.5, 0.5, 0.0),
+             vy = c( 0.0, 0.0, sqrt(3)/2))
+    } else if (n == 4) {
+      tibble(subgenome = plot_levels,
+             vx = c(-0.5,  0.5,  0.5, -0.5),
+             vy = c(-0.5, -0.5,  0.5,  0.5))
+    } else {
+      stop("get_vertices expects 2..4 subgenomes")
+    }
+  }
+  verts <- get_vertices(plot_levels)
+
+  radar_xy <- radar_support %>%
+    left_join(verts, by = "subgenome") %>%
+    group_by(contig) %>%
+    summarise(
+      rx = sum(w * vx, na.rm = TRUE),
+      ry = sum(w * vy, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    left_join(df_plot %>% select(original_name, assigned_subgenome), by = c("contig" = "original_name"))
+
+  frame <- if (n_sets == 2) {
+    tibble(x = c(-0.5, 0.5), y = c(0, 0))
+  } else {
+    verts %>%
+      transmute(x = vx, y = vy) %>%
+      bind_rows(.[1,])
+  }
+
+  p_radar <- ggplot() +
+    geom_path(data = frame, aes(x = x, y = y), linewidth = 0.4, color = "grey40") +
+    geom_text(data = verts, aes(x = vx, y = vy, label = subgenome),
+              color = "grey20", size = 6 / .pt,
+              nudge_x = if (n_sets == 2) c(-0.03, 0.03) else 0,
+              nudge_y = if (n_sets == 2) c( 0.03, 0.03) else 0) +
+    geom_point(
+      data = radar_xy %>% filter(!is.na(rx), !is.na(ry)),
+      aes(x = rx, y = ry, color = assigned_subgenome),
+      shape = 16, alpha = 0.80, size = 1.6
+    ) +
+    scale_color_manual(values = col_dark, drop = FALSE) +
+    coord_equal(clip = "off") +
+    theme_classic() +
+    theme(
+      plot.title = element_text(hjust = 0.5, size = 6),
+      axis.title = element_blank(),
+      axis.text  = element_blank(),
+      axis.ticks = element_blank(),
+      panel.grid = element_blank(),
+      plot.margin = margin(1.5, 1.5, 1.5, 1.5)
+    ) +
+    labs(title = "Chromosome-set support", x = NULL, y = NULL)
+
+  p_radar <- apply_legend_theme(p_radar, text_pt = 6, key_pt = 6, tight = TRUE)
+
+} else {
+  p_radar <- ggplot() + theme_void() + labs(title = "Subgenome support (n/a)")
+}
+
+# ----------------------------
+# Bottom-right: identity vs assigned subgenome (or single-genome)
+# ----------------------------
+if (has_subgenomes) {
+
+  df_id_assigned <- df_plot %>%
+    filter(!is.na(best_identity), assigned_subgenome %in% plot_levels) %>%
+    mutate(assigned_sg = factor(assigned_subgenome, levels = plot_levels))
+
+  p_id <- ggplot(df_id_assigned, aes(x = assigned_sg, y = pmax(0, pmin(1, best_identity)), color = assigned_sg)) +
+    geom_jitter(width = 0.18, height = 0, alpha = 0.55, size = 1.2, show.legend = FALSE) +
+    stat_summary(fun = median, geom = "point", shape = 95, size = 7, show.legend = FALSE) +
+    scale_color_manual(values = col_dark, drop = FALSE) +
+    scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
+    theme_classic() +
+    theme(
+      plot.title = element_text(hjust = 0.5, size = 6),
+      axis.title.x = element_text(size = 6),
+      axis.title.y = element_text(size = 6),
+      axis.text = element_text(size = 6),
+      axis.ticks = element_blank(),
+      panel.grid.major.y = element_line(color = "grey85", linewidth = 0.4),
+      panel.grid.major.x = element_blank(),
+      panel.grid.minor   = element_blank(),
+      plot.margin = margin(5.5, 5.5, 5.5, 5.5)
+    ) +
+    labs(
+      title = "Identity to assigned reference chromosome",
+      x = "Assigned subgenome",
+      y = "Alignment identity proxy"
+    )
+
+} else {
+
+  df_id_assigned <- df_plot %>%
+    filter(!is.na(best_identity), assigned_ref_id != "NA")
+
+  df_id_assigned <- df_id_assigned %>%
+    mutate(assigned_bin = factor("Genome", levels = "Genome"))
+
+  p_id <- ggplot(df_id_assigned, aes(x = assigned_bin, y = pmax(0, pmin(1, best_identity)))) +
+    geom_jitter(width = 0.18, height = 0, alpha = 0.55, size = 1.2, color = "grey35", show.legend = FALSE) +
+    stat_summary(fun = median, geom = "point", shape = 95, size = 7, color = "grey15", show.legend = FALSE) +
+    scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
+    theme_classic() +
+    theme(
+      plot.title = element_text(hjust = 0.5, size = 6),
+      axis.title.x = element_blank(),
+      axis.title.y = element_text(size = 6),
+      axis.text = element_text(size = 6),
+      axis.ticks = element_blank(),
+      panel.grid.major.y = element_line(color = "grey85", linewidth = 0.4),
+      panel.grid.major.x = element_blank(),
+      panel.grid.minor   = element_blank(),
+      plot.margin = margin(5.5, 5.5, 5.5, 5.5)
+    ) +
+    labs(
+      title = "Identity to assigned reference chromosome",
+      x = NULL,
+      y = "Alignment identity proxy"
+    )
+}
+
+if (has_subgenomes) {
+  bottom_row <- (p_radar + p_id + plot_layout(widths = c(1, 1.35), guides = "collect")) &
+    theme(legend.position = "bottom")
+  bottom_row <- apply_legend_theme(bottom_row, text_pt = 6, key_pt = 6, tight = TRUE)
+  full_plot <- p_comp / bottom_row + plot_layout(heights = c(1, 1))
+} else {
+  full_plot <- p_comp / p_id + plot_layout(heights = c(1, 1))
+}
+
+message("macro rows: ", nrow(macro_plot), "  seg rows: ", nrow(seg_plot))
+ggsave(out_pdf, plot = full_plot, width = 6, height = 6, units = "in", dpi = 300)
