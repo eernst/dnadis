@@ -199,12 +199,9 @@ ref_lines <- ref_sg %>%
 df_plot <- df %>%
   mutate(
     contig_len = if_else(is.na(length), 0, as.numeric(length)),
-
     assigned_subgenome = if_else(assigned_subgenome %in% plot_levels, assigned_subgenome, "NA"),
     assigned_chrom_id  = if_else(assigned_chrom_id %in% chrom_levels, assigned_chrom_id, "Un"),
-
     chrom_id = factor(assigned_chrom_id, levels = x_levels),
-
     best_identity = as.numeric(best_identity)
   ) %>%
   filter(contig_len >= chr_like_minlen)

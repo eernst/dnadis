@@ -84,7 +84,16 @@ jobs:
           environment-name: final_finalizer
           create-args: >-
             python=${{ matrix.python-version }}
-            miniprot gffread blast minimap2 centrifuger pytest
+            miniprot gffread blast minimap2 centrifuger pytest pytest-cov
             -c conda-forge -c bioconda
       - name: Run tests
-        run: micromamba run -n final_finalizer pytest -q
+        run: micromamba run -n final_finalizer pytest -q --cov=final_finalizer --cov-report=xml --cov-report=term-missing
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.xml
+          flags: unittests
+          name: py${{ matrix.python-version }}
+          fail_ci_if_error: false
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
