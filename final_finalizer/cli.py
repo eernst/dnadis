@@ -90,7 +90,7 @@ def main():
     common.add_argument("--plot-html", action="store_true", help="Also generate interactive HTML plot (ggiraph)")
     common.add_argument(
         "-C", "--chr-like-minlen", type=int, default=None,
-        help="Minimum contig length (bp) to be considered chromosome-like. Default: 80%% of smallest nuclear ref chromosome.",
+        help="Minimum contig length (bp) to be considered chromosome-like. Default: 80% of smallest nuclear ref chromosome.",
     )
     common.add_argument(
         "--add-subgenome-suffix", type=str, default=None,
@@ -114,7 +114,7 @@ def main():
     toggles = p.add_argument_group("Pipeline phase toggles")
     toggles.add_argument(
         "--nt-synteny", action="store_true",
-        help="Run nucleotide-based synteny alignments (minimap2/mm2plus) for QA/diagnostics.",
+        help="Run nucleotide-based synteny alignments (minimap2/mm2plus) for QA/diagnostics. Optional; classification uses protein-anchored synteny only.",
     )
     toggles.add_argument("--skip-organelles", action="store_true", help="Skip organelle detection.")
     toggles.add_argument("--skip-rdna", action="store_true", help="Skip rDNA detection.")
@@ -126,7 +126,7 @@ def main():
     tools = p.add_argument_group("External tool paths")
     tools.add_argument("--gffread", default="gffread", help="gffread executable [gffread]")
     tools.add_argument("--miniprot", default="miniprot", help="miniprot executable [miniprot]")
-    tools.add_argument("--miniprot-args", default="", help='Extra args passed to miniprot (e.g. "-G 200k") [none]')
+    tools.add_argument("--miniprot-args", default="", help='Extra args for miniprot (e.g. "-G 200k" to increase max intron size for plants with large introns) [none]')
 
     # =========================================================================
     # Reference inputs for classification
@@ -281,7 +281,7 @@ def main():
     chr_debris_thresh = p.add_argument_group("Thresholds: Chromosome debris detection")
     chr_debris_thresh.add_argument(
         "--chr-debris-min-cov", type=float, default=0.80,
-        help="Min query coverage vs assembled chromosomes [0.80]",
+        help="Min query coverage for detecting duplicates of assembled chromosomes [0.80]",
     )
     chr_debris_thresh.add_argument(
         "--chr-debris-min-identity", type=float, default=0.90,
@@ -303,7 +303,7 @@ def main():
     debris_thresh = p.add_argument_group("Thresholds: Reference-based debris detection")
     debris_thresh.add_argument(
         "--debris-min-cov", type=float, default=0.50,
-        help="Min alignment coverage vs reference for debris [0.50]",
+        help="Min alignment coverage vs reference for reference-based debris detection [0.50]",
     )
     debris_thresh.add_argument(
         "--debris-min-protein-hits", type=int, default=2,
@@ -417,7 +417,7 @@ def main():
         assign_ref_score=args.assign_ref_score,
     )
 
-    # --- Protein-anchor anti-contamination gate ---
+    # --- Protein-anchor synteny gates: filter weak assignments ---
     seg_count, span_bp = build_segment_support_from_rows(ev.chain_segments_rows)
 
     def _passes_gate(

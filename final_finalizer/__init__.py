@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-final_finalizer - Genome-wide subgenome distance analysis tool.
+final_finalizer - Genome assembly finalization tool.
 
-This package provides tools for genome classification using minimap2 chains
-or miniprot protein-anchored synteny blocks.
+This package classifies contigs from de novo genome assemblies using
+protein-anchored synteny evidence, organelle detection, and taxonomic screening.
 """
 from __future__ import annotations
 

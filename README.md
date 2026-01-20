@@ -22,7 +22,7 @@
 [![CI](https://github.com/eernst/final_finalizer/actions/workflows/ci.yml/badge.svg)](https://github.com/eernst/final_finalizer/actions/workflows/ci.yml)
 
 **Required:**
-- Python 3.8+
+- Python 3.9+
 - [miniprot](https://github.com/lh3/miniprot) - protein-to-genome alignment
 - [gffread](https://github.com/gpertea/gffread) - GFF3/FASTA processing
 - [BLAST+](https://blast.ncbi.nlm.nih.gov/) - organelle/rDNA detection
@@ -63,7 +63,7 @@ Latest tested conda package versions (CI):
     -q assembly.fasta \
     -o output_prefix \
     --ref-gff3 reference.gff3 \
-    --plot
+    --plot \
     --plot-html
 ```
 
@@ -85,7 +85,7 @@ Latest tested conda package versions (CI):
 | `-t, --threads` | Number of threads | 8 |
 | `--plot` | Generate PDF visualization | off |
 | `--plot-html` | Also generate interactive HTML visualization | off |
-| `-C, --chr-like-minlen` | Min contig length for chromosome classification | 80% of smallest ref chromosome |
+| `-C, --chr-like-minlen` | Min contig length for chromosome classification | 80% of smallest nuclear ref chromosome |
 | `--add-subgenome-suffix` | Suffix for non-polyploid references (e.g., 'A') | none |
 
 ### Classification references
@@ -140,7 +140,9 @@ Latest tested conda package versions (CI):
 | `contaminant_taxid` | NCBI taxonomy ID (for contaminants) |
 | `contaminant_sci` | Scientific name (for contaminants) |
 | `assigned_ref_id` | Best-matching reference chromosome |
-| `genes_per_Mbp` | Gene density for chromosome contigs |
+| `genes_per_Mbp` | Gene density (aligned reference genes per Mbp of query sequence) |
+
+For complete column documentation for all TSV files, see [docs/output_formats.md](docs/output_formats.md).
 
 ### Visualization
 
@@ -154,14 +156,14 @@ The tool runs these phases in order:
 
 1. **Reference protein extraction** - Extract proteins from GFF3 using gffread
 2. **Protein-anchor synteny** - Align proteins to query assembly (miniprot)
-3. **Synteny block building** - Chain alignments into synteny blocks
-4. **Chromosome assignment** - Assign contigs to reference chromosomes
-5. **Organelle detection** - BLAST against chrC/chrM references
-6. **rDNA detection** - BLAST against rDNA reference
-7. **Chromosome debris detection** - High-identity matches to assembled chromosomes
-8. **Contaminant detection** - Centrifuger taxonomic classification
-9. **Debris classification** - Reference/protein-based debris detection
-10. **Orientation determination** - Determine strand for chromosome contigs
+3. **Synteny block building** - Chain alignments into synteny blocks; identify chromosome candidates
+4. **Organelle detection** - BLAST non-chromosome contigs against chrC/chrM references
+5. **rDNA detection** - BLAST against rDNA reference
+6. **Chromosome debris detection** - High-coverage, high-identity matches to assembled chromosomes
+7. **Contaminant detection** - Centrifuger taxonomic classification
+8. **Debris classification** - Reference/protein-based debris detection for remaining contigs
+9. **Orientation determination** - Determine strand for chromosome contigs based on synteny votes
+10. **Final classification** - Assign all contigs to categories
 11. **Output generation** - Write classified FASTAs and summary tables
 
 ## Contig Classification Categories
@@ -173,8 +175,8 @@ The tool runs these phases in order:
 | `organelle_debris` | Partial organelle sequence |
 | `rDNA` | Ribosomal DNA repeat unit |
 | `contaminant` | Sequence from contaminating organism |
-| `chrom_debris` | Fragment of assembled chromosome (high-identity duplicate) |
-| `debris` | Assembly debris with protein/reference support |
+| `chrom_debris` | High-coverage (≥80%), high-identity (≥90%) duplicate of an assembled chromosome contig |
+| `debris` | Assembly debris with reference nucleotide coverage (≥50%) or protein homology (≥2 miniprot hits) |
 | `unclassified` | Could not be classified |
 
 ## Thresholds
@@ -188,6 +190,8 @@ The tool runs these phases in order:
 | `--miniprot-min-genes` | 3 | Min unique genes for assignment |
 | `--miniprot-min-segments` | 5 | Min synteny segments |
 | `--miniprot-min-span-frac` | 0.20 | Min span fraction of contig |
+
+All gate criteria must be satisfied for chromosome assignment (AND logic).
 
 ### Organelle detection
 
@@ -222,7 +226,7 @@ The tool runs these phases in order:
     -o my_assembly_classified \
     --ref-gff3 TAIR10.gff3 \
     -t 32 \
-    --plot
+    --plot \
     --plot-html
 ```
 
@@ -237,7 +241,7 @@ The tool runs these phases in order:
     --centrifuger-idx /path/to/centrifuger/nt \
     --rdna-ref default \
     -t 64 \
-    --plot
+    --plot \
     --plot-html
 ```
 
@@ -250,7 +254,7 @@ The tool runs these phases in order:
     -o rice_classified \
     --ref-gff3 rice_ref.gff3 \
     --add-subgenome-suffix A \
-    --plot
+    --plot \
     --plot-html
 ```
 
@@ -287,7 +291,7 @@ This prevents spurious assignments from:
 
 Two complementary approaches:
 
-1. **Chromosome debris** - Contigs with high-identity matches (>90%) to already-assembled chromosome contigs (detected via minimap2 asm5 alignment)
+1. **Chromosome debris** - Contigs with high-coverage (≥80%) and high-identity (≥90%) matches to already-assembled chromosome contigs (detected via minimap2 asm5 alignment)
 
 2. **Reference-based debris** - Contigs with moderate reference coverage (>50%) but insufficient synteny support for chromosome assignment
 

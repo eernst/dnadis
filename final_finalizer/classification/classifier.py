@@ -72,7 +72,11 @@ def determine_contig_orientations(
     block strand votes. Non-chromosome contigs (debris, contaminants, unclassified)
     are left in their original orientation since they lack reliable synteny evidence.
 
-    Returns dict: contig_name -> should_reverse_complement (only for chromosome contigs)
+    Returns:
+        Dict[str, bool]: Mapping of contig name to orientation flag.
+            True = contig should be reverse-complemented to match reference orientation.
+            False = contig is already in correct orientation.
+            Only chromosome contigs are included in the returned dict.
     """
     orientations: Dict[str, bool] = {}
 
