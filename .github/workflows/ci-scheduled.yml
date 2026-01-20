@@ -6,74 +6,12 @@ on:
   workflow_dispatch:
 
 jobs:
-  resolve-python:
-    runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.matrix.outputs.matrix }}
-    steps:
-      - name: Setup micromamba
-        uses: mamba-org/setup-micromamba@v1
-        with:
-          micromamba-version: "latest"
-          environment-name: resolver
-          create-args: >-
-            python=3.10
-            -c conda-forge
-      - name: Resolve latest Python from conda-forge
-        id: matrix
-        run: |
-          latest=$(micromamba repoquery search python -c conda-forge --json \
-            | python - <<'PY'
-          import json
-          import re
-          import sys
-
-          data = json.load(sys.stdin)
-          if isinstance(data, list):
-              records = data
-          elif isinstance(data, dict):
-              records = data.get("records") or data.get("packages") or data.get("result") or []
-          else:
-              records = []
-
-          versions = set()
-          for rec in records:
-              ver = None
-              if isinstance(rec, dict):
-                  ver = rec.get("version") or rec.get("package_version") or rec.get("ver")
-              elif isinstance(rec, str):
-                  m = re.search(r"(\\d+\\.\\d+\\.\\d+)", rec)
-                  ver = m.group(1) if m else None
-              if ver:
-                  m = re.match(r"^(\\d+)\\.(\\d+)\\.\\d+$", ver)
-                  if m:
-                      versions.add(f"{m.group(1)}.{m.group(2)}")
-
-          print(sorted(versions, key=lambda s: tuple(map(int, s.split("."))))[-1] if versions else "")
-          PY
-          )
-          if [ -z "$latest" ]; then
-            echo "Failed to resolve latest Python from conda-forge." >&2
-            exit 1
-          fi
-          python - <<'PY' >> "$GITHUB_OUTPUT"
-          import json
-
-          oldest = "3.8"
-          latest = "${latest}"
-          versions = []
-          for v in (oldest, latest):
-              if v not in versions:
-                  versions.append(v)
-          print(f"matrix={json.dumps({'python-version': versions})}")
-          PY
-
   tests:
-    needs: resolve-python
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      matrix: ${{ fromJson(needs.resolve-python.outputs.matrix) }}
+      matrix:
+        python-version: ["3.9", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - name: Setup micromamba
