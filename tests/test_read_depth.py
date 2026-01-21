@@ -44,10 +44,10 @@ def test_detect_read_format_fastq_gz(tmp_path):
 
 def test_get_minimap2_preset():
     """Test minimap2 preset mapping for different read types."""
-    assert get_minimap2_preset("hifi") == "lr:hqae"
+    assert get_minimap2_preset("hifi_onthq") == "lr:hqae"
     assert get_minimap2_preset("ont") == "map-ont"
     assert get_minimap2_preset("sr") == "sr"
-    # Unknown type should default to hifi preset
+    # Unknown type should default to hifi_onthq preset
     assert get_minimap2_preset("unknown") == "lr:hqae"
 
 

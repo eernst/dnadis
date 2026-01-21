@@ -133,7 +133,7 @@ def main():
     common.add_argument("--plot-html", action="store_true", help="Also generate interactive HTML plot (ggiraph)")
     common.add_argument(
         "-C", "--chr-like-minlen", type=int, default=None,
-        help="Minimum contig length (bp) to be considered chromosome-like. Default: 80% of smallest nuclear ref chromosome.",
+        help="Minimum contig length (bp) to be considered chromosome-like. Default: 80%% of smallest nuclear ref chromosome.",
     )
     common.add_argument(
         "--add-subgenome-suffix", type=str, default=None,
@@ -160,8 +160,8 @@ def main():
         help="Reads for depth analysis (FASTQ/BAM/CRAM). Auto-detects format and alignment status.",
     )
     depth_grp.add_argument(
-        "--reads-type", choices=["hifi", "ont", "sr"], default="hifi",
-        help="Read type for minimap2 alignment: hifi (lr:hqae), ont (map-ont), sr (sr) [hifi]",
+        "--reads-type", choices=["hifi_onthq", "ont", "sr"], default="hifi_onthq",
+        help="Read type for minimap2 alignment: hifi_onthq (lr:hqae), ont (map-ont), sr (sr) [hifi]",
     )
     depth_grp.add_argument(
         "--skip-depth", action="store_true",
@@ -170,6 +170,10 @@ def main():
     depth_grp.add_argument(
         "--depth-window-size", type=int, default=1000,
         help="Window size for mosdepth depth calculation [1000]",
+    )
+    depth_grp.add_argument(
+        "--depth-target-coverage", type=float, default=20.0,
+        help="Target coverage for downsampling before alignment (0 to disable) [20.0]",
     )
 
     # =========================================================================
@@ -866,6 +870,7 @@ def main():
             threads=args.threads,
             reads_type=args.reads_type,
             window_size=args.depth_window_size,
+            target_coverage=args.depth_target_coverage if args.depth_target_coverage > 0 else None,
         )
 
         # Attach depth stats to classifications
