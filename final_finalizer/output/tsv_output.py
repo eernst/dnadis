@@ -117,6 +117,11 @@ def write_contig_summary_tsv(
         "synteny_score",
         "contam_score",
         "contam_coverage",
+        "depth_mean",
+        "depth_median",
+        "depth_std",
+        "depth_breadth_1x",
+        "depth_breadth_10x",
         "best_score",
         "second_score",
         "score_ratio",
@@ -226,6 +231,13 @@ def write_contig_summary_tsv(
             contam_score = f"{clf.contam_score:.3f}" if clf and clf.contam_score is not None else ""
             contam_coverage = f"{clf.contam_coverage:.3f}" if clf and clf.contam_coverage is not None else ""
 
+            # Read depth columns
+            depth_mean = f"{clf.depth_mean:.2f}" if clf and clf.depth_mean is not None else ""
+            depth_median = f"{clf.depth_median:.2f}" if clf and clf.depth_median is not None else ""
+            depth_std = f"{clf.depth_std:.2f}" if clf and clf.depth_std is not None else ""
+            depth_breadth_1x = f"{clf.depth_breadth_1x:.4f}" if clf and clf.depth_breadth_1x is not None else ""
+            depth_breadth_10x = f"{clf.depth_breadth_10x:.4f}" if clf and clf.depth_breadth_10x is not None else ""
+
             # Compute genes per Mbp for chromosome-assigned contigs
             gene_count = qr_gene_count.get((q, assigned_ref_id), 0) if assigned_ref_id else 0
             if contig_len > 0 and gene_count > 0:
@@ -253,6 +265,11 @@ def write_contig_summary_tsv(
                         synteny_score,
                         contam_score,
                         contam_coverage,
+                        depth_mean,
+                        depth_median,
+                        depth_std,
+                        depth_breadth_1x,
+                        depth_breadth_10x,
                         f"{bs:.3f}",
                         f"{sr:.3f}",
                         f"{score_ratio:.3f}",

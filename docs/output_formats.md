@@ -42,6 +42,23 @@ These columns provide the underlying evidence used to determine classification c
 | `contam_score` | float | Contaminant evidence strength (0.0-1.0); normalized centrifuger score |
 | `contam_coverage` | float | Fraction of contig covered by contaminant alignments (0.0-1.0) |
 
+### Read Depth Columns
+
+These columns are populated when `--reads` is provided. They contain per-contig read depth statistics computed by mosdepth.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `depth_mean` | float | Mean read depth across the contig |
+| `depth_median` | float | Median read depth across the contig |
+| `depth_std` | float | Standard deviation of read depth |
+| `depth_breadth_1x` | float | Fraction of bases with ≥1x coverage (0.0-1.0) |
+| `depth_breadth_10x` | float | Fraction of bases with ≥10x coverage (0.0-1.0) |
+
+These depth metrics are useful for:
+- **Copy number assessment**: Chromosomes should have ~1x relative depth; debris may show elevated depth
+- **Misassembly detection**: Abrupt depth changes may indicate chimeric regions
+- **Quality control**: Low breadth indicates incomplete coverage
+
 ### Assignment Columns
 
 | Column | Type | Description |

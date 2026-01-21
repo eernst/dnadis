@@ -108,6 +108,12 @@ class ContigClassification:
     contam_score: Optional[float] = None  # Contaminant evidence strength (0.0-1.0)
     contam_coverage: Optional[float] = None  # Contaminant alignment coverage (0.0-1.0)
     classification_confidence: Optional[str] = None  # high/medium/low
+    # Read depth fields (optional, from --reads analysis)
+    depth_mean: Optional[float] = None
+    depth_median: Optional[float] = None
+    depth_std: Optional[float] = None
+    depth_breadth_1x: Optional[float] = None
+    depth_breadth_10x: Optional[float] = None
 
 
 @dataclass
@@ -154,3 +160,27 @@ class BlastHitSummary:
     best_hit_taxid: Optional[int]
     best_hit_evalue: float
     total_aligned_bp: int
+
+
+@dataclass
+class DepthStats:
+    """Read depth statistics for a contig.
+
+    Computed from mosdepth output across window bins.
+
+    Attributes:
+        mean_depth: Mean read depth across the contig
+        median_depth: Median read depth across the contig
+        std_depth: Standard deviation of read depth
+        min_depth: Minimum depth in any window
+        max_depth: Maximum depth in any window
+        breadth_1x: Fraction of bases with >= 1x coverage (0.0-1.0)
+        breadth_10x: Fraction of bases with >= 10x coverage (0.0-1.0)
+    """
+    mean_depth: float
+    median_depth: float
+    std_depth: float
+    min_depth: float
+    max_depth: float
+    breadth_1x: float
+    breadth_10x: float

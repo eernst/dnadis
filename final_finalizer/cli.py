@@ -100,7 +100,7 @@ from final_finalizer.output.tsv_output import (
     write_contig_summary_tsv,
     write_macro_blocks_tsv,
 )
-from final_finalizer.output.plotting import run_plot
+from final_finalizer.output.plotting import run_plot, run_depth_plot
 
 
 def main():
@@ -149,6 +149,27 @@ def main():
             "Example: --ref-id-pattern '^(?P<chrom>chr\\d+)(?P<sg>[AB])$' for chr1A/chr1B style. "
             "If unset, presets handle chrN[A-Z], chrN(At|Dt), and chrN patterns."
         ),
+    )
+
+    # =========================================================================
+    # Read depth analysis
+    # =========================================================================
+    depth_grp = p.add_argument_group("Read depth analysis")
+    depth_grp.add_argument(
+        "--reads", type=_validate_input_path, default=None,
+        help="Reads for depth analysis (FASTQ/BAM/CRAM). Auto-detects format and alignment status.",
+    )
+    depth_grp.add_argument(
+        "--reads-type", choices=["hifi", "ont", "sr"], default="hifi",
+        help="Read type for minimap2 alignment: hifi (lr:hqae), ont (map-ont), sr (sr) [hifi]",
+    )
+    depth_grp.add_argument(
+        "--skip-depth", action="store_true",
+        help="Skip depth analysis even if --reads provided.",
+    )
+    depth_grp.add_argument(
+        "--depth-window-size", type=int, default=1000,
+        help="Window size for mosdepth depth calculation [1000]",
     )
 
     # =========================================================================
@@ -824,6 +845,39 @@ def main():
     for clf in classifications:
         clf.reversed = contig_orientations.get(clf.original_name, False)
 
+    # --- Phase 11.5: Read depth analysis (optional) ---
+    depth_stats: Dict[str, 'DepthStats'] = {}
+    if args.reads and not args.skip_depth:
+        print("[info] Phase 11.5: Read depth analysis", file=sys.stderr)
+        from final_finalizer.analysis.read_depth import calculate_depth_metrics
+        from final_finalizer.models import DepthStats
+
+        depth_work_dir = work_dir / "read_depth"
+        depth_stats = calculate_depth_metrics(
+            reads=args.reads,
+            assembly=qry,
+            contig_lengths=qry_lengths,
+            work_dir=depth_work_dir,
+            threads=args.threads,
+            reads_type=args.reads_type,
+            window_size=args.depth_window_size,
+        )
+
+        # Attach depth stats to classifications
+        for clf in classifications:
+            ds = depth_stats.get(clf.original_name)
+            if ds:
+                clf.depth_mean = ds.mean_depth
+                clf.depth_median = ds.median_depth
+                clf.depth_std = ds.std_depth
+                clf.depth_breadth_1x = ds.breadth_1x
+                clf.depth_breadth_10x = ds.breadth_10x
+
+        if depth_stats:
+            print(f"[done] Depth analysis complete for {len(depth_stats)} contigs", file=sys.stderr)
+    elif args.reads and args.skip_depth:
+        print("[info] Phase 11.5: Skipping depth analysis (--skip-depth)", file=sys.stderr)
+
     # --- Phase 12: Write FASTA outputs ---
     print("[info] Phase 12: Writing FASTA outputs", file=sys.stderr)
     write_classified_fastas(
@@ -885,6 +939,14 @@ def main():
             plot_suffix,
             args.plot_html,
         )
+        # Generate depth overview plot if depth data was computed
+        if depth_stats:
+            run_depth_plot(
+                summary_tsv,
+                outprefix,
+                plot_suffix,
+                args.plot_html,
+            )
 
 
 if __name__ == "__main__":

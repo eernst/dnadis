@@ -28,7 +28,9 @@
 - [BLAST+](https://blast.ncbi.nlm.nih.gov/) - organelle/rDNA detection
 
 **Optional:**
-- [minimap2](https://github.com/lh3/minimap2) or [mm2plus](https://github.com/lh3/mm2plus) - nucleotide synteny QA
+- [minimap2](https://github.com/lh3/minimap2) or [mm2plus](https://github.com/lh3/mm2plus) - nucleotide synteny QA and read alignment for depth analysis
+- [samtools](https://github.com/samtools/samtools) - BAM/CRAM handling for depth analysis
+- [mosdepth](https://github.com/brentp/mosdepth) - efficient depth calculation
 - [centrifuger](https://github.com/mourisl/centrifuger) - contaminant detection
 - R with ggplot2, dplyr, readr, stringr, tibble, tidyr, patchwork, ggnewscale, pacman - visualization (`--plot`)
 - R with ggiraph, htmlwidgets, pandoc - interactive visualization (`--plot-html`)
@@ -97,6 +99,25 @@ Latest tested conda package versions (CI):
 | `--rdna-ref` | rDNA reference FASTA, or 'default' for bundled Arabidopsis 45S |
 | `--centrifuger-idx` | Centrifuger index prefix for contaminant screening |
 
+### Read depth analysis
+
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--reads` | Reads for depth analysis (FASTQ/BAM/CRAM). Auto-detects format. | none |
+| `--reads-type` | Read type: `hifi`, `ont`, or `sr` | hifi |
+| `--skip-depth` | Skip depth analysis even if `--reads` provided | off |
+| `--depth-window-size` | Window size for mosdepth | 1000 |
+
+The `--reads` option accepts:
+- FASTQ files (`.fq`, `.fastq`, `.fq.gz`, `.fastq.gz`)
+- Unaligned BAM/CRAM files (will be aligned with minimap2)
+- Pre-aligned BAM/CRAM files (used directly)
+
+Read type to minimap2 preset mapping:
+- `hifi` → `-x lr:hqae` (PacBio HiFi/Duplex, error rate < 1%)
+- `ont` → `-x map-ont` (ONT reads)
+- `sr` → `-x sr` (Illumina short reads)
+
 ### Pipeline toggles
 
 | Argument | Description |
@@ -142,6 +163,10 @@ Latest tested conda package versions (CI):
 | `contaminant_sci` | Scientific name (for contaminants) |
 | `assigned_ref_id` | Best-matching reference chromosome |
 | `genes_per_Mbp` | Gene density (aligned reference genes per Mbp of query sequence) |
+| `depth_mean` | Mean read depth (if `--reads` provided) |
+| `depth_median` | Median read depth (if `--reads` provided) |
+| `depth_breadth_1x` | Fraction of bases with ≥1x coverage (if `--reads` provided) |
+| `depth_breadth_10x` | Fraction of bases with ≥10x coverage (if `--reads` provided) |
 
 For complete column documentation for all TSV files, see [docs/output_formats.md](docs/output_formats.md).
 
@@ -150,6 +175,8 @@ For complete column documentation for all TSV files, see [docs/output_formats.md
 | File | Description |
 |------|-------------|
 | `*.chromosome_overview.pdf` | Multi-panel plot showing contig composition, subgenome support, and alignment identity |
+| `*.depth_overview.pdf` | Read depth visualization by classification and chromosome (if `--reads` provided) |
+| `*.depth_overview.html` | Interactive version with tooltips (if `--plot-html` and `--reads` provided) |
 
 ## Classification Pipeline
 
@@ -165,7 +192,8 @@ The tool runs these phases in order:
 8. **Debris classification** - Reference/protein-based debris detection for remaining contigs
 9. **Orientation determination** - Determine strand for chromosome contigs based on synteny votes
 10. **Final classification** - Assign all contigs to categories
-11. **Output generation** - Write classified FASTAs and summary tables
+11. **Read depth analysis** (optional) - Align reads and compute per-contig depth metrics
+12. **Output generation** - Write classified FASTAs, summary tables, and visualizations
 
 ## Contig Classification Categories
 
@@ -290,6 +318,35 @@ All gate criteria must be satisfied for chromosome assignment (AND logic).
     --add-subgenome-suffix A \
     --plot \
     --plot-html
+```
+
+### With read depth analysis (HiFi reads)
+
+```bash
+./final_finalizer.py \
+    -r reference.fasta \
+    -q assembly.fasta \
+    -o assembly_classified \
+    --ref-gff3 reference.gff3 \
+    --reads hifi_reads.fastq.gz \
+    --reads-type hifi \
+    --plot \
+    --plot-html \
+    -t 32
+```
+
+### With pre-aligned BAM for depth analysis
+
+```bash
+./final_finalizer.py \
+    -r reference.fasta \
+    -q assembly.fasta \
+    -o assembly_classified \
+    --ref-gff3 reference.gff3 \
+    --reads aligned_reads.bam \
+    --plot \
+    --plot-html \
+    -t 32
 ```
 
 ## Algorithm Details
