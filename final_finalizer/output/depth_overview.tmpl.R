@@ -58,8 +58,11 @@ if (!has_depth) {
 }
 
 # Classification order for consistent display
+# Note: chrC and chrM are separated from other organelles for clarity
 classification_order <- c(
   "chrom_assigned",
+  "chrC",
+  "chrM",
   "chrom_unassigned",
   "organelle_complete",
   "organelle_debris",
@@ -73,34 +76,45 @@ classification_order <- c(
 # Color palette for classifications
 classification_colors <- c(
   "chrom_assigned" = "#1F77B4",
+  "chrC" = "#2CA02C",
+  "chrM" = "#D62728",
   "chrom_unassigned" = "#9ECAE1",
-  "organelle_complete" = "#2CA02C",
+  "organelle_complete" = "#66C2A5",
   "organelle_debris" = "#98DF8A",
   "rDNA" = "#FF7F0E",
-  "contaminant" = "#D62728",
+  "contaminant" = "#8C564B",
   "chrom_debris" = "#9467BD",
   "debris" = "#C5B0D5",
   "unclassified" = "#7F7F7F"
 )
 
 # Prepare data for plotting
+# Separate chrC and chrM organelles into their own categories
 df_depth <- df %>%
   filter(!is.na(depth_mean)) %>%
   mutate(
-    classification = factor(classification, levels = classification_order),
+    # Create display classification that separates chrC and chrM
+    display_class = case_when(
+      contig == "chrC" ~ "chrC",
+      contig == "chrM" ~ "chrM",
+      TRUE ~ classification
+    ),
+    display_class = factor(display_class, levels = classification_order),
     length_mb = as.numeric(length) / 1e6,
     # For chrom_assigned, create chrom_order for sorting
     chrom_num = as.integer(str_extract(assigned_chrom_id, "\\d+")),
     chrom_num = if_else(is.na(chrom_num), 999L, chrom_num)
   ) %>%
-  arrange(classification, chrom_num, assigned_chrom_id, desc(length_mb))
+  arrange(display_class, chrom_num, assigned_chrom_id, desc(length_mb))
 
 # ----------------------------
-# Top: Mean depth by classification (box + jitter)
+# Top: Mean depth by classification (box + violin)
+# Organelles (chrC and chrM) are plotted separately
 # ----------------------------
-p_class_depth <- ggplot(df_depth, aes(x = classification, y = depth_mean, fill = classification)) +
-  geom_boxplot(alpha = 0.7, outlier.shape = NA, width = 0.6) +
-  geom_jitter(aes(color = classification), width = 0.15, alpha = 0.5, size = 1.2, show.legend = FALSE) +
+p_class_depth <- ggplot(df_depth, aes(x = display_class, y = depth_mean, fill = display_class)) +
+  geom_violin(alpha = 0.5, scale = "width", width = 0.7) +
+  geom_boxplot(alpha = 0.7, outlier.shape = NA, width = 0.3) +
+  geom_jitter(aes(color = display_class), width = 0.12, alpha = 0.5, size = 1.2, show.legend = FALSE) +
   scale_fill_manual(values = classification_colors, drop = FALSE, guide = "none") +
   scale_color_manual(values = classification_colors, drop = FALSE) +
   scale_x_discrete(
@@ -121,17 +135,38 @@ p_class_depth <- ggplot(df_depth, aes(x = classification, y = depth_mean, fill =
 
 # ----------------------------
 # Middle: Depth for chromosome-assigned contigs, ordered by chromosome
+# Includes chrC and chrM organelles if present
 # ----------------------------
 df_chrom <- df_depth %>%
-  filter(classification == "chrom_assigned") %>%
+  filter(
+    classification == "chrom_assigned" |
+    contig == "chrC" |
+    contig == "chrM"
+  ) %>%
   mutate(
-    chrom_label = if_else(
-      assigned_subgenome != "NA",
-      paste0(assigned_chrom_id, assigned_subgenome),
-      assigned_chrom_id
+    # Use contig name for organelles, assigned_chrom_id for others
+    chrom_id = case_when(
+      contig == "chrC" ~ "chrC",
+      contig == "chrM" ~ "chrM",
+      TRUE ~ assigned_chrom_id
     ),
-    plot_order = row_number()
-  )
+    # Extract numeric part for sorting (organelles get special values)
+    chrom_sort = case_when(
+      contig == "chrC" ~ 9998L,
+      contig == "chrM" ~ 9999L,
+      TRUE ~ chrom_num
+    ),
+    # Label for display
+    # Note: assigned_subgenome may be NA (R's missing) or "NA" (string)
+    # Use !is.na() to check for actual values
+    chrom_label = if_else(
+      classification == "chrom_assigned" & !is.na(assigned_subgenome) & assigned_subgenome != "",
+      paste0(chrom_id, assigned_subgenome),
+      chrom_id
+    )
+  ) %>%
+  arrange(chrom_sort, chrom_label, desc(length_mb)) %>%
+  mutate(plot_order = row_number())
 
 if (nrow(df_chrom) > 0) {
   # Create x-axis breaks at chromosome boundaries
@@ -139,11 +174,22 @@ if (nrow(df_chrom) > 0) {
     group_by(chrom_label) %>%
     summarise(mid_pos = mean(plot_order), .groups = "drop")
 
+  # Color by subgenome for regular chromosomes, distinct colors for organelles
+  df_chrom <- df_chrom %>%
+    mutate(
+      fill_category = case_when(
+        contig == "chrC" ~ "chrC",
+        contig == "chrM" ~ "chrM",
+        TRUE ~ assigned_subgenome
+      )
+    )
+
   p_chrom_depth <- ggplot(df_chrom, aes(x = plot_order, y = depth_mean)) +
-    geom_col(aes(fill = assigned_subgenome), width = 0.8, alpha = 0.85) +
+    geom_col(aes(fill = fill_category), width = 0.8, alpha = 0.85) +
     scale_fill_manual(
       values = c("A" = "#1F77B4", "B" = "#FF7F0E", "NA" = "#7F7F7F",
-                 "At" = "#1F77B4", "Dt" = "#FF7F0E", "G" = "#2CA02C"),
+                 "At" = "#1F77B4", "Dt" = "#FF7F0E", "G" = "#2CA02C",
+                 "chrC" = "#2CA02C", "chrM" = "#D62728"),
       name = "Subgenome"
     ) +
     scale_x_continuous(
@@ -175,9 +221,10 @@ if (nrow(df_chrom) > 0) {
 
 # ----------------------------
 # Bottom: Breadth coverage (1x and 10x) by classification
+# Organelles (chrC and chrM) are plotted separately
 # ----------------------------
 df_breadth <- df_depth %>%
-  select(contig, classification, depth_breadth_1x, depth_breadth_10x) %>%
+  select(contig, classification, display_class, depth_breadth_1x, depth_breadth_10x) %>%
   tidyr::pivot_longer(
     cols = c(depth_breadth_1x, depth_breadth_10x),
     names_to = "metric",
@@ -192,9 +239,9 @@ df_breadth <- df_depth %>%
     metric = factor(metric, levels = c(">=1x", ">=10x"))
   )
 
-p_breadth <- ggplot(df_breadth, aes(x = classification, y = breadth, fill = metric)) +
+p_breadth <- ggplot(df_breadth, aes(x = display_class, y = breadth, fill = metric)) +
   geom_boxplot(alpha = 0.7, position = position_dodge(width = 0.75), width = 0.6, outlier.size = 0.8) +
-  scale_fill_manual(values = c(">=1x" = "#2CA02C", ">=10x" = "#1F77B4"), name = "Coverage") +
+  scale_fill_manual(values = c(">=1x" = "#66C2A5", ">=10x" = "#1F77B4"), name = "Coverage") +
   scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2), labels = scales::percent) +
   scale_x_discrete(
     labels = function(x) str_replace_all(x, "_", "\n")
@@ -234,7 +281,7 @@ if (plot_html) {
     mutate(
       tooltip = paste0(
         "Contig: ", contig,
-        "\nClassification: ", classification,
+        "\nClassification: ", display_class,
         "\nLength: ", sprintf("%.2f", length_mb), " Mbp",
         "\nMean depth: ", sprintf("%.1f", depth_mean), "x",
         "\nMedian depth: ", sprintf("%.1f", depth_median), "x",
@@ -243,11 +290,12 @@ if (plot_html) {
       )
     )
 
-  p_class_depth_html <- ggplot(df_depth_tooltip, aes(x = classification, y = depth_mean, fill = classification)) +
-    geom_boxplot(alpha = 0.7, outlier.shape = NA, width = 0.6) +
+  p_class_depth_html <- ggplot(df_depth_tooltip, aes(x = display_class, y = depth_mean, fill = display_class)) +
+    geom_violin(alpha = 0.5, scale = "width", width = 0.7) +
+    geom_boxplot(alpha = 0.7, outlier.shape = NA, width = 0.3) +
     ggiraph::geom_point_interactive(
-      aes(color = classification, tooltip = tooltip),
-      position = position_jitter(width = 0.15),
+      aes(color = display_class, tooltip = tooltip),
+      position = position_jitter(width = 0.12),
       alpha = 0.5, size = 1.2, show.legend = FALSE
     ) +
     scale_fill_manual(values = classification_colors, drop = FALSE, guide = "none") +
@@ -282,12 +330,13 @@ if (plot_html) {
 
     p_chrom_depth_html <- ggplot(df_chrom_tooltip, aes(x = plot_order, y = depth_mean)) +
       ggiraph::geom_col_interactive(
-        aes(fill = assigned_subgenome, tooltip = tooltip),
+        aes(fill = fill_category, tooltip = tooltip),
         width = 0.8, alpha = 0.85
       ) +
       scale_fill_manual(
         values = c("A" = "#1F77B4", "B" = "#FF7F0E", "NA" = "#7F7F7F",
-                   "At" = "#1F77B4", "Dt" = "#FF7F0E", "G" = "#2CA02C"),
+                   "At" = "#1F77B4", "Dt" = "#FF7F0E", "G" = "#2CA02C",
+                   "chrC" = "#2CA02C", "chrM" = "#D62728"),
         name = "Subgenome"
       ) +
       scale_x_continuous(

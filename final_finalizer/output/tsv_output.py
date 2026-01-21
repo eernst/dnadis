@@ -176,9 +176,19 @@ def write_contig_summary_tsv(
 
             low_coverage = "yes" if total_aligned_bp < int(chr_like_minlen) else "no"
 
-            assigned_ref_id = str(best_ref.get(q, "") or "")
+            # Get chain evidence for reference assignment
+            chain_assigned_ref_id = str(best_ref.get(q, "") or "")
             bs = float(best_score.get(q, 0.0) or 0.0)
             sr = float(second_score.get(q, 0.0) or 0.0)
+
+            # For non-chromosome classifications (organelles, rDNA, contaminants, debris),
+            # use the classification's assigned_ref_id instead of chain evidence
+            clf_class = clf.classification if clf else "unclassified"
+            if clf and clf_class in ("organelle_complete", "organelle_debris", "rDNA",
+                                     "contaminant", "debris", "chrom_debris", "unclassified"):
+                assigned_ref_id = clf.assigned_ref_id if clf.assigned_ref_id else ""
+            else:
+                assigned_ref_id = chain_assigned_ref_id
 
             best_union_bp = int(best_bp.get(q, 0) or 0)
             second_ref_id = str(second_ref.get(q, "") or "")

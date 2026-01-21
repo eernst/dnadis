@@ -383,6 +383,6 @@ def test_contig_orientation_detection(tmp_path):
     assert reverse_strands > 0, \
         "No reverse (-) strands detected for contig_reversed in macro_blocks"
 
-    print(f"[test] Orientation detection test passed!")
+    print("[test] Orientation detection test passed!")
     print(f"[test] - contig_forward: {forward_strands} forward (+) strand blocks, reversed={fwd_class['reversed']}")
     print(f"[test] - contig_reversed: {reverse_strands} reverse (-) strand blocks, reversed={rev_class['reversed']}")
