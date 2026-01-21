@@ -247,8 +247,8 @@ def main():
         help="Min alignment span for nucleotide synteny block building [10000]",
     )
     block_thresh.add_argument(
-        "--assign-minlen-protein", type=int, default=300,
-        help="Min target span for protein-anchor synteny block building [300]",
+        "--assign-minlen-protein", type=int, default=150,
+        help="Min target span for protein-anchor synteny block building [150]",
     )
     block_thresh.add_argument(
         "--assign-minmapq", type=int, default=0,
