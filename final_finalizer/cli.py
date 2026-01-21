@@ -628,6 +628,17 @@ def main():
         if ref_id and qry_lengths.get(contig, 0) >= chr_like_minlen:
             chromosome_contigs.add(contig)
 
+    # Compute assembly chromosome GC baseline (for non-chrom classification confidence)
+    # This is more appropriate than reference GC for divergent genomes
+    asm_gc_nuclear = {k: v for k, v in qry_gc.items() if k in chromosome_contigs}
+    if asm_gc_nuclear:
+        asm_gc_mean, asm_gc_std = calculate_gc_stats(asm_gc_nuclear)
+        print(f"[info] Assembly chromosome GC: mean={asm_gc_mean:.3f}, std={asm_gc_std:.3f} (n={len(asm_gc_nuclear)})", file=sys.stderr)
+    else:
+        # Fall back to reference GC if no chromosome contigs identified
+        asm_gc_mean, asm_gc_std = ref_gc_mean, ref_gc_std
+        print("[warn] No chromosome contigs for assembly GC baseline, using reference GC", file=sys.stderr)
+
     # Create work directory for classification outputs
     work_dir = outprefix.parent / f"{outprefix.name}_classification"
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -802,6 +813,8 @@ def main():
         query_gc=qry_gc,
         ref_gc_mean=ref_gc_mean,
         ref_gc_std=ref_gc_std,
+        asm_gc_mean=asm_gc_mean,
+        asm_gc_std=asm_gc_std,
         organelle_hits=organelle_hits,
         rdna_hits=rdna_hits,
         chrom_debris_hits=chrom_debris_hits,

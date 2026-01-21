@@ -404,6 +404,8 @@ def classify_all_contigs(
     query_gc: Optional[Dict[str, float]] = None,
     ref_gc_mean: Optional[float] = None,
     ref_gc_std: Optional[float] = None,
+    asm_gc_mean: Optional[float] = None,
+    asm_gc_std: Optional[float] = None,
     organelle_hits: Optional[Dict[str, OrganelleHit]] = None,
     rdna_hits: Optional[Dict[str, RdnaHit]] = None,
     chrom_debris_hits: Optional[Dict[str, DebrisHit]] = None,
@@ -427,7 +429,9 @@ def classify_all_contigs(
 
     Confidence levels are based on:
     - Gene proportion: Fraction of reference genes aligned to contig
-    - GC deviation: Standard deviations from reference nuclear GC mean
+    - GC deviation: Standard deviations from GC baseline
+      - chrom_assigned: compared to reference nuclear GC
+      - other categories: compared to assembly chromosome GC (more appropriate for divergent genomes)
     - Coverage: Alignment coverage fraction (0.0-1.0)
     - Identity: Alignment identity (0.0-1.0)
     - Protein hits: Number of miniprot alignments
@@ -450,6 +454,8 @@ def classify_all_contigs(
         query_gc: Dict of contig name -> GC content (0.0-1.0)
         ref_gc_mean: Mean GC content of reference nuclear chromosomes
         ref_gc_std: Standard deviation of reference GC content
+        asm_gc_mean: Mean GC content of assembly chromosome contigs
+        asm_gc_std: Standard deviation of assembly chromosome GC content
         organelle_hits: Dict of contig -> OrganelleHit with detection details
         rdna_hits: Dict of contig -> RdnaHit with detection details
         chrom_debris_hits: Dict of contig -> DebrisHit from chromosome debris detection
@@ -462,8 +468,8 @@ def classify_all_contigs(
     classifications: List[ContigClassification] = []
     classified_contigs: Set[str] = set()
 
-    # Helper to compute GC deviation in standard deviations
-    def _gc_deviation(contig: str) -> Optional[float]:
+    # Helper to compute GC deviation vs REFERENCE (for chrom_assigned validation)
+    def _gc_deviation_vs_ref(contig: str) -> Optional[float]:
         if query_gc is None or ref_gc_mean is None or ref_gc_std is None:
             return None
         gc = query_gc.get(contig)
@@ -472,6 +478,19 @@ def classify_all_contigs(
         if ref_gc_std == 0:
             return 0.0
         return abs(gc - ref_gc_mean) / ref_gc_std
+
+    # Helper to compute GC deviation vs ASSEMBLY chromosomes (for non-chrom classifications)
+    # This is more appropriate for divergent genomes where the assembly may have
+    # different GC than the reference
+    def _gc_deviation_vs_asm(contig: str) -> Optional[float]:
+        if query_gc is None or asm_gc_mean is None or asm_gc_std is None:
+            return None
+        gc = query_gc.get(contig)
+        if gc is None:
+            return None
+        if asm_gc_std == 0:
+            return 0.0
+        return abs(gc - asm_gc_mean) / asm_gc_std
 
     # Helper to get contig GC content
     def _get_gc(contig: str) -> Optional[float]:
@@ -489,7 +508,7 @@ def classify_all_contigs(
         gene_count = ev.qr_gene_count.get((contig, ref_id), 0)
         ref_total_genes = ref_gene_counts.get(ref_id, 0)
         gene_proportion = (gene_count / ref_total_genes) if ref_total_genes > 0 else None
-        gc_dev = _gc_deviation(contig)
+        gc_dev = _gc_deviation_vs_ref(contig)  # Use reference GC for chrom_assigned validation
 
         # Compute synteny score (0-1) based on gene proportion
         synteny_score = min(1.0, gene_proportion * 2) if gene_proportion else 0.0
@@ -537,11 +556,11 @@ def classify_all_contigs(
         if contig in contaminants:
             continue
 
-        gc_dev = _gc_deviation(contig)
+        gc_dev = _gc_deviation_vs_asm(contig)  # Use assembly chromosome GC baseline
 
         # Confidence is inherently low/medium for unassigned contigs
-        # Medium: GC similar to reference (might be a real chromosome from a divergent region)
-        # Low: GC different from reference (might be contaminant or unusual sequence)
+        # Medium: GC similar to assembly chromosomes (might be a real chromosome from a divergent region)
+        # Low: GC different from assembly (might be contaminant or unusual sequence)
         confidence = "medium"
         if gc_dev is not None and gc_dev > 2.0:
             confidence = "low"
@@ -640,7 +659,7 @@ def classify_all_contigs(
     # rDNA: Confidence based on coverage and identity
     for contig in rdna_contigs:
         if contig not in classified_contigs:
-            gc_dev = _gc_deviation(contig)
+            gc_dev = _gc_deviation_vs_asm(contig)  # Use assembly chromosome GC baseline
             hit = rdna_hits.get(contig) if rdna_hits else None
             # High confidence if coverage >= 80% and identity >= 95%
             # Medium confidence if coverage >= 50% (our threshold)
@@ -671,10 +690,10 @@ def classify_all_contigs(
     for contig, hit in contaminants.items():
         if contig not in classified_contigs:
             contig_len = query_lengths.get(contig, 0)
-            gc_dev = _gc_deviation(contig)
+            gc_dev = _gc_deviation_vs_asm(contig)  # Use assembly chromosome GC baseline
 
             # Compute confidence based on coverage and GC deviation
-            # High confidence: high coverage (>0.8) AND (GC deviation > 2 std OR no synteny)
+            # High confidence: high coverage (>0.8) AND (GC deviation > 2 std from assembly)
             # Medium confidence: moderate coverage (0.5-0.8) OR conflicting evidence
             # Low confidence: low coverage (<0.5) AND some synteny evidence
             confidence = "high"
@@ -709,11 +728,11 @@ def classify_all_contigs(
     for contig in chromosome_debris:
         if contig not in classified_contigs:
             ref_id = best_ref.get(contig, "")
-            gc_dev = _gc_deviation(contig)
+            gc_dev = _gc_deviation_vs_asm(contig)  # Use assembly chromosome GC baseline
             hit = chrom_debris_hits.get(contig) if chrom_debris_hits else None
             # High confidence: ≥90% coverage AND ≥95% identity
             # Medium confidence: passed strict 80% cov, 90% identity threshold
-            # Low confidence: borderline or GC very different from reference
+            # Low confidence: borderline or GC very different from assembly chromosomes
             confidence = "high"
             if hit:
                 if hit.coverage >= 0.90 and hit.identity >= 0.95:
@@ -745,13 +764,13 @@ def classify_all_contigs(
             # Check if this contig has synteny support
             ref_id = best_ref.get(contig, "")
             classification = "chrom_debris" if ref_id else "debris"
-            gc_dev = _gc_deviation(contig)
+            gc_dev = _gc_deviation_vs_asm(contig)  # Use assembly chromosome GC baseline
             hit = other_debris_hits.get(contig) if other_debris_hits else None
 
             # Confidence based on detection evidence
             # High: ≥80% coverage OR ≥5 protein hits
             # Medium: ≥50% coverage OR ≥2 protein hits (our threshold)
-            # Low: borderline OR GC very different with no synteny
+            # Low: borderline OR GC very different from assembly chromosomes with no synteny
             confidence = "medium"
             if hit:
                 if hit.coverage >= 0.80 or hit.protein_hits >= 5:
@@ -783,7 +802,7 @@ def classify_all_contigs(
     # Low confidence by definition - no evidence for any classification
     for contig in query_lengths.keys():
         if contig not in classified_contigs:
-            gc_dev = _gc_deviation(contig)
+            gc_dev = _gc_deviation_vs_asm(contig)  # Use assembly chromosome GC baseline
             classifications.append(ContigClassification(
                 original_name=contig,
                 new_name="",

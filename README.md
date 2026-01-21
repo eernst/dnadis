@@ -203,7 +203,9 @@ Each contig is assigned a confidence level (`high`, `medium`, or `low`) indicati
 
 **Gene proportion**: Fraction of reference chromosome genes aligned to the query contig. Higher values indicate stronger synteny support.
 
-**GC deviation**: How many standard deviations (σ) the contig's GC content differs from the reference nuclear genome mean. Large deviations may indicate contamination or unusual sequences.
+**GC deviation**: How many standard deviations (σ) the contig's GC content differs from a GC baseline. Large deviations may indicate contamination or unusual sequences.
+- For `chrom_assigned`: compared to reference nuclear genome GC (validates synteny-based assignment)
+- For all other categories: compared to assembly chromosome GC (more appropriate for divergent genomes where the assembly may differ significantly from the reference)
 
 **Coverage**: Fraction of contig covered by alignments (0.0-1.0). Higher coverage indicates more complete matches.
 

@@ -37,7 +37,7 @@ These columns provide the underlying evidence used to determine classification c
 | Column | Type | Description |
 |--------|------|-------------|
 | `gc_content` | float | GC content of contig (0.0-1.0) |
-| `gc_deviation` | float | How many standard deviations the contig GC differs from reference mean |
+| `gc_deviation` | float | How many standard deviations the contig GC differs from baseline (reference GC for chrom_assigned, assembly chromosome GC for others) |
 | `synteny_score` | float | Synteny evidence strength (0.0-1.0); based on gene proportion |
 | `contam_score` | float | Contaminant evidence strength (0.0-1.0); normalized centrifuger score |
 | `contam_coverage` | float | Fraction of contig covered by contaminant alignments (0.0-1.0) |
@@ -131,7 +131,9 @@ The `classification_confidence` column indicates how certain the classification 
 **Evidence factors considered:**
 
 - **Gene proportion**: Fraction of reference chromosome genes aligned to the query contig
-- **GC deviation**: How many standard deviations (σ) the contig's GC content differs from the reference nuclear genome mean
+- **GC deviation**: How many standard deviations (σ) the contig's GC content differs from a GC baseline:
+  - For `chrom_assigned`: compared to reference nuclear genome GC
+  - For all other categories: compared to assembly chromosome GC (more appropriate for divergent genomes)
 - **Coverage**: Fraction of contig covered by alignments (0.0-1.0)
 - **Identity**: Alignment identity (0.0-1.0)
 - **Protein hits**: Number of unique reference protein-coding genes with miniprot alignments
