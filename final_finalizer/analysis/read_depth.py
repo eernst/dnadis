@@ -26,6 +26,7 @@ Depth metrics are useful for:
 from __future__ import annotations
 
 import gzip
+import json
 import random
 import shutil
 import statistics
@@ -511,6 +512,135 @@ def downsample_reads(
         return True, reads_path
 
 
+def write_alignment_metadata(
+    metadata_path: Path,
+    original_reads: Path,
+    assembly: Path,
+    reads_type: str,
+    target_coverage: Optional[float],
+    downsampled: bool,
+) -> None:
+    """Write alignment metadata for cache validation.
+
+    Args:
+        metadata_path: Path to write metadata JSON
+        original_reads: Path to original reads file (before downsampling)
+        assembly: Path to assembly FASTA
+        reads_type: Read type used for alignment
+        target_coverage: Target coverage for downsampling (None if disabled)
+        downsampled: Whether reads were downsampled
+    """
+    metadata = {
+        "original_reads": str(original_reads.resolve()),
+        "original_reads_name": original_reads.name,
+        "assembly": str(assembly.resolve()),
+        "assembly_name": assembly.name,
+        "reads_type": reads_type,
+        "target_coverage": target_coverage,
+        "downsampled": downsampled,
+    }
+    try:
+        with open(metadata_path, "w") as f:
+            json.dump(metadata, f, indent=2)
+    except Exception as e:
+        print(f"[warn] Could not write alignment metadata: {e}", file=sys.stderr)
+
+
+def check_alignment_cache(
+    bam_path: Path,
+    metadata_path: Path,
+    original_reads: Path,
+    assembly: Path,
+    reads_type: str,
+    target_coverage: Optional[float],
+) -> bool:
+    """Check if cached alignment is valid for current parameters.
+
+    Validates that:
+    1. BAM file exists and is non-empty
+    2. Metadata file exists and matches current parameters
+    3. BAM index exists
+
+    Args:
+        bam_path: Path to aligned BAM
+        metadata_path: Path to metadata JSON
+        original_reads: Current original reads path
+        assembly: Current assembly path
+        reads_type: Current reads type
+        target_coverage: Current target coverage
+
+    Returns:
+        True if cache is valid and can be reused, False otherwise
+    """
+    # Check BAM exists
+    if not file_exists_and_valid(bam_path, min_size=100):
+        return False
+
+    # Check metadata exists
+    if not metadata_path.exists():
+        print("[info] No alignment metadata found, will realign", file=sys.stderr)
+        return False
+
+    # Load and validate metadata
+    try:
+        with open(metadata_path) as f:
+            metadata = json.load(f)
+
+        # Check original reads match (by resolved path)
+        cached_reads = metadata.get("original_reads", "")
+        current_reads = str(original_reads.resolve())
+        if cached_reads != current_reads:
+            print(f"[info] Reads file changed: cached={metadata.get('original_reads_name', 'unknown')}, "
+                  f"current={original_reads.name}", file=sys.stderr)
+            return False
+
+        # Check assembly matches
+        cached_assembly = metadata.get("assembly", "")
+        current_assembly = str(assembly.resolve())
+        if cached_assembly != current_assembly:
+            print(f"[info] Assembly changed: cached={metadata.get('assembly_name', 'unknown')}, "
+                  f"current={assembly.name}", file=sys.stderr)
+            return False
+
+        # Check reads type matches
+        cached_reads_type = metadata.get("reads_type", "")
+        if cached_reads_type != reads_type:
+            print(f"[info] Reads type changed: cached={cached_reads_type}, current={reads_type}", file=sys.stderr)
+            return False
+
+        # Check target coverage matches (for downsampling consistency)
+        cached_coverage = metadata.get("target_coverage")
+        if cached_coverage != target_coverage:
+            print(f"[info] Target coverage changed: cached={cached_coverage}, current={target_coverage}", file=sys.stderr)
+            return False
+
+    except (json.JSONDecodeError, KeyError) as e:
+        print(f"[warn] Invalid alignment metadata: {e}", file=sys.stderr)
+        return False
+
+    # Check BAM index exists
+    bai_path = Path(str(bam_path) + ".bai")
+    csi_path = Path(str(bam_path) + ".csi")
+    if not bai_path.exists() and not csi_path.exists():
+        print("[info] BAM index missing, will create", file=sys.stderr)
+        # Try to create index
+        if have_exe("samtools"):
+            try:
+                subprocess.run(
+                    ["samtools", "index", str(bam_path)],
+                    check=True,
+                    stderr=subprocess.DEVNULL,
+                )
+                print("[info] Created BAM index", file=sys.stderr)
+            except subprocess.CalledProcessError:
+                print("[warn] Could not create BAM index, will realign", file=sys.stderr)
+                return False
+        else:
+            return False
+
+    return True
+
+
 def align_reads_to_assembly(
     reads: Path,
     assembly: Path,
@@ -840,63 +970,91 @@ def calculate_depth_metrics(
                     stderr=subprocess.DEVNULL,
                 )
     else:
-        # Need to align - consider downsampling first
-        reads_to_align = reads
-
-        # Downsample if target coverage is specified
-        if target_coverage and target_coverage > 0:
-            assembly_size = sum(contig_lengths.values())
-            print(f"[info] Assembly size: {assembly_size:,} bp", file=sys.stderr)
-
-            # Estimate total read bases
-            print("[info] Estimating total read bases for downsampling", file=sys.stderr)
-            total_read_bases = estimate_read_bases(reads, read_format)
-
-            if total_read_bases > 0:
-                current_coverage = total_read_bases / assembly_size
-                print(f"[info] Estimated read coverage: {current_coverage:.1f}X", file=sys.stderr)
-
-                fraction = calculate_subsample_fraction(
-                    total_read_bases=total_read_bases,
-                    assembly_size=assembly_size,
-                    target_coverage=target_coverage,
-                )
-
-                if fraction < 1.0:
-                    print(f"[info] Downsampling to ~{target_coverage:.0f}X coverage (fraction={fraction:.3f})", file=sys.stderr)
-                    downsampled_path = work_dir / "downsampled_reads"
-                    success, reads_to_align = downsample_reads(
-                        reads_path=reads,
-                        read_format=read_format,
-                        output_path=downsampled_path,
-                        fraction=fraction,
-                        seed=42,
-                        threads=threads,
-                    )
-                    if not success:
-                        print("[warn] Downsampling failed, using full reads", file=sys.stderr)
-                        reads_to_align = reads
-                else:
-                    print(f"[info] Read coverage ({current_coverage:.1f}X) below target ({target_coverage:.0f}X), no downsampling needed", file=sys.stderr)
-            else:
-                print("[warn] Could not estimate read bases, skipping downsampling", file=sys.stderr)
-
+        # Need to align - check cache first, then consider downsampling
         bam_path = work_dir / "aligned_reads.sorted.bam"
+        metadata_path = work_dir / "alignment_metadata.json"
         err_path = work_dir / "alignment.err"
 
-        success = align_reads_to_assembly(
-            reads=reads_to_align,
+        # Check if we have a valid cached alignment from the same reads
+        cache_valid = check_alignment_cache(
+            bam_path=bam_path,
+            metadata_path=metadata_path,
+            original_reads=reads,
             assembly=assembly,
-            output_bam=bam_path,
-            threads=threads,
             reads_type=reads_type,
-            work_dir=work_dir,
-            err_path=err_path,
+            target_coverage=target_coverage,
         )
 
-        if not success:
-            print("[error] Read alignment failed", file=sys.stderr)
-            return {}
+        if cache_valid:
+            print(f"[info] Reusing cached alignment: {bam_path}", file=sys.stderr)
+        else:
+            # Need to perform alignment - consider downsampling first
+            reads_to_align = reads
+            downsampled = False
+
+            # Downsample if target coverage is specified
+            if target_coverage and target_coverage > 0:
+                assembly_size = sum(contig_lengths.values())
+                print(f"[info] Assembly size: {assembly_size:,} bp", file=sys.stderr)
+
+                # Estimate total read bases
+                print("[info] Estimating total read bases for downsampling", file=sys.stderr)
+                total_read_bases = estimate_read_bases(reads, read_format)
+
+                if total_read_bases > 0:
+                    current_coverage = total_read_bases / assembly_size
+                    print(f"[info] Estimated read coverage: {current_coverage:.1f}X", file=sys.stderr)
+
+                    fraction = calculate_subsample_fraction(
+                        total_read_bases=total_read_bases,
+                        assembly_size=assembly_size,
+                        target_coverage=target_coverage,
+                    )
+
+                    if fraction < 1.0:
+                        print(f"[info] Downsampling to ~{target_coverage:.0f}X coverage (fraction={fraction:.3f})", file=sys.stderr)
+                        downsampled_path = work_dir / "downsampled_reads"
+                        success, reads_to_align = downsample_reads(
+                            reads_path=reads,
+                            read_format=read_format,
+                            output_path=downsampled_path,
+                            fraction=fraction,
+                            seed=42,
+                            threads=threads,
+                        )
+                        if not success:
+                            print("[warn] Downsampling failed, using full reads", file=sys.stderr)
+                            reads_to_align = reads
+                        else:
+                            downsampled = True
+                    else:
+                        print(f"[info] Read coverage ({current_coverage:.1f}X) below target ({target_coverage:.0f}X), no downsampling needed", file=sys.stderr)
+                else:
+                    print("[warn] Could not estimate read bases, skipping downsampling", file=sys.stderr)
+
+            success = align_reads_to_assembly(
+                reads=reads_to_align,
+                assembly=assembly,
+                output_bam=bam_path,
+                threads=threads,
+                reads_type=reads_type,
+                work_dir=work_dir,
+                err_path=err_path,
+            )
+
+            if not success:
+                print("[error] Read alignment failed", file=sys.stderr)
+                return {}
+
+            # Write metadata for future cache validation
+            write_alignment_metadata(
+                metadata_path=metadata_path,
+                original_reads=reads,
+                assembly=assembly,
+                reads_type=reads_type,
+                target_coverage=target_coverage,
+                downsampled=downsampled,
+            )
 
     # Run mosdepth
     mosdepth_prefix = work_dir / "depth"
