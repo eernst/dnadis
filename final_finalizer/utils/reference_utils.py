@@ -278,9 +278,21 @@ def parse_gff3_transcript_coords(
     Returns:
       tx2loc:  dict[str] -> (chrom, start0, end0, strand)
       tx2gene: dict[str] -> gene_id
+
+    Raises:
+      RuntimeError: If no transcript features are found
     """
+    import sys
+
     tx2loc: dict[str, tuple[str, int, int, str]] = {}
     tx2gene: dict[str, str] = {}
+
+    # Track parsing issues for reporting
+    parse_errors: List[str] = []
+    total_lines = 0
+    malformed_lines = 0
+    missing_id_count = 0
+    invalid_coord_count = 0
 
     def _attrs_to_dict(attr_str: str) -> dict[str, str]:
         d: dict[str, str] = {}
@@ -294,11 +306,15 @@ def parse_gff3_transcript_coords(
         return d
 
     with open_maybe_gzip(gff3_path, "rt") as fh:
-        for line in fh:
+        for line_num, line in enumerate(fh, 1):
             if not line or line.startswith("#"):
                 continue
+            total_lines += 1
             parts = line.rstrip("\n").split("\t")
             if len(parts) != 9:
+                malformed_lines += 1
+                if len(parse_errors) < 5:
+                    parse_errors.append(f"Line {line_num}: Expected 9 fields, got {len(parts)}")
                 continue
             seqid, _src, ftype, start, end, _score, strand, _phase, attrs = parts
             ftype_l = ftype.lower()
@@ -309,11 +325,17 @@ def parse_gff3_transcript_coords(
                 s = int(start) - 1  # 0-based half-open
                 e = int(end)
             except ValueError:
+                invalid_coord_count += 1
+                if len(parse_errors) < 5:
+                    parse_errors.append(f"Line {line_num}: Invalid coordinates: start={start}, end={end}")
                 continue
 
             ad = _attrs_to_dict(attrs)
             tid = ad.get("ID")
             if not tid:
+                missing_id_count += 1
+                if len(parse_errors) < 5:
+                    parse_errors.append(f"Line {line_num}: mRNA/transcript missing ID attribute")
                 continue
 
             parent = ad.get("Parent", "")
@@ -322,6 +344,26 @@ def parse_gff3_transcript_coords(
             ref_id = ref_id_map.get(seqid, normalize_ref_id(seqid)) if ref_id_map else seqid
             tx2loc[tid] = (ref_id, s, e, strand if strand in ("+", "-") else "+")
             tx2gene[tid] = gene_id
+
+    # Report parsing issues
+    total_errors = malformed_lines + missing_id_count + invalid_coord_count
+    if total_errors > 0:
+        print(
+            f"[warn] GFF3 parsing: {total_errors} issues "
+            f"(malformed={malformed_lines}, missing_id={missing_id_count}, invalid_coords={invalid_coord_count})",
+            file=sys.stderr,
+        )
+        for err in parse_errors:
+            print(f"  {err}", file=sys.stderr)
+        if total_errors > 5:
+            print(f"  ... and {total_errors - len(parse_errors)} more", file=sys.stderr)
+
+    if not tx2loc:
+        raise RuntimeError(
+            f"No transcript features found in GFF3: {gff3_path}\n"
+            f"Total lines: {total_lines}, Errors: {total_errors}\n"
+            "Expected: mRNA or transcript features with ID= attribute"
+        )
 
     return tx2loc, tx2gene
 

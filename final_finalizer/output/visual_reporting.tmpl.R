@@ -218,7 +218,7 @@ ev <- ev %>%
 # ----------------------------
 df_slots <- df_plot %>%
   mutate(contig_len_mb = contig_len / 1e6) %>%
-  filter(assigned_chrom_id != "Un") %>%
+  filter(assigned_chrom_id != "Un" | classification == "chrom_unassigned") %>%
   left_join(x_tbl, by = "chrom_id") %>%
   filter(!is.na(x_index)) %>%
   group_by(chrom_id) %>%
@@ -588,11 +588,14 @@ if (has_subgenomes) {
       ry = sum(w * vy, na.rm = TRUE),
       .groups = "drop"
     ) %>%
-    left_join(df_plot %>% select(original_name, assigned_subgenome), by = c("contig" = "original_name")) %>%
+    left_join(df_plot %>% select(original_name, assigned_subgenome, classification),
+              by = c("contig" = "original_name")) %>%
     mutate(
       assigned_subgenome = if_else(is.na(assigned_subgenome), "NA", assigned_subgenome),
-      assigned_subgenome = factor(assigned_subgenome, levels = c(plot_levels, "NA"))
-    )
+      classification = if_else(is.na(classification), "NA", classification)
+    ) %>%
+    filter(assigned_subgenome %in% plot_levels | classification == "chrom_unassigned") %>%
+    mutate(assigned_subgenome = factor(assigned_subgenome, levels = c(plot_levels, "NA")))
 
   frame <- if (n_sets == 2) {
     tibble(x = c(-0.5, 0.5), y = c(0, 0))
@@ -713,7 +716,8 @@ if (has_subgenomes) {
 }
 
 if (has_subgenomes) {
-  bottom_row <- (p_radar + p_id + plot_layout(widths = c(1, 1.35)))
+  bottom_row <- (p_radar + p_id + plot_layout(widths = c(1, 1.35), guides = "keep")) &
+    theme(plot.margin = margin(8.5, 8.5, 5.5, 8.5))
   full_plot <- p_comp / bottom_row + plot_layout(heights = c(1, 1))
 } else {
   full_plot <- p_comp / p_id + plot_layout(heights = c(1, 1))
@@ -724,7 +728,8 @@ ggsave(out_pdf, plot = full_plot, width = 6, height = 6, units = "in", dpi = 300
 
 if (plot_html) {
   if (has_subgenomes) {
-    bottom_row_html <- (p_radar + p_id + plot_layout(widths = c(1, 1.35)))
+    bottom_row_html <- (p_radar + p_id + plot_layout(widths = c(1, 1.35), guides = "keep")) &
+      theme(plot.margin = margin(8.5, 8.5, 5.5, 8.5))
     full_plot_html <- p_comp_html / bottom_row_html + plot_layout(heights = c(1, 1))
   } else {
     full_plot_html <- p_comp_html / p_id + plot_layout(heights = c(1, 1))

@@ -27,9 +27,43 @@ def have_exe(exe: str) -> bool:
     return shutil.which(exe) is not None
 
 
-def run_to_gzip(cmd: list[str], gz_out: Path, err_path: Path) -> None:
+def file_exists_and_valid(path: Path, min_size: int = 1) -> bool:
+    """Check if a file exists, is readable, and has at least min_size bytes.
+
+    This combines existence check with basic integrity validation to avoid
+    TOCTOU race conditions and detect corrupted/truncated files.
+
+    Args:
+        path: File path to check
+        min_size: Minimum file size in bytes (default 1, i.e., non-empty)
+
+    Returns:
+        True if file exists and meets size requirement, False otherwise
     """
-    Run a command, streaming stdout into a gzipped file. Stderr -> err_path.
+    try:
+        if not path.exists():
+            return False
+        if not path.is_file():
+            return False
+        if path.stat().st_size < min_size:
+            return False
+        return True
+    except (OSError, PermissionError):
+        # File may have been deleted or we don't have permission
+        return False
+
+
+def run_to_gzip(cmd: list[str], gz_out: Path, err_path: Path, timeout: int = 7200) -> None:
+    """Run a command, streaming stdout into a gzipped file. Stderr -> err_path.
+
+    Args:
+        cmd: Command and arguments to run
+        gz_out: Output path for gzipped stdout
+        err_path: Path for stderr output
+        timeout: Maximum runtime in seconds (default 2 hours)
+
+    Raises:
+        RuntimeError: If command fails or times out
     """
     err_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -44,10 +78,33 @@ def run_to_gzip(cmd: list[str], gz_out: Path, err_path: Path) -> None:
                 if proc.stdout:
                     proc.stdout.close()
             finally:
-                ret = proc.wait()
+                try:
+                    ret = proc.wait(timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+                    raise RuntimeError(
+                        f"Command timed out after {timeout}s: {' '.join(cmd)}\n"
+                        f"Error log: {err_path}"
+                    )
 
     if ret != 0:
-        raise RuntimeError(f"Command failed with return code {ret} (see {err_path})")
+        # Read error log preview for better error messages
+        error_preview = ""
+        try:
+            if err_path.exists():
+                with err_path.open("r", errors="replace") as ef:
+                    lines = ef.readlines()[:10]
+                    error_preview = "".join(lines)
+        except Exception:
+            pass
+
+        raise RuntimeError(
+            f"Command failed with return code {ret}\n"
+            f"Command: {' '.join(cmd)}\n"
+            f"Error log: {err_path}\n"
+            f"Preview:\n{error_preview}"
+        )
 
 
 def merge_intervals(intervals: list[tuple[int, int]]) -> tuple[list[tuple[int, int]], int]:

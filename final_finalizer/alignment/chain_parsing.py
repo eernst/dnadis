@@ -35,9 +35,15 @@ def _finalize_chain(chain: Chain):
 
 
 def _chain_weight(qbp: int, matches: int, alnlen: int, mode: str) -> float:
+    """Calculate chain weight/score based on the specified scoring mode.
+
+    All arithmetic uses float to avoid potential integer overflow on
+    very large alignments.
+    """
     if alnlen <= 0:
         return 0.0
-    ident = matches / alnlen
+    # Ensure float arithmetic throughout
+    ident = float(matches) / float(alnlen)
     if mode == "matches":
         return float(matches)
     if mode == "qbp_ident":
@@ -157,7 +163,7 @@ def parse_paf_chain_evidence_and_segments(
 
 def _filter_overlapping_hits_by_identity(
     blocks: dict[tuple[str, str, str], list[Block]],
-) -> tuple[dict[tuple[str, str, str], list[Block]], int, int]:
+) -> tuple[dict[tuple[str, str, str], list[Block]], int, int, dict[str, int]]:
     """
     Filter overlapping hits on each contig, keeping only the highest-identity hit.
 
@@ -165,11 +171,14 @@ def _filter_overlapping_hits_by_identity(
     the highest identity (matches/aln_len) is retained. This removes "shadow" hits
     from homeologous genes that map to the same query region with lower identity.
 
+    This is biologically important for polyploid genomes where homeologous gene
+    copies may map to the same query region with different identities.
+
     Args:
         blocks: Dict mapping (contig, ref_id, strand) -> list of Block objects
 
     Returns:
-        Tuple of (filtered_blocks, total_hits_before, total_hits_removed)
+        Tuple of (filtered_blocks, total_hits_before, total_hits_removed, removed_per_contig)
     """
     # Group all blocks by contig (across all ref_ids)
     contig_hits: dict[str, list[tuple[tuple[str, str, str], Block]]] = defaultdict(list)
@@ -180,6 +189,7 @@ def _filter_overlapping_hits_by_identity(
 
     total_before = sum(len(v) for v in contig_hits.values())
     total_removed = 0
+    removed_per_contig: dict[str, int] = defaultdict(int)
 
     filtered_blocks: dict[tuple[str, str, str], list[Block]] = defaultdict(list)
 
@@ -221,6 +231,7 @@ def _filter_overlapping_hits_by_identity(
                     if qs < kept_qe and qe > kept_qs and ident > kept_ident:
                         # This new hit dominates the kept one - remove it
                         total_removed += 1
+                        removed_per_contig[contig] += 1
                     else:
                         new_kept_intervals.append((kept_qs, kept_qe, kept_ident))
                         new_kept_hits.append(kept_hits[i])
@@ -233,12 +244,13 @@ def _filter_overlapping_hits_by_identity(
                 kept_hits.append((key, blk))
             else:
                 total_removed += 1
+                removed_per_contig[contig] += 1
 
         # Add kept hits to filtered_blocks
         for key, blk in kept_hits:
             filtered_blocks[key].append(blk)
 
-    return filtered_blocks, total_before, total_removed
+    return filtered_blocks, total_before, total_removed, dict(removed_per_contig)
 
 
 def parse_miniprot_synteny_evidence_and_segments(
@@ -340,12 +352,18 @@ def parse_miniprot_synteny_evidence_and_segments(
             )
 
     # Filter overlapping hits, keeping only highest-identity hit at each position
-    blocks, n_before, n_removed = _filter_overlapping_hits_by_identity(blocks)
+    blocks, n_before, n_removed, removed_per_contig = _filter_overlapping_hits_by_identity(blocks)
     if n_removed > 0:
         print(
             f"[info] Filtered {n_removed}/{n_before} overlapping protein hits by identity",
             file=sys.stderr,
         )
+        # Show contigs with most filtered hits (helps identify potential issues)
+        if removed_per_contig:
+            top_contigs = sorted(removed_per_contig.items(), key=lambda x: -x[1])[:3]
+            if top_contigs[0][1] > 10:  # Only show if significant filtering
+                top_str = ", ".join(f"{c}:{n}" for c, n in top_contigs)
+                print(f"[info]   Top filtered contigs: {top_str}", file=sys.stderr)
 
     return _chains_to_evidence_and_segments(
         blocks=blocks,

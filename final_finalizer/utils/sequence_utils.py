@@ -50,8 +50,33 @@ def read_fasta_lengths(fasta_path: Path) -> dict[str, int]:
     return lengths
 
 
-def read_fasta_sequences(fasta_path: Path) -> Dict[str, str]:
-    """Read FASTA file and return dict of name -> sequence."""
+def read_fasta_sequences(fasta_path: Path, warn_size_gb: float = 2.0) -> Dict[str, str]:
+    """Read FASTA file and return dict of name -> sequence.
+
+    Note: This loads the entire file into memory. For very large genomes,
+    consider using write_filtered_fasta() which streams data instead.
+
+    Args:
+        fasta_path: Path to FASTA file (plain or gzipped)
+        warn_size_gb: Warn if file exceeds this size in GB (default 2.0)
+
+    Returns:
+        Dict mapping sequence name to sequence string
+    """
+    import sys
+
+    # Check file size and warn for large files
+    try:
+        file_size_gb = fasta_path.stat().st_size / (1024**3)
+        if file_size_gb > warn_size_gb:
+            print(
+                f"[warn] Loading {file_size_gb:.1f} GB FASTA into memory. "
+                "This may use significant RAM.",
+                file=sys.stderr,
+            )
+    except OSError:
+        pass  # File might be gzipped, size check less meaningful
+
     sequences: Dict[str, str] = {}
     name: Optional[str] = None
     seq_parts: List[str] = []

@@ -6,12 +6,13 @@ Contains functions to run minimap2, mm2plus, gffread, and miniprot.
 """
 from __future__ import annotations
 
+import shlex
 import subprocess
 import sys
 from pathlib import Path
 from typing import List, Optional
 
-from final_finalizer.utils.io_utils import have_exe, run_to_gzip
+from final_finalizer.utils.io_utils import file_exists_and_valid, have_exe, run_to_gzip
 
 
 # ----------------------------
@@ -67,8 +68,8 @@ def run_minimap2(
     Returns:
         True if alignment succeeded, False otherwise
     """
-    # Check if output already exists
-    if paf_out.exists():
+    # Check if output already exists and is valid
+    if file_exists_and_valid(paf_out):
         print(f"[info] PAF exists, reusing: {paf_out}", file=sys.stderr)
         return True
 
@@ -130,7 +131,7 @@ def run_minimap2_synteny(
     This uses specialized parameters (-c -f1 -B2 -O1,24 -s 10 --max-chain-skip=80 -z 2000,200)
     for genome-wide synteny analysis. Output is gzipped PAF.
     """
-    if paf_gz_out.exists():
+    if file_exists_and_valid(paf_gz_out):
         print(f"[info] PAF.gz exists, reusing: {paf_gz_out}", file=sys.stderr)
         return
 
@@ -175,7 +176,7 @@ def run_gffread_extract_proteins(
     Use gffread to extract protein sequences from reference genome + GFF3.
       gffread -g ref.fa -y proteins.fa ref.gff3
     """
-    if proteins_faa.exists():
+    if file_exists_and_valid(proteins_faa):
         print(f"[info] Proteins FASTA exists, reusing: {proteins_faa}", file=sys.stderr)
         return
 
@@ -212,7 +213,7 @@ def run_miniprot(
     Here target = query genome, query = reference proteins.
     Output is gzipped PAF.
     """
-    if paf_gz_out.exists():
+    if file_exists_and_valid(paf_gz_out):
         print(f"[info] miniprot PAF.gz exists, reusing: {paf_gz_out}", file=sys.stderr)
         return
 
@@ -221,7 +222,8 @@ def run_miniprot(
 
     cmd = [miniprot_exe, "-t", str(threads)]
     if extra_args:
-        cmd += extra_args.strip().split()
+        # Use shlex.split for proper shell argument parsing (prevents command injection)
+        cmd += shlex.split(extra_args.strip())
     cmd += [str(query_fasta), str(proteins_faa)]
 
     print(

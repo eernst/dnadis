@@ -10,6 +10,9 @@ from typing import Dict, List, Optional, Set, Tuple
 from final_finalizer.models import ContigClassification
 from final_finalizer.utils.reference_utils import split_chrom_subgenome
 
+# Use a large but finite value instead of infinity to avoid parsing issues
+MAX_SCORE_RATIO = 1e9
+
 
 def _denormalize_ref_id(ref_id: str, ref_norm_to_orig: Optional[Dict[str, str]]) -> str:
     if not ref_norm_to_orig:
@@ -175,7 +178,7 @@ def write_contig_summary_tsv(
                 assigned_ref_id_out = _denormalize_ref_id(assigned_ref_id, ref_norm_to_orig)
                 assigned_chrom_id, assigned_subgenome = split_chrom_subgenome(assigned_ref_id_out)
                 best_ref_union_frac = (best_union_bp / contig_len) if contig_len > 0 else 0.0
-                score_ratio = (bs / sr) if sr > 0 else (float("inf") if bs > 0 else 0.0)
+                score_ratio = (bs / sr) if sr > 0 else (MAX_SCORE_RATIO if bs > 0 else 0.0)
 
                 status = "OK"
                 if best_ref_union_frac < float(assign_min_frac):
@@ -224,7 +227,7 @@ def write_contig_summary_tsv(
                         str(int(contig_len)),  # length
                         f"{bs:.3f}",
                         f"{sr:.3f}",
-                        (f"{score_ratio:.3f}" if not math.isinf(score_ratio) else "Inf"),
+                        f"{score_ratio:.3f}",
                         str(int(best_union_bp)),
                         f"{best_ref_union_frac:.4f}",
                         (f"{ref_gene_proportion:.4f}" if isinstance(ref_gene_proportion, float) else str(ref_gene_proportion)),
@@ -548,7 +551,7 @@ def compute_summary(
                 assigned_ref_id_out = assigned_ref_id
 
                 best_ref_union_frac = (best_union_bp / contig_len) if contig_len > 0 else 0.0
-                score_ratio = (bs / sr) if sr > 0 else (float("inf") if bs > 0 else 0.0)
+                score_ratio = (bs / sr) if sr > 0 else (MAX_SCORE_RATIO if bs > 0 else 0.0)
 
                 status = "OK"
                 if best_ref_union_frac < float(assign_min_frac):
@@ -576,7 +579,7 @@ def compute_summary(
                         str(status),
                         f"{bs:.3f}",
                         f"{sr:.3f}",
-                        (f"{score_ratio:.3f}" if not math.isinf(score_ratio) else "Inf"),
+                        f"{score_ratio:.3f}",
                         str(int(best_union_bp)),
                         str(int(contig_len)),
                         f"{best_ref_union_frac:.4f}",

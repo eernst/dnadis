@@ -8,6 +8,34 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Dict, Optional, Set, Tuple
 
+
+def _validate_input_path(path_str: str) -> Path:
+    """Validate that an input file path exists and is readable.
+
+    Used as argparse type for input file arguments.
+    """
+    path = Path(path_str).resolve()
+    if not path.exists():
+        raise argparse.ArgumentTypeError(f"Input file not found: {path}")
+    if not path.is_file():
+        raise argparse.ArgumentTypeError(f"Input path is not a file: {path}")
+    return path
+
+
+def _positive_int(value: str) -> int:
+    """Validate that a value is a positive integer.
+
+    Used as argparse type for thread count and similar arguments.
+    """
+    try:
+        ivalue = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"Invalid integer value: {value}")
+    if ivalue <= 0:
+        raise argparse.ArgumentTypeError(f"Value must be positive, got {value}")
+    return ivalue
+
+from final_finalizer.utils.io_utils import file_exists_and_valid
 from final_finalizer.utils.sequence_utils import (
     read_fasta_lengths,
     write_filtered_fasta,
@@ -71,11 +99,12 @@ def main():
     # Required arguments
     # =========================================================================
     req = p.add_argument_group("Required arguments")
-    req.add_argument("-r", "--ref", required=True, help="Reference assembly FASTA (plain or gzipped; chrNA/chrNP/etc.)")
-    req.add_argument("-q", "--query", required=True, help="Query assembly FASTA (plain or gzipped; contigs/scaffolds)")
+    req.add_argument("-r", "--ref", type=_validate_input_path, required=True, help="Reference assembly FASTA (plain or gzipped; chrNA/chrNP/etc.)")
+    req.add_argument("-q", "--query", type=_validate_input_path, required=True, help="Query assembly FASTA (plain or gzipped; contigs/scaffolds)")
     req.add_argument("-o", "--outprefix", required=True, help="Output prefix (no extension)")
     req.add_argument(
         "--ref-gff3",
+        type=_validate_input_path,
         required=True,
         help="Reference GFF3 with protein-coding gene annotations. "
         "Used to extract proteins (gffread) and run protein-anchor synteny blocks (miniprot).",
@@ -85,7 +114,7 @@ def main():
     # Common options
     # =========================================================================
     common = p.add_argument_group("Common options")
-    common.add_argument("-t", "--threads", type=int, default=8, help="Threads for minimap2/miniprot [8]")
+    common.add_argument("-t", "--threads", type=_positive_int, default=8, help="Threads for minimap2/miniprot [8]")
     common.add_argument("--plot", action="store_true", help="Generate overview plots with R/ggplot2")
     common.add_argument("--plot-html", action="store_true", help="Also generate interactive HTML plot (ggiraph)")
     common.add_argument(
@@ -329,8 +358,8 @@ def main():
 
     # --- Phase 1: Reading reference and query FASTA ---
     print("[info] Phase 1: Reading reference and query FASTA", file=sys.stderr)
-    ref = Path(args.ref)
-    qry = Path(args.query)
+    ref = args.ref  # Already a Path from _validate_input_path
+    qry = args.query  # Already a Path from _validate_input_path
     outprefix = Path(args.outprefix)
     ref_lengths_norm, ref_orig_to_norm, ref_norm_to_orig = read_fasta_lengths_with_map(ref)
     ref_ids_raw = set(read_fasta_lengths(ref).keys())
@@ -354,7 +383,7 @@ def main():
     miniprot_paf_gz = Path(str(outprefix) + ".miniprot.paf.gz")
     miniprot_err = Path(str(outprefix) + ".miniprot.err")
 
-    if not ref_lengths_tsv.exists():
+    if not file_exists_and_valid(ref_lengths_tsv):
         print(f"[info] Writing reference lengths: {ref_lengths_tsv}", file=sys.stderr)
         write_ref_lengths_tsv(ref_lengths_tsv, ref)
     else:
@@ -383,7 +412,7 @@ def main():
 
     # --- Phase 3: Protein-anchor synteny analysis ---
     print("[info] Phase 3: Protein-anchor synteny analysis", file=sys.stderr)
-    ref_gff3 = Path(args.ref_gff3)
+    ref_gff3 = args.ref_gff3  # Already a Path from _validate_input_path
     filtered_ref_gff3 = Path(str(outprefix) + ".ref_gff3.filtered.gff3")
     ref_gff3 = filter_gff3_by_ref(
         ref_gff3,
