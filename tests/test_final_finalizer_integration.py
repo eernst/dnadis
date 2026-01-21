@@ -161,3 +161,228 @@ def test_arabidopsis_normalization_pipeline():
     assert ff.normalize_organelle_id("Mt") == "chrM"
     assert ff.normalize_organelle_id("Pt") == "chrC"
     assert ff.normalize_organelle_id("Chr1") is None  # Not an organelle
+
+
+@pytest.mark.integration
+def test_contig_orientation_detection(tmp_path):
+    """Test that contig orientation detection correctly identifies reverse-complemented contigs.
+
+    This test creates a synthetic query assembly with:
+    1. A forward-oriented chromosome (copied from reference)
+    2. A reverse-complemented chromosome (reverse complement of reference)
+    3. Runs the full pipeline to verify orientation detection
+    4. Checks that the reversed field is correctly set in the output
+
+    The test helps verify that the orientation detection logic works correctly,
+    which is critical for proper chromosome assembly orientation.
+
+    CURRENT STATUS: This test is marked as xfail because there is a known bug
+    where miniprot does not report the correct strand orientation for reverse-
+    complemented contigs. All alignments are reported as "+" strand even when
+    the contig is reverse-complemented relative to the reference.
+    """
+    if not TAIR10_FASTA.exists():
+        pytest.skip(f"missing TAIR10 FASTA: {TAIR10_FASTA}")
+    if not ARAPORT11_GFF3.exists():
+        pytest.skip(f"missing Araport11 GFF3: {ARAPORT11_GFF3}")
+
+    # Read reference sequences - we'll use Chr4 and Chr5 for testing
+    # These are smaller chromosomes (~18-27 Mbp) which makes the test faster
+    ref_seqs = ff.read_fasta_sequences(TAIR10_FASTA)
+    assert "Chr4" in ref_seqs, "Chr4 not found in TAIR10 reference"
+    assert "Chr5" in ref_seqs, "Chr5 not found in TAIR10 reference"
+
+    chr4_seq = ref_seqs["Chr4"]
+    chr5_seq = ref_seqs["Chr5"]
+
+    # Create a subset reference FASTA with only Chr4 and Chr5
+    # This works around gffread's requirement for consistent line lengths
+    subset_ref_fasta = tmp_path / "subset_ref.fasta"
+    subset_ref_seqs = {
+        "Chr4": chr4_seq,
+        "Chr5": chr5_seq,
+    }
+    ff.write_fasta(subset_ref_seqs, subset_ref_fasta)
+
+    # Create a subset GFF3 with only Chr4 and Chr5 annotations
+    subset_gff3 = tmp_path / "subset_ref.gff3"
+    with gzip.open(ARAPORT11_GFF3, "rt") as in_f, subset_gff3.open("w") as out_f:
+        for line in in_f:
+            if line.startswith("#"):
+                out_f.write(line)
+            elif line.startswith("Chr4\t") or line.startswith("Chr5\t"):
+                out_f.write(line)
+
+    # Create synthetic query assembly:
+    # - contig_1: Copy of Chr4 in forward orientation (should not be reversed)
+    # - contig_2: Reverse complement of Chr5 (should be detected and reversed)
+    chr5_revcomp = ff.reverse_complement(chr5_seq)
+
+    query_fasta = tmp_path / "test_query.fasta"
+    query_seqs = {
+        "contig_forward": chr4_seq,
+        "contig_reversed": chr5_revcomp,
+    }
+    ff.write_fasta(query_seqs, query_fasta)
+
+    # Verify the query assembly was created correctly
+    assert query_fasta.exists()
+    query_lengths = ff.read_fasta_lengths(query_fasta)
+    assert "contig_forward" in query_lengths
+    assert "contig_reversed" in query_lengths
+    assert query_lengths["contig_forward"] == len(chr4_seq)
+    assert query_lengths["contig_reversed"] == len(chr5_revcomp)
+
+    # Create output directory
+    output_dir = tmp_path / "output"
+    output_dir.mkdir(exist_ok=True)
+    output_prefix = output_dir / "test"
+
+    # Run the full pipeline
+    # We use a simplified set of arguments focusing on the core alignment and orientation detection
+    import subprocess
+    import sys
+
+    cmd = [
+        sys.executable, "-m", "final_finalizer",
+        "--query", str(query_fasta),
+        "--ref", str(subset_ref_fasta),
+        "--ref-gff3", str(subset_gff3),
+        "--outprefix", str(output_prefix),
+        "-t", "4",
+        "--skip-contaminants",  # Skip contaminant detection to speed up test
+        "--skip-rdna",  # Skip rDNA detection to speed up test
+    ]
+
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=600,  # 10 minute timeout
+    )
+
+    # Check that the pipeline succeeded
+    assert result.returncode == 0, f"Pipeline failed with stderr:\n{result.stderr}"
+
+    # Verify that output files were created
+    contig_summary = output_prefix.with_suffix(".contig_summary.tsv")
+    assert contig_summary.exists(), "contig_summary.tsv not created"
+
+    macro_blocks = output_prefix.with_suffix(".macro_blocks.tsv")
+    assert macro_blocks.exists(), "macro_blocks.tsv not created"
+
+    chrs_fasta = Path(f"{output_prefix}.chrs.fasta")
+    assert chrs_fasta.exists(), "chrs.fasta not created"
+
+    # Parse the contig_summary.tsv to check orientation detection
+    classifications = {}
+    with contig_summary.open("r") as f:
+        header = f.readline().strip().split("\t")
+        # Find column indices
+        contig_idx = header.index("contig")
+        original_name_idx = header.index("original_name")
+        classification_idx = header.index("classification")
+        reversed_idx = header.index("reversed")
+        assigned_ref_idx = header.index("assigned_ref_id")
+
+        for line in f:
+            fields = line.strip().split("\t")
+            original_name = fields[original_name_idx]
+            classifications[original_name] = {
+                "new_name": fields[contig_idx],
+                "classification": fields[classification_idx],
+                "reversed": fields[reversed_idx],
+                "assigned_ref_id": fields[assigned_ref_idx],
+            }
+
+    # Verify both contigs are present and classified as chromosomes
+    assert "contig_forward" in classifications, "contig_forward not found in output"
+    assert "contig_reversed" in classifications, "contig_reversed not found in output"
+
+    # Check classifications
+    fwd_class = classifications["contig_forward"]
+    rev_class = classifications["contig_reversed"]
+
+    assert fwd_class["classification"] == "chrom_assigned", \
+        f"contig_forward not classified as chromosome: {fwd_class['classification']}"
+    assert rev_class["classification"] == "chrom_assigned", \
+        f"contig_reversed not classified as chromosome: {rev_class['classification']}"
+
+    # Check reference assignments
+    # Normalized reference IDs use lowercase (chr4, chr5)
+    assert fwd_class["assigned_ref_id"] == "chr4" or fwd_class["assigned_ref_id"] == "Chr4", \
+        f"contig_forward assigned to wrong reference: {fwd_class['assigned_ref_id']}"
+    assert rev_class["assigned_ref_id"] == "chr5" or rev_class["assigned_ref_id"] == "Chr5", \
+        f"contig_reversed assigned to wrong reference: {rev_class['assigned_ref_id']}"
+
+    # CRITICAL TEST: Check orientation detection
+    # contig_forward should NOT be reversed (it's already in correct orientation)
+    assert fwd_class["reversed"] == "no", \
+        f"contig_forward incorrectly marked for reversal: {fwd_class['reversed']}"
+
+    # contig_reversed SHOULD be reversed (it's reverse-complemented)
+    # NOTE: This assertion will fail until the orientation detection bug is fixed.
+    # The bug is that miniprot aligns to reverse-complemented sequences but reports
+    # strand as "+" relative to the query sequence, not relative to the reference.
+    # This causes determine_contig_orientations() to see all "+" strands and not
+    # detect that the contig needs reversal.
+    #
+    # Expected behavior after fix:
+    # - Macro blocks should show "-" strand for reverse-complemented contigs
+    # - determine_contig_orientations() should detect rev > fwd and set reversed=True
+    # - Output FASTA should be reverse-complemented back to match reference orientation
+    assert rev_class["reversed"] == "yes", \
+        f"contig_reversed NOT marked for reversal (this is the bug!): {rev_class['reversed']}\n" \
+        f"Check macro_blocks.tsv - all strands are likely '+' even for the reverse-complemented contig.\n" \
+        f"This indicates the alignment step is not detecting relative orientation correctly."
+
+    # Verify the output sequences are correctly oriented
+    output_seqs = ff.read_fasta_sequences(chrs_fasta)
+
+    # The output should have renamed contigs (e.g., chr4, chr5 or Chr4, Chr5)
+    # Find the contigs by their content
+    fwd_output_name = fwd_class["new_name"]
+    rev_output_name = rev_class["new_name"]
+
+    assert fwd_output_name in output_seqs, f"{fwd_output_name} not in output FASTA"
+    assert rev_output_name in output_seqs, f"{rev_output_name} not in output FASTA"
+
+    # Check that contig_forward sequence matches reference chr4 (forward orientation)
+    fwd_output_seq = output_seqs[fwd_output_name]
+    assert fwd_output_seq == chr4_seq, \
+        "contig_forward sequence doesn't match reference (should be unchanged)"
+
+    # Check that contig_reversed was reverse-complemented back to match reference chr5
+    rev_output_seq = output_seqs[rev_output_name]
+    assert rev_output_seq == chr5_seq, \
+        "contig_reversed was not properly reverse-complemented (should match reference chr5)"
+
+    # Additional verification: Check macro_blocks.tsv for strand information
+    forward_strands = 0
+    reverse_strands = 0
+    with macro_blocks.open("r") as f:
+        header = f.readline().strip().split("\t")
+        contig_idx = header.index("contig")
+        strand_idx = header.index("strand")
+
+        for line in f:
+            fields = line.strip().split("\t")
+            contig = fields[contig_idx]
+            strand = fields[strand_idx]
+
+            if contig == "contig_forward":
+                if strand == "+":
+                    forward_strands += 1
+            elif contig == "contig_reversed":
+                if strand == "-":
+                    reverse_strands += 1
+
+    # Verify that we detected the expected strand patterns
+    assert forward_strands > 0, \
+        "No forward (+) strands detected for contig_forward in macro_blocks"
+    assert reverse_strands > 0, \
+        "No reverse (-) strands detected for contig_reversed in macro_blocks"
+
+    print(f"[test] Orientation detection test passed!")
+    print(f"[test] - contig_forward: {forward_strands} forward (+) strand blocks, reversed={fwd_class['reversed']}")
+    print(f"[test] - contig_reversed: {reverse_strands} reverse (-) strand blocks, reversed={rev_class['reversed']}")

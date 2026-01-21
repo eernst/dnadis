@@ -53,6 +53,117 @@ def _chain_weight(qbp: int, matches: int, alnlen: int, mode: str) -> float:
     raise ValueError(f"Unknown chain score mode: {mode}")
 
 
+def _infer_chain_strand_from_coords(blocks: list[Block]) -> str:
+    """Infer the strand orientation of a chain based on query vs reference coordinates.
+
+    For protein-anchor chains, we determine if the query contig is forward or
+    reverse-complemented relative to the reference by checking if reference
+    coordinates progress in the same direction as query coordinates.
+
+    - Forward orientation ("+"):  query and reference positions correlate positively
+    - Reverse orientation ("-"): query and reference positions correlate negatively
+
+    Args:
+        blocks: List of Block objects in the chain (should be sorted by query start)
+
+    Returns:
+        "+" if forward orientation, "-" if reverse orientation
+    """
+    if len(blocks) < 2:
+        # Can't determine strand from a single block
+        # Default to "+" which means no reversal
+        return "+"
+
+    # Compute correlation between query midpoints and reference midpoints
+    # using a simple sign-based voting approach
+    forward_votes = 0
+    reverse_votes = 0
+
+    # Sort blocks by query start
+    sorted_blocks = sorted(blocks, key=lambda b: b.qs)
+
+    for i in range(len(sorted_blocks) - 1):
+        b1 = sorted_blocks[i]
+        b2 = sorted_blocks[i + 1]
+
+        # Query direction is always positive (sorted by qs)
+        q_delta = (b2.qs + b2.qe) / 2 - (b1.qs + b1.qe) / 2
+
+        # Reference direction - compute midpoints
+        r1_mid = (b1.rs + b1.re) / 2
+        r2_mid = (b2.rs + b2.re) / 2
+        r_delta = r2_mid - r1_mid
+
+        # If both deltas have the same sign, it's forward orientation
+        # If opposite signs, it's reverse orientation
+        if (q_delta > 0 and r_delta > 0) or (q_delta < 0 and r_delta < 0):
+            forward_votes += 1
+        elif (q_delta > 0 and r_delta < 0) or (q_delta < 0 and r_delta > 0):
+            reverse_votes += 1
+
+    return "-" if reverse_votes > forward_votes else "+"
+
+
+def _infer_contig_strand_from_all_blocks(
+    all_blocks: dict[tuple[str, str, str], list[Block]],
+    contig: str,
+    ref_id: str,
+) -> str:
+    """Infer strand for a contig by looking at ALL blocks mapping to a reference.
+
+    This is used when individual chains have too few blocks to determine strand.
+    By looking at the overall correlation between query and reference positions
+    across all blocks for a contig-reference pair, we can determine if the
+    contig is reverse-complemented.
+
+    Args:
+        all_blocks: Dict of (contig, ref_id, strand) -> list of Block
+        contig: Query contig name
+        ref_id: Reference chromosome ID
+
+    Returns:
+        "+" if forward orientation, "-" if reverse orientation
+    """
+    # Collect all blocks for this contig-ref pair (any strand key)
+    blocks = []
+    for key, blks in all_blocks.items():
+        if key[0] == contig and key[1] == ref_id:
+            blocks.extend(blks)
+
+    if len(blocks) < 2:
+        return "+"
+
+    # Sort by query midpoint
+    sorted_blocks = sorted(blocks, key=lambda b: (b.qs + b.qe) / 2)
+
+    # Count direction votes
+    forward_votes = 0
+    reverse_votes = 0
+
+    for i in range(len(sorted_blocks) - 1):
+        b1 = sorted_blocks[i]
+        b2 = sorted_blocks[i + 1]
+
+        q_mid1 = (b1.qs + b1.qe) / 2
+        q_mid2 = (b2.qs + b2.qe) / 2
+        r_mid1 = (b1.rs + b1.re) / 2
+        r_mid2 = (b2.rs + b2.re) / 2
+
+        q_delta = q_mid2 - q_mid1
+        r_delta = r_mid2 - r_mid1
+
+        # Skip if blocks are at same position
+        if abs(q_delta) < 100:  # Within 100bp, consider same position
+            continue
+
+        if (q_delta > 0 and r_delta > 0) or (q_delta < 0 and r_delta < 0):
+            forward_votes += 1
+        elif (q_delta > 0 and r_delta < 0) or (q_delta < 0 and r_delta > 0):
+            reverse_votes += 1
+
+    return "-" if reverse_votes > forward_votes else "+"
+
+
 def _tp_keep(fields: list[str], assign_tp: str) -> bool:
     if assign_tp == "ALL":
         return True
@@ -377,7 +488,8 @@ def parse_miniprot_synteny_evidence_and_segments(
         assign_chain_score=assign_chain_score,
         assign_chain_min_bp=assign_chain_min_bp,
         assign_ref_score=assign_ref_score,
-        segments_strand_from_blocks=False,  # forced '+'
+        segments_strand_from_blocks=False,  # Don't use raw strand from blocks
+        infer_strand_from_coords=True,  # Infer strand from query vs reference coordinate correlation
     )
 
 
@@ -394,7 +506,22 @@ def _chains_to_evidence_and_segments(
     assign_chain_min_bp,
     assign_ref_score: str,
     segments_strand_from_blocks: bool,
+    infer_strand_from_coords: bool = False,
 ) -> ChainEvidenceResult:
+    # Precompute contig-level strand inference if needed
+    # This uses ALL blocks for each (contig, ref_id) pair to determine orientation
+    contig_ref_strand: dict[tuple[str, str], str] = {}
+    if infer_strand_from_coords:
+        # Get unique (contig, ref_id) pairs
+        contig_ref_pairs = set()
+        for (q, ref_id, _strand) in blocks.keys():
+            contig_ref_pairs.add((q, ref_id))
+        # Compute strand for each pair using all blocks
+        for (q, ref_id) in contig_ref_pairs:
+            contig_ref_strand[(q, ref_id)] = _infer_contig_strand_from_all_blocks(
+                blocks, q, ref_id
+            )
+
     # Evidence across kept chains
     qr_intervals = defaultdict(list)  # (q, ref_id) -> list[(qs,qe)]
     qr_matches = defaultdict(int)
@@ -415,6 +542,7 @@ def _chains_to_evidence_and_segments(
     for (q, ref_id, strand), blks in blocks.items():
         blks.sort(key=lambda b: (b.qs, b.qe))
         chains: list[Chain] = []
+        chain_blocks: list[list[Block]] = []  # Track blocks per chain for strand inference
 
         for b in blks:
             diag = _diag_for_block(b)
@@ -455,6 +583,7 @@ def _chains_to_evidence_and_segments(
                         gene_ids=gset,
                     )
                 )
+                chain_blocks.append([b])  # Start new block list for this chain
             else:
                 ch = chains[best_i]
                 if b.gene_id:
@@ -464,11 +593,13 @@ def _chains_to_evidence_and_segments(
                 ch.q_intervals.append((b.qs, b.qe))
                 ch.matches_sum += b.matches
                 ch.alnlen_sum += b.aln_len
+                chain_blocks[best_i].append(b)  # Add block to existing chain
 
         qlen = int(contig_lengths.get(q, 0) or qlens_from_paf.get(q, 0) or 0)
         chrom_id, sub = split_chrom_subgenome(ref_id)
 
-        for chain_id, ch in enumerate(chains, start=1):
+        output_chain_id = 0
+        for chain_idx, ch in enumerate(chains):
             merged, qbp, msum, alnsum = _finalize_chain(ch)
 
             if qbp <= 0 or alnsum <= 0 or not merged:
@@ -484,7 +615,16 @@ def _chains_to_evidence_and_segments(
             if w <= 0:
                 continue
 
-            seg_strand = strand if segments_strand_from_blocks else "+"
+            output_chain_id += 1
+
+            # Determine strand for this chain
+            if segments_strand_from_blocks:
+                seg_strand = strand
+            elif infer_strand_from_coords:
+                # Use precomputed contig-level strand (based on all blocks for this contig-ref pair)
+                seg_strand = contig_ref_strand.get((q, ref_id), "+")
+            else:
+                seg_strand = "+"
 
             # Macro block spanning the full merged chain extent on the contig
             qstart = min(s for s, _e in merged)
@@ -501,7 +641,7 @@ def _chains_to_evidence_and_segments(
                     chrom_id,
                     sub,
                     seg_strand,
-                    chain_id,
+                    output_chain_id,
                     qstart,
                     qend,
                     qspan,
@@ -532,7 +672,7 @@ def _chains_to_evidence_and_segments(
                 qr_best_chain_ident[key_qr] = ident
 
             for (s, e) in merged:
-                chain_segments_rows.append((q, qlen, chrom_id, sub, seg_strand, chain_id, s, e))
+                chain_segments_rows.append((q, qlen, chrom_id, sub, seg_strand, output_chain_id, s, e))
 
     # finalize per-(q,ref_id) union bp
     qr_union_bp = defaultdict(int)
