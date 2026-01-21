@@ -142,7 +142,7 @@ def read_fasta_lengths_with_map(
     return normalized, orig_to_norm, norm_to_orig
 
 
-def _is_nuclear_chromosome(ref_id: str) -> bool:
+def is_nuclear_chromosome(ref_id: str) -> bool:
     """Check if a reference ID matches a nuclear chromosome pattern.
 
     Returns True only for IDs that positively match chromosome patterns
@@ -170,7 +170,7 @@ def get_min_nuclear_chrom_length(ref_lengths: Dict[str, int]) -> int:
     """
     nuclear_lengths = [
         length for ref_id, length in ref_lengths.items()
-        if _is_nuclear_chromosome(ref_id)
+        if is_nuclear_chromosome(ref_id)
     ]
     return min(nuclear_lengths) if nuclear_lengths else 0
 

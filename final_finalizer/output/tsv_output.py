@@ -78,15 +78,23 @@ def write_contig_summary_tsv(
 ) -> None:
     """Write enhanced contig_summary.tsv with classification columns.
 
-    New columns added:
+    Includes classification columns:
     - original_name
-    - classification
+    - classification (chrom_assigned, chrom_unassigned, contaminant, etc.)
+    - classification_confidence (high/medium/low)
     - reversed
     - contaminant_taxid (NCBI taxonomy ID for contaminants)
     - contaminant_sci (scientific name for contaminants)
     - length (after status)
     - ref_gene_proportion
     - genes_per_Mbp (for chromosome-assigned contigs)
+
+    Evidence strength columns (for classification confidence):
+    - gc_content: GC content of contig (0.0-1.0)
+    - gc_deviation: Deviation from reference mean in std devs
+    - synteny_score: Synteny evidence strength (0.0-1.0)
+    - contam_score: Contaminant evidence strength (0.0-1.0)
+    - contam_coverage: Contaminant alignment coverage (0.0-1.0)
     """
     # Build lookup by original name
     clf_lookup = {clf.original_name: clf for clf in classifications}
@@ -95,6 +103,7 @@ def write_contig_summary_tsv(
         "contig",
         "original_name",
         "classification",
+        "classification_confidence",
         "reversed",
         "contaminant_taxid",
         "contaminant_sci",
@@ -103,6 +112,11 @@ def write_contig_summary_tsv(
         "assigned_chrom_id",
         "status",
         "length",
+        "gc_content",
+        "gc_deviation",
+        "synteny_score",
+        "contam_score",
+        "contam_coverage",
         "best_score",
         "second_score",
         "score_ratio",
@@ -199,10 +213,18 @@ def write_contig_summary_tsv(
             original_name = q
             new_name = clf.new_name if clf else q
             classification = clf.classification if clf else "unclassified"
+            classification_confidence = clf.classification_confidence if clf and clf.classification_confidence else ""
             reversed_val = "yes" if contig_orientations.get(q, False) else "no"
             contaminant_taxid = str(clf.contaminant_taxid) if clf and clf.contaminant_taxid is not None else ""
             contaminant_sci = clf.contaminant_sci if clf and clf.contaminant_sci else ""
             ref_gene_proportion = clf.ref_gene_proportion if clf and clf.ref_gene_proportion is not None else ""
+
+            # Evidence strength columns
+            gc_content = f"{clf.gc_content:.4f}" if clf and clf.gc_content is not None else ""
+            gc_deviation = f"{clf.gc_deviation:.2f}" if clf and clf.gc_deviation is not None else ""
+            synteny_score = f"{clf.synteny_score:.3f}" if clf and clf.synteny_score is not None else ""
+            contam_score = f"{clf.contam_score:.3f}" if clf and clf.contam_score is not None else ""
+            contam_coverage = f"{clf.contam_coverage:.3f}" if clf and clf.contam_coverage is not None else ""
 
             # Compute genes per Mbp for chromosome-assigned contigs
             gene_count = qr_gene_count.get((q, assigned_ref_id), 0) if assigned_ref_id else 0
@@ -217,6 +239,7 @@ def write_contig_summary_tsv(
                         new_name,  # contig (new name)
                         original_name,
                         classification,
+                        classification_confidence,
                         reversed_val,
                         contaminant_taxid,
                         contaminant_sci,
@@ -225,6 +248,11 @@ def write_contig_summary_tsv(
                         str(assigned_chrom_id),
                         str(status),
                         str(int(contig_len)),  # length
+                        gc_content,
+                        gc_deviation,
+                        synteny_score,
+                        contam_score,
+                        contam_coverage,
                         f"{bs:.3f}",
                         f"{sr:.3f}",
                         f"{score_ratio:.3f}",

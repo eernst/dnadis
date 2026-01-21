@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
+from final_finalizer.models import ContaminantHit
 from final_finalizer.utils.io_utils import have_exe, open_maybe_gzip
 
 
@@ -119,7 +120,7 @@ def detect_contaminants(
     threads: int,
     min_score: int,
     exclude_contigs: Set[str],
-) -> Dict[str, Tuple[int, str]]:
+) -> Dict[str, ContaminantHit]:
     """Identify contaminant contigs using centrifuger taxonomic classification.
 
     Centrifuger is much faster than BLAST for taxonomic classification.
@@ -136,7 +137,7 @@ def detect_contaminants(
         exclude_contigs: Set of contigs to exclude from screening
 
     Returns:
-        Dict mapping contig_name -> (taxid, scientific_name)
+        Dict mapping contig_name -> ContaminantHit with taxid, name, coverage, score
     """
     work_dir.mkdir(parents=True, exist_ok=True)
 
@@ -181,7 +182,7 @@ def detect_contaminants(
             return {}
 
     # Parse results
-    contaminants: Dict[str, Tuple[int, str]] = {}
+    contaminants: Dict[str, ContaminantHit] = {}
 
     if not output_path.exists() or output_path.stat().st_size == 0:
         return contaminants
@@ -222,7 +223,12 @@ def detect_contaminants(
             # Look up scientific name
             sci_name = name_table.get(taxid, "")
 
-            contaminants[contig_name] = (taxid, sci_name)
+            contaminants[contig_name] = ContaminantHit(
+                taxid=taxid,
+                sci_name=sci_name,
+                coverage=coverage,
+                score=score,
+            )
             print(
                 f"[info] Contaminant: {contig_name} (taxid={taxid}, {sci_name}, score={score}, cov={coverage:.2f})",
                 file=sys.stderr,

@@ -37,6 +37,8 @@ def _positive_int(value: str) -> int:
 
 from final_finalizer.utils.io_utils import file_exists_and_valid
 from final_finalizer.utils.sequence_utils import (
+    calculate_gc_content_fasta,
+    calculate_gc_stats,
     read_fasta_lengths,
     write_filtered_fasta,
 )
@@ -377,6 +379,26 @@ def main():
     ref_ids_raw = set(read_fasta_lengths(ref).keys())
     qry_lengths = read_fasta_lengths(qry)
     print(f"[info] Query contigs: {len(qry_lengths)}", file=sys.stderr)
+
+    # Compute GC content for reference and query
+    print("[info] Computing GC content for reference and query sequences", file=sys.stderr)
+    ref_gc_all = calculate_gc_content_fasta(ref)
+    qry_gc = calculate_gc_content_fasta(qry)
+
+    # Compute reference GC baseline (nuclear chromosomes only, exclude organelles)
+    # Filter to only include sequences matching chromosome patterns
+    from final_finalizer.utils.reference_utils import is_nuclear_chromosome
+    ref_gc_nuclear = {
+        ref_norm_to_orig.get(k, k): v
+        for k, v in ref_gc_all.items()
+        if is_nuclear_chromosome(k)
+    }
+    if ref_gc_nuclear:
+        ref_gc_mean, ref_gc_std = calculate_gc_stats(ref_gc_nuclear)
+        print(f"[info] Reference nuclear GC: mean={ref_gc_mean:.3f}, std={ref_gc_std:.3f}", file=sys.stderr)
+    else:
+        ref_gc_mean, ref_gc_std = None, None
+        print("[warn] Could not compute reference GC baseline (no nuclear chromosomes found)", file=sys.stderr)
 
     # Outputs (shared)
     ref_lengths_tsv = Path(str(outprefix) + ".ref_lengths.tsv")
@@ -762,6 +784,9 @@ def main():
         other_debris=other_debris,
         add_subgenome_suffix=args.add_subgenome_suffix,
         ref_norm_to_orig=ref_norm_to_orig,
+        query_gc=qry_gc,
+        ref_gc_mean=ref_gc_mean,
+        ref_gc_std=ref_gc_std,
     )
 
     for clf in classifications:

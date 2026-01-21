@@ -25,9 +25,22 @@ The main output file containing classification results and quality metrics for e
 | `contig` | string | New contig name (reflects chromosome assignment, e.g., `chr5A` or `contig_1`) |
 | `original_name` | string | Original contig name from input FASTA |
 | `classification` | string | Classification category (see [Categories](#classification-categories)) |
+| `classification_confidence` | string | Confidence level: `high`, `medium`, or `low` (see [Confidence](#classification-confidence)) |
 | `reversed` | yes/no | Whether the contig was reverse-complemented to match reference orientation |
 | `contaminant_taxid` | integer | NCBI taxonomy ID (only for `contaminant` classification) |
 | `contaminant_sci` | string | Scientific name of contaminant organism |
+
+### Evidence Strength Columns
+
+These columns provide the underlying evidence used to determine classification confidence.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `gc_content` | float | GC content of contig (0.0-1.0) |
+| `gc_deviation` | float | How many standard deviations the contig GC differs from reference mean |
+| `synteny_score` | float | Synteny evidence strength (0.0-1.0); based on gene proportion |
+| `contam_score` | float | Contaminant evidence strength (0.0-1.0); normalized centrifuger score |
+| `contam_coverage` | float | Fraction of contig covered by contaminant alignments (0.0-1.0) |
 
 ### Assignment Columns
 
@@ -104,6 +117,30 @@ The main output file containing classification results and quality metrics for e
 | `chrom_debris` | High-coverage (≥80%), high-identity (≥90%) duplicate of an assembled chromosome |
 | `debris` | Assembly debris with reference homology (≥50% coverage) or protein hits (≥2) |
 | `unclassified` | Could not be classified (below chromosome-length threshold) |
+
+### Classification Confidence
+
+The `classification_confidence` column indicates how certain the classification is, based on multiple lines of evidence.
+
+| Level | Criteria |
+|-------|----------|
+| `high` | Strong, consistent evidence supporting the classification |
+| `medium` | Moderate evidence, or some conflicting signals |
+| `low` | Weak evidence, conflicting signals, or unusual characteristics |
+
+**Evidence factors considered:**
+
+- **Synteny strength**: Gene proportion and number of synteny segments
+- **GC content**: Deviation from reference nuclear chromosomes (in standard deviations)
+- **Contaminant coverage**: Fraction of contig covered by contaminant alignments
+
+**Per-category confidence logic:**
+
+| Classification | High | Medium | Low |
+|---------------|------|--------|-----|
+| `chrom_assigned` | Gene proportion ≥20%, GC deviation <2σ | Gene proportion 10-20%, or GC deviation 2-3σ | Gene proportion <10%, or GC deviation >3σ |
+| `chrom_unassigned` | — | GC deviation <2σ | GC deviation ≥2σ |
+| `contaminant` | Coverage ≥80%, or GC deviation >2σ | Coverage 50-80% | Coverage <50% |
 
 ### Assignment Status Values
 

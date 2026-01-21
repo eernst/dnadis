@@ -133,3 +133,91 @@ def write_filtered_fasta(
 def is_hifiasm_circular(contig_name: str) -> bool:
     """Check if contig name matches hifiasm circular pattern (ptg*c)."""
     return bool(re.match(r"ptg\d+c", contig_name))
+
+
+def calculate_gc_content(seq: str) -> float:
+    """Calculate GC content of a DNA sequence.
+
+    Args:
+        seq: DNA sequence string
+
+    Returns:
+        GC content as fraction (0.0-1.0). Returns 0.0 for empty sequences
+        or sequences with only ambiguous bases.
+    """
+    seq_upper = seq.upper()
+    gc_count = seq_upper.count("G") + seq_upper.count("C")
+    # Only count unambiguous bases (A, T, G, C)
+    total = (
+        seq_upper.count("A")
+        + seq_upper.count("T")
+        + seq_upper.count("G")
+        + seq_upper.count("C")
+    )
+    if total == 0:
+        return 0.0
+    return gc_count / total
+
+
+def calculate_gc_content_fasta(fasta_path: Path) -> Dict[str, float]:
+    """Calculate GC content for all sequences in a FASTA file.
+
+    Streams through the file to avoid loading entire genome into memory.
+
+    Args:
+        fasta_path: Path to FASTA file (plain or gzipped)
+
+    Returns:
+        Dict mapping sequence name to GC content (0.0-1.0)
+    """
+    gc_contents: Dict[str, float] = {}
+    name: Optional[str] = None
+    gc_count = 0
+    total_count = 0
+
+    with open_maybe_gzip(fasta_path, "rt") as fh:
+        for line in fh:
+            if not line:
+                continue
+            if line.startswith(">"):
+                # Save previous sequence's GC content
+                if name is not None:
+                    gc_contents[name] = (gc_count / total_count) if total_count > 0 else 0.0
+                name = line[1:].strip().split()[0]
+                gc_count = 0
+                total_count = 0
+            else:
+                seq = line.strip().upper()
+                gc_count += seq.count("G") + seq.count("C")
+                total_count += seq.count("A") + seq.count("T") + seq.count("G") + seq.count("C")
+
+    # Save last sequence
+    if name is not None:
+        gc_contents[name] = (gc_count / total_count) if total_count > 0 else 0.0
+
+    return gc_contents
+
+
+def calculate_gc_stats(gc_contents: Dict[str, float]) -> tuple[float, float]:
+    """Calculate mean and standard deviation of GC contents.
+
+    Args:
+        gc_contents: Dict of sequence name to GC content
+
+    Returns:
+        Tuple of (mean, std_dev). Returns (0.0, 0.0) if empty.
+    """
+    if not gc_contents:
+        return 0.0, 0.0
+
+    values = list(gc_contents.values())
+    n = len(values)
+    mean = sum(values) / n
+
+    if n < 2:
+        return mean, 0.0
+
+    variance = sum((x - mean) ** 2 for x in values) / (n - 1)
+    std_dev = variance ** 0.5
+
+    return mean, std_dev

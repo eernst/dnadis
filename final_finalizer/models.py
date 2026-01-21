@@ -72,13 +72,29 @@ class ContigClassification:
     """Classification result for a single contig."""
     original_name: str
     new_name: str
-    classification: str  # chrom, chrom_debris, organelle_complete, organelle_debris, rDNA, contaminant, unclassified
+    classification: str  # chrom_assigned, chrom_unassigned, chrom_debris, organelle_complete, organelle_debris, rDNA, contaminant, debris, unclassified
     reversed: bool
     contaminant_taxid: Optional[int]  # NCBI taxonomy ID for contaminants
     contaminant_sci: Optional[str]  # Scientific name for contaminants
     assigned_ref_id: Optional[str]
     ref_gene_proportion: Optional[float]
     contig_len: int
+    # Evidence strength fields (for classification confidence)
+    gc_content: Optional[float] = None  # GC content (0.0-1.0)
+    gc_deviation: Optional[float] = None  # Deviation from reference mean in std devs
+    synteny_score: Optional[float] = None  # Synteny evidence strength (0.0-1.0)
+    contam_score: Optional[float] = None  # Contaminant evidence strength (0.0-1.0)
+    contam_coverage: Optional[float] = None  # Contaminant alignment coverage
+    classification_confidence: Optional[str] = None  # high/medium/low
+
+
+@dataclass
+class ContaminantHit:
+    """Contaminant detection result for a contig."""
+    taxid: int
+    sci_name: str
+    coverage: float  # Fraction of contig covered (0.0-1.0)
+    score: int  # Centrifuger score
 
 
 @dataclass

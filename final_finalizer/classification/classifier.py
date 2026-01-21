@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from final_finalizer.alignment.external_tools import get_minimap2_exe, run_minimap2
-from final_finalizer.models import ChainEvidenceResult, ContigClassification
+from final_finalizer.models import ChainEvidenceResult, ContaminantHit, ContigClassification
 from final_finalizer.utils.io_utils import merge_intervals, open_maybe_gzip
 from final_finalizer.utils.reference_utils import normalize_ref_id, split_chrom_subgenome
 from final_finalizer.utils.sequence_utils import read_fasta_sequences, write_fasta
@@ -355,11 +355,14 @@ def classify_all_contigs(
     chrM_contig: Optional[str],
     organelle_debris: Set[str],
     rdna_contigs: Set[str],
-    contaminants: Dict[str, Tuple[int, str]],
+    contaminants: Dict[str, ContaminantHit],
     chromosome_debris: Set[str],
     other_debris: Set[str],
     add_subgenome_suffix: Optional[str],
     ref_norm_to_orig: Optional[Dict[str, str]] = None,
+    query_gc: Optional[Dict[str, float]] = None,
+    ref_gc_mean: Optional[float] = None,
+    ref_gc_std: Optional[float] = None,
 ) -> List[ContigClassification]:
     """Classify all contigs and generate classifications list.
 
@@ -374,14 +377,32 @@ def classify_all_contigs(
         chrM_contig: Mitochondrial contig name
         organelle_debris: Set of organelle debris contigs
         rdna_contigs: Set of rDNA contigs
-        contaminants: Dict of contig -> (taxid, scientific_name)
+        contaminants: Dict of contig -> ContaminantHit with taxid, name, coverage, score
         chromosome_debris: Set of chromosome debris contigs (from chr-vs-chr alignment)
         other_debris: Set of other debris contigs (from ref/protein alignment)
         add_subgenome_suffix: Optional subgenome suffix to add
+        query_gc: Dict of contig name -> GC content (0.0-1.0)
+        ref_gc_mean: Mean GC content of reference nuclear chromosomes
+        ref_gc_std: Standard deviation of reference GC content
     """
 
     classifications: List[ContigClassification] = []
     classified_contigs: Set[str] = set()
+
+    # Helper to compute GC deviation in standard deviations
+    def _gc_deviation(contig: str) -> Optional[float]:
+        if query_gc is None or ref_gc_mean is None or ref_gc_std is None:
+            return None
+        gc = query_gc.get(contig)
+        if gc is None:
+            return None
+        if ref_gc_std == 0:
+            return 0.0
+        return abs(gc - ref_gc_mean) / ref_gc_std
+
+    # Helper to get contig GC content
+    def _get_gc(contig: str) -> Optional[float]:
+        return query_gc.get(contig) if query_gc else None
 
     # 1. Chromosome-length contigs with reference assignment
     for contig, ref_id in best_ref.items():
@@ -395,6 +416,25 @@ def classify_all_contigs(
         gene_count = ev.qr_gene_count.get((contig, ref_id), 0)
         ref_total_genes = ref_gene_counts.get(ref_id, 0)
         gene_proportion = (gene_count / ref_total_genes) if ref_total_genes > 0 else None
+        gc_dev = _gc_deviation(contig)
+
+        # Compute synteny score (0-1) based on gene proportion
+        synteny_score = min(1.0, gene_proportion * 2) if gene_proportion else 0.0
+
+        # Compute confidence
+        # High: good synteny (>20% genes) AND GC similar to reference (<2 std)
+        # Medium: moderate synteny OR borderline GC
+        # Low: weak synteny AND/OR very different GC
+        confidence = "high"
+        if gene_proportion is None or gene_proportion < 0.1:
+            confidence = "low"
+        elif gene_proportion < 0.2:
+            confidence = "medium"
+        # GC deviation penalty
+        if gc_dev is not None and gc_dev > 3.0:
+            confidence = "low"
+        elif gc_dev is not None and gc_dev > 2.0 and confidence == "high":
+            confidence = "medium"
 
         classifications.append(ContigClassification(
             original_name=contig,
@@ -406,15 +446,33 @@ def classify_all_contigs(
             assigned_ref_id=ref_id,
             ref_gene_proportion=gene_proportion,
             contig_len=contig_len,
+            gc_content=_get_gc(contig),
+            gc_deviation=gc_dev,
+            synteny_score=synteny_score,
+            classification_confidence=confidence,
         ))
         classified_contigs.add(contig)
 
     # 1b. Chromosome-length contigs WITHOUT reference assignment
+    # (but not contaminants - those are handled separately)
     for contig, contig_len in query_lengths.items():
         if contig in classified_contigs:
             continue
         if contig_len < chr_like_minlen:
             continue
+        # Skip known contaminants - they should be classified as contaminants, not chrom_unassigned
+        if contig in contaminants:
+            continue
+
+        gc_dev = _gc_deviation(contig)
+
+        # Confidence is inherently low/medium for unassigned contigs
+        # Medium: GC similar to reference (might be a real chromosome from a divergent region)
+        # Low: GC different from reference (might be contaminant or unusual sequence)
+        confidence = "medium"
+        if gc_dev is not None and gc_dev > 2.0:
+            confidence = "low"
+
         # This contig is chromosome-length but has no synteny assignment
         classifications.append(ContigClassification(
             original_name=contig,
@@ -426,6 +484,10 @@ def classify_all_contigs(
             assigned_ref_id=None,
             ref_gene_proportion=None,
             contig_len=contig_len,
+            gc_content=_get_gc(contig),
+            gc_deviation=gc_dev,
+            synteny_score=0.0,  # No synteny evidence
+            classification_confidence=confidence,
         ))
         classified_contigs.add(contig)
 
@@ -491,18 +553,39 @@ def classify_all_contigs(
             classified_contigs.add(contig)
 
     # 4. Contaminants
-    for contig, (taxid, sci_name) in contaminants.items():
+    for contig, hit in contaminants.items():
         if contig not in classified_contigs:
+            contig_len = query_lengths.get(contig, 0)
+            gc_dev = _gc_deviation(contig)
+
+            # Compute confidence based on coverage and GC deviation
+            # High confidence: high coverage (>0.8) AND (GC deviation > 2 std OR no synteny)
+            # Medium confidence: moderate coverage (0.5-0.8) OR conflicting evidence
+            # Low confidence: low coverage (<0.5) AND some synteny evidence
+            confidence = "high"
+            if hit.coverage < 0.5:
+                confidence = "low"
+            elif hit.coverage < 0.8:
+                confidence = "medium"
+            # GC deviation supports contaminant classification
+            if gc_dev is not None and gc_dev > 2.0:
+                confidence = "high"
+
             classifications.append(ContigClassification(
                 original_name=contig,
                 new_name="",
                 classification="contaminant",
                 reversed=False,
-                contaminant_taxid=taxid,
-                contaminant_sci=sci_name,
+                contaminant_taxid=hit.taxid,
+                contaminant_sci=hit.sci_name,
                 assigned_ref_id=None,
                 ref_gene_proportion=None,
-                contig_len=query_lengths.get(contig, 0),
+                contig_len=contig_len,
+                gc_content=_get_gc(contig),
+                gc_deviation=gc_dev,
+                contam_score=min(1.0, hit.score / 1e9) if hit.score else None,  # Normalize to 0-1 range
+                contam_coverage=hit.coverage,
+                classification_confidence=confidence,
             ))
             classified_contigs.add(contig)
 
