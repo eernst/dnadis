@@ -371,9 +371,9 @@ p_comp <- ggplot() +
   ) +
   geom_rect(
     data = seg_plot %>% filter(off_target),
-    aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax, fill = target_subgenome),
-    color = "red",
-    linewidth = 0.05,
+    aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+    fill = "red",
+    color = NA,
     alpha = 0.35
   ) +
   scale_fill_manual(values = col_light, guide = "none", drop = FALSE) +
@@ -387,9 +387,9 @@ p_comp <- ggplot() +
   ) +
   geom_rect(
     data = macro_plot %>% filter(off_target),
-    aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax, fill = target_subgenome),
-    color = "red",
-    linewidth = 0.05,
+    aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+    fill = "red",
+    color = NA,
     alpha = 0.5,
     show.legend = FALSE
   ) +
@@ -470,9 +470,9 @@ if (plot_html) {
     ) +
     ggiraph::geom_rect_interactive(
       data = seg_plot %>% filter(off_target),
-      aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax, fill = target_subgenome, tooltip = tooltip),
-      color = "red",
-      linewidth = 0.05,
+      aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax, tooltip = tooltip),
+      fill = "red",
+      color = NA,
       alpha = 0.35
     ) +
     scale_fill_manual(values = col_light, guide = "none", drop = FALSE) +
@@ -486,9 +486,9 @@ if (plot_html) {
     ) +
     ggiraph::geom_rect_interactive(
       data = macro_plot %>% filter(off_target),
-      aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax, fill = target_subgenome, tooltip = tooltip),
-      color = "red",
-      linewidth = 0.05,
+      aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax, tooltip = tooltip),
+      fill = "red",
+      color = NA,
       alpha = 0.5,
       show.legend = FALSE
     ) +
