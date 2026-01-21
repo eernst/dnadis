@@ -4,9 +4,24 @@ Read depth analysis for final_finalizer.
 
 Provides functions for:
 - Detecting read format (FASTQ, unaligned BAM, aligned BAM/CRAM)
-- Aligning reads to assembly with minimap2
+- Downsampling reads to target coverage (seqtk for FASTQ, samtools for BAM)
+- Aligning reads to assembly with minimap2/mm2plus
 - Running mosdepth for depth calculation
 - Parsing mosdepth output and computing per-contig depth statistics
+
+The depth analysis pipeline:
+1. Auto-detect read format (FASTQ/BAM/CRAM, aligned vs unaligned)
+2. If not pre-aligned:
+   a. Estimate total read bases and coverage
+   b. Downsample to target coverage if needed (default 20X)
+   c. Align with minimap2 using appropriate preset
+3. Run mosdepth to compute window-based depth metrics
+4. Parse results into DepthStats per contig (mean, median, std, breadth)
+
+Depth metrics are useful for:
+- Quality assessment (breadth of coverage)
+- Copy number evaluation (relative depth)
+- Identifying misassemblies (depth discontinuities)
 """
 from __future__ import annotations
 
@@ -122,6 +137,12 @@ def get_minimap2_preset(reads_type: str) -> str:
 
     Returns:
         Minimap2 -x preset string
+
+    Notes:
+        - "hifi_onthq" uses lr:hqae (long reads, high quality, all-vs-all, end-to-end)
+          Suitable for PacBio HiFi, Duplex, and ONT Q20+ with error rate < 1%
+        - "ont" uses map-ont for standard-accuracy ONT reads
+        - "sr" uses sr for Illumina short reads
     """
     presets = {
         "hifi_onthq": "lr:hqae",  # Long reads, high quality, error rate < 1% (HiFi, Duplex, ONT Q20+)
@@ -506,7 +527,7 @@ def align_reads_to_assembly(
         assembly: Path to assembly FASTA
         output_bam: Path for output sorted BAM
         threads: Number of threads
-        reads_type: Read type for preset selection ("hifi", "ont", "sr")
+        reads_type: Read type for preset selection ("hifi_onthq", "ont", "sr")
         work_dir: Working directory for intermediate files
         err_path: Path for error log (optional)
 
@@ -763,7 +784,7 @@ def calculate_depth_metrics(
     contig_lengths: Dict[str, int],
     work_dir: Path,
     threads: int,
-    reads_type: str = "hifi",
+    reads_type: str = "hifi_onthq",
     window_size: int = 1000,
     target_coverage: Optional[float] = 20.0,
 ) -> Dict[str, DepthStats]:
@@ -782,10 +803,11 @@ def calculate_depth_metrics(
         contig_lengths: Dictionary of contig names to lengths
         work_dir: Working directory for intermediate files
         threads: Number of threads to use
-        reads_type: Read type for minimap2 preset ("hifi", "ont", "sr")
-        window_size: Window size for mosdepth (default 1000)
+        reads_type: Read type for minimap2 preset ("hifi_onthq", "ont", "sr")
+        window_size: Window size for mosdepth (default 1000bp)
         target_coverage: Target coverage for downsampling before alignment.
             Set to None or 0 to disable downsampling. Default 20.0 (20X).
+            Downsampling uses seqtk (FASTQ) or samtools (BAM/CRAM).
 
     Returns:
         Dictionary mapping contig names to DepthStats objects

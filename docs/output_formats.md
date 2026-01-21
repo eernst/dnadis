@@ -48,9 +48,9 @@ These columns are populated when `--reads` is provided. They contain per-contig 
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `depth_mean` | float | Mean read depth across the contig |
+| `depth_mean` | float | Mean read depth across the contig (computed by mosdepth) |
 | `depth_median` | float | Median read depth across the contig |
-| `depth_std` | float | Standard deviation of read depth |
+| `depth_std` | float | Standard deviation of read depth across windows |
 | `depth_breadth_1x` | float | Fraction of bases with ≥1x coverage (0.0-1.0) |
 | `depth_breadth_10x` | float | Fraction of bases with ≥10x coverage (0.0-1.0) |
 
@@ -90,8 +90,8 @@ These depth metrics are useful for:
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `ref_gene_proportion` | float | Proportion of reference chromosome genes aligned to this contig |
-| `genes_per_Mbp` | float | Gene density: aligned reference genes per megabase of query sequence |
+| `ref_gene_proportion` | float | Proportion of reference chromosome genes aligned to this contig (0.0-1.0). Higher values indicate stronger synteny support. |
+| `genes_per_Mbp` | float | Gene density: aligned reference genes per megabase of query sequence. Computed as `gene_count / (contig_length_bp / 1,000,000)`. |
 
 ### Quality Flag Columns
 

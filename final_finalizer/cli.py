@@ -9,6 +9,19 @@ Each contig receives:
 - A classification category (chrom_assigned, organelle_complete, debris, etc.)
 - A confidence level (high/medium/low) based on evidence strength
 - A new name reflecting its assignment (e.g., chr5A, chrC, contig_1)
+- Optional read depth metrics (if --reads provided)
+
+Classification confidence is determined by multiple lines of evidence:
+- Gene proportion: fraction of reference genes aligned to the contig
+- GC content deviation: how many standard deviations from expected baseline
+- Alignment coverage and identity
+- Protein hit counts
+
+Read depth analysis (optional):
+- Auto-detects read format (FASTQ, BAM, CRAM)
+- Downsamples to target coverage before alignment (default 20X)
+- Aligns with minimap2 using appropriate preset for read type
+- Computes depth statistics with mosdepth (mean, median, std, breadth)
 
 See README.md for full documentation and examples.
 """
@@ -161,7 +174,7 @@ def main():
     )
     depth_grp.add_argument(
         "--reads-type", choices=["hifi_onthq", "ont", "sr"], default="hifi_onthq",
-        help="Read type for minimap2 alignment: hifi_onthq (lr:hqae), ont (map-ont), sr (sr) [hifi]",
+        help="Read type for minimap2 alignment: hifi_onthq (lr:hqae for HiFi/ONT Q20+), ont (map-ont), sr (sr) [hifi_onthq]",
     )
     depth_grp.add_argument(
         "--skip-depth", action="store_true",

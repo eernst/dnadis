@@ -31,6 +31,7 @@
 - [minimap2](https://github.com/lh3/minimap2) or [mm2plus](https://github.com/lh3/mm2plus) - nucleotide synteny QA and read alignment for depth analysis
 - [samtools](https://github.com/samtools/samtools) - BAM/CRAM handling for depth analysis
 - [mosdepth](https://github.com/brentp/mosdepth) - efficient depth calculation
+- [seqtk](https://github.com/lh3/seqtk) - FASTQ downsampling for depth analysis
 - [centrifuger](https://github.com/mourisl/centrifuger) - contaminant detection
 - R with ggplot2, dplyr, readr, stringr, tibble, tidyr, patchwork, ggnewscale, pacman - visualization (`--plot`)
 - R with ggiraph, htmlwidgets, pandoc - interactive visualization (`--plot-html`)
@@ -40,6 +41,11 @@
 ```bash
 conda create -n final_finalizer python=3.10 miniprot gffread blast mm2plus centrifuger -c bioconda -c conda-forge
 conda activate final_finalizer
+```
+
+Optional (read depth analysis):
+```bash
+conda install -n final_finalizer -c bioconda samtools mosdepth seqtk
 ```
 
 Optional (plotting):
@@ -104,9 +110,10 @@ Latest tested conda package versions (CI):
 | Argument | Description | Default |
 |----------|-------------|---------|
 | `--reads` | Reads for depth analysis (FASTQ/BAM/CRAM). Auto-detects format. | none |
-| `--reads-type` | Read type: `hifi`, `ont`, or `sr` | hifi |
+| `--reads-type` | Read type: `hifi_onthq`, `ont`, or `sr` | hifi_onthq |
 | `--skip-depth` | Skip depth analysis even if `--reads` provided | off |
 | `--depth-window-size` | Window size for mosdepth | 1000 |
+| `--depth-target-coverage` | Target coverage for downsampling before alignment (0 to disable) | 20.0 |
 
 The `--reads` option accepts:
 - FASTQ files (`.fq`, `.fastq`, `.fq.gz`, `.fastq.gz`)
@@ -114,9 +121,11 @@ The `--reads` option accepts:
 - Pre-aligned BAM/CRAM files (used directly)
 
 Read type to minimap2 preset mapping:
-- `hifi` → `-x lr:hqae` (PacBio HiFi/Duplex, error rate < 1%)
-- `ont` → `-x map-ont` (ONT reads)
+- `hifi_onthq` → `-x lr:hqae` (PacBio HiFi/Duplex, ONT Q20+; high-quality long reads with error rate < 1%)
+- `ont` → `-x map-ont` (ONT reads, standard accuracy)
 - `sr` → `-x sr` (Illumina short reads)
+
+**Read downsampling**: If `--depth-target-coverage` is set (default: 20X), reads are automatically downsampled before alignment using seqtk (for FASTQ) or samtools (for BAM/CRAM). This reduces computational time while maintaining sufficient coverage for depth-based quality assessment. Pre-aligned BAM/CRAM files are not downsampled. Set to 0 to disable downsampling.
 
 ### Pipeline toggles
 
@@ -162,9 +171,11 @@ Read type to minimap2 preset mapping:
 | `contaminant_taxid` | NCBI taxonomy ID (for contaminants) |
 | `contaminant_sci` | Scientific name (for contaminants) |
 | `assigned_ref_id` | Best-matching reference chromosome |
+| `ref_gene_proportion` | Fraction of reference chromosome genes aligned to this contig (0.0-1.0) |
 | `genes_per_Mbp` | Gene density (aligned reference genes per Mbp of query sequence) |
 | `depth_mean` | Mean read depth (if `--reads` provided) |
 | `depth_median` | Median read depth (if `--reads` provided) |
+| `depth_std` | Standard deviation of read depth (if `--reads` provided) |
 | `depth_breadth_1x` | Fraction of bases with ≥1x coverage (if `--reads` provided) |
 | `depth_breadth_10x` | Fraction of bases with ≥10x coverage (if `--reads` provided) |
 
@@ -229,7 +240,7 @@ Each contig is assigned a confidence level (`high`, `medium`, or `low`) indicati
 
 ### Evidence Factors
 
-**Gene proportion**: Fraction of reference chromosome genes aligned to the query contig. Higher values indicate stronger synteny support.
+**Gene proportion** (`ref_gene_proportion`): Fraction of reference chromosome genes aligned to the query contig (e.g., 0.85 = 85% of reference genes found on this contig). Higher values indicate stronger synteny support. This metric assesses completeness relative to the reference chromosome.
 
 **GC deviation**: How many standard deviations (σ) the contig's GC content differs from a GC baseline. Large deviations may indicate contamination or unusual sequences.
 - For `chrom_assigned`: compared to reference nuclear genome GC (validates synteny-based assignment)
@@ -249,6 +260,7 @@ Each contig is assigned a confidence level (`high`, `medium`, or `low`) indicati
 |-----------|---------|-------------|
 | `--assign-min-frac` | 0.10 | Min synteny coverage of contig |
 | `--assign-min-ratio` | 1.25 | Min best/second score ratio |
+| `--assign-minlen-protein` | 150 | Min target span (bp) for protein-anchor synteny block building |
 | `--miniprot-min-genes` | 3 | Min unique genes for assignment |
 | `--miniprot-min-segments` | 5 | Min synteny segments |
 | `--miniprot-min-span-frac` | 0.20 | Min span fraction of contig |
@@ -329,7 +341,7 @@ All gate criteria must be satisfied for chromosome assignment (AND logic).
     -o assembly_classified \
     --ref-gff3 reference.gff3 \
     --reads hifi_reads.fastq.gz \
-    --reads-type hifi \
+    --reads-type hifi_onthq \
     --plot \
     --plot-html \
     -t 32
