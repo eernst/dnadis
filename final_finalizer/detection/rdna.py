@@ -23,17 +23,24 @@ def prepare_rdna_reference(
 ) -> Optional[Path]:
     """Prepare rDNA reference FASTA.
 
-    If rdna_ref_arg is None or 'default', use data/athal-45s-ref.fa.
+    If rdna_ref_arg is None or 'default', search for data/athal-45s-ref.fa in:
+      1. script_dir/data/ (for package installations)
+      2. script_dir/../data/ (for running from repo root via shim)
     Otherwise, use the provided path.
     """
     if rdna_ref_arg is None or rdna_ref_arg.lower() == "default":
-        default_path = script_dir / "data" / "athal-45s-ref.fa"
-        if default_path.exists():
-            print(f"[info] Using default rDNA reference: {default_path}", file=sys.stderr)
-            return default_path
-        else:
-            print(f"[warn] Default rDNA reference not found: {default_path}", file=sys.stderr)
-            return None
+        # Search multiple locations for the default reference
+        search_paths = [
+            script_dir / "data" / "athal-45s-ref.fa",
+            script_dir.parent / "data" / "athal-45s-ref.fa",
+        ]
+        for default_path in search_paths:
+            if default_path.exists():
+                print(f"[info] Using default rDNA reference: {default_path}", file=sys.stderr)
+                return default_path
+
+        print(f"[warn] Default rDNA reference not found in: {[str(p) for p in search_paths]}", file=sys.stderr)
+        return None
 
     rdna_path = Path(rdna_ref_arg)
     if rdna_path.exists():
