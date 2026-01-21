@@ -17,7 +17,14 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from final_finalizer.alignment.external_tools import get_minimap2_exe, run_minimap2
-from final_finalizer.models import ChainEvidenceResult, ContaminantHit, ContigClassification
+from final_finalizer.models import (
+    ChainEvidenceResult,
+    ContaminantHit,
+    ContigClassification,
+    DebrisHit,
+    OrganelleHit,
+    RdnaHit,
+)
 from final_finalizer.utils.io_utils import merge_intervals, open_maybe_gzip
 from final_finalizer.utils.reference_utils import normalize_ref_id, split_chrom_subgenome
 from final_finalizer.utils.sequence_utils import read_fasta_sequences, write_fasta
@@ -182,7 +189,7 @@ def classify_debris_and_unclassified(
     threads: int,
     min_coverage: float,
     min_protein_hits: int,
-) -> Tuple[Set[str], Set[str]]:
+) -> Tuple[Set[str], Set[str], Dict[str, DebrisHit]]:
     """Classify remaining contigs as debris or unclassified based on reference homology.
 
     MOTIVATION: After chromosome debris detection (which catches assembly artifacts that
@@ -214,21 +221,29 @@ def classify_debris_and_unclassified(
         min_protein_hits: Min miniprot protein hits for debris classification
 
     Returns:
-        Tuple of (debris_contigs, unclassified_contigs)
+        Tuple of (debris_contigs, unclassified_contigs, debris_hits)
+        where debris_hits maps contig name to DebrisHit with coverage and identity details
     """
     work_dir.mkdir(parents=True, exist_ok=True)
 
     debris_contigs: Set[str] = set()
     unclassified_contigs: Set[str] = set()
+    debris_hits: Dict[str, DebrisHit] = {}
 
     # Check protein hits for each remaining contig
-    contigs_with_protein_hits: Set[str] = set()
+    contigs_with_protein_hits: Dict[str, int] = {}  # contig -> protein hit count
     for (contig, _), gene_count in qr_gene_count.items():
         if contig in remaining_contigs and gene_count >= min_protein_hits:
-            contigs_with_protein_hits.add(contig)
+            # Track max hits across all ref chroms
+            if contig not in contigs_with_protein_hits or gene_count > contigs_with_protein_hits[contig]:
+                contigs_with_protein_hits[contig] = gene_count
 
     # For contigs without enough protein hits, check nucleotide alignment
-    contigs_needing_alignment = remaining_contigs - contigs_with_protein_hits
+    contigs_needing_alignment = remaining_contigs - set(contigs_with_protein_hits.keys())
+
+    # Track coverage/identity from alignments
+    contig_coverage: Dict[str, float] = {}
+    contig_identity: Dict[str, float] = {}
 
     if contigs_needing_alignment:
         # Write subset of contigs to align
@@ -248,11 +263,15 @@ def classify_debris_and_unclassified(
                     paf_out=paf_out,
                     threads=threads,
                     preset="asm20",
+                    extra_args=["-c"],  # output CIGAR for identity calculation
                 )
 
-                # Parse PAF to get coverage
+                # Parse PAF to get coverage and identity
                 if paf_out.exists():
                     query_intervals: Dict[str, List[Tuple[int, int]]] = defaultdict(list)
+                    query_matches: Dict[str, int] = defaultdict(int)
+                    query_alnlen: Dict[str, int] = defaultdict(int)
+
                     with paf_out.open("r") as fh:
                         for line in fh:
                             fields = line.rstrip("\n").split("\t")
@@ -262,21 +281,43 @@ def classify_debris_and_unclassified(
                             try:
                                 qs = int(fields[2])
                                 qe = int(fields[3])
+                                matches = int(fields[9])
+                                aln_len = int(fields[10])
                             except ValueError:
                                 continue
                             if qs > qe:
                                 qs, qe = qe, qs
                             query_intervals[qname].append((qs, qe))
+                            query_matches[qname] += matches
+                            query_alnlen[qname] += aln_len
 
                     for qname, intervals in query_intervals.items():
                         _, total_bp = merge_intervals(intervals)
                         qlen = query_lengths.get(qname, 0)
                         coverage = (total_bp / qlen) if qlen > 0 else 0.0
+                        identity = (query_matches[qname] / query_alnlen[qname]) if query_alnlen[qname] > 0 else 0.0
+
+                        contig_coverage[qname] = coverage
+                        contig_identity[qname] = identity
+
                         if coverage >= min_coverage:
                             debris_contigs.add(qname)
+                            debris_hits[qname] = DebrisHit(
+                                coverage=coverage,
+                                identity=identity,
+                                protein_hits=0,
+                                source="reference",
+                            )
 
     # Add contigs with protein hits to debris
-    debris_contigs.update(contigs_with_protein_hits)
+    for contig, protein_hits in contigs_with_protein_hits.items():
+        debris_contigs.add(contig)
+        debris_hits[contig] = DebrisHit(
+            coverage=contig_coverage.get(contig, 0.0),
+            identity=contig_identity.get(contig, 0.0),
+            protein_hits=protein_hits,
+            source="reference",
+        )
 
     # Everything else is unclassified
     unclassified_contigs = remaining_contigs - debris_contigs
@@ -284,7 +325,7 @@ def classify_debris_and_unclassified(
     print(f"[info] Debris contigs: {len(debris_contigs)}", file=sys.stderr)
     print(f"[info] Unclassified contigs: {len(unclassified_contigs)}", file=sys.stderr)
 
-    return debris_contigs, unclassified_contigs
+    return debris_contigs, unclassified_contigs, debris_hits
 
 
 # ----------------------------
@@ -363,8 +404,33 @@ def classify_all_contigs(
     query_gc: Optional[Dict[str, float]] = None,
     ref_gc_mean: Optional[float] = None,
     ref_gc_std: Optional[float] = None,
+    organelle_hits: Optional[Dict[str, OrganelleHit]] = None,
+    rdna_hits: Optional[Dict[str, RdnaHit]] = None,
+    chrom_debris_hits: Optional[Dict[str, DebrisHit]] = None,
+    other_debris_hits: Optional[Dict[str, DebrisHit]] = None,
 ) -> List[ContigClassification]:
-    """Classify all contigs and generate classifications list.
+    """Classify all contigs and assign confidence levels.
+
+    This function classifies each contig into one of nine categories and assigns
+    a confidence level (high/medium/low) based on multiple evidence sources.
+
+    Classification categories:
+    - chrom_assigned: Chromosome-length contigs with synteny support
+    - chrom_unassigned: Chromosome-length contigs without synteny
+    - organelle_complete: Complete organelle genomes (chrC, chrM)
+    - organelle_debris: Partial organelle sequences
+    - rDNA: Ribosomal DNA repeat units
+    - contaminant: Sequences from contaminating organisms
+    - chrom_debris: High-coverage duplicates of assembled chromosomes
+    - debris: Assembly fragments with reference homology
+    - unclassified: Sequences with no classification evidence
+
+    Confidence levels are based on:
+    - Gene proportion: Fraction of reference genes aligned to contig
+    - GC deviation: Standard deviations from reference nuclear GC mean
+    - Coverage: Alignment coverage fraction (0.0-1.0)
+    - Identity: Alignment identity (0.0-1.0)
+    - Protein hits: Number of miniprot alignments
 
     Args:
         query_fasta: Path to query FASTA
@@ -384,6 +450,13 @@ def classify_all_contigs(
         query_gc: Dict of contig name -> GC content (0.0-1.0)
         ref_gc_mean: Mean GC content of reference nuclear chromosomes
         ref_gc_std: Standard deviation of reference GC content
+        organelle_hits: Dict of contig -> OrganelleHit with detection details
+        rdna_hits: Dict of contig -> RdnaHit with detection details
+        chrom_debris_hits: Dict of contig -> DebrisHit from chromosome debris detection
+        other_debris_hits: Dict of contig -> DebrisHit from reference/protein detection
+
+    Returns:
+        List of ContigClassification objects with assigned names, categories, and confidence levels
     """
 
     classifications: List[ContigClassification] = []
@@ -495,6 +568,11 @@ def classify_all_contigs(
     # organelle_complete: High confidence - passed strict detection criteria
     # (coverage >80%, length within tolerance)
     if chrC_contig and chrC_contig not in classified_contigs:
+        hit = organelle_hits.get(chrC_contig) if organelle_hits else None
+        # High confidence if coverage >= 90%, medium if >= 80% (our threshold)
+        confidence = "high"
+        if hit and hit.coverage < 0.90:
+            confidence = "medium"
         classifications.append(ContigClassification(
             original_name=chrC_contig,
             new_name="chrC",
@@ -507,11 +585,16 @@ def classify_all_contigs(
             contig_len=query_lengths.get(chrC_contig, 0),
             gc_content=_get_gc(chrC_contig),
             gc_deviation=None,  # Organelles have different GC, don't compare to nuclear
-            classification_confidence="high",
+            classification_confidence=confidence,
         ))
         classified_contigs.add(chrC_contig)
 
     if chrM_contig and chrM_contig not in classified_contigs:
+        hit = organelle_hits.get(chrM_contig) if organelle_hits else None
+        # High confidence if coverage >= 90%, medium if >= 80% (our threshold)
+        confidence = "high"
+        if hit and hit.coverage < 0.90:
+            confidence = "medium"
         classifications.append(ContigClassification(
             original_name=chrM_contig,
             new_name="chrM",
@@ -524,13 +607,19 @@ def classify_all_contigs(
             contig_len=query_lengths.get(chrM_contig, 0),
             gc_content=_get_gc(chrM_contig),
             gc_deviation=None,  # Organelles have different GC, don't compare to nuclear
-            classification_confidence="high",
+            classification_confidence=confidence,
         ))
         classified_contigs.add(chrM_contig)
 
     # Organelle debris: Medium confidence - partial organelle match
     for contig in organelle_debris:
         if contig not in classified_contigs:
+            hit = organelle_hits.get(contig) if organelle_hits else None
+            # Medium confidence by default (partial match)
+            # Low confidence if coverage is very low (<60%)
+            confidence = "medium"
+            if hit and hit.coverage < 0.60:
+                confidence = "low"
             classifications.append(ContigClassification(
                 original_name=contig,
                 new_name="",
@@ -538,25 +627,30 @@ def classify_all_contigs(
                 reversed=False,
                 contaminant_taxid=None,
                 contaminant_sci=None,
-                assigned_ref_id=None,
+                assigned_ref_id=hit.organelle_type if hit else None,
                 ref_gene_proportion=None,
                 contig_len=query_lengths.get(contig, 0),
                 gc_content=_get_gc(contig),
                 gc_deviation=None,  # Organelles have different GC
-                classification_confidence="medium",
+                classification_confidence=confidence,
             ))
             classified_contigs.add(contig)
 
     # 3. rDNA contigs
-    # rDNA: Medium confidence by default, high if passes additional checks
+    # rDNA: Confidence based on coverage and identity
     for contig in rdna_contigs:
         if contig not in classified_contigs:
             gc_dev = _gc_deviation(contig)
-            # rDNA often has different GC than chromosomes, so GC deviation
-            # doesn't necessarily indicate low confidence
-            # High confidence if passed detection threshold (>50% coverage)
-            # Could be medium if borderline, but we don't have coverage data here
+            hit = rdna_hits.get(contig) if rdna_hits else None
+            # High confidence if coverage >= 80% and identity >= 95%
+            # Medium confidence if coverage >= 50% (our threshold)
+            # Low confidence if borderline
             confidence = "medium"
+            if hit:
+                if hit.coverage >= 0.80 and hit.identity >= 0.95:
+                    confidence = "high"
+                elif hit.coverage < 0.60:
+                    confidence = "low"
             classifications.append(ContigClassification(
                 original_name=contig,
                 new_name="",
@@ -611,16 +705,23 @@ def classify_all_contigs(
             classified_contigs.add(contig)
 
     # 5. Chromosome debris (from chr-vs-chr alignment detection)
-    # High confidence: passed strict thresholds (≥80% coverage, ≥90% identity)
+    # Confidence based on coverage, identity, and GC deviation
     for contig in chromosome_debris:
         if contig not in classified_contigs:
             ref_id = best_ref.get(contig, "")
             gc_dev = _gc_deviation(contig)
-            # High confidence by default (passed strict 80% cov, 90% identity)
-            # Could be medium if GC is very different from reference
+            hit = chrom_debris_hits.get(contig) if chrom_debris_hits else None
+            # High confidence: ≥90% coverage AND ≥95% identity
+            # Medium confidence: passed strict 80% cov, 90% identity threshold
+            # Low confidence: borderline or GC very different from reference
             confidence = "high"
+            if hit:
+                if hit.coverage >= 0.90 and hit.identity >= 0.95:
+                    confidence = "high"
+                elif hit.coverage < 0.85 or hit.identity < 0.92:
+                    confidence = "medium"
             if gc_dev is not None and gc_dev > 3.0:
-                confidence = "medium"
+                confidence = "medium" if confidence == "high" else "low"
             classifications.append(ContigClassification(
                 original_name=contig,
                 new_name="",
@@ -638,17 +739,27 @@ def classify_all_contigs(
             classified_contigs.add(contig)
 
     # 6. Other debris (from reference/protein alignment detection)
-    # Medium confidence: has some homology but not enough for chromosome assignment
+    # Confidence based on coverage, identity, protein hits, and GC deviation
     for contig in other_debris:
         if contig not in classified_contigs:
             # Check if this contig has synteny support
             ref_id = best_ref.get(contig, "")
             classification = "chrom_debris" if ref_id else "debris"
             gc_dev = _gc_deviation(contig)
+            hit = other_debris_hits.get(contig) if other_debris_hits else None
 
-            # Medium confidence by default (≥50% coverage or ≥2 protein hits)
-            # Low if GC very different and no synteny support
+            # Confidence based on detection evidence
+            # High: ≥80% coverage OR ≥5 protein hits
+            # Medium: ≥50% coverage OR ≥2 protein hits (our threshold)
+            # Low: borderline OR GC very different with no synteny
             confidence = "medium"
+            if hit:
+                if hit.coverage >= 0.80 or hit.protein_hits >= 5:
+                    confidence = "high"
+                elif hit.coverage < 0.55 and hit.protein_hits < 3:
+                    confidence = "low"
+
+            # GC deviation penalty
             if gc_dev is not None and gc_dev > 3.0 and not ref_id:
                 confidence = "low"
 

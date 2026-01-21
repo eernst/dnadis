@@ -10,9 +10,10 @@ from __future__ import annotations
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from final_finalizer.alignment.external_tools import get_minimap2_exe, run_minimap2
+from final_finalizer.models import DebrisHit
 from final_finalizer.utils.io_utils import merge_intervals
 from final_finalizer.utils.sequence_utils import write_filtered_fasta
 
@@ -25,8 +26,8 @@ def detect_chromosome_debris(
     threads: int,
     min_coverage: float = 0.80,
     min_identity: float = 0.90,
-    exclude_contigs: Set[str] = None,
-) -> Set[str]:
+    exclude_contigs: Optional[Set[str]] = None,
+) -> Tuple[Set[str], Dict[str, DebrisHit]]:
     """Identify contigs that are assembly artifacts: near-identical copies of chromosome contigs.
 
     MOTIVATION: Genome assemblers (especially hifiasm) can produce multiple representations
@@ -55,7 +56,9 @@ def detect_chromosome_debris(
         exclude_contigs: Set of contigs to exclude from debris detection
 
     Returns:
-        Set of contig names classified as chromosome_debris
+        Tuple of:
+        - Set of contig names classified as chromosome_debris
+        - Dict mapping contig name to DebrisHit with coverage, identity, and source
     """
     if exclude_contigs is None:
         exclude_contigs = set()
@@ -64,12 +67,12 @@ def detect_chromosome_debris(
 
     if not chromosome_contigs:
         print("[info] No chromosome contigs for debris detection", file=sys.stderr)
-        return set()
+        return set(), {}
 
     # Check for minimap2/mm2plus
     if not get_minimap2_exe():
         print("[warn] Neither minimap2 nor mm2plus found, skipping chromosome debris detection", file=sys.stderr)
-        return set()
+        return set(), {}
 
     # Create FASTA of chromosome contigs as reference (streaming to avoid loading entire genome)
     chrs_fasta = work_dir / "chromosome_contigs.fa"
@@ -83,7 +86,7 @@ def detect_chromosome_debris(
 
     if not candidate_contigs:
         print("[info] No candidate contigs for debris detection", file=sys.stderr)
-        return set()
+        return set(), {}
 
     candidates_fasta = work_dir / "debris_candidates.fa"
     if not candidates_fasta.exists():
@@ -100,7 +103,7 @@ def detect_chromosome_debris(
         extra_args=["-c"],  # output CIGAR
     )
     if not success:
-        return set()
+        return set(), {}
 
     # Parse PAF and compute coverage + identity per query
     query_intervals: Dict[str, List[Tuple[int, int]]] = defaultdict(list)
@@ -133,6 +136,8 @@ def detect_chromosome_debris(
 
     # Identify debris: high coverage and identity
     debris_contigs: Set[str] = set()
+    debris_hits: Dict[str, DebrisHit] = {}
+
     for qname, intervals in query_intervals.items():
         qlen = query_lengths.get(qname, 0)
         if qlen == 0:
@@ -147,10 +152,16 @@ def detect_chromosome_debris(
 
         if coverage >= min_coverage and identity >= min_identity:
             debris_contigs.add(qname)
+            debris_hits[qname] = DebrisHit(
+                coverage=coverage,
+                identity=identity,
+                protein_hits=0,  # No protein hits from assembly-to-assembly alignment
+                source="chromosome",
+            )
             print(
                 f"[info] Chromosome debris: {qname} (cov={coverage:.2f}, ident={identity:.2f})",
                 file=sys.stderr,
             )
 
     print(f"[info] Chromosome debris contigs: {len(debris_contigs)}", file=sys.stderr)
-    return debris_contigs
+    return debris_contigs, debris_hits

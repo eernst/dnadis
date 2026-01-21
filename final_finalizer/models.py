@@ -69,7 +69,29 @@ class ChainEvidenceResult:
 # ----------------------------
 @dataclass
 class ContigClassification:
-    """Classification result for a single contig."""
+    """Classification result for a single contig.
+
+    Contains the classification category, confidence level, and supporting evidence
+    for a query assembly contig.
+
+    Classification categories:
+    - chrom_assigned: Chromosome with reference assignment via synteny
+    - chrom_unassigned: Chromosome-length without reference assignment
+    - organelle_complete: Complete organelle genome (chrC or chrM)
+    - organelle_debris: Partial organelle sequence
+    - rDNA: Ribosomal DNA repeat unit
+    - contaminant: Sequence from contaminating organism
+    - chrom_debris: High-coverage duplicate of assembled chromosome
+    - debris: Assembly fragment with reference homology
+    - unclassified: No classification evidence
+
+    Confidence levels (high/medium/low) are determined by:
+    - Gene proportion: Fraction of reference genes aligned (for chromosomes)
+    - GC deviation: Standard deviations from reference nuclear GC mean
+    - Coverage: Alignment coverage fraction
+    - Identity: Alignment identity
+    - Protein hits: Number of miniprot alignments
+    """
     original_name: str
     new_name: str
     classification: str  # chrom_assigned, chrom_unassigned, chrom_debris, organelle_complete, organelle_debris, rDNA, contaminant, debris, unclassified
@@ -84,7 +106,7 @@ class ContigClassification:
     gc_deviation: Optional[float] = None  # Deviation from reference mean in std devs
     synteny_score: Optional[float] = None  # Synteny evidence strength (0.0-1.0)
     contam_score: Optional[float] = None  # Contaminant evidence strength (0.0-1.0)
-    contam_coverage: Optional[float] = None  # Contaminant alignment coverage
+    contam_coverage: Optional[float] = None  # Contaminant alignment coverage (0.0-1.0)
     classification_confidence: Optional[str] = None  # high/medium/low
 
 
@@ -95,6 +117,32 @@ class ContaminantHit:
     sci_name: str
     coverage: float  # Fraction of contig covered (0.0-1.0)
     score: int  # Centrifuger score
+
+
+@dataclass
+class OrganelleHit:
+    """Organelle detection result for a contig."""
+    organelle_type: str  # "chrC" or "chrM"
+    coverage: float  # Fraction of contig covered by alignments (0.0-1.0)
+    identity: float  # Alignment identity (0.0-1.0)
+    length_ratio: float  # Contig length / reference length
+    is_complete: bool  # True if classified as complete organelle
+
+
+@dataclass
+class RdnaHit:
+    """rDNA detection result for a contig."""
+    coverage: float  # Fraction of contig covered by rDNA alignments (0.0-1.0)
+    identity: float  # Alignment identity (0.0-1.0)
+
+
+@dataclass
+class DebrisHit:
+    """Debris detection result for a contig."""
+    coverage: float  # Fraction of contig covered by alignments (0.0-1.0)
+    identity: float  # Alignment identity (0.0-1.0)
+    protein_hits: int  # Number of protein hits
+    source: str  # "chromosome" or "reference" indicating detection source
 
 
 @dataclass

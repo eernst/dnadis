@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from final_finalizer.detection.blast import run_makeblastdb, run_blastn_megablast
+from final_finalizer.models import OrganelleHit
 from final_finalizer.utils.io_utils import merge_intervals
 from final_finalizer.utils.reference_utils import normalize_organelle_id
 from final_finalizer.utils.sequence_utils import (
@@ -115,7 +116,7 @@ def detect_organelles(
     min_coverage: float,
     chrC_len_tol: float,
     chrM_len_tol: float,
-) -> Tuple[Optional[str], Optional[str], Set[str]]:
+) -> Tuple[Optional[str], Optional[str], Set[str], Dict[str, OrganelleHit]]:
     """Identify best organelle candidates.
 
     Criteria for full organelle:
@@ -123,14 +124,17 @@ def detect_organelles(
     - Length within tolerance of reference
     - Prefer hifiasm circular contigs (ptg*c pattern)
 
-    Returns (chrC_contig, chrM_contig, debris_contigs)
-    where debris_contigs are those with 50%+ coverage but not selected as main organelle.
+    Returns (chrC_contig, chrM_contig, debris_contigs, organelle_hits)
+    where:
+    - debris_contigs are those with 50%+ coverage but not selected as main organelle
+    - organelle_hits is a dict mapping contig name to OrganelleHit with detection details
     """
     work_dir.mkdir(parents=True, exist_ok=True)
 
     chrC_contig: Optional[str] = None
     chrM_contig: Optional[str] = None
     debris_contigs: Set[str] = set()
+    organelle_hits: Dict[str, OrganelleHit] = {}
 
     # Get reference lengths
     chrC_len = 0
@@ -145,7 +149,7 @@ def detect_organelles(
     # Combine organelle references for BLAST if available
     if not chrC_ref and not chrM_ref:
         print("[info] No organelle references available, skipping organelle detection", file=sys.stderr)
-        return None, None, set()
+        return None, None, set(), {}
 
     # Create combined organelle reference for BLAST
     # Important: rename sequences to "chrC" and "chrM" so BLAST subject IDs match expected names
@@ -183,7 +187,10 @@ def detect_organelles(
     )
 
     # Parse BLAST results and compute coverage per (query, subject) pair
+    # Also track alignment identity (matches / alignment_length)
     query_subject_intervals: Dict[Tuple[str, str], List[Tuple[int, int]]] = defaultdict(list)
+    query_subject_matches: Dict[Tuple[str, str], int] = defaultdict(int)
+    query_subject_alnlen: Dict[Tuple[str, str], int] = defaultdict(int)
 
     if blast_out.exists() and blast_out.stat().st_size > 0:
         with blast_out.open("r") as fh:
@@ -197,6 +204,8 @@ def detect_organelles(
                 qseqid = fields[0]
                 sseqid = fields[1]
                 try:
+                    pident = float(fields[2])
+                    aln_length = int(fields[3])
                     qstart = int(fields[6])
                     qend = int(fields[7])
                 except ValueError:
@@ -205,50 +214,102 @@ def detect_organelles(
                 if qstart > qend:
                     qstart, qend = qend, qstart
 
-                query_subject_intervals[(qseqid, sseqid)].append((qstart, qend))
+                key = (qseqid, sseqid)
+                query_subject_intervals[key].append((qstart, qend))
+                # Compute matches from percent identity and alignment length
+                matches = int(pident * aln_length / 100.0)
+                query_subject_matches[key] += matches
+                query_subject_alnlen[key] += aln_length
 
     # Compute coverage and identify candidates
-    chrC_candidates: List[Tuple[str, float, int, bool]] = []  # (contig, coverage, length, is_circular)
-    chrM_candidates: List[Tuple[str, float, int, bool]] = []
+    # Extended tuple: (contig, coverage, identity, length, is_circular, length_ratio)
+    chrC_candidates: List[Tuple[str, float, float, int, bool, float]] = []
+    chrM_candidates: List[Tuple[str, float, float, int, bool, float]] = []
 
     for (qseqid, sseqid), intervals in query_subject_intervals.items():
         _, total_bp = merge_intervals(intervals)
         qlen = query_lengths.get(qseqid, 0)
         coverage = (total_bp / qlen) if qlen > 0 else 0.0
 
+        # Compute identity
+        key = (qseqid, sseqid)
+        total_matches = query_subject_matches[key]
+        total_alnlen = query_subject_alnlen[key]
+        identity = (total_matches / total_alnlen) if total_alnlen > 0 else 0.0
+
         is_circular = is_hifiasm_circular(qseqid)
 
         if sseqid == "chrC" and chrC_len > 0:
+            len_ratio = qlen / chrC_len if chrC_len > 0 else 0.0
             len_diff = abs(qlen - chrC_len) / chrC_len
             if coverage >= min_coverage and len_diff <= chrC_len_tol:
-                chrC_candidates.append((qseqid, coverage, qlen, is_circular))
+                chrC_candidates.append((qseqid, coverage, identity, qlen, is_circular, len_ratio))
             elif coverage >= 0.50:
                 debris_contigs.add(qseqid)
+                # Store hit info for debris
+                organelle_hits[qseqid] = OrganelleHit(
+                    organelle_type="chrC",
+                    coverage=coverage,
+                    identity=identity,
+                    length_ratio=len_ratio,
+                    is_complete=False,
+                )
 
         elif sseqid == "chrM" and chrM_len > 0:
+            len_ratio = qlen / chrM_len if chrM_len > 0 else 0.0
             len_diff = abs(qlen - chrM_len) / chrM_len
             if coverage >= min_coverage and len_diff <= chrM_len_tol:
-                chrM_candidates.append((qseqid, coverage, qlen, is_circular))
+                chrM_candidates.append((qseqid, coverage, identity, qlen, is_circular, len_ratio))
             elif coverage >= 0.50:
                 debris_contigs.add(qseqid)
+                # Store hit info for debris
+                organelle_hits[qseqid] = OrganelleHit(
+                    organelle_type="chrM",
+                    coverage=coverage,
+                    identity=identity,
+                    length_ratio=len_ratio,
+                    is_complete=False,
+                )
 
     # Select best candidates (prefer circular, then by length similarity)
-    def select_best(candidates: List[Tuple[str, float, int, bool]], ref_len: int) -> Optional[str]:
+    # Returns (contig_name, coverage, identity, length_ratio) or None
+    def select_best(
+        candidates: List[Tuple[str, float, float, int, bool, float]], ref_len: int
+    ) -> Optional[Tuple[str, float, float, float]]:
         if not candidates:
             return None
         # Sort by: circular (desc), then length difference (asc)
-        candidates.sort(key=lambda x: (-int(x[3]), abs(x[2] - ref_len)))
-        return candidates[0][0]
+        # Tuple: (contig, coverage, identity, length, is_circular, length_ratio)
+        candidates.sort(key=lambda x: (-int(x[4]), abs(x[3] - ref_len)))
+        best = candidates[0]
+        return (best[0], best[1], best[2], best[5])  # (name, coverage, identity, length_ratio)
 
-    chrC_contig = select_best(chrC_candidates, chrC_len)
-    chrM_contig = select_best(chrM_candidates, chrM_len)
+    chrC_result = select_best(chrC_candidates, chrC_len)
+    chrM_result = select_best(chrM_candidates, chrM_len)
 
-    # Remove selected organelles from debris
-    if chrC_contig:
+    # Extract contig names and create OrganelleHit entries for complete organelles
+    if chrC_result:
+        chrC_contig, chrC_cov, chrC_ident, chrC_len_ratio = chrC_result
         debris_contigs.discard(chrC_contig)
-        print(f"[info] Selected chrC candidate: {chrC_contig}", file=sys.stderr)
-    if chrM_contig:
-        debris_contigs.discard(chrM_contig)
-        print(f"[info] Selected chrM candidate: {chrM_contig}", file=sys.stderr)
+        organelle_hits[chrC_contig] = OrganelleHit(
+            organelle_type="chrC",
+            coverage=chrC_cov,
+            identity=chrC_ident,
+            length_ratio=chrC_len_ratio,
+            is_complete=True,
+        )
+        print(f"[info] Selected chrC candidate: {chrC_contig} (cov={chrC_cov:.2f}, ident={chrC_ident:.3f})", file=sys.stderr)
 
-    return chrC_contig, chrM_contig, debris_contigs
+    if chrM_result:
+        chrM_contig, chrM_cov, chrM_ident, chrM_len_ratio = chrM_result
+        debris_contigs.discard(chrM_contig)
+        organelle_hits[chrM_contig] = OrganelleHit(
+            organelle_type="chrM",
+            coverage=chrM_cov,
+            identity=chrM_ident,
+            length_ratio=chrM_len_ratio,
+            is_complete=True,
+        )
+        print(f"[info] Selected chrM candidate: {chrM_contig} (cov={chrM_cov:.2f}, ident={chrM_ident:.3f})", file=sys.stderr)
+
+    return chrC_contig, chrM_contig, debris_contigs, organelle_hits

@@ -36,7 +36,7 @@
 ### Conda environment
 
 ```bash
-conda create -n final_finalizer python=3.10 miniprot gffread blast minimap2 centrifuger -c bioconda -c conda-forge
+conda create -n final_finalizer python=3.10 miniprot gffread blast mm2plus centrifuger -c bioconda -c conda-forge
 conda activate final_finalizer
 ```
 
@@ -135,7 +135,8 @@ Latest tested conda package versions (CI):
 |--------|-------------|
 | `contig` | New contig name (with chromosome assignment) |
 | `original_name` | Original contig name from input FASTA |
-| `classification` | Category: chrom_assigned, chrom_unassigned, organelle_complete, rDNA, contaminant, debris, unclassified |
+| `classification` | Category: chrom_assigned, chrom_unassigned, organelle_complete, organelle_debris, rDNA, contaminant, chrom_debris, debris, unclassified |
+| `classification_confidence` | Confidence level: high, medium, or low |
 | `reversed` | Whether contig was reverse-complemented |
 | `contaminant_taxid` | NCBI taxonomy ID (for contaminants) |
 | `contaminant_sci` | Scientific name (for contaminants) |
@@ -170,7 +171,8 @@ The tool runs these phases in order:
 
 | Category | Description |
 |----------|-------------|
-| `chrom` | Chromosome-like contig assigned to a reference chromosome |
+| `chrom_assigned` | Chromosome-length contig assigned to a reference chromosome via synteny |
+| `chrom_unassigned` | Chromosome-length contig without reference assignment (novel or failed synteny gates) |
 | `organelle_complete` | Complete organelle genome (chrC or chrM) |
 | `organelle_debris` | Partial organelle sequence |
 | `rDNA` | Ribosomal DNA repeat unit |
@@ -178,6 +180,36 @@ The tool runs these phases in order:
 | `chrom_debris` | High-coverage (≥80%), high-identity (≥90%) duplicate of an assembled chromosome contig |
 | `debris` | Assembly debris with reference nucleotide coverage (≥50%) or protein homology (≥2 miniprot hits) |
 | `unclassified` | Could not be classified |
+
+## Classification Confidence Levels
+
+Each contig is assigned a confidence level (`high`, `medium`, or `low`) indicating the reliability of its classification based on multiple lines of evidence.
+
+### Confidence Criteria by Category
+
+| Classification | High | Medium | Low |
+|----------------|------|--------|-----|
+| **chrom_assigned** | Gene proportion ≥20% AND GC deviation <2σ | Gene proportion 10-20% OR GC deviation 2-3σ | Gene proportion <10% OR GC deviation >3σ |
+| **chrom_unassigned** | — | GC deviation <2σ | GC deviation ≥2σ |
+| **organelle_complete** | Coverage ≥90% | Coverage 80-90% | — |
+| **organelle_debris** | — | Coverage ≥60% | Coverage <60% |
+| **rDNA** | Coverage ≥80% AND identity ≥95% | Coverage 50-80% OR identity <95% | Coverage <60% |
+| **contaminant** | Coverage ≥80% OR GC deviation >2σ | Coverage 50-80% | Coverage <50% |
+| **chrom_debris** | Coverage ≥90%, identity ≥95%, GC deviation <3σ | Coverage 80-90% OR identity 90-95% OR GC deviation ≥3σ | — |
+| **debris** | Coverage ≥80% OR ≥5 protein hits | Coverage 50-80% OR 2-5 protein hits | GC deviation >3σ AND no synteny |
+| **unclassified** | — | — | Always (no evidence) |
+
+### Evidence Factors
+
+**Gene proportion**: Fraction of reference chromosome genes aligned to the query contig. Higher values indicate stronger synteny support.
+
+**GC deviation**: How many standard deviations (σ) the contig's GC content differs from the reference nuclear genome mean. Large deviations may indicate contamination or unusual sequences.
+
+**Coverage**: Fraction of contig covered by alignments (0.0-1.0). Higher coverage indicates more complete matches.
+
+**Identity**: Alignment identity (0.0-1.0). Values ≥0.95 indicate very high sequence similarity.
+
+**Protein hits**: Number of unique reference protein-coding genes with miniprot alignments to the contig.
 
 ## Thresholds
 

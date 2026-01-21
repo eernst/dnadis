@@ -130,22 +130,24 @@ The `classification_confidence` column indicates how certain the classification 
 
 **Evidence factors considered:**
 
-- **Synteny strength**: Gene proportion and number of synteny segments
-- **GC content**: Deviation from reference nuclear chromosomes (in standard deviations)
-- **Contaminant coverage**: Fraction of contig covered by contaminant alignments
+- **Gene proportion**: Fraction of reference chromosome genes aligned to the query contig
+- **GC deviation**: How many standard deviations (σ) the contig's GC content differs from the reference nuclear genome mean
+- **Coverage**: Fraction of contig covered by alignments (0.0-1.0)
+- **Identity**: Alignment identity (0.0-1.0)
+- **Protein hits**: Number of unique reference protein-coding genes with miniprot alignments
 
 **Per-category confidence logic:**
 
 | Classification | High | Medium | Low |
 |---------------|------|--------|-----|
-| `chrom_assigned` | Gene proportion ≥20%, GC deviation <2σ | Gene proportion 10-20%, or GC deviation 2-3σ | Gene proportion <10%, or GC deviation >3σ |
+| `chrom_assigned` | Gene proportion ≥20% AND GC deviation <2σ | Gene proportion 10-20% OR GC deviation 2-3σ | Gene proportion <10% OR GC deviation >3σ |
 | `chrom_unassigned` | — | GC deviation <2σ | GC deviation ≥2σ |
-| `organelle_complete` | Always (passed strict detection) | — | — |
-| `organelle_debris` | — | Always (partial match) | — |
-| `rDNA` | — | Always (passed detection threshold) | — |
-| `contaminant` | Coverage ≥80%, or GC deviation >2σ | Coverage 50-80% | Coverage <50% |
-| `chrom_debris` | Passed strict thresholds, GC deviation <3σ | GC deviation ≥3σ | — |
-| `debris` | — | Has reference homology, GC deviation <3σ | GC deviation ≥3σ and no synteny |
+| `organelle_complete` | Coverage ≥90% | Coverage 80-90% | — |
+| `organelle_debris` | — | Coverage ≥60% | Coverage <60% |
+| `rDNA` | Coverage ≥80% AND identity ≥95% | Coverage 50-80% OR identity <95% | Coverage <60% |
+| `contaminant` | Coverage ≥80% OR GC deviation >2σ | Coverage 50-80% | Coverage <50% |
+| `chrom_debris` | Coverage ≥90%, identity ≥95%, GC deviation <3σ | Coverage 80-90% OR identity 90-95% OR GC deviation ≥3σ | — |
+| `debris` | Coverage ≥80% OR ≥5 protein hits | Coverage 50-80% OR 2-5 protein hits | GC deviation >3σ AND no synteny |
 | `unclassified` | — | — | Always (no evidence) |
 
 ### Assignment Status Values

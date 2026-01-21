@@ -7,14 +7,16 @@ Contains functions for identifying contigs with significant ribosomal DNA conten
 from __future__ import annotations
 
 import sys
+from collections import defaultdict
 from pathlib import Path
-from typing import Dict, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 from final_finalizer.detection.blast import (
-    parse_blast_coverage,
     run_blastn_megablast,
     run_makeblastdb,
 )
+from final_finalizer.models import RdnaHit
+from final_finalizer.utils.io_utils import merge_intervals
 
 
 def prepare_rdna_reference(
@@ -59,10 +61,13 @@ def detect_rdna_contigs(
     threads: int,
     min_coverage: float,
     exclude_contigs: Set[str],
-) -> Set[str]:
+) -> Tuple[Set[str], Dict[str, RdnaHit]]:
     """Identify contigs with significant rDNA content.
 
-    Returns set of contig names with coverage >= min_coverage.
+    Returns:
+        Tuple of:
+        - set of contig names with coverage >= min_coverage
+        - dict mapping contig name to RdnaHit with coverage and identity details
     """
     work_dir.mkdir(parents=True, exist_ok=True)
 
@@ -82,15 +87,57 @@ def detect_rdna_contigs(
         err_path=work_dir / "blastn_rdna.err",
     )
 
-    # Parse results
-    blast_results = parse_blast_coverage(blast_out, query_lengths)
+    # Parse results with coverage and identity tracking
+    query_intervals: Dict[str, List[Tuple[int, int]]] = defaultdict(list)
+    query_matches: Dict[str, int] = defaultdict(int)
+    query_alnlen: Dict[str, int] = defaultdict(int)
+
+    if blast_out.exists() and blast_out.stat().st_size > 0:
+        with blast_out.open("r") as fh:
+            for line in fh:
+                if not line.strip() or line.startswith("#"):
+                    continue
+                fields = line.rstrip("\n").split("\t")
+                if len(fields) < 12:
+                    continue
+
+                qseqid = fields[0]
+                try:
+                    pident = float(fields[2])
+                    aln_length = int(fields[3])
+                    qstart = int(fields[6])
+                    qend = int(fields[7])
+                except ValueError:
+                    continue
+
+                if qstart > qend:
+                    qstart, qend = qend, qstart
+
+                query_intervals[qseqid].append((qstart, qend))
+                # Compute matches from percent identity and alignment length
+                matches = int(pident * aln_length / 100.0)
+                query_matches[qseqid] += matches
+                query_alnlen[qseqid] += aln_length
 
     rdna_contigs: Set[str] = set()
-    for contig, summary in blast_results.items():
-        if contig in exclude_contigs:
-            continue
-        if summary.total_coverage >= min_coverage:
-            rdna_contigs.add(contig)
-            print(f"[info] rDNA contig: {contig} (coverage={summary.total_coverage:.2f})", file=sys.stderr)
+    rdna_hits: Dict[str, RdnaHit] = {}
 
-    return rdna_contigs
+    for qseqid, intervals in query_intervals.items():
+        if qseqid in exclude_contigs:
+            continue
+
+        _, total_bp = merge_intervals(intervals)
+        qlen = query_lengths.get(qseqid, 0)
+        coverage = (total_bp / qlen) if qlen > 0 else 0.0
+
+        # Compute identity
+        total_matches = query_matches[qseqid]
+        total_alnlen = query_alnlen[qseqid]
+        identity = (total_matches / total_alnlen) if total_alnlen > 0 else 0.0
+
+        if coverage >= min_coverage:
+            rdna_contigs.add(qseqid)
+            rdna_hits[qseqid] = RdnaHit(coverage=coverage, identity=identity)
+            print(f"[info] rDNA contig: {qseqid} (cov={coverage:.2f}, ident={identity:.3f})", file=sys.stderr)
+
+    return rdna_contigs, rdna_hits

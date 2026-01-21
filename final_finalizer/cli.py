@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
-"""Command-line interface for final_finalizer."""
+"""Command-line interface for final_finalizer.
+
+This module provides the main entry point for the final_finalizer tool,
+which classifies genome assembly contigs into biological categories using
+protein-anchored synteny blocks, organelle alignments, and taxonomic screening.
+
+Each contig receives:
+- A classification category (chrom_assigned, organelle_complete, debris, etc.)
+- A confidence level (high/medium/low) based on evidence strength
+- A new name reflecting its assignment (e.g., chr5A, chrC, contig_1)
+
+See README.md for full documentation and examples.
+"""
 from __future__ import annotations
 
 import argparse
@@ -93,7 +105,7 @@ from final_finalizer.output.plotting import run_plot
 
 def main():
     p = argparse.ArgumentParser(
-        description="Genome-wide subgenome distance analysis using minimap2 chains or miniprot protein-anchored synteny blocks.",
+        description="Genome assembly finalization tool for contig classification using protein-anchored synteny blocks.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
@@ -638,6 +650,7 @@ def main():
     chrC_contig: Optional[str] = None
     chrM_contig: Optional[str] = None
     organelle_debris: Set[str] = set()
+    organelle_hits: Dict = {}
 
     if not args.skip_organelles:
         print("[info] Phase 4: Organelle detection", file=sys.stderr)
@@ -650,7 +663,7 @@ def main():
         )
 
         if chrC_ref or chrM_ref:
-            chrC_contig, chrM_contig, organelle_debris = detect_organelles(
+            chrC_contig, chrM_contig, organelle_debris, organelle_hits = detect_organelles(
                 query_fasta=blast_query_fasta,
                 query_lengths=blast_query_lengths,
                 chrC_ref=chrC_ref,
@@ -666,6 +679,7 @@ def main():
 
     # --- Phase 5: rDNA detection ---
     rdna_contigs: Set[str] = set()
+    rdna_hits: Dict = {}
     already_classified = {chrC_contig, chrM_contig} | organelle_debris
     already_classified.discard(None)
 
@@ -675,7 +689,7 @@ def main():
         rdna_ref = prepare_rdna_reference(args.rdna_ref, script_dir)
 
         if rdna_ref:
-            rdna_contigs = detect_rdna_contigs(
+            rdna_contigs, rdna_hits = detect_rdna_contigs(
                 query_fasta=blast_query_fasta,
                 query_lengths=blast_query_lengths,
                 rdna_ref=rdna_ref,
@@ -692,8 +706,9 @@ def main():
     already_classified = already_classified | rdna_contigs
 
     chromosome_debris: Set[str] = set()
+    chrom_debris_hits: Dict = {}
     if chromosome_contigs:
-        chromosome_debris = detect_chromosome_debris(
+        chromosome_debris, chrom_debris_hits = detect_chromosome_debris(
             query_fasta=qry,
             query_lengths=qry_lengths,
             chromosome_contigs=chromosome_contigs,
@@ -734,7 +749,7 @@ def main():
     already_classified = already_classified | set(contaminants.keys()) | chromosome_contigs
     remaining_contigs = set(qry_lengths.keys()) - already_classified
 
-    additional_debris, _unclassified = classify_debris_and_unclassified(
+    additional_debris, _unclassified, other_debris_hits = classify_debris_and_unclassified(
         remaining_contigs=remaining_contigs,
         query_fasta=qry,
         query_lengths=qry_lengths,
@@ -787,6 +802,10 @@ def main():
         query_gc=qry_gc,
         ref_gc_mean=ref_gc_mean,
         ref_gc_std=ref_gc_std,
+        organelle_hits=organelle_hits,
+        rdna_hits=rdna_hits,
+        chrom_debris_hits=chrom_debris_hits,
+        other_debris_hits=other_debris_hits,
     )
 
     for clf in classifications:
