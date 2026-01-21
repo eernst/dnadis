@@ -4,7 +4,7 @@
 from final_finalizer.classification.classifier import (
     classify_all_contigs,
     classify_debris_and_unclassified,
-    compute_mean_genes_per_Mbp,
+    compute_mean_gene_proportion,
     compute_orientation_votes,
     count_genes_per_ref_chrom,
     determine_contig_orientations,
@@ -15,7 +15,7 @@ __all__ = [
     "compute_orientation_votes",
     "determine_contig_orientations",
     "count_genes_per_ref_chrom",
-    "compute_mean_genes_per_Mbp",
+    "compute_mean_gene_proportion",
     "classify_debris_and_unclassified",
     "generate_contig_names",
     "classify_all_contigs",

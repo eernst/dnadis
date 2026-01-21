@@ -149,32 +149,38 @@ def count_genes_per_ref_chrom(
     return {chrom: len(genes) for chrom, genes in chrom_genes.items()}
 
 
-def compute_mean_genes_per_Mbp(
+def compute_mean_gene_proportion(
     qr_gene_count: Dict[Tuple[str, str], int],
-    query_lengths: Dict[str, int],
     chromosome_contigs: Set[str],
     best_ref: Dict[str, str],
+    ref_gene_counts: Dict[str, int],
 ) -> float:
-    """Compute mean genes per Mbp across chromosome-assigned contigs."""
-    total_genes = 0
-    total_bp = 0
+    """Compute mean gene proportion across chromosome-assigned contigs.
+
+    For each chromosome-assigned contig, computes the ratio:
+        (genes mapped to contig) / (total genes in assigned reference chromosome)
+
+    Returns the mean of these ratios across all chromosome-assigned contigs.
+    """
+    ratios = []
 
     for contig in chromosome_contigs:
         ref_id = best_ref.get(contig, "")
         if not ref_id:
             continue
-        gene_count = qr_gene_count.get((contig, ref_id), 0)
-        contig_len = query_lengths.get(contig, 0)
+        mapped_genes = qr_gene_count.get((contig, ref_id), 0)
+        ref_genes = ref_gene_counts.get(ref_id, 0)
 
-        total_genes += gene_count
-        total_bp += contig_len
+        if ref_genes > 0:
+            ratio = mapped_genes / ref_genes
+            ratios.append(ratio)
 
-    if total_bp == 0:
+    if not ratios:
         return 0.0
 
-    mean_gpmbp = total_genes / (total_bp / 1_000_000.0)
-    print(f"[info] Mean genes per Mbp (query): {mean_gpmbp:.2f} ({total_genes} genes / {total_bp} bp)", file=sys.stderr)
-    return mean_gpmbp
+    mean_ratio = sum(ratios) / len(ratios)
+    print(f"[info] Mean gene proportion (mapped/ref): {mean_ratio:.3f} ({len(ratios)} chromosome contigs)", file=sys.stderr)
+    return mean_ratio
 
 
 # ----------------------------

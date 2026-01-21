@@ -88,7 +88,7 @@ from final_finalizer.detection.contaminant import detect_contaminants
 from final_finalizer.classification.classifier import (
     classify_all_contigs,
     classify_debris_and_unclassified,
-    compute_mean_genes_per_Mbp,
+    compute_mean_gene_proportion,
     count_genes_per_ref_chrom,
     determine_contig_orientations,
 )
@@ -798,11 +798,11 @@ def main():
     # --- Phase 9: Gene count statistics ---
     print("[info] Phase 9: Gene count statistics", file=sys.stderr)
     ref_gene_counts = count_genes_per_ref_chrom(ref_gff3, ref_id_map=ref_orig_to_norm)
-    compute_mean_genes_per_Mbp(
+    compute_mean_gene_proportion(
         qr_gene_count=ev.qr_gene_count,
-        query_lengths=qry_lengths,
         chromosome_contigs=chromosome_contigs,
         best_ref=best_ref,
+        ref_gene_counts=ref_gene_counts,
     )
 
     # --- Phase 10: Orientation determination ---
