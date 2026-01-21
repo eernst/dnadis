@@ -218,6 +218,7 @@ ev <- ev %>%
 # ----------------------------
 df_slots <- df_plot %>%
   mutate(contig_len_mb = contig_len / 1e6) %>%
+  filter(assigned_chrom_id != "Un") %>%
   left_join(x_tbl, by = "chrom_id") %>%
   filter(!is.na(x_index)) %>%
   group_by(chrom_id) %>%
@@ -561,6 +562,24 @@ if (has_subgenomes) {
   }
   verts <- get_vertices(plot_levels)
 
+  label_verts <- if (n_sets == 2) {
+    verts %>%
+      mutate(
+        lx = if_else(vx < 0, -0.58, 0.58),
+        ly = 0,
+        hjust = if_else(vx < 0, 1, 0),
+        vjust = 0.5
+      )
+  } else {
+    verts %>%
+      mutate(
+        lx = vx,
+        ly = vy,
+        hjust = 0.5,
+        vjust = 0.5
+      )
+  }
+
   radar_xy <- radar_support %>%
     left_join(verts, by = "subgenome") %>%
     group_by(contig) %>%
@@ -569,7 +588,11 @@ if (has_subgenomes) {
       ry = sum(w * vy, na.rm = TRUE),
       .groups = "drop"
     ) %>%
-    left_join(df_plot %>% select(original_name, assigned_subgenome), by = c("contig" = "original_name"))
+    left_join(df_plot %>% select(original_name, assigned_subgenome), by = c("contig" = "original_name")) %>%
+    mutate(
+      assigned_subgenome = if_else(is.na(assigned_subgenome), "NA", assigned_subgenome),
+      assigned_subgenome = factor(assigned_subgenome, levels = c(plot_levels, "NA"))
+    )
 
   frame <- if (n_sets == 2) {
     tibble(x = c(-0.5, 0.5), y = c(0, 0))
@@ -579,31 +602,51 @@ if (has_subgenomes) {
       bind_rows(.[1,])
   }
 
+  radar_xlim <- c(-0.6, 0.6)
+  radar_ylim <- if (n_sets == 2) {
+    c(-0.6, 0.6)
+  } else {
+    c(-0.15, max(verts$vy) + 0.06)
+  }
+  axis_pos <- (0 - radar_ylim[1]) / (radar_ylim[2] - radar_ylim[1])
+  legend_pos <- c(0.5, pmax(0.02, axis_pos - 0.08))
+
   p_radar <- ggplot() +
     geom_path(data = frame, aes(x = x, y = y), linewidth = 0.4, color = "grey40") +
-    geom_text(data = verts, aes(x = vx, y = vy, label = subgenome),
-              color = "grey20", size = base_font_pt / .pt, family = base_family,
-              nudge_x = if (n_sets == 2) c(-0.03, 0.03) else 0,
-              nudge_y = if (n_sets == 2) c( 0.03, 0.03) else 0) +
+    geom_text(
+      data = label_verts,
+      aes(x = lx, y = ly, label = subgenome, hjust = hjust, vjust = vjust),
+      color = "grey20",
+      size = base_font_pt / .pt,
+      family = base_family
+    ) +
     geom_point(
       data = radar_xy %>% filter(!is.na(rx), !is.na(ry)),
       aes(x = rx, y = ry, color = assigned_subgenome),
-      shape = 16, alpha = 0.80, size = 1.6
+      shape = 16, alpha = 0.80, size = 1.6, show.legend = TRUE
     ) +
-    scale_color_manual(values = col_dark, drop = FALSE) +
-    coord_equal(clip = "off") +
+    scale_color_manual(
+      values = col_dark,
+      breaks = "NA",
+      labels = "Unassigned contigs",
+      drop = FALSE
+    ) +
+    guides(color = guide_legend(title = NULL, override.aes = list(size = 2))) +
+    coord_equal(clip = "off", xlim = radar_xlim, ylim = radar_ylim) +
     theme_classic(base_family = base_family, base_size = base_font_pt) +
     theme(
       plot.title = element_text(hjust = 0.5, size = base_font_pt, family = base_family),
       axis.title = element_blank(),
       axis.text  = element_blank(),
       axis.ticks = element_blank(),
+      axis.line = element_blank(),
       panel.grid = element_blank(),
       plot.margin = margin(1.5, 1.5, 1.5, 1.5)
     ) +
     labs(title = "Chromosome-set support", x = NULL, y = NULL)
 
-  p_radar <- apply_legend_theme(p_radar, text_pt = 6, key_pt = 6, tight = TRUE)
+  p_radar <- apply_legend_theme(p_radar, text_pt = 6, key_pt = 6, tight = TRUE) +
+    theme(legend.position = legend_pos, legend.justification = c(0.5, 1))
 
 } else {
   p_radar <- ggplot() + theme_void(base_family = base_family, base_size = base_font_pt) + labs(title = "Subgenome support (n/a)")
@@ -670,9 +713,7 @@ if (has_subgenomes) {
 }
 
 if (has_subgenomes) {
-  bottom_row <- (p_radar + p_id + plot_layout(widths = c(1, 1.35), guides = "collect")) &
-    theme(legend.position = "bottom")
-  bottom_row <- apply_legend_theme(bottom_row, text_pt = 6, key_pt = 6, tight = TRUE)
+  bottom_row <- (p_radar + p_id + plot_layout(widths = c(1, 1.35)))
   full_plot <- p_comp / bottom_row + plot_layout(heights = c(1, 1))
 } else {
   full_plot <- p_comp / p_id + plot_layout(heights = c(1, 1))
@@ -683,8 +724,7 @@ ggsave(out_pdf, plot = full_plot, width = 6, height = 6, units = "in", dpi = 300
 
 if (plot_html) {
   if (has_subgenomes) {
-    bottom_row_html <- (p_radar + p_id + plot_layout(widths = c(1, 1.35), guides = "collect")) &
-      theme(legend.position = "bottom")
+    bottom_row_html <- (p_radar + p_id + plot_layout(widths = c(1, 1.35)))
     full_plot_html <- p_comp_html / bottom_row_html + plot_layout(heights = c(1, 1))
   } else {
     full_plot_html <- p_comp_html / p_id + plot_layout(heights = c(1, 1))

@@ -309,7 +309,7 @@ def generate_contig_names(
     non_chrom_contigs: List[str] = []
 
     for clf in classifications:
-        if clf.classification == "chrom" and clf.assigned_ref_id:
+        if clf.classification == "chrom_assigned" and clf.assigned_ref_id:
             ref_to_contigs[clf.assigned_ref_id].append(clf.original_name)
         else:
             non_chrom_contigs.append(clf.original_name)
@@ -383,7 +383,7 @@ def classify_all_contigs(
     classifications: List[ContigClassification] = []
     classified_contigs: Set[str] = set()
 
-    # 1. Chromosome contigs (status OK and length >= chr_like_minlen)
+    # 1. Chromosome-length contigs with reference assignment
     for contig, ref_id in best_ref.items():
         if not ref_id:
             continue
@@ -399,12 +399,32 @@ def classify_all_contigs(
         classifications.append(ContigClassification(
             original_name=contig,
             new_name="",  # Will be filled later
-            classification="chrom",
+            classification="chrom_assigned",
             reversed=False,  # Will be filled later
             contaminant_taxid=None,
             contaminant_sci=None,
             assigned_ref_id=ref_id,
             ref_gene_proportion=gene_proportion,
+            contig_len=contig_len,
+        ))
+        classified_contigs.add(contig)
+
+    # 1b. Chromosome-length contigs WITHOUT reference assignment
+    for contig, contig_len in query_lengths.items():
+        if contig in classified_contigs:
+            continue
+        if contig_len < chr_like_minlen:
+            continue
+        # This contig is chromosome-length but has no synteny assignment
+        classifications.append(ContigClassification(
+            original_name=contig,
+            new_name="",  # Will be filled later
+            classification="chrom_unassigned",
+            reversed=False,
+            contaminant_taxid=None,
+            contaminant_sci=None,
+            assigned_ref_id=None,
+            ref_gene_proportion=None,
             contig_len=contig_len,
         ))
         classified_contigs.add(contig)

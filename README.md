@@ -135,7 +135,7 @@ Latest tested conda package versions (CI):
 |--------|-------------|
 | `contig` | New contig name (with chromosome assignment) |
 | `original_name` | Original contig name from input FASTA |
-| `classification` | Category: chrom, organelle_complete, rDNA, contaminant, debris, unclassified |
+| `classification` | Category: chrom_assigned, chrom_unassigned, organelle_complete, rDNA, contaminant, debris, unclassified |
 | `reversed` | Whether contig was reverse-complemented |
 | `contaminant_taxid` | NCBI taxonomy ID (for contaminants) |
 | `contaminant_sci` | Scientific name (for contaminants) |

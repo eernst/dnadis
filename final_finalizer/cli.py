@@ -522,7 +522,7 @@ def main():
 
     print(f"[info] Protein-anchor gate-aware rerank: demoted={n_demoted} switched={n_switched}", file=sys.stderr)
 
-    plot_suffix = "synteny (miniprot)"
+    plot_suffix = "protein-anchor synteny"
     print(f"[done] Proteins:         {proteins_faa}", file=sys.stderr)
     print(f"[done] miniprot PAF.gz:  {miniprot_paf_gz}", file=sys.stderr)
     print(f"[done] miniprot err:     {miniprot_err}", file=sys.stderr)

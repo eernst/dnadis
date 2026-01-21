@@ -95,14 +95,15 @@ The main output file containing classification results and quality metrics for e
 
 | Category | Description |
 |----------|-------------|
-| `chrom` | Chromosome-like contig assigned to a reference chromosome |
+| `chrom_assigned` | Chromosome-length contig assigned to a reference chromosome |
+| `chrom_unassigned` | Chromosome-length contig without reference assignment (novel or failed synteny gates) |
 | `organelle_complete` | Complete organelle genome (chrC or chrM) |
 | `organelle_debris` | Partial organelle sequence |
 | `rDNA` | Ribosomal DNA repeat unit |
 | `contaminant` | Sequence from contaminating organism |
 | `chrom_debris` | High-coverage (≥80%), high-identity (≥90%) duplicate of an assembled chromosome |
 | `debris` | Assembly debris with reference homology (≥50% coverage) or protein hits (≥2) |
-| `unclassified` | Could not be classified |
+| `unclassified` | Could not be classified (below chromosome-length threshold) |
 
 ### Assignment Status Values
 
