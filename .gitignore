@@ -9,6 +9,7 @@ build/
 # IDE
 .vscode/
 .idea/
+*.code-workspace
 
 # Test outputs
 test_output/
