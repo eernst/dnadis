@@ -40,8 +40,10 @@ def write_classified_fastas(
 
     for clf in classifications:
         # Map classification to output category
-        if clf.classification == "chrom":
+        if clf.classification == "chrom_assigned":
             category = "chrs"
+        elif clf.classification == "chrom_unassigned":
+            category = "unclassified"
         elif clf.classification == "organelle_complete":
             category = "organelles"
         elif clf.classification == "rDNA":
