@@ -244,7 +244,11 @@ def main():
     block_thresh = p.add_argument_group("Thresholds: Synteny block building")
     block_thresh.add_argument(
         "--assign-minlen", type=int, default=10_000,
-        help="Min alignment length for block building [10000]",
+        help="Min alignment span for nucleotide synteny block building [10000]",
+    )
+    block_thresh.add_argument(
+        "--assign-minlen-protein", type=int, default=300,
+        help="Min target span for protein-anchor synteny block building [300]",
     )
     block_thresh.add_argument(
         "--assign-minmapq", type=int, default=0,
@@ -501,7 +505,7 @@ def main():
         contig_lengths=qry_lengths,
         tx2loc=tx2loc,
         tx2gene=tx2gene,
-        assign_minlen=args.assign_minlen,
+        assign_minlen=args.assign_minlen_protein,
         assign_minmapq=args.assign_minmapq,
         chain_q_gap=args.chain_q_gap,
         chain_r_gap=args.chain_r_gap,
