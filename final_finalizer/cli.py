@@ -361,6 +361,18 @@ def main():
     ref = args.ref  # Already a Path from _validate_input_path
     qry = args.query  # Already a Path from _validate_input_path
     outprefix = Path(args.outprefix)
+
+    # Create output directory if it doesn't exist
+    out_dir = outprefix.parent
+    if out_dir and not out_dir.exists():
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            print(f"[info] Created output directory: {out_dir}", file=sys.stderr)
+        except PermissionError as e:
+            sys.exit(f"[error] Cannot create output directory {out_dir}: {e}")
+        except OSError as e:
+            sys.exit(f"[error] Failed to create output directory {out_dir}: {e}")
+
     ref_lengths_norm, ref_orig_to_norm, ref_norm_to_orig = read_fasta_lengths_with_map(ref)
     ref_ids_raw = set(read_fasta_lengths(ref).keys())
     qry_lengths = read_fasta_lengths(qry)
