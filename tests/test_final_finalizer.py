@@ -236,10 +236,11 @@ def test_filter_overlapping_hits_by_identity():
         ],
     }
 
-    filtered, n_before, n_removed = ff._filter_overlapping_hits_by_identity(blocks)
+    filtered, n_before, n_removed, removed_per_contig = ff._filter_overlapping_hits_by_identity(blocks)
 
     assert n_before == 4
     assert n_removed == 1  # geneP1 should be removed (overlaps geneA1 with lower identity)
+    assert removed_per_contig.get("contigA", 0) == 1
 
     # chr1A should keep both its hits
     assert len(filtered[("contigA", "chr1A", "+")]) == 2
@@ -261,10 +262,11 @@ def test_filter_overlapping_hits_higher_identity_wins():
         ],
     }
 
-    filtered, n_before, n_removed = ff._filter_overlapping_hits_by_identity(blocks)
+    filtered, n_before, n_removed, removed_per_contig = ff._filter_overlapping_hits_by_identity(blocks)
 
     assert n_before == 2
     assert n_removed == 1  # geneA1 should be removed
+    assert removed_per_contig.get("contigA", 0) == 1
 
     # chr1P should keep its hit (higher identity)
     assert len(filtered[("contigA", "chr1P", "+")]) == 1
