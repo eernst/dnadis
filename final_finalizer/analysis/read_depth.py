@@ -130,6 +130,9 @@ def is_aligned_bam(bam_path: Path) -> bool:
         return False
 
 
+VALID_READ_TYPES = ("hifi_onthq", "ont", "sr")
+
+
 def get_minimap2_preset(reads_type: str) -> str:
     """Get minimap2 preset for read type.
 
@@ -138,6 +141,9 @@ def get_minimap2_preset(reads_type: str) -> str:
 
     Returns:
         Minimap2 -x preset string
+
+    Raises:
+        ValueError: If reads_type is not a valid option
 
     Notes:
         - "hifi_onthq" uses lr:hqae (long reads, high quality, all-vs-all, end-to-end)
@@ -150,7 +156,11 @@ def get_minimap2_preset(reads_type: str) -> str:
         "ont": "map-ont",         # ONT reads, standard accuracy
         "sr": "sr",               # Short reads (Illumina)
     }
-    return presets.get(reads_type, "lr:hqae")
+    if reads_type not in presets:
+        raise ValueError(
+            f"Invalid reads_type: '{reads_type}'. Must be one of: {', '.join(VALID_READ_TYPES)}"
+        )
+    return presets[reads_type]
 
 
 def estimate_read_bases_fastq(reads_path: Path) -> int:
@@ -234,25 +244,38 @@ def _estimate_bases_by_sampling_fastq(reads_path: Path, sample_reads: int = 1000
                         break
 
         if read_count == 0:
+            print("[warn] No reads found in sample", file=sys.stderr)
             return 0
 
-        avg_read_len = total_bases / read_count
+        if bytes_read == 0:
+            print("[warn] No bytes read from sample", file=sys.stderr)
+            return 0
+
+        avg_read_len = float(total_bases) / read_count
 
         # Estimate total reads by file size ratio
-        # For gzipped files, use compressed file size and estimate compression ratio
-        file_size = reads_path.stat().st_size
+        # Use float throughout to avoid integer overflow with large files
+        file_size = float(reads_path.stat().st_size)
         if str(reads_path).endswith(".gz"):
             # Estimate compression ratio (~3-4x for FASTQ)
             # Use bytes_read (uncompressed) to estimate reads, then scale by compression
-            bytes_per_read_uncompressed = bytes_read / read_count
+            bytes_per_read_uncompressed = float(bytes_read) / read_count
             # Typical gzip compression for FASTQ is ~3.5x
             compression_ratio = 3.5
             estimated_total_reads = (file_size * compression_ratio) / bytes_per_read_uncompressed
         else:
-            bytes_per_read = bytes_read / read_count
+            bytes_per_read = float(bytes_read) / read_count
             estimated_total_reads = file_size / bytes_per_read
 
-        estimated_total_bases = int(estimated_total_reads * avg_read_len)
+        estimated_total_bases = estimated_total_reads * avg_read_len
+
+        # Cap at reasonable maximum (1 petabase) to prevent overflow
+        max_bases = 1e15
+        if estimated_total_bases > max_bases:
+            print(f"[warn] Estimated bases ({estimated_total_bases:.2e}) exceeds maximum, capping at {max_bases:.0e}", file=sys.stderr)
+            estimated_total_bases = max_bases
+
+        estimated_total_bases = int(estimated_total_bases)
 
         print(f"[info] Estimated {estimated_total_reads:.0f} reads, {estimated_total_bases:,} bases (sampling-based)", file=sys.stderr)
         return estimated_total_bases
@@ -381,6 +404,9 @@ def downsample_fastq(
         print("[error] seqtk not found, cannot downsample FASTQ", file=sys.stderr)
         return False
 
+    seqtk_proc = None
+    gzip_proc = None
+
     try:
         # seqtk sample -s seed input.fq fraction | gzip > output.fq.gz
         print(f"[info] Downsampling FASTQ to {fraction:.2%} with seqtk", file=sys.stderr)
@@ -403,8 +429,12 @@ def downsample_fastq(
             gzip_proc.wait()
             seqtk_proc.wait()
 
-            if seqtk_proc.returncode != 0 or gzip_proc.returncode != 0:
-                print("[error] seqtk/gzip pipeline failed", file=sys.stderr)
+            if seqtk_proc.returncode != 0:
+                stderr_output = seqtk_proc.stderr.read().decode() if seqtk_proc.stderr else ""
+                print(f"[error] seqtk sample failed (code {seqtk_proc.returncode}): {stderr_output}", file=sys.stderr)
+                return False
+            if gzip_proc.returncode != 0:
+                print(f"[error] gzip failed (code {gzip_proc.returncode})", file=sys.stderr)
                 return False
 
         print(f"[done] Downsampled FASTQ: {output_path}", file=sys.stderr)
@@ -413,6 +443,16 @@ def downsample_fastq(
     except Exception as e:
         print(f"[error] FASTQ downsampling failed: {e}", file=sys.stderr)
         return False
+
+    finally:
+        # Cleanup: terminate any still-running processes
+        for proc in [seqtk_proc, gzip_proc]:
+            if proc is not None and proc.poll() is None:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=5)
+                except Exception:
+                    proc.kill()
 
 
 def downsample_bam(
@@ -439,11 +479,13 @@ def downsample_bam(
         return False
 
     try:
-        # samtools view -s seed.fraction -b input.bam > output.bam
-        # The -s option takes seed.fraction format (e.g., 42.25 for seed=42, frac=0.25)
-        subsample_arg = f"{seed}.{int(fraction * 100):02d}"
+        # samtools view -s SEED.FRAC where integer part is seed, decimal part is fraction
+        # e.g., 42.25 means seed=42, keep 25% of reads
+        # Construct by adding seed + fraction to get correct format
+        subsample_value = seed + fraction
+        subsample_arg = f"{subsample_value:.6f}"  # Preserve precision for small fractions
 
-        print(f"[info] Downsampling BAM to {fraction:.2%} with samtools", file=sys.stderr)
+        print(f"[info] Downsampling BAM to {fraction:.2%} with samtools (-s {subsample_arg})", file=sys.stderr)
 
         cmd = [
             "samtools", "view",
@@ -456,7 +498,7 @@ def downsample_bam(
 
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
-            print(f"[error] samtools view failed: {result.stderr}", file=sys.stderr)
+            print(f"[error] samtools view -s {subsample_arg} failed: {result.stderr}", file=sys.stderr)
             return False
 
         print(f"[done] Downsampled BAM: {output_path}", file=sys.stderr)
@@ -707,6 +749,11 @@ def align_reads_to_assembly(
 
     print(f"[info] Aligning reads with {mapper} -x {preset}", file=sys.stderr)
 
+    # Track processes for cleanup
+    p_fastq = None
+    p_mm2 = None
+    p_sort = None
+
     try:
         err_file.parent.mkdir(parents=True, exist_ok=True)
         with err_file.open("wb") as err_fh:
@@ -727,8 +774,15 @@ def align_reads_to_assembly(
                 p_mm2.wait()
                 p_fastq.wait()
 
-                if p_sort.returncode != 0 or p_mm2.returncode != 0:
-                    print(f"[error] Alignment pipeline failed (see {err_file})", file=sys.stderr)
+                # Check all return codes with detailed error messages
+                if p_fastq.returncode != 0:
+                    print(f"[error] samtools fastq failed (code {p_fastq.returncode}, see {err_file})", file=sys.stderr)
+                    return False
+                if p_mm2.returncode != 0:
+                    print(f"[error] {mapper} failed (code {p_mm2.returncode}, see {err_file})", file=sys.stderr)
+                    return False
+                if p_sort.returncode != 0:
+                    print(f"[error] samtools sort failed (code {p_sort.returncode}, see {err_file})", file=sys.stderr)
                     return False
             else:
                 # Pipeline: minimap2 | samtools sort
@@ -740,8 +794,12 @@ def align_reads_to_assembly(
                 p_sort.wait()
                 p_mm2.wait()
 
-                if p_sort.returncode != 0 or p_mm2.returncode != 0:
-                    print(f"[error] Alignment pipeline failed (see {err_file})", file=sys.stderr)
+                # Check return codes with detailed error messages
+                if p_mm2.returncode != 0:
+                    print(f"[error] {mapper} failed (code {p_mm2.returncode}, see {err_file})", file=sys.stderr)
+                    return False
+                if p_sort.returncode != 0:
+                    print(f"[error] samtools sort failed (code {p_sort.returncode}, see {err_file})", file=sys.stderr)
                     return False
 
         # Index the BAM file
@@ -754,6 +812,16 @@ def align_reads_to_assembly(
     except Exception as e:
         print(f"[error] Alignment failed: {e}", file=sys.stderr)
         return False
+
+    finally:
+        # Cleanup: terminate any still-running processes
+        for proc in [p_fastq, p_mm2, p_sort]:
+            if proc is not None and proc.poll() is None:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=5)
+                except Exception:
+                    proc.kill()
 
 
 def run_mosdepth(
@@ -831,23 +899,50 @@ def parse_mosdepth_regions(
     # Collect depths per contig (list of window depths)
     contig_depths: Dict[str, list] = {name: [] for name in contig_lengths.keys()}
     contig_windows: Dict[str, list] = {name: [] for name in contig_lengths.keys()}
+    parse_errors = 0
+    max_parse_errors = 100  # Limit error reporting
 
     try:
         with gzip.open(regions_bed_gz, "rt") as fh:
-            for line in fh:
+            for line_num, line in enumerate(fh, 1):
                 parts = line.strip().split("\t")
                 if len(parts) < 4:
                     continue
 
-                chrom = parts[0]
-                start = int(parts[1])
-                end = int(parts[2])
-                depth = float(parts[3])
-                window_size = end - start
+                try:
+                    chrom = parts[0]
+                    start = int(parts[1])
+                    end = int(parts[2])
+                    depth = float(parts[3])
 
-                if chrom in contig_depths:
-                    contig_depths[chrom].append(depth)
-                    contig_windows[chrom].append((start, end, depth, window_size))
+                    # Validate interval
+                    if start < 0 or end <= start:
+                        if parse_errors < max_parse_errors:
+                            print(f"[warn] Invalid BED interval at line {line_num}: start={start}, end={end}", file=sys.stderr)
+                        parse_errors += 1
+                        continue
+
+                    # Validate depth (can be 0, but not negative)
+                    if depth < 0:
+                        if parse_errors < max_parse_errors:
+                            print(f"[warn] Negative depth at line {line_num}: {depth}", file=sys.stderr)
+                        parse_errors += 1
+                        continue
+
+                    window_size = end - start
+
+                    if chrom in contig_depths:
+                        contig_depths[chrom].append(depth)
+                        contig_windows[chrom].append((start, end, depth, window_size))
+
+                except (ValueError, IndexError) as e:
+                    if parse_errors < max_parse_errors:
+                        print(f"[warn] Malformed BED line {line_num}: {e}", file=sys.stderr)
+                    parse_errors += 1
+                    continue
+
+        if parse_errors > 0:
+            print(f"[warn] Total BED parsing errors: {parse_errors}", file=sys.stderr)
 
     except Exception as e:
         print(f"[warn] Error parsing mosdepth output {regions_bed_gz}: {e}", file=sys.stderr)

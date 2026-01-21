@@ -5,6 +5,8 @@ import textwrap
 from pathlib import Path
 import sys
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from final_finalizer.analysis.read_depth import (
@@ -47,8 +49,9 @@ def test_get_minimap2_preset():
     assert get_minimap2_preset("hifi_onthq") == "lr:hqae"
     assert get_minimap2_preset("ont") == "map-ont"
     assert get_minimap2_preset("sr") == "sr"
-    # Unknown type should default to hifi_onthq preset
-    assert get_minimap2_preset("unknown") == "lr:hqae"
+    # Unknown type should raise ValueError
+    with pytest.raises(ValueError, match="Invalid reads_type"):
+        get_minimap2_preset("unknown")
 
 
 def test_parse_mosdepth_regions(tmp_path):
