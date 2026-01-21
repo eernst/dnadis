@@ -72,6 +72,7 @@ def determine_contig_orientations(
     macro_block_rows: List[Tuple],
     best_ref: Dict[str, str],
     chromosome_contigs: Set[str],
+    query_lengths: Optional[Dict[str, int]] = None,
 ) -> Dict[str, bool]:
     """Determine which chromosome contigs need to be reverse-complemented.
 
@@ -100,7 +101,8 @@ def determine_contig_orientations(
         orientations[contig] = should_reverse
 
         if should_reverse:
-            print(f"[info] Contig {contig} will be reverse-complemented (fwd={fwd}, rev={rev})", file=sys.stderr)
+            contig_len = query_lengths.get(contig, 0) if query_lengths else 0
+            print(f"[info] Contig {contig} ({contig_len:,} bp) will be reverse-complemented (fwd={fwd}, rev={rev})", file=sys.stderr)
 
     return orientations
 

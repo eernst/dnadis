@@ -159,7 +159,7 @@ def detect_chromosome_debris(
                 source="chromosome",
             )
             print(
-                f"[info] Chromosome debris: {qname} (cov={coverage:.2f}, ident={identity:.2f})",
+                f"[info] Chromosome debris: {qname} ({qlen:,} bp, cov={coverage:.2f}, ident={identity:.2f})",
                 file=sys.stderr,
             )
 

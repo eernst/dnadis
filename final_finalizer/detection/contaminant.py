@@ -229,8 +229,9 @@ def detect_contaminants(
                 coverage=coverage,
                 score=score,
             )
+            contig_len = query_lengths.get(contig_name, read_len)
             print(
-                f"[info] Contaminant: {contig_name} (taxid={taxid}, {sci_name}, score={score}, cov={coverage:.2f})",
+                f"[info] Contaminant: {contig_name} ({contig_len:,} bp, taxid={taxid}, {sci_name}, score={score}, cov={coverage:.2f})",
                 file=sys.stderr,
             )
 

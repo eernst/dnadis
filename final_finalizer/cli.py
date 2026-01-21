@@ -811,6 +811,7 @@ def main():
         macro_block_rows=ev.macro_block_rows,
         best_ref=best_ref,
         chromosome_contigs=chromosome_contigs,
+        query_lengths=qry_lengths,
     )
 
     # --- Phase 11: Classify all contigs ---

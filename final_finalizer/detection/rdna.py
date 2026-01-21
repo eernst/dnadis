@@ -138,6 +138,6 @@ def detect_rdna_contigs(
         if coverage >= min_coverage:
             rdna_contigs.add(qseqid)
             rdna_hits[qseqid] = RdnaHit(coverage=coverage, identity=identity)
-            print(f"[info] rDNA contig: {qseqid} (cov={coverage:.2f}, ident={identity:.3f})", file=sys.stderr)
+            print(f"[info] rDNA contig: {qseqid} ({qlen:,} bp, cov={coverage:.2f}, ident={identity:.3f})", file=sys.stderr)
 
     return rdna_contigs, rdna_hits

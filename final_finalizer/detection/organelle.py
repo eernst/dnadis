@@ -298,7 +298,8 @@ def detect_organelles(
             length_ratio=chrC_len_ratio,
             is_complete=True,
         )
-        print(f"[info] Selected chrC candidate: {chrC_contig} (cov={chrC_cov:.2f}, ident={chrC_ident:.3f})", file=sys.stderr)
+        chrC_len_bp = query_lengths.get(chrC_contig, 0)
+        print(f"[info] Selected chrC candidate: {chrC_contig} ({chrC_len_bp:,} bp, cov={chrC_cov:.2f}, ident={chrC_ident:.3f})", file=sys.stderr)
 
     if chrM_result:
         chrM_contig, chrM_cov, chrM_ident, chrM_len_ratio = chrM_result
@@ -310,6 +311,7 @@ def detect_organelles(
             length_ratio=chrM_len_ratio,
             is_complete=True,
         )
-        print(f"[info] Selected chrM candidate: {chrM_contig} (cov={chrM_cov:.2f}, ident={chrM_ident:.3f})", file=sys.stderr)
+        chrM_len_bp = query_lengths.get(chrM_contig, 0)
+        print(f"[info] Selected chrM candidate: {chrM_contig} ({chrM_len_bp:,} bp, cov={chrM_cov:.2f}, ident={chrM_ident:.3f})", file=sys.stderr)
 
     return chrC_contig, chrM_contig, debris_contigs, organelle_hits
