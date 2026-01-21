@@ -196,11 +196,13 @@ def _estimate_bases_by_sampling_fastq(reads_path: Path, sample_reads: int = 1000
     total_bases = 0
     read_count = 0
     line_count = 0
+    bytes_read = 0
 
     try:
         opener = gzip.open if str(reads_path).endswith(".gz") else open
         with opener(reads_path, "rt") as fh:
             for line in fh:
+                bytes_read += len(line)
                 line_count += 1
                 # FASTQ format: line 2 of every 4 is the sequence
                 if line_count % 4 == 2:
@@ -215,15 +217,19 @@ def _estimate_bases_by_sampling_fastq(reads_path: Path, sample_reads: int = 1000
         avg_read_len = total_bases / read_count
 
         # Estimate total reads by file size ratio
-        # This is approximate but fast
+        # For gzipped files, use compressed file size and estimate compression ratio
         file_size = reads_path.stat().st_size
-        bytes_per_read = (fh.tell() if hasattr(fh, 'tell') else file_size) / read_count
-
-        # For gzipped files, estimate compression ratio (~3-4x for FASTQ)
         if str(reads_path).endswith(".gz"):
-            bytes_per_read *= 3.5  # Approximate compression ratio
+            # Estimate compression ratio (~3-4x for FASTQ)
+            # Use bytes_read (uncompressed) to estimate reads, then scale by compression
+            bytes_per_read_uncompressed = bytes_read / read_count
+            # Typical gzip compression for FASTQ is ~3.5x
+            compression_ratio = 3.5
+            estimated_total_reads = (file_size * compression_ratio) / bytes_per_read_uncompressed
+        else:
+            bytes_per_read = bytes_read / read_count
+            estimated_total_reads = file_size / bytes_per_read
 
-        estimated_total_reads = file_size / bytes_per_read
         estimated_total_bases = int(estimated_total_reads * avg_read_len)
 
         print(f"[info] Estimated {estimated_total_reads:.0f} reads, {estimated_total_bases:,} bases (sampling-based)", file=sys.stderr)
