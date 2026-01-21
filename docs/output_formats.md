@@ -140,7 +140,13 @@ The `classification_confidence` column indicates how certain the classification 
 |---------------|------|--------|-----|
 | `chrom_assigned` | Gene proportion ≥20%, GC deviation <2σ | Gene proportion 10-20%, or GC deviation 2-3σ | Gene proportion <10%, or GC deviation >3σ |
 | `chrom_unassigned` | — | GC deviation <2σ | GC deviation ≥2σ |
+| `organelle_complete` | Always (passed strict detection) | — | — |
+| `organelle_debris` | — | Always (partial match) | — |
+| `rDNA` | — | Always (passed detection threshold) | — |
 | `contaminant` | Coverage ≥80%, or GC deviation >2σ | Coverage 50-80% | Coverage <50% |
+| `chrom_debris` | Passed strict thresholds, GC deviation <3σ | GC deviation ≥3σ | — |
+| `debris` | — | Has reference homology, GC deviation <3σ | GC deviation ≥3σ and no synteny |
+| `unclassified` | — | — | Always (no evidence) |
 
 ### Assignment Status Values
 

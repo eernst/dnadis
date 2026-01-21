@@ -492,6 +492,8 @@ def classify_all_contigs(
         classified_contigs.add(contig)
 
     # 2. Organelle contigs
+    # organelle_complete: High confidence - passed strict detection criteria
+    # (coverage >80%, length within tolerance)
     if chrC_contig and chrC_contig not in classified_contigs:
         classifications.append(ContigClassification(
             original_name=chrC_contig,
@@ -503,6 +505,9 @@ def classify_all_contigs(
             assigned_ref_id="chrC",
             ref_gene_proportion=None,
             contig_len=query_lengths.get(chrC_contig, 0),
+            gc_content=_get_gc(chrC_contig),
+            gc_deviation=None,  # Organelles have different GC, don't compare to nuclear
+            classification_confidence="high",
         ))
         classified_contigs.add(chrC_contig)
 
@@ -517,10 +522,13 @@ def classify_all_contigs(
             assigned_ref_id="chrM",
             ref_gene_proportion=None,
             contig_len=query_lengths.get(chrM_contig, 0),
+            gc_content=_get_gc(chrM_contig),
+            gc_deviation=None,  # Organelles have different GC, don't compare to nuclear
+            classification_confidence="high",
         ))
         classified_contigs.add(chrM_contig)
 
-    # Organelle debris
+    # Organelle debris: Medium confidence - partial organelle match
     for contig in organelle_debris:
         if contig not in classified_contigs:
             classifications.append(ContigClassification(
@@ -533,12 +541,22 @@ def classify_all_contigs(
                 assigned_ref_id=None,
                 ref_gene_proportion=None,
                 contig_len=query_lengths.get(contig, 0),
+                gc_content=_get_gc(contig),
+                gc_deviation=None,  # Organelles have different GC
+                classification_confidence="medium",
             ))
             classified_contigs.add(contig)
 
     # 3. rDNA contigs
+    # rDNA: Medium confidence by default, high if passes additional checks
     for contig in rdna_contigs:
         if contig not in classified_contigs:
+            gc_dev = _gc_deviation(contig)
+            # rDNA often has different GC than chromosomes, so GC deviation
+            # doesn't necessarily indicate low confidence
+            # High confidence if passed detection threshold (>50% coverage)
+            # Could be medium if borderline, but we don't have coverage data here
+            confidence = "medium"
             classifications.append(ContigClassification(
                 original_name=contig,
                 new_name="",
@@ -549,6 +567,9 @@ def classify_all_contigs(
                 assigned_ref_id=None,
                 ref_gene_proportion=None,
                 contig_len=query_lengths.get(contig, 0),
+                gc_content=_get_gc(contig),
+                gc_deviation=gc_dev,
+                classification_confidence=confidence,
             ))
             classified_contigs.add(contig)
 
@@ -590,9 +611,16 @@ def classify_all_contigs(
             classified_contigs.add(contig)
 
     # 5. Chromosome debris (from chr-vs-chr alignment detection)
+    # High confidence: passed strict thresholds (≥80% coverage, ≥90% identity)
     for contig in chromosome_debris:
         if contig not in classified_contigs:
             ref_id = best_ref.get(contig, "")
+            gc_dev = _gc_deviation(contig)
+            # High confidence by default (passed strict 80% cov, 90% identity)
+            # Could be medium if GC is very different from reference
+            confidence = "high"
+            if gc_dev is not None and gc_dev > 3.0:
+                confidence = "medium"
             classifications.append(ContigClassification(
                 original_name=contig,
                 new_name="",
@@ -603,15 +631,26 @@ def classify_all_contigs(
                 assigned_ref_id=ref_id if ref_id else None,
                 ref_gene_proportion=None,
                 contig_len=query_lengths.get(contig, 0),
+                gc_content=_get_gc(contig),
+                gc_deviation=gc_dev,
+                classification_confidence=confidence,
             ))
             classified_contigs.add(contig)
 
     # 6. Other debris (from reference/protein alignment detection)
+    # Medium confidence: has some homology but not enough for chromosome assignment
     for contig in other_debris:
         if contig not in classified_contigs:
             # Check if this contig has synteny support
             ref_id = best_ref.get(contig, "")
             classification = "chrom_debris" if ref_id else "debris"
+            gc_dev = _gc_deviation(contig)
+
+            # Medium confidence by default (≥50% coverage or ≥2 protein hits)
+            # Low if GC very different and no synteny support
+            confidence = "medium"
+            if gc_dev is not None and gc_dev > 3.0 and not ref_id:
+                confidence = "low"
 
             classifications.append(ContigClassification(
                 original_name=contig,
@@ -623,12 +662,17 @@ def classify_all_contigs(
                 assigned_ref_id=ref_id if ref_id else None,
                 ref_gene_proportion=None,
                 contig_len=query_lengths.get(contig, 0),
+                gc_content=_get_gc(contig),
+                gc_deviation=gc_dev,
+                classification_confidence=confidence,
             ))
             classified_contigs.add(contig)
 
     # 7. Unclassified (everything else)
+    # Low confidence by definition - no evidence for any classification
     for contig in query_lengths.keys():
         if contig not in classified_contigs:
+            gc_dev = _gc_deviation(contig)
             classifications.append(ContigClassification(
                 original_name=contig,
                 new_name="",
@@ -639,6 +683,9 @@ def classify_all_contigs(
                 assigned_ref_id=None,
                 ref_gene_proportion=None,
                 contig_len=query_lengths.get(contig, 0),
+                gc_content=_get_gc(contig),
+                gc_deviation=gc_dev,
+                classification_confidence="low",
             ))
 
     # Generate names
