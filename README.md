@@ -23,6 +23,9 @@
 
 **Required:**
 - Python 3.9+
+- Python packages:
+  - [tomli](https://pypi.org/project/tomli/) - TOML configuration file support (Python <3.11 only)
+  - [intervaltree](https://pypi.org/project/intervaltree/) - efficient overlap detection (recommended for performance)
 - [miniprot](https://github.com/lh3/miniprot) - protein-to-genome alignment
 - [gffread](https://github.com/gpertea/gffread) - GFF3/FASTA processing
 - [BLAST+](https://blast.ncbi.nlm.nih.gov/) - organelle/rDNA detection
@@ -41,6 +44,9 @@
 ```bash
 conda create -n final_finalizer python=3.10 miniprot gffread blast mm2plus centrifuger -c bioconda -c conda-forge
 conda activate final_finalizer
+
+# Install Python dependencies
+pip install -r requirements.txt
 ```
 
 Optional (read depth analysis):
@@ -93,6 +99,11 @@ Latest tested conda package versions (CI):
 | `-t, --threads` | Number of threads | 8 |
 | `--plot` | Generate PDF visualization | off |
 | `--plot-html` | Also generate interactive HTML visualization | off |
+| `-v, --verbose` | Enable verbose (DEBUG level) logging | off |
+| `--quiet` | Suppress INFO messages (only warnings and errors) | off |
+| `--log-file` | Write logs to file (in addition to stderr) | none |
+| `--config` | Load configuration from TOML file (CLI args override) | none |
+| `--dump-config` | Print TOML config template and exit | off |
 | `-C, --chr-like-minlen` | Min contig length for chromosome classification | 80% of smallest nuclear ref chromosome |
 | `--add-subgenome-suffix` | Suffix for non-polyploid references (e.g., 'A') | none |
 
@@ -113,7 +124,8 @@ Latest tested conda package versions (CI):
 | `--reads-type` | Read type: `hifi_onthq`, `ont`, or `sr` | hifi_onthq |
 | `--skip-depth` | Skip depth analysis even if `--reads` provided | off |
 | `--depth-window-size` | Window size for mosdepth | 1000 |
-| `--depth-target-coverage` | Target coverage for downsampling before alignment (0 to disable) | 20.0 |
+| `--depth-target-coverage` | Target coverage for downsampling before alignment (0 to disable) | 0 |
+| `--keep-depth-bam` | Keep aligned BAM file after depth analysis | off |
 
 The `--reads` option accepts:
 - FASTQ files (`.fq`, `.fastq`, `.fq.gz`, `.fastq.gz`)
@@ -125,7 +137,9 @@ Read type to minimap2 preset mapping:
 - `ont` → `-x map-ont` (ONT reads, standard accuracy)
 - `sr` → `-x sr` (Illumina short reads)
 
-**Read downsampling**: If `--depth-target-coverage` is set (default: 20X), reads are automatically downsampled before alignment using rasusa (for FASTQ) or samtools (for BAM/CRAM). This reduces computational time while maintaining sufficient coverage for depth-based quality assessment. Pre-aligned BAM/CRAM files are not downsampled. Set to 0 to disable downsampling.
+**Read downsampling**: If `--depth-target-coverage` is set to a non-zero value (e.g., 20 for 20X coverage), reads are automatically downsampled before alignment using rasusa (for FASTQ) or samtools (for BAM/CRAM). This reduces computational time while maintaining sufficient coverage for depth-based quality assessment. Pre-aligned BAM/CRAM files are not downsampled. Default: 0 (disabled).
+
+**Depth caching**: Alignment and depth results are cached and automatically reused on subsequent runs if inputs match. Use `--keep-depth-bam` to retain the aligned BAM file after depth calculation (default: deleted to save space). Cached depth results can be reused even if the BAM is deleted.
 
 ### Pipeline toggles
 
@@ -289,6 +303,66 @@ All gate criteria must be satisfied for chromosome assignment (AND logic).
 | `--chr-debris-min-identity` | 0.90 | Min identity vs chromosomes |
 | `--debris-min-cov` | 0.50 | Min coverage vs reference |
 
+## Configuration Files
+
+`final_finalizer` supports TOML configuration files for managing complex parameter sets and reproducible analysis workflows.
+
+### Generating a config template
+
+```bash
+./final_finalizer.py --dump-config > my_config.toml
+```
+
+This creates a complete configuration file with all parameters and their current default values. Edit this file to customize your analysis.
+
+### Using a config file
+
+```bash
+./final_finalizer.py --config my_config.toml
+```
+
+**Important:** Command-line arguments override config file values. This allows you to have a base configuration but adjust specific parameters via CLI:
+
+```bash
+# Use config but override threads
+./final_finalizer.py --config my_config.toml -t 64
+```
+
+### Example config file
+
+```toml
+# Required
+[required]
+ref = "/path/to/reference.fasta"
+query = "/path/to/assembly.fasta"
+outprefix = "output_prefix"
+ref_gff3 = "/path/to/reference.gff3"
+
+# Common Options
+[common]
+threads = 32
+plot = true
+plot_html = true
+chr_like_minlen = 1000000
+
+# Read Depth Analysis
+[read_depth]
+reads = "/path/to/reads.fastq.gz"
+reads_type = "hifi_onthq"
+depth_target_coverage = 20.0
+keep_depth_bam = false
+
+# Reference Inputs For Classification
+[reference_inputs]
+centrifuger_idx = "/path/to/centrifuger/nt"
+rdna_ref = "default"
+
+# Thresholds can be customized per section
+[thresholds_chromosome]
+assign_min_frac = 0.10
+assign_min_ratio = 1.25
+```
+
 ## Example Workflows
 
 ### Basic chromosome assignment
@@ -361,6 +435,37 @@ All gate criteria must be satisfied for chromosome assignment (AND logic).
     -t 32
 ```
 
+### Using configuration file with verbose logging
+
+```bash
+# Generate config template
+./final_finalizer.py --dump-config > wheat_config.toml
+
+# Edit wheat_config.toml to set paths and parameters
+
+# Run with config and verbose logging
+./final_finalizer.py \
+    --config wheat_config.toml \
+    --verbose \
+    --log-file wheat_analysis.log
+```
+
+### With downsampled reads for faster depth analysis
+
+```bash
+./final_finalizer.py \
+    -r reference.fasta \
+    -q assembly.fasta \
+    -o assembly_classified \
+    --ref-gff3 reference.gff3 \
+    --reads hifi_reads.fastq.gz \
+    --reads-type hifi_onthq \
+    --depth-target-coverage 20 \
+    --keep-depth-bam \
+    --plot \
+    -t 32
+```
+
 ## Algorithm Details
 
 ### Protein-anchor synteny
@@ -377,6 +482,8 @@ Miniprot alignments are:
 3. Chained into collinear synteny blocks
 4. Aggregated per contig × reference chromosome
 5. Scored and ranked for assignment
+
+**Performance optimization**: The pipeline uses interval trees (via the `intervaltree` package) for efficient O(n log n) overlap detection during synteny block filtering, replacing the previous O(n²) algorithm. This significantly improves runtime for large assemblies with many protein alignments.
 
 ### Gate-based assignment
 

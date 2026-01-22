@@ -5,6 +5,25 @@ Logging configuration for final_finalizer.
 Provides a consistent logging setup with custom formatting that matches
 the existing [info], [warn], [error], [done] pattern with ANSI formatting
 for phase announcements.
+
+Key features:
+- Custom log levels (PHASE, DONE) for pipeline progress tracking
+- Color-coded terminal output (disabled for non-TTY)
+- Support for simultaneous stderr and file logging
+- Three verbosity modes:
+  * Normal (INFO+): Standard operation messages
+  * Verbose (DEBUG+): Detailed diagnostic information
+  * Quiet (WARNING+): Only warnings and errors
+
+Usage:
+    # Normal logging to stderr
+    ./final_finalizer.py [args]
+
+    # Verbose logging
+    ./final_finalizer.py --verbose [args]
+
+    # Quiet mode with file logging
+    ./final_finalizer.py --quiet --log-file analysis.log [args]
 """
 from __future__ import annotations
 

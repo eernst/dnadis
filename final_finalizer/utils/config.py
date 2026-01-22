@@ -4,6 +4,21 @@ TOML configuration file support for final_finalizer.
 
 Provides functions for loading configuration from TOML files,
 merging with command-line arguments, and generating config templates.
+
+Configuration files allow users to:
+- Store complex parameter sets for reproducible analyses
+- Share analysis parameters across projects
+- Override specific parameters via CLI while keeping base config
+
+The CONFIG_SCHEMA defines the mapping between TOML sections/keys
+and argparse argument names, ensuring proper validation and type conversion.
+
+Usage:
+    # Generate template
+    ./final_finalizer.py --dump-config > config.toml
+
+    # Use config file (CLI args override config values)
+    ./final_finalizer.py --config config.toml -t 64
 """
 from __future__ import annotations
 

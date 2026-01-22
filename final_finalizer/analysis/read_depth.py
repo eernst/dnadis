@@ -13,10 +13,17 @@ The depth analysis pipeline:
 1. Auto-detect read format (FASTQ/BAM/CRAM, aligned vs unaligned)
 2. If not pre-aligned:
    a. Estimate total read bases and coverage
-   b. Downsample to target coverage if needed (default 20X)
+   b. Downsample to target coverage if specified (default: disabled)
    c. Align with minimap2 using appropriate preset
 3. Run mosdepth to compute window-based depth metrics
 4. Parse results into DepthStats per contig (mean, median, std, breadth)
+
+Caching and cleanup:
+- Alignment results are cached with metadata validation
+- Depth results are cached separately from alignment
+- By default, intermediate BAM files are deleted after depth calculation
+  to save disk space (use --keep-depth-bam to retain)
+- Cached depth results can be reused even if BAM is deleted
 
 Depth metrics are useful for:
 - Quality assessment (breadth of coverage)
@@ -954,10 +961,12 @@ def calculate_depth_metrics(
 
     This is the main entry point for depth analysis. It handles:
     1. Format detection for input reads
-    2. Downsampling to target coverage (if alignment needed)
-    3. Alignment if reads are not pre-aligned
-    4. Running mosdepth for depth calculation
-    5. Parsing results into per-contig DepthStats
+    2. Cache validation (reuses existing alignments and depth calculations)
+    3. Downsampling to target coverage (if enabled and alignment needed)
+    4. Alignment if reads are not pre-aligned (using minimap2/mm2plus)
+    5. Running mosdepth for depth calculation
+    6. Parsing results into per-contig DepthStats
+    7. Cleanup of intermediate BAM files (unless keep_bam=True)
 
     Args:
         reads: Path to reads file (FASTQ, BAM, CRAM)
@@ -968,9 +977,12 @@ def calculate_depth_metrics(
         reads_type: Read type for minimap2 preset ("hifi_onthq", "ont", "sr")
         window_size: Window size for mosdepth (default 1000bp)
         target_coverage: Target coverage for downsampling before alignment.
-            Set to None or 0 to disable downsampling. Default 20.0 (20X).
-            Downsampling uses rasusa (FASTQ) or samtools (BAM/CRAM).
-        keep_bam: Keep aligned BAM file after depth analysis (default: delete to save space)
+            Set to None or 0 to disable downsampling (default: disabled).
+            When enabled (e.g., 20.0 for 20X), downsampling uses rasusa (FASTQ)
+            or samtools (BAM/CRAM). Pre-aligned BAM/CRAM files are not downsampled.
+        keep_bam: Keep aligned BAM file after depth analysis.
+            Default: False (delete to save disk space).
+            Depth results remain cached even if BAM is deleted.
 
     Returns:
         Dictionary mapping contig names to DepthStats objects

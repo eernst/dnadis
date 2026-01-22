@@ -4,6 +4,10 @@ Chain parsing and evidence computation for final_finalizer.
 
 Contains functions for parsing PAF files, building chains from alignment blocks,
 and computing evidence for contig-to-reference assignments.
+
+Performance: Uses interval trees (intervaltree package) for O(n log n) overlap
+detection during block filtering, replacing the previous O(n²) pairwise comparison.
+Falls back to sweep-line algorithm if intervaltree is not available.
 """
 from __future__ import annotations
 

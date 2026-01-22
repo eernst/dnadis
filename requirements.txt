@@ -1,8 +1,11 @@
 # Core dependencies for final_finalizer
 # Install with: pip install -r requirements.txt
 
-# Required for TOML config file support (Python < 3.11)
+# TOML configuration file support (--config, --dump-config)
+# Only required for Python < 3.11 (Python 3.11+ has built-in tomllib)
 tomli>=2.0.0
 
-# Required for O(n log n) overlap detection (recommended)
+# Interval tree data structure for efficient overlap detection
+# Provides O(n log n) performance for synteny block filtering
+# Recommended for improved performance on large assemblies
 intervaltree>=3.1.0
