@@ -59,12 +59,15 @@ if (!has_depth) {
 
 # Classification order for consistent display
 # Note: chrC and chrM are separated from other organelles for clarity
+# organelle_debris is split into chrC_debris and chrM_debris when assigned_ref_id is available
 classification_order <- c(
   "chrom_assigned",
   "chrC",
   "chrM",
   "chrom_unassigned",
   "organelle_complete",
+  "chrC_debris",
+  "chrM_debris",
   "organelle_debris",
   "rDNA",
   "contaminant",
@@ -74,13 +77,16 @@ classification_order <- c(
 )
 
 # Color palette for classifications
+# chrC/chrC_debris use green tones, chrM/chrM_debris use red tones
 classification_colors <- c(
   "chrom_assigned" = "#1F77B4",
   "chrC" = "#2CA02C",
   "chrM" = "#D62728",
   "chrom_unassigned" = "#9ECAE1",
   "organelle_complete" = "#66C2A5",
-  "organelle_debris" = "#98DF8A",
+  "chrC_debris" = "#98DF8A",
+  "chrM_debris" = "#FF9896",
+  "organelle_debris" = "#C7C7C7",
   "rDNA" = "#FF7F0E",
   "contaminant" = "#8C564B",
   "chrom_debris" = "#9467BD",
@@ -90,13 +96,17 @@ classification_colors <- c(
 
 # Prepare data for plotting
 # Separate chrC and chrM organelles into their own categories
+# Also split organelle_debris into chrC_debris and chrM_debris based on assigned_ref_id
 df_depth <- df %>%
   filter(!is.na(depth_mean)) %>%
   mutate(
     # Create display classification that separates chrC and chrM
+    # For organelle_debris, use assigned_ref_id to determine chrC_debris vs chrM_debris
     display_class = case_when(
       contig == "chrC" ~ "chrC",
       contig == "chrM" ~ "chrM",
+      classification == "organelle_debris" & assigned_ref_id == "chrC" ~ "chrC_debris",
+      classification == "organelle_debris" & assigned_ref_id == "chrM" ~ "chrM_debris",
       TRUE ~ classification
     ),
     display_class = factor(display_class, levels = classification_order),
