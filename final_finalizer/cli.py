@@ -185,8 +185,8 @@ def main():
         help="Window size for mosdepth depth calculation [1000]",
     )
     depth_grp.add_argument(
-        "--depth-target-coverage", type=float, default=20.0,
-        help="Target coverage for downsampling before alignment (0 to disable) [20.0]",
+        "--depth-target-coverage", type=float, default=0,
+        help="Target coverage (e.g. 20) for downsampling reads before alignment (0 to disable) [0]",
     )
 
     # =========================================================================

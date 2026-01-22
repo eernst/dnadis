@@ -31,7 +31,7 @@
 - [minimap2](https://github.com/lh3/minimap2) or [mm2plus](https://github.com/lh3/mm2plus) - nucleotide synteny QA and read alignment for depth analysis
 - [samtools](https://github.com/samtools/samtools) - BAM/CRAM handling for depth analysis
 - [mosdepth](https://github.com/brentp/mosdepth) - efficient depth calculation
-- [seqtk](https://github.com/lh3/seqtk) - FASTQ downsampling for depth analysis
+- [rasusa](https://github.com/mbhall88/rasusa) - FASTQ downsampling for depth analysis
 - [centrifuger](https://github.com/mourisl/centrifuger) - contaminant detection
 - R with ggplot2, dplyr, readr, stringr, tibble, tidyr, patchwork, ggnewscale, pacman - visualization (`--plot`)
 - R with ggiraph, htmlwidgets, pandoc - interactive visualization (`--plot-html`)
@@ -45,7 +45,7 @@ conda activate final_finalizer
 
 Optional (read depth analysis):
 ```bash
-conda install -n final_finalizer -c bioconda samtools mosdepth seqtk
+conda install -n final_finalizer -c bioconda samtools mosdepth rasusa
 ```
 
 Optional (plotting):
@@ -125,7 +125,7 @@ Read type to minimap2 preset mapping:
 - `ont` → `-x map-ont` (ONT reads, standard accuracy)
 - `sr` → `-x sr` (Illumina short reads)
 
-**Read downsampling**: If `--depth-target-coverage` is set (default: 20X), reads are automatically downsampled before alignment using seqtk (for FASTQ) or samtools (for BAM/CRAM). This reduces computational time while maintaining sufficient coverage for depth-based quality assessment. Pre-aligned BAM/CRAM files are not downsampled. Set to 0 to disable downsampling.
+**Read downsampling**: If `--depth-target-coverage` is set (default: 20X), reads are automatically downsampled before alignment using rasusa (for FASTQ) or samtools (for BAM/CRAM). This reduces computational time while maintaining sufficient coverage for depth-based quality assessment. Pre-aligned BAM/CRAM files are not downsampled. Set to 0 to disable downsampling.
 
 ### Pipeline toggles
 

@@ -4,7 +4,7 @@ Read depth analysis for final_finalizer.
 
 Provides functions for:
 - Detecting read format (FASTQ, unaligned BAM, aligned BAM/CRAM)
-- Downsampling reads to target coverage (seqtk for FASTQ, samtools for BAM)
+- Downsampling reads to target coverage (rasusa for FASTQ, samtools for BAM)
 - Aligning reads to assembly with minimap2/mm2plus
 - Running mosdepth for depth calculation
 - Parsing mosdepth output and computing per-contig depth statistics
@@ -27,8 +27,6 @@ from __future__ import annotations
 
 import gzip
 import json
-import random
-import shutil
 import statistics
 import subprocess
 import sys
@@ -163,128 +161,6 @@ def get_minimap2_preset(reads_type: str) -> str:
     return presets[reads_type]
 
 
-def estimate_read_bases_fastq(reads_path: Path) -> int:
-    """Estimate total bases in a FASTQ file using seqtk fqchk.
-
-    Falls back to sampling-based estimation if seqtk is not available.
-
-    Args:
-        reads_path: Path to FASTQ or FASTQ.gz file
-
-    Returns:
-        Estimated total bases in the file
-    """
-    if have_exe("seqtk"):
-        try:
-            # seqtk fqchk outputs stats including total bases
-            # Format: min_len: X; max_len: Y; avg_len: Z; N reads; Q bases
-            result = subprocess.run(
-                ["seqtk", "fqchk", str(reads_path)],
-                capture_output=True,
-                text=True,
-                timeout=300,  # 5 min timeout for large files
-            )
-            if result.returncode == 0:
-                # Parse the first line which contains summary stats
-                # Example: "min_len: 1000; max_len: 50000; avg_len: 15234.5; 1234567 reads; 18789012345 bases"
-                for line in result.stdout.split("\n"):
-                    if "bases" in line.lower():
-                        # Try to extract the number before "bases"
-                        parts = line.split(";")
-                        for part in parts:
-                            if "bases" in part.lower():
-                                # Extract number from string like "18789012345 bases"
-                                tokens = part.strip().split()
-                                for i, tok in enumerate(tokens):
-                                    if "bases" in tok.lower() and i > 0:
-                                        try:
-                                            return int(tokens[i - 1])
-                                        except ValueError:
-                                            pass
-                                    # Also try format "N bases"
-                                    try:
-                                        return int(tok)
-                                    except ValueError:
-                                        continue
-        except subprocess.TimeoutExpired:
-            print("[warn] seqtk fqchk timed out, falling back to sampling", file=sys.stderr)
-        except Exception as e:
-            print(f"[warn] seqtk fqchk failed: {e}, falling back to sampling", file=sys.stderr)
-
-    # Fallback: sample first N reads and extrapolate
-    return _estimate_bases_by_sampling_fastq(reads_path)
-
-
-def _estimate_bases_by_sampling_fastq(reads_path: Path, sample_reads: int = 10000) -> int:
-    """Estimate total bases by sampling first N reads from FASTQ.
-
-    Args:
-        reads_path: Path to FASTQ or FASTQ.gz file
-        sample_reads: Number of reads to sample
-
-    Returns:
-        Estimated total bases
-    """
-    total_bases = 0
-    read_count = 0
-    line_count = 0
-    bytes_read = 0
-
-    try:
-        opener = gzip.open if str(reads_path).endswith(".gz") else open
-        with opener(reads_path, "rt") as fh:
-            for line in fh:
-                bytes_read += len(line)
-                line_count += 1
-                # FASTQ format: line 2 of every 4 is the sequence
-                if line_count % 4 == 2:
-                    total_bases += len(line.strip())
-                    read_count += 1
-                    if read_count >= sample_reads:
-                        break
-
-        if read_count == 0:
-            print("[warn] No reads found in sample", file=sys.stderr)
-            return 0
-
-        if bytes_read == 0:
-            print("[warn] No bytes read from sample", file=sys.stderr)
-            return 0
-
-        avg_read_len = float(total_bases) / read_count
-
-        # Estimate total reads by file size ratio
-        # Use float throughout to avoid integer overflow with large files
-        file_size = float(reads_path.stat().st_size)
-        if str(reads_path).endswith(".gz"):
-            # Estimate compression ratio (~3-4x for FASTQ)
-            # Use bytes_read (uncompressed) to estimate reads, then scale by compression
-            bytes_per_read_uncompressed = float(bytes_read) / read_count
-            # Typical gzip compression for FASTQ is ~3.5x
-            compression_ratio = 3.5
-            estimated_total_reads = (file_size * compression_ratio) / bytes_per_read_uncompressed
-        else:
-            bytes_per_read = float(bytes_read) / read_count
-            estimated_total_reads = file_size / bytes_per_read
-
-        estimated_total_bases = estimated_total_reads * avg_read_len
-
-        # Cap at reasonable maximum (1 petabase) to prevent overflow
-        max_bases = 1e15
-        if estimated_total_bases > max_bases:
-            print(f"[warn] Estimated bases ({estimated_total_bases:.2e}) exceeds maximum, capping at {max_bases:.0e}", file=sys.stderr)
-            estimated_total_bases = max_bases
-
-        estimated_total_bases = int(estimated_total_bases)
-
-        print(f"[info] Estimated {estimated_total_reads:.0f} reads, {estimated_total_bases:,} bases (sampling-based)", file=sys.stderr)
-        return estimated_total_bases
-
-    except Exception as e:
-        print(f"[warn] Could not estimate read bases: {e}", file=sys.stderr)
-        return 0
-
-
 def estimate_read_bases_bam(bam_path: Path) -> int:
     """Estimate total bases in a BAM file using samtools.
 
@@ -341,7 +217,7 @@ def estimate_read_bases_bam(bam_path: Path) -> int:
 
 
 def estimate_read_bases(reads_path: Path, read_format: ReadFormat) -> int:
-    """Estimate total bases in a reads file.
+    """Estimate total bases in a reads file (BAM/CRAM only).
 
     Args:
         reads_path: Path to reads file
@@ -350,12 +226,10 @@ def estimate_read_bases(reads_path: Path, read_format: ReadFormat) -> int:
     Returns:
         Estimated total bases
     """
-    if read_format in (ReadFormat.FASTQ, ReadFormat.FASTQ_GZ):
-        return estimate_read_bases_fastq(reads_path)
-    elif read_format in (ReadFormat.UNALIGNED_BAM, ReadFormat.UNALIGNED_CRAM):
+    if read_format in (ReadFormat.UNALIGNED_BAM, ReadFormat.UNALIGNED_CRAM):
         return estimate_read_bases_bam(reads_path)
     else:
-        # Aligned BAM/CRAM - shouldn't need downsampling
+        # FASTQ and aligned BAM/CRAM are handled elsewhere.
         return 0
 
 
@@ -386,56 +260,48 @@ def calculate_subsample_fraction(
 def downsample_fastq(
     reads_path: Path,
     output_path: Path,
-    fraction: float,
+    target_coverage: float,
+    genome_size: int,
     seed: int = 42,
 ) -> bool:
-    """Downsample a FASTQ file using seqtk.
+    """Downsample a FASTQ file using rasusa.
 
     Args:
         reads_path: Path to input FASTQ or FASTQ.gz
         output_path: Path for output (will be gzipped)
-        fraction: Fraction to retain (0.0-1.0)
+        target_coverage: Target coverage to retain (e.g., 20.0 for 20X)
+        genome_size: Genome size in bp (used to compute target bases)
         seed: Random seed for reproducibility
 
     Returns:
         True if successful, False otherwise
     """
-    if not have_exe("seqtk"):
-        print("[error] seqtk not found, cannot downsample FASTQ", file=sys.stderr)
+    if not have_exe("rasusa"):
+        print("[error] rasusa not found, cannot downsample FASTQ", file=sys.stderr)
         return False
 
-    seqtk_proc = None
-    gzip_proc = None
+    if genome_size <= 0 or target_coverage <= 0:
+        print("[error] Invalid genome size or target coverage for downsampling", file=sys.stderr)
+        return False
 
     try:
-        # seqtk sample -s seed input.fq fraction | gzip > output.fq.gz
-        print(f"[info] Downsampling FASTQ to {fraction:.2%} with seqtk", file=sys.stderr)
+        print(f"[info] Downsampling FASTQ to ~{target_coverage:.2f}X with rasusa", file=sys.stderr)
 
-        with open(output_path, "wb") as out_fh:
-            seqtk_proc = subprocess.Popen(
-                ["seqtk", "sample", "-s", str(seed), str(reads_path), str(fraction)],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-            gzip_proc = subprocess.Popen(
-                ["gzip", "-c"],
-                stdin=seqtk_proc.stdout,
-                stdout=out_fh,
-                stderr=subprocess.PIPE,
-            )
-            if seqtk_proc.stdout:
-                seqtk_proc.stdout.close()
+        cmd = [
+            "rasusa",
+            "reads",
+            "--coverage", f"{target_coverage:.6g}",
+            "--genome-size", str(genome_size),
+            "--seed", str(seed),
+            "-o", str(output_path),
+            str(reads_path)
+        ]
 
-            gzip_proc.wait()
-            seqtk_proc.wait()
-
-            if seqtk_proc.returncode != 0:
-                stderr_output = seqtk_proc.stderr.read().decode() if seqtk_proc.stderr else ""
-                print(f"[error] seqtk sample failed (code {seqtk_proc.returncode}): {stderr_output}", file=sys.stderr)
-                return False
-            if gzip_proc.returncode != 0:
-                print(f"[error] gzip failed (code {gzip_proc.returncode})", file=sys.stderr)
-                return False
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            stderr_output = (result.stderr or result.stdout or "").strip()
+            print(f"[error] rasusa failed (code {result.returncode}): {stderr_output}", file=sys.stderr)
+            return False
 
         print(f"[done] Downsampled FASTQ: {output_path}", file=sys.stderr)
         return True
@@ -443,16 +309,6 @@ def downsample_fastq(
     except Exception as e:
         print(f"[error] FASTQ downsampling failed: {e}", file=sys.stderr)
         return False
-
-    finally:
-        # Cleanup: terminate any still-running processes
-        for proc in [seqtk_proc, gzip_proc]:
-            if proc is not None and proc.poll() is None:
-                try:
-                    proc.terminate()
-                    proc.wait(timeout=5)
-                except Exception:
-                    proc.kill()
 
 
 def downsample_bam(
@@ -516,8 +372,10 @@ def downsample_reads(
     fraction: float,
     seed: int = 42,
     threads: int = 4,
+    target_coverage: Optional[float] = None,
+    genome_size: Optional[int] = None,
 ) -> Tuple[bool, Path]:
-    """Downsample reads to a target fraction.
+    """Downsample reads to a target fraction/coverage.
 
     Args:
         reads_path: Path to input reads
@@ -526,22 +384,27 @@ def downsample_reads(
         fraction: Fraction to retain (0.0-1.0)
         seed: Random seed for reproducibility
         threads: Number of threads for BAM operations
+        target_coverage: Target coverage for FASTQ downsampling (rasusa)
+        genome_size: Genome size in bp for FASTQ downsampling (rasusa)
 
     Returns:
-        Tuple of (success, output_path). If fraction >= 1.0, returns original path.
+        Tuple of (success, output_path). For FASTQ, target_coverage/genome_size are used.
     """
-    if fraction >= 1.0:
-        print("[info] No downsampling needed (fraction >= 1.0)", file=sys.stderr)
-        return True, reads_path
 
     if read_format in (ReadFormat.FASTQ, ReadFormat.FASTQ_GZ):
         # Output as gzipped FASTQ
         if not str(output_path).endswith(".gz"):
             output_path = Path(str(output_path) + ".gz")
-        success = downsample_fastq(reads_path, output_path, fraction, seed)
+        if target_coverage is None or genome_size is None:
+            print("[error] Missing target coverage or genome size for FASTQ downsampling", file=sys.stderr)
+            return False, reads_path
+        success = downsample_fastq(reads_path, output_path, target_coverage, genome_size, seed)
         return success, output_path if success else reads_path
 
     elif read_format in (ReadFormat.UNALIGNED_BAM, ReadFormat.UNALIGNED_CRAM):
+        if fraction >= 1.0:
+            print("[info] No downsampling needed (fraction >= 1.0)", file=sys.stderr)
+            return True, reads_path
         # Output as BAM
         if not str(output_path).endswith(".bam"):
             output_path = Path(str(output_path) + ".bam")
@@ -1032,7 +895,7 @@ def calculate_depth_metrics(
         window_size: Window size for mosdepth (default 1000bp)
         target_coverage: Target coverage for downsampling before alignment.
             Set to None or 0 to disable downsampling. Default 20.0 (20X).
-            Downsampling uses seqtk (FASTQ) or samtools (BAM/CRAM).
+            Downsampling uses rasusa (FASTQ) or samtools (BAM/CRAM).
 
     Returns:
         Dictionary mapping contig names to DepthStats objects
@@ -1092,40 +955,58 @@ def calculate_depth_metrics(
                 assembly_size = sum(contig_lengths.values())
                 print(f"[info] Assembly size: {assembly_size:,} bp", file=sys.stderr)
 
-                # Estimate total read bases
-                print("[info] Estimating total read bases for downsampling", file=sys.stderr)
-                total_read_bases = estimate_read_bases(reads, read_format)
-
-                if total_read_bases > 0:
-                    current_coverage = total_read_bases / assembly_size
-                    print(f"[info] Estimated read coverage: {current_coverage:.1f}X", file=sys.stderr)
-
-                    fraction = calculate_subsample_fraction(
-                        total_read_bases=total_read_bases,
-                        assembly_size=assembly_size,
+                if read_format in (ReadFormat.FASTQ, ReadFormat.FASTQ_GZ):
+                    downsampled_path = work_dir / "downsampled_reads"
+                    success, reads_to_align = downsample_reads(
+                        reads_path=reads,
+                        read_format=read_format,
+                        output_path=downsampled_path,
+                        fraction=1.0,
+                        seed=42,
+                        threads=threads,
                         target_coverage=target_coverage,
+                        genome_size=assembly_size,
                     )
-
-                    if fraction < 1.0:
-                        print(f"[info] Downsampling to ~{target_coverage:.0f}X coverage (fraction={fraction:.3f})", file=sys.stderr)
-                        downsampled_path = work_dir / "downsampled_reads"
-                        success, reads_to_align = downsample_reads(
-                            reads_path=reads,
-                            read_format=read_format,
-                            output_path=downsampled_path,
-                            fraction=fraction,
-                            seed=42,
-                            threads=threads,
-                        )
-                        if not success:
-                            print("[warn] Downsampling failed, using full reads", file=sys.stderr)
-                            reads_to_align = reads
-                        else:
-                            downsampled = True
+                    if not success:
+                        print("[warn] Downsampling failed, using full reads", file=sys.stderr)
+                        reads_to_align = reads
                     else:
-                        print(f"[info] Read coverage ({current_coverage:.1f}X) below target ({target_coverage:.0f}X), no downsampling needed", file=sys.stderr)
+                        downsampled = True
                 else:
-                    print("[warn] Could not estimate read bases, skipping downsampling", file=sys.stderr)
+                    # Estimate total read bases for BAM/CRAM downsampling.
+                    print("[info] Estimating total read bases for downsampling", file=sys.stderr)
+                    total_read_bases = estimate_read_bases(reads, read_format)
+
+                    if total_read_bases > 0:
+                        current_coverage = total_read_bases / assembly_size
+                        print(f"[info] Estimated read coverage: {current_coverage:.1f}X", file=sys.stderr)
+
+                        fraction = calculate_subsample_fraction(
+                            total_read_bases=total_read_bases,
+                            assembly_size=assembly_size,
+                            target_coverage=target_coverage,
+                        )
+
+                        if fraction < 1.0:
+                            print(f"[info] Downsampling to ~{target_coverage:.0f}X coverage (fraction={fraction:.3f})", file=sys.stderr)
+                            downsampled_path = work_dir / "downsampled_reads"
+                            success, reads_to_align = downsample_reads(
+                                reads_path=reads,
+                                read_format=read_format,
+                                output_path=downsampled_path,
+                                fraction=fraction,
+                                seed=42,
+                                threads=threads,
+                            )
+                            if not success:
+                                print("[warn] Downsampling failed, using full reads", file=sys.stderr)
+                                reads_to_align = reads
+                            else:
+                                downsampled = True
+                        else:
+                            print(f"[info] Read coverage ({current_coverage:.1f}X) below target ({target_coverage:.0f}X), no downsampling needed", file=sys.stderr)
+                    else:
+                        print("[warn] Could not estimate read bases, skipping downsampling", file=sys.stderr)
 
             success = align_reads_to_assembly(
                 reads=reads_to_align,

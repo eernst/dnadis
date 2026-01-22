@@ -58,38 +58,38 @@ if (!has_depth) {
 }
 
 # Classification order for consistent display
-# Note: chrC and chrM are separated from other organelles for clarity
+# Each classification is followed by its corresponding debris category
 # organelle_debris is split into chrC_debris and chrM_debris when assigned_ref_id is available
 classification_order <- c(
   "chrom_assigned",
+  "chrom_debris",
   "chrC",
-  "chrM",
-  "chrom_unassigned",
-  "organelle_complete",
   "chrC_debris",
+  "chrM",
   "chrM_debris",
+  "organelle_complete",
   "organelle_debris",
+  "chrom_unassigned",
   "rDNA",
   "contaminant",
-  "chrom_debris",
   "debris",
   "unclassified"
 )
 
 # Color palette for classifications
-# chrC/chrC_debris use green tones, chrM/chrM_debris use red tones
+# Each debris category uses a lighter shade of its parent classification
 classification_colors <- c(
   "chrom_assigned" = "#1F77B4",
+  "chrom_debris" = "#AEC7E8",
   "chrC" = "#2CA02C",
-  "chrM" = "#D62728",
-  "chrom_unassigned" = "#9ECAE1",
-  "organelle_complete" = "#66C2A5",
   "chrC_debris" = "#98DF8A",
+  "chrM" = "#D62728",
   "chrM_debris" = "#FF9896",
+  "organelle_complete" = "#66C2A5",
   "organelle_debris" = "#C7C7C7",
+  "chrom_unassigned" = "#9ECAE1",
   "rDNA" = "#FF7F0E",
   "contaminant" = "#8C564B",
-  "chrom_debris" = "#9467BD",
   "debris" = "#C5B0D5",
   "unclassified" = "#7F7F7F"
 )
