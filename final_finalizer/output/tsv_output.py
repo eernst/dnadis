@@ -197,7 +197,12 @@ def write_contig_summary_tsv(
             _mtmp, m_b, al_b, ident_b, dist_b = fetch_metrics(q, assigned_ref_id)
             _stmp, m_s, al_s, ident_s, dist_s = fetch_metrics(q, second_ref_id)
 
-            if not assigned_ref_id or bs <= 0.0:
+            # For non-chromosome classifications (organelles, debris, etc.), don't require
+            # chain evidence (bs > 0) - they have assigned_ref_id from their detection method
+            needs_chain_evidence = clf_class not in ("organelle_complete", "organelle_debris",
+                                                      "rDNA", "contaminant", "debris",
+                                                      "chrom_debris", "unclassified")
+            if not assigned_ref_id or (needs_chain_evidence and bs <= 0.0):
                 assigned_chrom_id, assigned_subgenome = ("", "NA")
                 status = "NO_HITS"
                 best_ref_union_frac = 0.0
