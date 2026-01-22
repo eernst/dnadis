@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import gzip
 import shutil
+import stat as stat_module
 import subprocess
 from pathlib import Path
 
@@ -30,26 +31,25 @@ def have_exe(exe: str) -> bool:
 def file_exists_and_valid(path: Path, min_size: int = 1) -> bool:
     """Check if a file exists, is readable, and has at least min_size bytes.
 
-    This combines existence check with basic integrity validation to avoid
-    TOCTOU race conditions and detect corrupted/truncated files.
+    This uses a single stat() call to avoid TOCTOU race conditions and detect
+    corrupted/truncated files.
 
     Args:
         path: File path to check
         min_size: Minimum file size in bytes (default 1, i.e., non-empty)
 
     Returns:
-        True if file exists and meets size requirement, False otherwise
+        True if file exists, is a regular file, and meets size requirement
     """
     try:
-        if not path.exists():
+        st = path.stat()
+        if not stat_module.S_ISREG(st.st_mode):
             return False
-        if not path.is_file():
-            return False
-        if path.stat().st_size < min_size:
+        if st.st_size < min_size:
             return False
         return True
-    except (OSError, PermissionError):
-        # File may have been deleted or we don't have permission
+    except (OSError, PermissionError, FileNotFoundError):
+        # File doesn't exist, was deleted, or we don't have permission
         return False
 
 

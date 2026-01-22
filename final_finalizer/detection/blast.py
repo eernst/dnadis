@@ -7,13 +7,15 @@ Contains functions for running BLAST searches and parsing results.
 from __future__ import annotations
 
 import subprocess
-import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from final_finalizer.models import BlastHitSummary
 from final_finalizer.utils.io_utils import have_exe, merge_intervals
+from final_finalizer.utils.logging_config import get_logger
+
+logger = get_logger("blast")
 
 
 def run_makeblastdb(
@@ -29,7 +31,7 @@ def run_makeblastdb(
     # Check if database already exists
     db_files = list(db_path.parent.glob(f"{db_path.name}.n*"))
     if db_files:
-        print(f"[info] BLAST database exists, reusing: {db_path}", file=sys.stderr)
+        logger.info(f"BLAST database exists, reusing: {db_path}")
         return
 
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -42,7 +44,7 @@ def run_makeblastdb(
         "-hash_index",
     ]
 
-    print(f"[info] Creating BLAST database: {db_path}", file=sys.stderr)
+    logger.info(f"Creating BLAST database: {db_path}")
 
     if err_path:
         err_path.parent.mkdir(parents=True, exist_ok=True)
@@ -81,7 +83,7 @@ def run_blastn_megablast(
         err_path: Optional path for stderr output
     """
     if output_path.exists():
-        print(f"[info] BLAST output exists, reusing: {output_path}", file=sys.stderr)
+        logger.info(f"BLAST output exists, reusing: {output_path}")
         return
 
     if not have_exe("blastn"):
@@ -115,7 +117,7 @@ def run_blastn_megablast(
     else:
         cmd = base_cmd + ["-query", str(query_fasta)]
 
-    print(f"[info] Running blastn megablast -> {output_path}", file=sys.stderr)
+    logger.info(f"Running blastn megablast -> {output_path}")
 
     if err_path:
         err_path.parent.mkdir(parents=True, exist_ok=True)

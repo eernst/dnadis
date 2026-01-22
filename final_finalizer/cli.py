@@ -117,6 +117,36 @@ from final_finalizer.output.plotting import run_plot, run_depth_plot
 
 
 def main():
+    # Handle --dump-config early, before argument parsing
+    # This allows generating config template without providing required args
+    if '--dump-config' in sys.argv:
+        from final_finalizer.utils.config import dump_config_template
+        # Create a minimal namespace with defaults
+        defaults = argparse.Namespace(
+            ref=None, query=None, outprefix=None, ref_gff3=None,
+            threads=8, plot=False, plot_html=False, verbose=False, quiet=False,
+            log_file=None, config=None, dump_config=True, chr_like_minlen=None,
+            add_subgenome_suffix=None, ref_id_pattern=None, reads=None,
+            reads_type="hifi_onthq", skip_depth=False, depth_window_size=1000,
+            depth_target_coverage=0, keep_depth_bam=False, nt_synteny=False,
+            skip_organelles=False, skip_rdna=False, skip_contaminants=False,
+            gffread="gffread", miniprot="miniprot", miniprot_args="",
+            chrC_ref=None, chrM_ref=None, rdna_ref=None, centrifuger_idx=None,
+            assign_min_frac=0.10, assign_min_ratio=1.25, chimera_primary_frac=0.8,
+            chimera_secondary_frac=0.2, low_ref_span_threshold=0.75,
+            assign_minlen=10000, assign_minlen_protein=150, assign_minmapq=0,
+            assign_min_ident=0.0, assign_tp="PI", chain_q_gap=200000,
+            chain_r_gap=400000, chain_diag_slop=150000, assign_chain_min_bp=0,
+            assign_chain_score="matches", assign_chain_topk=3, assign_ref_score="all",
+            miniprot_min_genes=3, miniprot_min_segments=5, miniprot_min_span_frac=0.20,
+            miniprot_min_span_bp=50000, organelle_min_cov=0.80, chrC_len_tolerance=0.05,
+            chrM_len_tolerance=0.20, rdna_min_cov=0.50, chr_debris_min_cov=0.80,
+            chr_debris_min_identity=0.90, contaminant_min_score=150, debris_min_cov=0.50,
+            debris_min_protein_hits=2, preset="asm20", kmer=None, window=None, aln_minlen=10000,
+        )
+        print(dump_config_template(defaults))
+        sys.exit(0)
+
     p = argparse.ArgumentParser(
         description="Genome assembly finalization tool for contig classification using protein-anchored synteny blocks.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -144,6 +174,11 @@ def main():
     common.add_argument("-t", "--threads", type=_positive_int, default=8, help="Threads for minimap2/miniprot [8]")
     common.add_argument("--plot", action="store_true", help="Generate overview plots with R/ggplot2")
     common.add_argument("--plot-html", action="store_true", help="Also generate interactive HTML plot (ggiraph)")
+    common.add_argument("-v", "--verbose", action="store_true", help="Enable verbose (DEBUG level) logging")
+    common.add_argument("--quiet", action="store_true", help="Suppress INFO messages (only show warnings and errors)")
+    common.add_argument("--log-file", type=str, default=None, metavar="PATH", help="Also write logs to this file")
+    common.add_argument("--config", type=Path, default=None, metavar="TOML", help="Load configuration from TOML file (CLI args override)")
+    common.add_argument("--dump-config", action="store_true", help="Print TOML config template and exit")
     common.add_argument(
         "-C", "--chr-like-minlen", type=int, default=None,
         help="Minimum contig length (bp) to be considered chromosome-like. Default: 80%% of smallest nuclear ref chromosome.",
@@ -187,6 +222,11 @@ def main():
     depth_grp.add_argument(
         "--depth-target-coverage", type=float, default=0,
         help="Target coverage (e.g. 20) for downsampling reads before alignment (0 to disable) [0]",
+    )
+    depth_grp.add_argument(
+        "--keep-depth-bam",
+        action="store_true",
+        help="Keep aligned BAM file after depth analysis (default: delete to save space)",
     )
 
     # =========================================================================
@@ -409,11 +449,25 @@ def main():
 
     args = p.parse_args()
 
+    # Load config file if provided (CLI args override config)
+    if args.config:
+        from final_finalizer.utils.config import load_config, merge_config_with_args
+        try:
+            config = load_config(args.config)
+            merge_config_with_args(config, args)
+        except Exception as e:
+            sys.exit(f"[error] Failed to load config file: {e}")
+
+    # Setup logging
+    from final_finalizer.utils.logging_config import setup_logging, get_logger
+    setup_logging(verbose=args.verbose, quiet=args.quiet, log_file=args.log_file)
+    logger = get_logger("cli")
+
     if args.ref_id_pattern:
         set_ref_id_patterns(compile_ref_id_patterns(args.ref_id_pattern))
 
     # --- Phase 1: Reading reference and query FASTA ---
-    print("[info] Phase 1: Reading reference and query FASTA", file=sys.stderr)
+    logger.phase("Phase 1: Reading reference and query FASTA")
     ref = args.ref  # Already a Path from _validate_input_path
     qry = args.query  # Already a Path from _validate_input_path
     outprefix = Path(args.outprefix)
@@ -423,7 +477,7 @@ def main():
     if out_dir and not out_dir.exists():
         try:
             out_dir.mkdir(parents=True, exist_ok=True)
-            print(f"[info] Created output directory: {out_dir}", file=sys.stderr)
+            logger.info(f"Created output directory: {out_dir}")
         except PermissionError as e:
             sys.exit(f"[error] Cannot create output directory {out_dir}: {e}")
         except OSError as e:
@@ -432,10 +486,10 @@ def main():
     ref_lengths_norm, ref_orig_to_norm, ref_norm_to_orig = read_fasta_lengths_with_map(ref)
     ref_ids_raw = set(read_fasta_lengths(ref).keys())
     qry_lengths = read_fasta_lengths(qry)
-    print(f"[info] Query contigs: {len(qry_lengths)}", file=sys.stderr)
+    logger.info(f"Query contigs: {len(qry_lengths)}")
 
     # Compute GC content for reference and query
-    print("[info] Computing GC content for reference and query sequences", file=sys.stderr)
+    logger.info("Computing GC content for reference and query sequences")
     ref_gc_all = calculate_gc_content_fasta(ref)
     qry_gc = calculate_gc_content_fasta(qry)
 
@@ -449,10 +503,10 @@ def main():
     }
     if ref_gc_nuclear:
         ref_gc_mean, ref_gc_std = calculate_gc_stats(ref_gc_nuclear)
-        print(f"[info] Reference nuclear GC: mean={ref_gc_mean:.3f}, std={ref_gc_std:.3f}", file=sys.stderr)
+        logger.info(f"Reference nuclear GC: mean={ref_gc_mean:.3f}, std={ref_gc_std:.3f}")
     else:
         ref_gc_mean, ref_gc_std = None, None
-        print("[warn] Could not compute reference GC baseline (no nuclear chromosomes found)", file=sys.stderr)
+        logger.warning("Could not compute reference GC baseline (no nuclear chromosomes found)")
 
     # Outputs (shared)
     ref_lengths_tsv = Path(str(outprefix) + ".ref_lengths.tsv")
@@ -472,13 +526,13 @@ def main():
     miniprot_err = Path(str(outprefix) + ".miniprot.err")
 
     if not file_exists_and_valid(ref_lengths_tsv):
-        print(f"[info] Writing reference lengths: {ref_lengths_tsv}", file=sys.stderr)
+        logger.info(f"Writing reference lengths: {ref_lengths_tsv}")
         write_ref_lengths_tsv(ref_lengths_tsv, ref)
     else:
-        print(f"[info] Reference lengths TSV exists, reusing: {ref_lengths_tsv}", file=sys.stderr)
+        logger.info(f"Reference lengths TSV exists, reusing: {ref_lengths_tsv}")
 
     # --- Phase 2: Nucleotide synteny analysis (optional QA) ---
-    print("[info] Phase 2: Nucleotide synteny analysis (optional QA)", file=sys.stderr)
+    logger.phase("Phase 2: Nucleotide synteny analysis (optional QA)")
     if args.nt_synteny:
         run_minimap2_synteny(ref, qry, paf_gz, args.threads, args.preset, args.kmer, args.window, err_log)
         (
@@ -494,12 +548,12 @@ def main():
             _second_ref_p,
         ) = parse_paf_primary(paf_gz, args.aln_minlen)
         write_stats_tsv(stats_tsv, aln_sum_p, match_sum_p)
-        print(f"[done] Stats (primary QA): {stats_tsv}", file=sys.stderr)
+        logger.done(f"Stats (primary QA): {stats_tsv}")
     else:
-        print("[info] --nt-synteny not set: skipping nucleotide alignments + primary-only QA stats.", file=sys.stderr)
+        logger.info("--nt-synteny not set: skipping nucleotide alignments + primary-only QA stats.")
 
     # --- Phase 3: Protein-anchor synteny analysis ---
-    print("[info] Phase 3: Protein-anchor synteny analysis", file=sys.stderr)
+    logger.phase("Phase 3: Protein-anchor synteny analysis")
     ref_gff3 = args.ref_gff3  # Already a Path from _validate_input_path
     filtered_ref_gff3 = Path(str(outprefix) + ".ref_gff3.filtered.gff3")
     ref_gff3 = filter_gff3_by_ref(
@@ -508,7 +562,7 @@ def main():
         filtered_ref_gff3,
         ref_norm_to_orig=ref_norm_to_orig,
     )
-    print(f"[info] Protein-anchor mode enabled (ref GFF3: {ref_gff3})", file=sys.stderr)
+    logger.info(f"Protein-anchor mode enabled (ref GFF3: {ref_gff3})")
 
     tx2loc, tx2gene = parse_gff3_transcript_coords(ref_gff3, ref_id_map=ref_orig_to_norm)
     if not (tx2loc and tx2gene):
@@ -573,7 +627,7 @@ def main():
         if sc > 0:
             candidates_by_contig[q].append((float(sc), ref_id))
 
-    print(f"[info] Assignment score per ref: {args.assign_ref_score}", file=sys.stderr)
+    logger.info(f"Assignment score per ref: {args.assign_ref_score}")
 
     for q in qry_lengths.keys():
         clen = int(qry_lengths.get(q, 0) or ev.qlens_from_paf.get(q, 0) or 0)
@@ -637,29 +691,29 @@ def main():
         if chosen_ref_id != orig_best:
             n_switched += 1
 
-    print(f"[info] Protein-anchor gate-aware rerank: demoted={n_demoted} switched={n_switched}", file=sys.stderr)
+    logger.info(f"Protein-anchor gate-aware rerank: demoted={n_demoted} switched={n_switched}")
 
     plot_suffix = "protein-anchor synteny"
-    print(f"[done] Proteins:         {proteins_faa}", file=sys.stderr)
-    print(f"[done] miniprot PAF.gz:  {miniprot_paf_gz}", file=sys.stderr)
-    print(f"[done] miniprot err:     {miniprot_err}", file=sys.stderr)
+    logger.done(f"Proteins:         {proteins_faa}")
+    logger.done(f"miniprot PAF.gz:  {miniprot_paf_gz}")
+    logger.done(f"miniprot err:     {miniprot_err}")
 
     # Write segments + evidence summary TSVs
     write_chain_segments_tsv(segments_tsv, ev.chain_segments_rows, ref_norm_to_orig=ref_norm_to_orig)
     write_chain_summary_tsv(chain_summary_tsv, ev.chain_summary_rows, ref_norm_to_orig=ref_norm_to_orig)
-    print(f"[done] Segments TSV:      {segments_tsv}", file=sys.stderr)
-    print(f"[done] Evidence TSV:      {chain_summary_tsv}", file=sys.stderr)
+    logger.done(f"Segments TSV:      {segments_tsv}")
+    logger.done(f"Evidence TSV:      {chain_summary_tsv}")
 
     # Write macro blocks TSV
     write_macro_blocks_tsv(macro_blocks_tsv, ev.macro_block_rows, ref_norm_to_orig=ref_norm_to_orig)
-    print(f"[done] Macro blocks TSV:  {macro_blocks_tsv}", file=sys.stderr)
+    logger.done(f"Macro blocks TSV:  {macro_blocks_tsv}")
 
     # --- Compute chr_like_minlen if not provided ---
     ref_lengths = ref_lengths_norm
     if args.chr_like_minlen is None:
         min_nuclear = get_min_nuclear_chrom_length(ref_lengths)
         chr_like_minlen = int(min_nuclear * 0.8) if min_nuclear > 0 else 1_000_000
-        print(f"[info] chr_like_minlen not specified, using 80% of smallest nuclear chrom: {chr_like_minlen}", file=sys.stderr)
+        logger.info(f"chr_like_minlen not specified, using 80% of smallest nuclear chrom: {chr_like_minlen}")
     else:
         chr_like_minlen = args.chr_like_minlen
 
@@ -675,11 +729,11 @@ def main():
     asm_gc_nuclear = {k: v for k, v in qry_gc.items() if k in chromosome_contigs}
     if asm_gc_nuclear:
         asm_gc_mean, asm_gc_std = calculate_gc_stats(asm_gc_nuclear)
-        print(f"[info] Assembly chromosome GC: mean={asm_gc_mean:.3f}, std={asm_gc_std:.3f} (n={len(asm_gc_nuclear)})", file=sys.stderr)
+        logger.info(f"Assembly chromosome GC: mean={asm_gc_mean:.3f}, std={asm_gc_std:.3f} (n={len(asm_gc_nuclear)})")
     else:
         # Fall back to reference GC if no chromosome contigs identified
         asm_gc_mean, asm_gc_std = ref_gc_mean, ref_gc_std
-        print("[warn] No chromosome contigs for assembly GC baseline, using reference GC", file=sys.stderr)
+        logger.warning("No chromosome contigs for assembly GC baseline, using reference GC")
 
     # Create work directory for classification outputs
     work_dir = outprefix.parent / f"{outprefix.name}_classification"
@@ -690,7 +744,7 @@ def main():
     non_chrom_contigs = set(qry_lengths.keys()) - chromosome_contigs
     non_chrom_fasta = work_dir / "non_chromosome_contigs.fa"
     if non_chrom_contigs:
-        print(f"[info] Creating filtered FASTA for BLAST ({len(non_chrom_contigs)} non-chromosome contigs)", file=sys.stderr)
+        logger.info(f"Creating filtered FASTA for BLAST ({len(non_chrom_contigs)} non-chromosome contigs)")
         write_filtered_fasta(qry, non_chrom_fasta, non_chrom_contigs)
         blast_query_fasta = non_chrom_fasta
         blast_query_lengths = {k: v for k, v in qry_lengths.items() if k in non_chrom_contigs}
@@ -706,7 +760,7 @@ def main():
     organelle_hits: Dict = {}
 
     if not args.skip_organelles:
-        print("[info] Phase 4: Organelle detection", file=sys.stderr)
+        logger.phase("Phase 4: Organelle detection")
         chrC_ref, chrM_ref = prepare_organelle_references(
             ref_fasta=ref,
             chrC_ref_arg=getattr(args, 'chrC_ref', None),
@@ -728,7 +782,7 @@ def main():
                 chrM_len_tol=getattr(args, 'chrM_len_tolerance', 0.20),
             )
     else:
-        print("[info] Phase 4: Skipping organelle detection (--skip-organelles)", file=sys.stderr)
+        logger.info("Phase 4: Skipping organelle detection (--skip-organelles)")
 
     # --- Phase 5: rDNA detection ---
     rdna_contigs: Set[str] = set()
@@ -737,7 +791,7 @@ def main():
     already_classified.discard(None)
 
     if not args.skip_rdna:
-        print("[info] Phase 5: rDNA detection", file=sys.stderr)
+        logger.phase("Phase 5: rDNA detection")
         script_dir = Path(__file__).resolve().parent
         rdna_ref = prepare_rdna_reference(args.rdna_ref, script_dir)
 
@@ -752,10 +806,10 @@ def main():
                 exclude_contigs=already_classified,
             )
     else:
-        print("[info] Phase 5: Skipping rDNA detection (--skip-rdna)", file=sys.stderr)
+        logger.info("Phase 5: Skipping rDNA detection (--skip-rdna)")
 
     # --- Phase 6: Chromosome debris detection ---
-    print("[info] Phase 6: Chromosome debris detection", file=sys.stderr)
+    logger.phase("Phase 6: Chromosome debris detection")
     already_classified = already_classified | rdna_contigs
 
     chromosome_debris: Set[str] = set()
@@ -777,7 +831,7 @@ def main():
     contaminants: Dict[str, Tuple[int, str]] = {}
 
     if not args.skip_contaminants and args.centrifuger_idx:
-        print("[info] Phase 7: Contaminant detection", file=sys.stderr)
+        logger.phase("Phase 7: Contaminant detection")
         residual_contigs = set(qry_lengths.keys()) - already_classified - chromosome_contigs
         if residual_contigs:
             residual_fasta = work_dir / "residual_for_contaminant_screen.fa"
@@ -794,10 +848,10 @@ def main():
                 exclude_contigs=set(),
             )
     else:
-        print("[info] Phase 7: Skipping contaminant detection", file=sys.stderr)
+        logger.info("Phase 7: Skipping contaminant detection")
 
     # --- Phase 8: Debris/unclassified classification ---
-    print("[info] Phase 8: Debris/unclassified classification", file=sys.stderr)
+    logger.phase("Phase 8: Debris/unclassified classification")
 
     already_classified = already_classified | set(contaminants.keys()) | chromosome_contigs
     remaining_contigs = set(qry_lengths.keys()) - already_classified
@@ -817,7 +871,7 @@ def main():
     other_debris = additional_debris
 
     # --- Phase 9: Gene count statistics ---
-    print("[info] Phase 9: Gene count statistics", file=sys.stderr)
+    logger.phase("Phase 9: Gene count statistics")
     ref_gene_counts = count_genes_per_ref_chrom(ref_gff3, ref_id_map=ref_orig_to_norm)
     compute_mean_gene_proportion(
         qr_gene_count=ev.qr_gene_count,
@@ -827,7 +881,7 @@ def main():
     )
 
     # --- Phase 10: Orientation determination ---
-    print("[info] Phase 10: Orientation determination", file=sys.stderr)
+    logger.phase("Phase 10: Orientation determination")
     contig_orientations = determine_contig_orientations(
         macro_block_rows=ev.macro_block_rows,
         best_ref=best_ref,
@@ -836,7 +890,7 @@ def main():
     )
 
     # --- Phase 11: Classify all contigs ---
-    print("[info] Phase 11: Classifying all contigs", file=sys.stderr)
+    logger.phase("Phase 11: Classifying all contigs")
     classifications = classify_all_contigs(
         query_fasta=qry,
         query_lengths=qry_lengths,
@@ -870,7 +924,7 @@ def main():
     # --- Phase 11.5: Read depth analysis (optional) ---
     depth_stats: Dict[str, 'DepthStats'] = {}
     if args.reads and not args.skip_depth:
-        print("[info] Phase 11.5: Read depth analysis", file=sys.stderr)
+        logger.phase("Phase 11.5: Read depth analysis")
         from final_finalizer.analysis.read_depth import calculate_depth_metrics
         from final_finalizer.models import DepthStats
 
@@ -884,6 +938,7 @@ def main():
             reads_type=args.reads_type,
             window_size=args.depth_window_size,
             target_coverage=args.depth_target_coverage if args.depth_target_coverage > 0 else None,
+            keep_bam=args.keep_depth_bam,
         )
 
         # Attach depth stats to classifications
@@ -897,12 +952,12 @@ def main():
                 clf.depth_breadth_10x = ds.breadth_10x
 
         if depth_stats:
-            print(f"[done] Depth analysis complete for {len(depth_stats)} contigs", file=sys.stderr)
+            logger.done(f"Depth analysis complete for {len(depth_stats)} contigs")
     elif args.reads and args.skip_depth:
-        print("[info] Phase 11.5: Skipping depth analysis (--skip-depth)", file=sys.stderr)
+        logger.info("Phase 11.5: Skipping depth analysis (--skip-depth)")
 
     # --- Phase 12: Write FASTA outputs ---
-    print("[info] Phase 12: Writing FASTA outputs", file=sys.stderr)
+    logger.phase("Phase 12: Writing FASTA outputs")
     write_classified_fastas(
         query_fasta=qry,
         classifications=classifications,
@@ -911,7 +966,7 @@ def main():
     )
 
     # --- Phase 13: Write enhanced summary TSV ---
-    print("[info] Phase 13: Writing enhanced summary TSV", file=sys.stderr)
+    logger.phase("Phase 13: Writing enhanced summary TSV")
     summary_tsv = Path(str(outprefix) + ".contig_summary.tsv")
 
     write_contig_summary_tsv(
@@ -940,15 +995,15 @@ def main():
         ref_norm_to_orig=ref_norm_to_orig,
     )
 
-    print(f"[done] Summary:           {summary_tsv}", file=sys.stderr)
-    print(f"[done] Ref lengths:       {ref_lengths_tsv}", file=sys.stderr)
+    logger.done(f"Summary:           {summary_tsv}")
+    logger.done(f"Ref lengths:       {ref_lengths_tsv}")
 
     clf_counts: Dict[str, int] = defaultdict(int)
     for clf in classifications:
         clf_counts[clf.classification] += 1
-    print("[done] Classification summary:", file=sys.stderr)
+    logger.done("Classification summary:")
     for cat, count in sorted(clf_counts.items()):
-        print(f"       {cat}: {count}", file=sys.stderr)
+        logger.info(f"       {cat}: {count}")
 
     if args.plot:
         run_plot(

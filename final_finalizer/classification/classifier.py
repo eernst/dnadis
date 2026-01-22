@@ -483,8 +483,8 @@ def classify_all_contigs(
         gc = query_gc.get(contig)
         if gc is None:
             return None
-        if ref_gc_std == 0:
-            return 0.0
+        if ref_gc_std == 0 or ref_gc_std < 0.001:
+            return None  # Cannot compute meaningful deviation with zero/near-zero std
         return abs(gc - ref_gc_mean) / ref_gc_std
 
     # Helper to compute GC deviation vs ASSEMBLY chromosomes (for non-chrom classifications)
@@ -496,8 +496,8 @@ def classify_all_contigs(
         gc = query_gc.get(contig)
         if gc is None:
             return None
-        if asm_gc_std == 0:
-            return 0.0
+        if asm_gc_std == 0 or asm_gc_std < 0.001:
+            return None  # Cannot compute meaningful deviation with zero/near-zero std
         return abs(gc - asm_gc_mean) / asm_gc_std
 
     # Helper to get contig GC content

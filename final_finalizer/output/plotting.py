@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import subprocess
-import sys
 from pathlib import Path
 from typing import Dict, Optional
+
+from final_finalizer.utils.logging_config import get_logger
+
+logger = get_logger("plotting")
 
 
 def have_rscript() -> bool:
@@ -38,7 +41,7 @@ def run_plot(
     plot_html: bool,
 ):
     if not have_rscript():
-        print("[warn] --plot specified, but Rscript not found in PATH; skipping plot.", file=sys.stderr)
+        logger.warning("--plot specified, but Rscript not found in PATH; skipping plot.")
         return
 
     plot_pdf = Path(str(outprefix) + ".chromosome_overview.pdf")
@@ -76,15 +79,15 @@ def run_plot(
     with r_script_path.open("w", encoding="utf-8") as rf:
         rf.write(filled)
 
-    print(f"[info] Running Rscript to generate plot: {plot_pdf}", file=sys.stderr)
+    logger.info(f"Running Rscript to generate plot: {plot_pdf}")
     try:
         subprocess.run(["Rscript", str(r_script_path)], check=True)
     except subprocess.CalledProcessError as e:
-        print(f"[warn] Rscript failed with code {e.returncode}; plot not generated.", file=sys.stderr)
+        logger.warning(f"Rscript failed with code {e.returncode}; plot not generated.")
     else:
-        print(f"[done] Plot written to: {plot_pdf}", file=sys.stderr)
+        logger.done(f"Plot written to: {plot_pdf}")
         if plot_html:
-            print(f"[done] Plot written to: {plot_html_path}", file=sys.stderr)
+            logger.done(f"Plot written to: {plot_html_path}")
 
 
 def run_depth_plot(
@@ -106,7 +109,7 @@ def run_depth_plot(
         plot_html: Whether to generate interactive HTML version
     """
     if not have_rscript():
-        print("[warn] --plot specified, but Rscript not found in PATH; skipping depth plot.", file=sys.stderr)
+        logger.warning("--plot specified, but Rscript not found in PATH; skipping depth plot.")
         return
 
     # Check if summary file has depth data
@@ -114,10 +117,10 @@ def run_depth_plot(
         with summary_tsv.open("r") as fh:
             header = fh.readline().strip().split("\t")
             if "depth_mean" not in header:
-                print("[info] No depth data in summary; skipping depth plot.", file=sys.stderr)
+                logger.info("No depth data in summary; skipping depth plot.")
                 return
     except Exception as e:
-        print(f"[warn] Could not check summary file for depth data: {e}", file=sys.stderr)
+        logger.warning(f"Could not check summary file for depth data: {e}")
         return
 
     plot_pdf = Path(str(outprefix) + ".depth_overview.pdf")
@@ -127,7 +130,7 @@ def run_depth_plot(
     # Template expected alongside this Python file
     tmpl_path = Path(__file__).resolve().with_name("depth_overview.tmpl.R")
     if not tmpl_path.exists():
-        print(f"[warn] Missing R template for depth plots: {tmpl_path}", file=sys.stderr)
+        logger.warning(f"Missing R template for depth plots: {tmpl_path}")
         return
 
     tmpl = _read_text(tmpl_path)
@@ -143,12 +146,12 @@ def run_depth_plot(
     with r_script_path.open("w", encoding="utf-8") as rf:
         rf.write(filled)
 
-    print(f"[info] Running Rscript to generate depth plot: {plot_pdf}", file=sys.stderr)
+    logger.info(f"Running Rscript to generate depth plot: {plot_pdf}")
     try:
         subprocess.run(["Rscript", str(r_script_path)], check=True)
     except subprocess.CalledProcessError as e:
-        print(f"[warn] Rscript failed with code {e.returncode}; depth plot not generated.", file=sys.stderr)
+        logger.warning(f"Rscript failed with code {e.returncode}; depth plot not generated.")
     else:
-        print(f"[done] Depth plot written to: {plot_pdf}", file=sys.stderr)
+        logger.done(f"Depth plot written to: {plot_pdf}")
         if plot_html:
-            print(f"[done] Depth plot written to: {plot_html_path}", file=sys.stderr)
+            logger.done(f"Depth plot written to: {plot_html_path}")

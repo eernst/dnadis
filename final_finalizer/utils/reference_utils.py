@@ -11,7 +11,10 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from final_finalizer.utils.io_utils import open_maybe_gzip
+from final_finalizer.utils.logging_config import get_logger
 from final_finalizer.utils.sequence_utils import read_fasta_lengths
+
+logger = get_logger("reference_utils")
 
 
 # ----------------------------
@@ -282,8 +285,6 @@ def parse_gff3_transcript_coords(
     Raises:
       RuntimeError: If no transcript features are found
     """
-    import sys
-
     tx2loc: dict[str, tuple[str, int, int, str]] = {}
     tx2gene: dict[str, str] = {}
 
@@ -348,15 +349,14 @@ def parse_gff3_transcript_coords(
     # Report parsing issues
     total_errors = malformed_lines + missing_id_count + invalid_coord_count
     if total_errors > 0:
-        print(
-            f"[warn] GFF3 parsing: {total_errors} issues "
-            f"(malformed={malformed_lines}, missing_id={missing_id_count}, invalid_coords={invalid_coord_count})",
-            file=sys.stderr,
+        logger.warning(
+            f"GFF3 parsing: {total_errors} issues "
+            f"(malformed={malformed_lines}, missing_id={missing_id_count}, invalid_coords={invalid_coord_count})"
         )
         for err in parse_errors:
-            print(f"  {err}", file=sys.stderr)
+            logger.warning(f"  {err}")
         if total_errors > 5:
-            print(f"  ... and {total_errors - len(parse_errors)} more", file=sys.stderr)
+            logger.warning(f"  ... and {total_errors - len(parse_errors)} more")
 
     if not tx2loc:
         raise RuntimeError(

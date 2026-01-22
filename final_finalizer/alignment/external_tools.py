@@ -6,13 +6,45 @@ Contains functions to run minimap2, mm2plus, gffread, and miniprot.
 """
 from __future__ import annotations
 
+import re
 import shlex
 import subprocess
-import sys
 from pathlib import Path
 from typing import List, Optional
 
 from final_finalizer.utils.io_utils import file_exists_and_valid, have_exe, run_to_gzip
+from final_finalizer.utils.logging_config import get_logger
+
+logger = get_logger("external_tools")
+
+
+# Pattern to detect dangerous shell metacharacters that could enable command injection
+_DANGEROUS_SHELL_CHARS = re.compile(r'[;&|`$(){}[\]<>!\\\'\"#]')
+
+
+def validate_extra_args(args_str: str, arg_name: str = "extra_args") -> str:
+    """Validate extra command-line arguments for shell safety.
+
+    Checks for dangerous shell metacharacters that could enable command injection.
+    This is a defense-in-depth measure since shlex.split() is used, but provides
+    an additional layer of protection and clearer error messages.
+
+    Args:
+        args_str: The argument string to validate
+        arg_name: Name of the argument for error messages
+
+    Returns:
+        The validated and stripped argument string
+
+    Raises:
+        ValueError: If dangerous shell metacharacters are detected
+    """
+    if not args_str:
+        return ""
+    args_str = args_str.strip()
+    if _DANGEROUS_SHELL_CHARS.search(args_str):
+        raise ValueError(f"Invalid characters in {arg_name}: shell metacharacters not allowed")
+    return args_str
 
 
 # ----------------------------
@@ -70,12 +102,12 @@ def run_minimap2(
     """
     # Check if output already exists and is valid
     if file_exists_and_valid(paf_out):
-        print(f"[info] PAF exists, reusing: {paf_out}", file=sys.stderr)
+        logger.info(f"PAF exists, reusing: {paf_out}")
         return True
 
     mapper = get_minimap2_exe()
     if not mapper:
-        print("[warn] Neither mm2plus nor minimap2 found in PATH", file=sys.stderr)
+        logger.warning("Neither mm2plus nor minimap2 found in PATH")
         return False
 
     # Build command
@@ -92,7 +124,7 @@ def run_minimap2(
         # Output directly to file
         cmd += ["-o", str(paf_out), str(ref), str(qry)]
 
-    print(f"[info] Running {mapper} -> {paf_out}", file=sys.stderr)
+    logger.info(f"Running {mapper} -> {paf_out}")
 
     if err_path:
         err_path.parent.mkdir(parents=True, exist_ok=True)
@@ -107,10 +139,10 @@ def run_minimap2(
             else:
                 ret = subprocess.run(cmd, stderr=subprocess.DEVNULL, check=False)
             if ret.returncode != 0:
-                print(f"[warn] {mapper} failed with return code {ret.returncode}", file=sys.stderr)
+                logger.warning(f"{mapper} failed with return code {ret.returncode}")
                 return False
     except Exception as e:
-        print(f"[warn] {mapper} failed: {e}", file=sys.stderr)
+        logger.warning(f"{mapper} failed: {e}")
         return False
 
     return True
@@ -132,7 +164,7 @@ def run_minimap2_synteny(
     for genome-wide synteny analysis. Output is gzipped PAF.
     """
     if file_exists_and_valid(paf_gz_out):
-        print(f"[info] PAF.gz exists, reusing: {paf_gz_out}", file=sys.stderr)
+        logger.info(f"PAF.gz exists, reusing: {paf_gz_out}")
         return
 
     mapper = get_minimap2_exe()
@@ -158,10 +190,7 @@ def run_minimap2_synteny(
         cmd += ["-w", str(w)]
     cmd += [str(ref), str(qry)]
 
-    print(
-        f"[info] Running {mapper} -> {paf_gz_out} (stderr: {err_path}): " + " ".join(cmd),
-        file=sys.stderr,
-    )
+    logger.info(f"Running {mapper} -> {paf_gz_out} (stderr: {err_path}): " + " ".join(cmd))
     run_to_gzip(cmd, paf_gz_out, err_path)
 
 
@@ -177,14 +206,14 @@ def run_gffread_extract_proteins(
       gffread -g ref.fa -y proteins.fa ref.gff3
     """
     if file_exists_and_valid(proteins_faa):
-        print(f"[info] Proteins FASTA exists, reusing: {proteins_faa}", file=sys.stderr)
+        logger.info(f"Proteins FASTA exists, reusing: {proteins_faa}")
         return
 
     if not have_exe(gffread_exe):
         raise RuntimeError(f"gffread executable not found/usable: {gffread_exe}")
 
     cmd = [gffread_exe, "-g", str(ref_fasta), "-y", str(proteins_faa), str(ref_gff3)]
-    print(f"[info] Extracting proteins with gffread (stderr: {err_path}): " + " ".join(cmd), file=sys.stderr)
+    logger.info(f"Extracting proteins with gffread (stderr: {err_path}): " + " ".join(cmd))
 
     err_path.parent.mkdir(parents=True, exist_ok=True)
     with err_path.open("wb") as err_fh:
@@ -214,7 +243,7 @@ def run_miniprot(
     Output is gzipped PAF.
     """
     if file_exists_and_valid(paf_gz_out):
-        print(f"[info] miniprot PAF.gz exists, reusing: {paf_gz_out}", file=sys.stderr)
+        logger.info(f"miniprot PAF.gz exists, reusing: {paf_gz_out}")
         return
 
     if not have_exe(miniprot_exe):
@@ -222,12 +251,10 @@ def run_miniprot(
 
     cmd = [miniprot_exe, "-t", str(threads)]
     if extra_args:
-        # Use shlex.split for proper shell argument parsing (prevents command injection)
-        cmd += shlex.split(extra_args.strip())
+        # Validate for shell safety and use shlex.split for proper argument parsing
+        validated = validate_extra_args(extra_args, "--miniprot-args")
+        cmd += shlex.split(validated)
     cmd += [str(query_fasta), str(proteins_faa)]
 
-    print(
-        f"[info] Running miniprot -> {paf_gz_out} (stderr: {err_path}): " + " ".join(cmd),
-        file=sys.stderr,
-    )
+    logger.info(f"Running miniprot -> {paf_gz_out} (stderr: {err_path}): " + " ".join(cmd))
     run_to_gzip(cmd, paf_gz_out, err_path)

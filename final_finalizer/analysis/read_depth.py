@@ -29,13 +29,15 @@ import gzip
 import json
 import statistics
 import subprocess
-import sys
 from enum import Enum
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 from final_finalizer.models import DepthStats
 from final_finalizer.utils.io_utils import file_exists_and_valid, have_exe
+from final_finalizer.utils.logging_config import get_logger
+
+logger = get_logger("read_depth")
 
 
 class ReadFormat(Enum):
@@ -100,7 +102,7 @@ def is_aligned_bam(bam_path: Path) -> bool:
         True if file contains aligned reads, False if unaligned
     """
     if not have_exe("samtools"):
-        print("[warn] samtools not found; assuming BAM is unaligned", file=sys.stderr)
+        logger.warning("samtools not found; assuming BAM is unaligned")
         return False
 
     try:
@@ -111,7 +113,7 @@ def is_aligned_bam(bam_path: Path) -> bool:
             timeout=30,
         )
         if result.returncode != 0:
-            print(f"[warn] samtools view -H failed for {bam_path}; assuming unaligned", file=sys.stderr)
+            logger.warning(f"samtools view -H failed for {bam_path}; assuming unaligned")
             return False
 
         # Check for @SQ lines (reference sequences) - indicates aligned BAM
@@ -121,10 +123,10 @@ def is_aligned_bam(bam_path: Path) -> bool:
         return False
 
     except subprocess.TimeoutExpired:
-        print(f"[warn] samtools timeout checking {bam_path}; assuming unaligned", file=sys.stderr)
+        logger.warning(f"samtools timeout checking {bam_path}; assuming unaligned")
         return False
     except Exception as e:
-        print(f"[warn] Error checking BAM alignment status: {e}; assuming unaligned", file=sys.stderr)
+        logger.warning(f"Error checking BAM alignment status: {e}; assuming unaligned")
         return False
 
 
@@ -171,7 +173,7 @@ def estimate_read_bases_bam(bam_path: Path) -> int:
         Estimated total bases
     """
     if not have_exe("samtools"):
-        print("[warn] samtools not found, cannot estimate BAM bases", file=sys.stderr)
+        logger.warning("samtools not found, cannot estimate BAM bases")
         return 0
 
     try:
@@ -209,9 +211,9 @@ def estimate_read_bases_bam(bam_path: Path) -> int:
             return read_count * avg_len
 
     except subprocess.TimeoutExpired:
-        print("[warn] samtools timed out estimating BAM bases", file=sys.stderr)
+        logger.warning("samtools timed out estimating BAM bases")
     except Exception as e:
-        print(f"[warn] Could not estimate BAM bases: {e}", file=sys.stderr)
+        logger.warning(f"Could not estimate BAM bases: {e}")
 
     return 0
 
@@ -277,15 +279,15 @@ def downsample_fastq(
         True if successful, False otherwise
     """
     if not have_exe("rasusa"):
-        print("[error] rasusa not found, cannot downsample FASTQ", file=sys.stderr)
+        logger.error("rasusa not found, cannot downsample FASTQ")
         return False
 
     if genome_size <= 0 or target_coverage <= 0:
-        print("[error] Invalid genome size or target coverage for downsampling", file=sys.stderr)
+        logger.error("Invalid genome size or target coverage for downsampling")
         return False
 
     try:
-        print(f"[info] Downsampling FASTQ to ~{target_coverage:.2f}X with rasusa", file=sys.stderr)
+        logger.info(f"Downsampling FASTQ to ~{target_coverage:.2f}X with rasusa")
 
         cmd = [
             "rasusa",
@@ -300,14 +302,14 @@ def downsample_fastq(
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             stderr_output = (result.stderr or result.stdout or "").strip()
-            print(f"[error] rasusa failed (code {result.returncode}): {stderr_output}", file=sys.stderr)
+            logger.error(f"rasusa failed (code {result.returncode}): {stderr_output}")
             return False
 
-        print(f"[done] Downsampled FASTQ: {output_path}", file=sys.stderr)
+        logger.done(f"Downsampled FASTQ: {output_path}")
         return True
 
     except Exception as e:
-        print(f"[error] FASTQ downsampling failed: {e}", file=sys.stderr)
+        logger.error(f"FASTQ downsampling failed: {e}")
         return False
 
 
@@ -331,7 +333,12 @@ def downsample_bam(
         True if successful, False otherwise
     """
     if not have_exe("samtools"):
-        print("[error] samtools not found, cannot downsample BAM", file=sys.stderr)
+        logger.error("samtools not found, cannot downsample BAM")
+        return False
+
+    # Validate fraction is in valid range
+    if fraction <= 0.0 or fraction > 1.0:
+        logger.error(f"Invalid subsample fraction: {fraction}. Must be in (0.0, 1.0]")
         return False
 
     try:
@@ -341,7 +348,7 @@ def downsample_bam(
         subsample_value = seed + fraction
         subsample_arg = f"{subsample_value:.6f}"  # Preserve precision for small fractions
 
-        print(f"[info] Downsampling BAM to {fraction:.2%} with samtools (-s {subsample_arg})", file=sys.stderr)
+        logger.info(f"Downsampling BAM to {fraction:.2%} with samtools (-s {subsample_arg})")
 
         cmd = [
             "samtools", "view",
@@ -354,14 +361,14 @@ def downsample_bam(
 
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
-            print(f"[error] samtools view -s {subsample_arg} failed: {result.stderr}", file=sys.stderr)
+            logger.error(f"samtools view -s {subsample_arg} failed: {result.stderr}")
             return False
 
-        print(f"[done] Downsampled BAM: {output_path}", file=sys.stderr)
+        logger.done(f"Downsampled BAM: {output_path}")
         return True
 
     except Exception as e:
-        print(f"[error] BAM downsampling failed: {e}", file=sys.stderr)
+        logger.error(f"BAM downsampling failed: {e}")
         return False
 
 
@@ -396,14 +403,14 @@ def downsample_reads(
         if not str(output_path).endswith(".gz"):
             output_path = Path(str(output_path) + ".gz")
         if target_coverage is None or genome_size is None:
-            print("[error] Missing target coverage or genome size for FASTQ downsampling", file=sys.stderr)
+            logger.error("Missing target coverage or genome size for FASTQ downsampling")
             return False, reads_path
         success = downsample_fastq(reads_path, output_path, target_coverage, genome_size, seed)
         return success, output_path if success else reads_path
 
     elif read_format in (ReadFormat.UNALIGNED_BAM, ReadFormat.UNALIGNED_CRAM):
         if fraction >= 1.0:
-            print("[info] No downsampling needed (fraction >= 1.0)", file=sys.stderr)
+            logger.info("No downsampling needed (fraction >= 1.0)")
             return True, reads_path
         # Output as BAM
         if not str(output_path).endswith(".bam"):
@@ -413,7 +420,7 @@ def downsample_reads(
 
     else:
         # Aligned BAM/CRAM - shouldn't downsample
-        print("[warn] Cannot downsample aligned BAM/CRAM", file=sys.stderr)
+        logger.warning("Cannot downsample aligned BAM/CRAM")
         return True, reads_path
 
 
@@ -424,6 +431,7 @@ def write_alignment_metadata(
     reads_type: str,
     target_coverage: Optional[float],
     downsampled: bool,
+    window_size: int = 1000,
 ) -> None:
     """Write alignment metadata for cache validation.
 
@@ -434,6 +442,7 @@ def write_alignment_metadata(
         reads_type: Read type used for alignment
         target_coverage: Target coverage for downsampling (None if disabled)
         downsampled: Whether reads were downsampled
+        window_size: Window size for mosdepth (for cache validation)
     """
     metadata = {
         "original_reads": str(original_reads.resolve()),
@@ -443,12 +452,13 @@ def write_alignment_metadata(
         "reads_type": reads_type,
         "target_coverage": target_coverage,
         "downsampled": downsampled,
+        "window_size": window_size,
     }
     try:
         with open(metadata_path, "w") as f:
             json.dump(metadata, f, indent=2)
     except Exception as e:
-        print(f"[warn] Could not write alignment metadata: {e}", file=sys.stderr)
+        logger.warning(f"Could not write alignment metadata: {e}")
 
 
 def check_alignment_cache(
@@ -483,7 +493,7 @@ def check_alignment_cache(
 
     # Check metadata exists
     if not metadata_path.exists():
-        print("[info] No alignment metadata found, will realign", file=sys.stderr)
+        logger.info("No alignment metadata found, will realign")
         return False
 
     # Load and validate metadata
@@ -495,39 +505,39 @@ def check_alignment_cache(
         cached_reads = metadata.get("original_reads", "")
         current_reads = str(original_reads.resolve())
         if cached_reads != current_reads:
-            print(f"[info] Reads file changed: cached={metadata.get('original_reads_name', 'unknown')}, "
-                  f"current={original_reads.name}", file=sys.stderr)
+            logger.info(f"Reads file changed: cached={metadata.get('original_reads_name', 'unknown')}, "
+                        f"current={original_reads.name}")
             return False
 
         # Check assembly matches
         cached_assembly = metadata.get("assembly", "")
         current_assembly = str(assembly.resolve())
         if cached_assembly != current_assembly:
-            print(f"[info] Assembly changed: cached={metadata.get('assembly_name', 'unknown')}, "
-                  f"current={assembly.name}", file=sys.stderr)
+            logger.info(f"Assembly changed: cached={metadata.get('assembly_name', 'unknown')}, "
+                        f"current={assembly.name}")
             return False
 
         # Check reads type matches
         cached_reads_type = metadata.get("reads_type", "")
         if cached_reads_type != reads_type:
-            print(f"[info] Reads type changed: cached={cached_reads_type}, current={reads_type}", file=sys.stderr)
+            logger.info(f"Reads type changed: cached={cached_reads_type}, current={reads_type}")
             return False
 
         # Check target coverage matches (for downsampling consistency)
         cached_coverage = metadata.get("target_coverage")
         if cached_coverage != target_coverage:
-            print(f"[info] Target coverage changed: cached={cached_coverage}, current={target_coverage}", file=sys.stderr)
+            logger.info(f"Target coverage changed: cached={cached_coverage}, current={target_coverage}")
             return False
 
     except (json.JSONDecodeError, KeyError) as e:
-        print(f"[warn] Invalid alignment metadata: {e}", file=sys.stderr)
+        logger.warning(f"Invalid alignment metadata: {e}")
         return False
 
     # Check BAM index exists
     bai_path = Path(str(bam_path) + ".bai")
     csi_path = Path(str(bam_path) + ".csi")
     if not bai_path.exists() and not csi_path.exists():
-        print("[info] BAM index missing, will create", file=sys.stderr)
+        logger.info("BAM index missing, will create")
         # Try to create index
         if have_exe("samtools"):
             try:
@@ -536,14 +546,70 @@ def check_alignment_cache(
                     check=True,
                     stderr=subprocess.DEVNULL,
                 )
-                print("[info] Created BAM index", file=sys.stderr)
+                logger.info("Created BAM index")
             except subprocess.CalledProcessError:
-                print("[warn] Could not create BAM index, will realign", file=sys.stderr)
+                logger.warning("Could not create BAM index, will realign")
                 return False
         else:
             return False
 
     return True
+
+
+def check_depth_cache(
+    regions_bed_gz: Path,
+    metadata_path: Path,
+    original_reads: Path,
+    assembly: Path,
+    reads_type: str,
+    target_coverage: Optional[float],
+    window_size: int,
+) -> bool:
+    """Check if cached depth output is valid for current parameters.
+
+    Returns True if mosdepth regions file exists AND metadata matches all params.
+    This allows skipping both alignment AND mosdepth on re-run.
+
+    Args:
+        regions_bed_gz: Path to mosdepth regions.bed.gz output file
+        metadata_path: Path to metadata JSON
+        original_reads: Current original reads path
+        assembly: Current assembly path
+        reads_type: Current reads type
+        target_coverage: Current target coverage
+        window_size: Current mosdepth window size
+
+    Returns:
+        True if cache is valid and can be reused, False otherwise
+    """
+    # Check mosdepth output exists
+    if not file_exists_and_valid(regions_bed_gz, min_size=50):
+        return False
+
+    # Check metadata exists and matches
+    if not metadata_path.exists():
+        return False
+
+    try:
+        with open(metadata_path) as f:
+            metadata = json.load(f)
+
+        # Validate all parameters match
+        if metadata.get("original_reads") != str(original_reads.resolve()):
+            return False
+        if metadata.get("assembly") != str(assembly.resolve()):
+            return False
+        if metadata.get("reads_type") != reads_type:
+            return False
+        if metadata.get("target_coverage") != target_coverage:
+            return False
+        if metadata.get("window_size") != window_size:
+            logger.info(f"Window size changed: cached={metadata.get('window_size')}, current={window_size}")
+            return False
+
+        return True
+    except Exception:
+        return False
 
 
 def align_reads_to_assembly(
@@ -570,7 +636,7 @@ def align_reads_to_assembly(
         True if alignment succeeded, False otherwise
     """
     if file_exists_and_valid(output_bam, min_size=100):
-        print(f"[info] Aligned BAM exists, reusing: {output_bam}", file=sys.stderr)
+        logger.info(f"Aligned BAM exists, reusing: {output_bam}")
         return True
 
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -583,11 +649,11 @@ def align_reads_to_assembly(
             break
 
     if not mapper:
-        print("[error] Neither mm2plus nor minimap2 found in PATH", file=sys.stderr)
+        logger.error("Neither mm2plus nor minimap2 found in PATH")
         return False
 
     if not have_exe("samtools"):
-        print("[error] samtools not found in PATH", file=sys.stderr)
+        logger.error("samtools not found in PATH")
         return False
 
     preset = get_minimap2_preset(reads_type)
@@ -610,7 +676,7 @@ def align_reads_to_assembly(
     # samtools sort command
     sort_cmd = ["samtools", "sort", "-@", str(max(1, threads // 2)), "-o", str(output_bam), "-"]
 
-    print(f"[info] Aligning reads with {mapper} -x {preset}", file=sys.stderr)
+    logger.info(f"Aligning reads with {mapper} -x {preset}")
 
     # Track processes for cleanup
     p_fastq = None
@@ -639,13 +705,13 @@ def align_reads_to_assembly(
 
                 # Check all return codes with detailed error messages
                 if p_fastq.returncode != 0:
-                    print(f"[error] samtools fastq failed (code {p_fastq.returncode}, see {err_file})", file=sys.stderr)
+                    logger.error(f"samtools fastq failed (code {p_fastq.returncode}, see {err_file})")
                     return False
                 if p_mm2.returncode != 0:
-                    print(f"[error] {mapper} failed (code {p_mm2.returncode}, see {err_file})", file=sys.stderr)
+                    logger.error(f"{mapper} failed (code {p_mm2.returncode}, see {err_file})")
                     return False
                 if p_sort.returncode != 0:
-                    print(f"[error] samtools sort failed (code {p_sort.returncode}, see {err_file})", file=sys.stderr)
+                    logger.error(f"samtools sort failed (code {p_sort.returncode}, see {err_file})")
                     return False
             else:
                 # Pipeline: minimap2 | samtools sort
@@ -659,21 +725,21 @@ def align_reads_to_assembly(
 
                 # Check return codes with detailed error messages
                 if p_mm2.returncode != 0:
-                    print(f"[error] {mapper} failed (code {p_mm2.returncode}, see {err_file})", file=sys.stderr)
+                    logger.error(f"{mapper} failed (code {p_mm2.returncode}, see {err_file})")
                     return False
                 if p_sort.returncode != 0:
-                    print(f"[error] samtools sort failed (code {p_sort.returncode}, see {err_file})", file=sys.stderr)
+                    logger.error(f"samtools sort failed (code {p_sort.returncode}, see {err_file})")
                     return False
 
         # Index the BAM file
         idx_cmd = ["samtools", "index", "-@", str(threads), str(output_bam)]
         subprocess.run(idx_cmd, check=True, stderr=subprocess.DEVNULL)
 
-        print(f"[done] Alignment complete: {output_bam}", file=sys.stderr)
+        logger.done(f"Alignment complete: {output_bam}")
         return True
 
     except Exception as e:
-        print(f"[error] Alignment failed: {e}", file=sys.stderr)
+        logger.error(f"Alignment failed: {e}")
         return False
 
     finally:
@@ -683,8 +749,15 @@ def align_reads_to_assembly(
                 try:
                     proc.terminate()
                     proc.wait(timeout=5)
-                except Exception:
+                except subprocess.TimeoutExpired:
                     proc.kill()
+                    proc.wait()  # Must wait after kill to reap zombie
+                except Exception:
+                    try:
+                        proc.kill()
+                        proc.wait()
+                    except Exception:
+                        pass
 
 
 def run_mosdepth(
@@ -708,11 +781,11 @@ def run_mosdepth(
     """
     regions_file = Path(str(output_prefix) + ".regions.bed.gz")
     if file_exists_and_valid(regions_file, min_size=50):
-        print(f"[info] mosdepth output exists, reusing: {regions_file}", file=sys.stderr)
+        logger.info(f"mosdepth output exists, reusing: {regions_file}")
         return True
 
     if not have_exe("mosdepth"):
-        print("[error] mosdepth not found in PATH", file=sys.stderr)
+        logger.error("mosdepth not found in PATH")
         return False
 
     # mosdepth command: window-based depth
@@ -725,7 +798,7 @@ def run_mosdepth(
         str(bam_path),
     ]
 
-    print(f"[info] Running mosdepth with {window_size}bp windows", file=sys.stderr)
+    logger.info(f"Running mosdepth with {window_size}bp windows")
 
     try:
         err_file = err_path or Path(str(output_prefix) + ".mosdepth.err")
@@ -735,14 +808,14 @@ def run_mosdepth(
             result = subprocess.run(cmd, stderr=err_fh, check=False)
 
         if result.returncode != 0:
-            print(f"[error] mosdepth failed (see {err_file})", file=sys.stderr)
+            logger.error(f"mosdepth failed (see {err_file})")
             return False
 
-        print(f"[done] mosdepth complete: {regions_file}", file=sys.stderr)
+        logger.done(f"mosdepth complete: {regions_file}")
         return True
 
     except Exception as e:
-        print(f"[error] mosdepth failed: {e}", file=sys.stderr)
+        logger.error(f"mosdepth failed: {e}")
         return False
 
 
@@ -781,14 +854,14 @@ def parse_mosdepth_regions(
                     # Validate interval
                     if start < 0 or end <= start:
                         if parse_errors < max_parse_errors:
-                            print(f"[warn] Invalid BED interval at line {line_num}: start={start}, end={end}", file=sys.stderr)
+                            logger.warning(f"Invalid BED interval at line {line_num}: start={start}, end={end}")
                         parse_errors += 1
                         continue
 
                     # Validate depth (can be 0, but not negative)
                     if depth < 0:
                         if parse_errors < max_parse_errors:
-                            print(f"[warn] Negative depth at line {line_num}: {depth}", file=sys.stderr)
+                            logger.warning(f"Negative depth at line {line_num}: {depth}")
                         parse_errors += 1
                         continue
 
@@ -800,15 +873,15 @@ def parse_mosdepth_regions(
 
                 except (ValueError, IndexError) as e:
                     if parse_errors < max_parse_errors:
-                        print(f"[warn] Malformed BED line {line_num}: {e}", file=sys.stderr)
+                        logger.warning(f"Malformed BED line {line_num}: {e}")
                     parse_errors += 1
                     continue
 
         if parse_errors > 0:
-            print(f"[warn] Total BED parsing errors: {parse_errors}", file=sys.stderr)
+            logger.warning(f"Total BED parsing errors: {parse_errors}")
 
     except Exception as e:
-        print(f"[warn] Error parsing mosdepth output {regions_bed_gz}: {e}", file=sys.stderr)
+        logger.warning(f"Error parsing mosdepth output {regions_bed_gz}: {e}")
         return {}
 
     # Compute stats per contig
@@ -875,6 +948,7 @@ def calculate_depth_metrics(
     reads_type: str = "hifi_onthq",
     window_size: int = 1000,
     target_coverage: Optional[float] = 20.0,
+    keep_bam: bool = False,
 ) -> Dict[str, DepthStats]:
     """Calculate read depth metrics for an assembly.
 
@@ -896,31 +970,41 @@ def calculate_depth_metrics(
         target_coverage: Target coverage for downsampling before alignment.
             Set to None or 0 to disable downsampling. Default 20.0 (20X).
             Downsampling uses rasusa (FASTQ) or samtools (BAM/CRAM).
+        keep_bam: Keep aligned BAM file after depth analysis (default: delete to save space)
 
     Returns:
         Dictionary mapping contig names to DepthStats objects
     """
     work_dir.mkdir(parents=True, exist_ok=True)
 
+    # Early check: if depth output already valid, skip everything
+    regions_file = work_dir / "depth.regions.bed.gz"
+    metadata_path = work_dir / "alignment_metadata.json"
+
+    if check_depth_cache(regions_file, metadata_path, reads, assembly,
+                         reads_type, target_coverage, window_size):
+        logger.info(f"Reusing cached depth output: {regions_file}")
+        return parse_mosdepth_regions(regions_file, contig_lengths)
+
     # Detect read format
     try:
         read_format = detect_read_format(reads)
-        print(f"[info] Detected read format: {read_format.value}", file=sys.stderr)
+        logger.info(f"Detected read format: {read_format.value}")
     except ValueError as e:
-        print(f"[error] {e}", file=sys.stderr)
+        logger.error(f"{e}")
         return {}
 
     # Determine if we need to align
     if read_format in (ReadFormat.ALIGNED_BAM, ReadFormat.ALIGNED_CRAM):
         # Already aligned - use directly (no downsampling for pre-aligned)
         bam_path = reads
-        print("[info] Using pre-aligned BAM/CRAM", file=sys.stderr)
+        logger.info("Using pre-aligned BAM/CRAM")
 
         # Check if index exists, create if needed
         bai_path = Path(str(reads) + ".bai")
         csi_path = Path(str(reads) + ".csi")
         if not bai_path.exists() and not csi_path.exists():
-            print("[info] Indexing BAM file", file=sys.stderr)
+            logger.info("Indexing BAM file")
             if have_exe("samtools"):
                 subprocess.run(
                     ["samtools", "index", "-@", str(threads), str(reads)],
@@ -944,7 +1028,7 @@ def calculate_depth_metrics(
         )
 
         if cache_valid:
-            print(f"[info] Reusing cached alignment: {bam_path}", file=sys.stderr)
+            logger.info(f"Reusing cached alignment: {bam_path}")
         else:
             # Need to perform alignment - consider downsampling first
             reads_to_align = reads
@@ -953,7 +1037,7 @@ def calculate_depth_metrics(
             # Downsample if target coverage is specified
             if target_coverage and target_coverage > 0:
                 assembly_size = sum(contig_lengths.values())
-                print(f"[info] Assembly size: {assembly_size:,} bp", file=sys.stderr)
+                logger.info(f"Assembly size: {assembly_size:,} bp")
 
                 if read_format in (ReadFormat.FASTQ, ReadFormat.FASTQ_GZ):
                     downsampled_path = work_dir / "downsampled_reads"
@@ -968,18 +1052,18 @@ def calculate_depth_metrics(
                         genome_size=assembly_size,
                     )
                     if not success:
-                        print("[warn] Downsampling failed, using full reads", file=sys.stderr)
+                        logger.warning("Downsampling failed, using full reads")
                         reads_to_align = reads
                     else:
                         downsampled = True
                 else:
                     # Estimate total read bases for BAM/CRAM downsampling.
-                    print("[info] Estimating total read bases for downsampling", file=sys.stderr)
+                    logger.info("Estimating total read bases for downsampling")
                     total_read_bases = estimate_read_bases(reads, read_format)
 
                     if total_read_bases > 0:
                         current_coverage = total_read_bases / assembly_size
-                        print(f"[info] Estimated read coverage: {current_coverage:.1f}X", file=sys.stderr)
+                        logger.info(f"Estimated read coverage: {current_coverage:.1f}X")
 
                         fraction = calculate_subsample_fraction(
                             total_read_bases=total_read_bases,
@@ -988,7 +1072,7 @@ def calculate_depth_metrics(
                         )
 
                         if fraction < 1.0:
-                            print(f"[info] Downsampling to ~{target_coverage:.0f}X coverage (fraction={fraction:.3f})", file=sys.stderr)
+                            logger.info(f"Downsampling to ~{target_coverage:.0f}X coverage (fraction={fraction:.3f})")
                             downsampled_path = work_dir / "downsampled_reads"
                             success, reads_to_align = downsample_reads(
                                 reads_path=reads,
@@ -999,14 +1083,14 @@ def calculate_depth_metrics(
                                 threads=threads,
                             )
                             if not success:
-                                print("[warn] Downsampling failed, using full reads", file=sys.stderr)
+                                logger.warning("Downsampling failed, using full reads")
                                 reads_to_align = reads
                             else:
                                 downsampled = True
                         else:
-                            print(f"[info] Read coverage ({current_coverage:.1f}X) below target ({target_coverage:.0f}X), no downsampling needed", file=sys.stderr)
+                            logger.info(f"Read coverage ({current_coverage:.1f}X) below target ({target_coverage:.0f}X), no downsampling needed")
                     else:
-                        print("[warn] Could not estimate read bases, skipping downsampling", file=sys.stderr)
+                        logger.warning("Could not estimate read bases, skipping downsampling")
 
             success = align_reads_to_assembly(
                 reads=reads_to_align,
@@ -1019,7 +1103,7 @@ def calculate_depth_metrics(
             )
 
             if not success:
-                print("[error] Read alignment failed", file=sys.stderr)
+                logger.error("Read alignment failed")
                 return {}
 
             # Write metadata for future cache validation
@@ -1030,6 +1114,7 @@ def calculate_depth_metrics(
                 reads_type=reads_type,
                 target_coverage=target_coverage,
                 downsampled=downsampled,
+                window_size=window_size,
             )
 
     # Run mosdepth
@@ -1045,16 +1130,30 @@ def calculate_depth_metrics(
     )
 
     if not success:
-        print("[error] mosdepth failed", file=sys.stderr)
+        logger.error("mosdepth failed")
         return {}
 
     # Parse mosdepth output
     regions_file = Path(str(mosdepth_prefix) + ".regions.bed.gz")
     if not regions_file.exists():
-        print(f"[error] mosdepth output not found: {regions_file}", file=sys.stderr)
+        logger.error(f"mosdepth output not found: {regions_file}")
         return {}
 
     depth_stats = parse_mosdepth_regions(regions_file, contig_lengths)
-    print(f"[info] Computed depth stats for {len(depth_stats)} contigs", file=sys.stderr)
+    logger.info(f"Computed depth stats for {len(depth_stats)} contigs")
+
+    # After successful mosdepth, cleanup BAM unless --keep-depth-bam
+    # Only cleanup if we created the BAM (not pre-aligned)
+    if not keep_bam and read_format not in (ReadFormat.ALIGNED_BAM, ReadFormat.ALIGNED_CRAM):
+        bam_to_clean = work_dir / "aligned_reads.sorted.bam"
+        if bam_to_clean.exists():
+            try:
+                bam_to_clean.unlink()
+                bai_path = Path(str(bam_to_clean) + ".bai")
+                if bai_path.exists():
+                    bai_path.unlink()
+                logger.info(f"Cleaned up intermediate BAM: {bam_to_clean.name}")
+            except Exception as e:
+                logger.warning(f"Could not cleanup BAM: {e}")
 
     return depth_stats

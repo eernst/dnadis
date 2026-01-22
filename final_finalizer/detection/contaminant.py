@@ -8,12 +8,14 @@ taxonomic classification.
 from __future__ import annotations
 
 import subprocess
-import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from final_finalizer.models import ContaminantHit
 from final_finalizer.utils.io_utils import have_exe, open_maybe_gzip
+from final_finalizer.utils.logging_config import get_logger
+
+logger = get_logger("contaminant")
 
 
 def _fasta_to_fastq_stream(fasta_path: Path, fastq_path: Path) -> None:
@@ -77,17 +79,17 @@ def _get_centrifuger_name_table(idx_prefix: str, work_dir: Path) -> Dict[int, st
 
     # Run centrifuger-inspect
     if not have_exe("centrifuger-inspect"):
-        print("[warn] centrifuger-inspect not found, cannot look up scientific names", file=sys.stderr)
+        logger.warning("centrifuger-inspect not found, cannot look up scientific names")
         return {}
 
     cmd = ["centrifuger-inspect", "-x", idx_prefix, "--name-table"]
     try:
         ret = subprocess.run(cmd, capture_output=True, text=True, check=False)
         if ret.returncode != 0:
-            print(f"[warn] centrifuger-inspect failed: {ret.stderr}", file=sys.stderr)
+            logger.warning(f"centrifuger-inspect failed: {ret.stderr}")
             return {}
     except Exception as e:
-        print(f"[warn] centrifuger-inspect error: {e}", file=sys.stderr)
+        logger.warning(f"centrifuger-inspect error: {e}")
         return {}
 
     # Parse output: "taxid | name | scientific name |"
@@ -108,7 +110,7 @@ def _get_centrifuger_name_table(idx_prefix: str, work_dir: Path) -> Dict[int, st
         for taxid, name in sorted(name_table.items()):
             fh.write(f"{taxid}\t{name}\n")
 
-    print(f"[info] Loaded {len(name_table)} taxid -> name mappings from centrifuger index", file=sys.stderr)
+    logger.info(f"Loaded {len(name_table)} taxid -> name mappings from centrifuger index")
     return name_table
 
 
@@ -143,20 +145,20 @@ def detect_contaminants(
 
     # Check for centrifuger executable
     if not have_exe("centrifuger"):
-        print("[warn] centrifuger not found in PATH, skipping contaminant detection", file=sys.stderr)
+        logger.warning("centrifuger not found in PATH, skipping contaminant detection")
         return {}
 
     # Validate index
     if not _validate_centrifuger_index(centrifuger_idx):
-        print(f"[warn] centrifuger index not found: {centrifuger_idx}", file=sys.stderr)
+        logger.warning(f"centrifuger index not found: {centrifuger_idx}")
         return {}
 
-    print(f"[info] Using centrifuger index: {centrifuger_idx}", file=sys.stderr)
+    logger.info(f"Using centrifuger index: {centrifuger_idx}")
 
     # Convert FASTA to FASTQ (centrifuger requires FASTQ)
     fastq_path = work_dir / "contigs.fq"
     if not fastq_path.exists():
-        print("[info] Converting FASTA to FASTQ for centrifuger", file=sys.stderr)
+        logger.info("Converting FASTA to FASTQ for centrifuger")
         _fasta_to_fastq_stream(query_fasta, fastq_path)
 
     # Run centrifuger
@@ -171,14 +173,14 @@ def detect_contaminants(
             "-t", str(threads),
         ]
 
-        print(f"[info] Running centrifuger -> {output_path}", file=sys.stderr)
+        logger.info(f"Running centrifuger -> {output_path}")
 
         err_path.parent.mkdir(parents=True, exist_ok=True)
         with output_path.open("w") as out_fh, err_path.open("w") as err_fh:
             ret = subprocess.run(cmd, stdout=out_fh, stderr=err_fh, check=False)
 
         if ret.returncode != 0:
-            print(f"[warn] centrifuger failed with return code {ret.returncode}", file=sys.stderr)
+            logger.warning(f"centrifuger failed with return code {ret.returncode}")
             return {}
 
     # Parse results
@@ -230,10 +232,7 @@ def detect_contaminants(
                 score=score,
             )
             contig_len = query_lengths.get(contig_name, read_len)
-            print(
-                f"[info] Contaminant: {contig_name} ({contig_len:,} bp, taxid={taxid}, {sci_name}, score={score}, cov={coverage:.2f})",
-                file=sys.stderr,
-            )
+            logger.info(f"Contaminant: {contig_name} ({contig_len:,} bp, taxid={taxid}, {sci_name}, score={score}, cov={coverage:.2f})")
 
-    print(f"[info] Contaminant contigs: {len(contaminants)}", file=sys.stderr)
+    logger.info(f"Contaminant contigs: {len(contaminants)}")
     return contaminants

@@ -7,7 +7,6 @@ using BLAST-based alignment to reference organelle sequences.
 """
 from __future__ import annotations
 
-import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
@@ -15,6 +14,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from final_finalizer.detection.blast import run_makeblastdb, run_blastn_megablast
 from final_finalizer.models import OrganelleHit
 from final_finalizer.utils.io_utils import merge_intervals
+from final_finalizer.utils.logging_config import get_logger
 from final_finalizer.utils.reference_utils import normalize_organelle_id
 from final_finalizer.utils.sequence_utils import (
     is_hifiasm_circular,
@@ -22,6 +22,8 @@ from final_finalizer.utils.sequence_utils import (
     read_fasta_sequences,
     write_fasta,
 )
+
+logger = get_logger("organelle")
 
 
 def extract_organelle_from_ref(
@@ -74,34 +76,34 @@ def prepare_organelle_references(
         chrC_arg_path = Path(chrC_ref_arg)
         if chrC_arg_path.exists():
             chrC_path = chrC_arg_path
-            print(f"[info] Using user-provided chrC reference: {chrC_path}", file=sys.stderr)
+            logger.info(f"Using user-provided chrC reference: {chrC_path}")
         else:
-            print(f"[warn] chrC reference not found: {chrC_ref_arg}", file=sys.stderr)
+            logger.warning(f"chrC reference not found: {chrC_ref_arg}")
     else:
         # Try to extract from reference
         chrC_extracted = work_dir / "chrC_ref.fa"
         if extract_organelle_from_ref(ref_fasta, "chrC", chrC_extracted, ref_norm_to_orig):
             chrC_path = chrC_extracted
-            print(f"[info] Extracted chrC from reference: {chrC_path}", file=sys.stderr)
+            logger.info(f"Extracted chrC from reference: {chrC_path}")
         else:
-            print("[info] No chrC found in reference FASTA", file=sys.stderr)
+            logger.info("No chrC found in reference FASTA")
 
     # Handle mitochondrial reference
     if chrM_ref_arg:
         chrM_arg_path = Path(chrM_ref_arg)
         if chrM_arg_path.exists():
             chrM_path = chrM_arg_path
-            print(f"[info] Using user-provided chrM reference: {chrM_path}", file=sys.stderr)
+            logger.info(f"Using user-provided chrM reference: {chrM_path}")
         else:
-            print(f"[warn] chrM reference not found: {chrM_ref_arg}", file=sys.stderr)
+            logger.warning(f"chrM reference not found: {chrM_ref_arg}")
     else:
         # Try to extract from reference
         chrM_extracted = work_dir / "chrM_ref.fa"
         if extract_organelle_from_ref(ref_fasta, "chrM", chrM_extracted, ref_norm_to_orig):
             chrM_path = chrM_extracted
-            print(f"[info] Extracted chrM from reference: {chrM_path}", file=sys.stderr)
+            logger.info(f"Extracted chrM from reference: {chrM_path}")
         else:
-            print("[info] No chrM found in reference FASTA", file=sys.stderr)
+            logger.info("No chrM found in reference FASTA")
 
     return chrC_path, chrM_path
 
@@ -148,7 +150,7 @@ def detect_organelles(
 
     # Combine organelle references for BLAST if available
     if not chrC_ref and not chrM_ref:
-        print("[info] No organelle references available, skipping organelle detection", file=sys.stderr)
+        logger.info("No organelle references available, skipping organelle detection")
         return None, None, set(), {}
 
     # Create combined organelle reference for BLAST
@@ -299,7 +301,7 @@ def detect_organelles(
             is_complete=True,
         )
         chrC_len_bp = query_lengths.get(chrC_contig, 0)
-        print(f"[info] Selected chrC candidate: {chrC_contig} ({chrC_len_bp:,} bp, cov={chrC_cov:.2f}, ident={chrC_ident:.3f})", file=sys.stderr)
+        logger.info(f"Selected chrC candidate: {chrC_contig} ({chrC_len_bp:,} bp, cov={chrC_cov:.2f}, ident={chrC_ident:.3f})")
 
     if chrM_result:
         chrM_contig, chrM_cov, chrM_ident, chrM_len_ratio = chrM_result
@@ -312,6 +314,6 @@ def detect_organelles(
             is_complete=True,
         )
         chrM_len_bp = query_lengths.get(chrM_contig, 0)
-        print(f"[info] Selected chrM candidate: {chrM_contig} ({chrM_len_bp:,} bp, cov={chrM_cov:.2f}, ident={chrM_ident:.3f})", file=sys.stderr)
+        logger.info(f"Selected chrM candidate: {chrM_contig} ({chrM_len_bp:,} bp, cov={chrM_cov:.2f}, ident={chrM_ident:.3f})")
 
     return chrC_contig, chrM_contig, debris_contigs, organelle_hits

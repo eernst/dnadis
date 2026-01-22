@@ -6,7 +6,6 @@ Contains functions for identifying contigs with significant ribosomal DNA conten
 """
 from __future__ import annotations
 
-import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
@@ -17,6 +16,9 @@ from final_finalizer.detection.blast import (
 )
 from final_finalizer.models import RdnaHit
 from final_finalizer.utils.io_utils import merge_intervals
+from final_finalizer.utils.logging_config import get_logger
+
+logger = get_logger("rdna")
 
 
 def prepare_rdna_reference(
@@ -38,18 +40,18 @@ def prepare_rdna_reference(
         ]
         for default_path in search_paths:
             if default_path.exists():
-                print(f"[info] Using default rDNA reference: {default_path}", file=sys.stderr)
+                logger.info(f"Using default rDNA reference: {default_path}")
                 return default_path
 
-        print(f"[warn] Default rDNA reference not found in: {[str(p) for p in search_paths]}", file=sys.stderr)
+        logger.warning(f"Default rDNA reference not found in: {[str(p) for p in search_paths]}")
         return None
 
     rdna_path = Path(rdna_ref_arg)
     if rdna_path.exists():
-        print(f"[info] Using user-provided rDNA reference: {rdna_path}", file=sys.stderr)
+        logger.info(f"Using user-provided rDNA reference: {rdna_path}")
         return rdna_path
 
-    print(f"[warn] rDNA reference not found: {rdna_ref_arg}", file=sys.stderr)
+    logger.warning(f"rDNA reference not found: {rdna_ref_arg}")
     return None
 
 
@@ -138,6 +140,6 @@ def detect_rdna_contigs(
         if coverage >= min_coverage:
             rdna_contigs.add(qseqid)
             rdna_hits[qseqid] = RdnaHit(coverage=coverage, identity=identity)
-            print(f"[info] rDNA contig: {qseqid} ({qlen:,} bp, cov={coverage:.2f}, ident={identity:.3f})", file=sys.stderr)
+            logger.info(f"rDNA contig: {qseqid} ({qlen:,} bp, cov={coverage:.2f}, ident={identity:.3f})")
 
     return rdna_contigs, rdna_hits

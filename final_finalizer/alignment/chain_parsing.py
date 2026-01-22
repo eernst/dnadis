@@ -7,18 +7,26 @@ and computing evidence for contig-to-reference assignments.
 """
 from __future__ import annotations
 
-import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, Optional
 
+try:
+    from intervaltree import IntervalTree
+    HAVE_INTERVALTREE = True
+except ImportError:
+    HAVE_INTERVALTREE = False
+
 from final_finalizer.models import Block, Chain, ChainEvidenceResult
 from final_finalizer.utils.io_utils import merge_intervals, open_maybe_gzip
+from final_finalizer.utils.logging_config import get_logger
 from final_finalizer.utils.reference_utils import (
     normalize_ref_id,
     paf_tag_value,
     split_chrom_subgenome,
 )
+
+logger = get_logger("chain_parsing")
 
 
 def _diag_for_block(b: Block) -> int:
@@ -285,6 +293,8 @@ def _filter_overlapping_hits_by_identity(
     This is biologically important for polyploid genomes where homeologous gene
     copies may map to the same query region with different identities.
 
+    Uses an interval tree for O(n log n) performance instead of O(n²) pairwise comparison.
+
     Args:
         blocks: Dict mapping (contig, ref_id, strand) -> list of Block objects
 
@@ -308,54 +318,62 @@ def _filter_overlapping_hits_by_identity(
         if not hits:
             continue
 
-        # Calculate identity for each hit and sort by (qs, -identity)
-        # so higher identity comes first when starts are equal
+        # Calculate identity for each hit and sort by identity descending (highest first)
         hits_with_ident = []
         for key, blk in hits:
             ident = blk.matches / blk.aln_len if blk.aln_len > 0 else 0.0
-            hits_with_ident.append((blk.qs, -ident, key, blk, ident))
+            hits_with_ident.append((blk.qs, blk.qe, ident, key, blk))
 
-        hits_with_ident.sort(key=lambda x: (x[0], x[1]))
+        # Sort by identity descending - process highest identity hits first
+        hits_with_ident.sort(key=lambda x: -x[2])
 
-        # Sweep through hits, keeping track of covered intervals
-        # For each hit, check if it overlaps with any kept hit that has higher identity
-        kept_intervals: list[tuple[int, int, float]] = []  # (qs, qe, identity)
-        kept_hits: list[tuple[tuple[str, str, str], Block]] = []
+        if HAVE_INTERVALTREE:
+            # Use interval tree for O(n log n) performance
+            tree: IntervalTree = IntervalTree()
+            kept_hits: list[tuple[tuple[str, str, str], Block]] = []
 
-        for qs, neg_ident, key, blk, ident in hits_with_ident:
-            qe = blk.qe
-            # Check if this hit overlaps with any kept interval
-            dominated = False
-            for kept_qs, kept_qe, kept_ident in kept_intervals:
-                # Check for 1+ bp overlap
-                if qs < kept_qe and qe > kept_qs:
-                    # Overlap exists - keep only if this has strictly higher identity
-                    if ident <= kept_ident:
+            for qs, qe, ident, key, blk in hits_with_ident:
+                # Ensure valid interval (qe > qs)
+                if qe <= qs:
+                    continue
+
+                # Check if this hit overlaps with any existing higher-identity hit
+                # Since we process in identity order, any existing interval has higher/equal identity
+                overlapping = tree[qs:qe]
+
+                if not overlapping:
+                    # No overlapping higher-identity hits - keep this one
+                    tree[qs:qe] = (ident, key, blk)
+                    kept_hits.append((key, blk))
+                else:
+                    # Overlaps with higher-identity hit - filter this one out
+                    total_removed += 1
+                    removed_per_contig[contig] += 1
+        else:
+            # Fallback: O(n²) sweep line algorithm if intervaltree not available
+            kept_intervals: list[tuple[int, int, float]] = []
+            kept_hits = []
+
+            for qs, qe, ident, key, blk in hits_with_ident:
+                if qe <= qs:
+                    continue
+
+                # Check if this hit overlaps with any kept interval
+                dominated = False
+                for kept_qs, kept_qe, kept_ident in kept_intervals:
+                    # Check for 1+ bp overlap
+                    if qs < kept_qe and qe > kept_qs:
+                        # Overlap exists - since we process in identity order,
+                        # the kept interval has higher or equal identity
                         dominated = True
                         break
 
-            if not dominated:
-                # Remove any previously kept intervals that this one dominates
-                new_kept_intervals = []
-                new_kept_hits = []
-                for i, (kept_qs, kept_qe, kept_ident) in enumerate(kept_intervals):
-                    if qs < kept_qe and qe > kept_qs and ident > kept_ident:
-                        # This new hit dominates the kept one - remove it
-                        total_removed += 1
-                        removed_per_contig[contig] += 1
-                    else:
-                        new_kept_intervals.append((kept_qs, kept_qe, kept_ident))
-                        new_kept_hits.append(kept_hits[i])
-
-                kept_intervals = new_kept_intervals
-                kept_hits = new_kept_hits
-
-                # Add this hit
-                kept_intervals.append((qs, qe, ident))
-                kept_hits.append((key, blk))
-            else:
-                total_removed += 1
-                removed_per_contig[contig] += 1
+                if not dominated:
+                    kept_intervals.append((qs, qe, ident))
+                    kept_hits.append((key, blk))
+                else:
+                    total_removed += 1
+                    removed_per_contig[contig] += 1
 
         # Add kept hits to filtered_blocks
         for key, blk in kept_hits:
@@ -465,16 +483,13 @@ def parse_miniprot_synteny_evidence_and_segments(
     # Filter overlapping hits, keeping only highest-identity hit at each position
     blocks, n_before, n_removed, removed_per_contig = _filter_overlapping_hits_by_identity(blocks)
     if n_removed > 0:
-        print(
-            f"[info] Filtered {n_removed}/{n_before} overlapping protein hits by identity",
-            file=sys.stderr,
-        )
+        logger.info(f"Filtered {n_removed}/{n_before} overlapping protein hits by identity")
         # Show contigs with most filtered hits (helps identify potential issues)
         if removed_per_contig:
             top_contigs = sorted(removed_per_contig.items(), key=lambda x: -x[1])[:3]
             if top_contigs[0][1] > 10:  # Only show if significant filtering
                 top_str = ", ".join(f"{c}:{n}" for c, n in top_contigs)
-                print(f"[info]   Top filtered contigs: {top_str}", file=sys.stderr)
+                logger.info(f"  Top filtered contigs: {top_str}")
 
     return _chains_to_evidence_and_segments(
         blocks=blocks,

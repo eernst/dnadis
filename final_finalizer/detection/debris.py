@@ -7,7 +7,6 @@ near-identical copies of chromosome contigs that should be classified as debris.
 """
 from __future__ import annotations
 
-import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
@@ -15,7 +14,10 @@ from typing import Dict, List, Optional, Set, Tuple
 from final_finalizer.alignment.external_tools import get_minimap2_exe, run_minimap2
 from final_finalizer.models import DebrisHit
 from final_finalizer.utils.io_utils import merge_intervals
+from final_finalizer.utils.logging_config import get_logger
 from final_finalizer.utils.sequence_utils import write_filtered_fasta
+
+logger = get_logger("debris")
 
 
 def detect_chromosome_debris(
@@ -66,26 +68,26 @@ def detect_chromosome_debris(
     work_dir.mkdir(parents=True, exist_ok=True)
 
     if not chromosome_contigs:
-        print("[info] No chromosome contigs for debris detection", file=sys.stderr)
+        logger.info("No chromosome contigs for debris detection")
         return set(), {}
 
     # Check for minimap2/mm2plus
     if not get_minimap2_exe():
-        print("[warn] Neither minimap2 nor mm2plus found, skipping chromosome debris detection", file=sys.stderr)
+        logger.warning("Neither minimap2 nor mm2plus found, skipping chromosome debris detection")
         return set(), {}
 
     # Create FASTA of chromosome contigs as reference (streaming to avoid loading entire genome)
     chrs_fasta = work_dir / "chromosome_contigs.fa"
     if not chrs_fasta.exists():
         write_filtered_fasta(query_fasta, chrs_fasta, chromosome_contigs)
-    print(f"[info] Created chromosome reference for debris detection: {len(chromosome_contigs)} contigs", file=sys.stderr)
+    logger.info(f"Created chromosome reference for debris detection: {len(chromosome_contigs)} contigs")
 
     # Create FASTA of candidate contigs to test (streaming)
     excluded = chromosome_contigs | exclude_contigs
     candidate_contigs = set(query_lengths.keys()) - excluded
 
     if not candidate_contigs:
-        print("[info] No candidate contigs for debris detection", file=sys.stderr)
+        logger.info("No candidate contigs for debris detection")
         return set(), {}
 
     candidates_fasta = work_dir / "debris_candidates.fa"
@@ -158,10 +160,9 @@ def detect_chromosome_debris(
                 protein_hits=0,  # No protein hits from assembly-to-assembly alignment
                 source="chromosome",
             )
-            print(
-                f"[info] Chromosome debris: {qname} ({qlen:,} bp, cov={coverage:.2f}, ident={identity:.2f})",
-                file=sys.stderr,
+            logger.info(
+                f"Chromosome debris: {qname} ({qlen:,} bp, cov={coverage:.2f}, ident={identity:.2f})"
             )
 
-    print(f"[info] Chromosome debris contigs: {len(debris_contigs)}", file=sys.stderr)
+    logger.info(f"Chromosome debris contigs: {len(debris_contigs)}")
     return debris_contigs, debris_hits
