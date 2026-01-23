@@ -133,8 +133,9 @@ if (n_sets > 4) {
 has_subgenomes <- (n_sets >= 2)
 
 # Custom palettes for up to 4 subgenomes
-pal_dark  <- c("#1F77B4", "#FF7F0E", "#5B2333", "#00A676")
-pal_light <- c("#9ECAE1", "#FDD0A2", "#CFA7B0", "#7FFFD4")
+# Blue, Orange, Teal (harmonious triad), Green
+pal_dark  <- c("#1F77B4", "#FF7F0E", "#17A589", "#2E7D32")
+pal_light <- c("#9ECAE1", "#FDD0A2", "#A3E4D7", "#A5D6A7")
 
 plot_levels <- if (has_subgenomes) sg_levels else c("G")
 
@@ -186,9 +187,12 @@ if (has_subgenomes) {
     mutate(target_subgenome = "G")
 }
 
+# Spacing factor between chromosome bins (1.0 = no extra space, 1.2 = 20% more)
+chrom_spacing <- 1.15
+
 x_levels <- c(chrom_levels, "Un")
 x_tbl <- tibble(chrom_id = factor(x_levels, levels = x_levels),
-                x_index = seq_along(x_levels))
+                x_index = seq_along(x_levels) * chrom_spacing)
 
 ref_lines <- ref_sg %>%
   mutate(chrom_id = factor(chrom_id, levels = x_levels)) %>%
@@ -335,65 +339,66 @@ macro_plot <- macro %>%
     )
   )
 
+# Width for alignment segments - wider to fill the pill background
+seg_xw <- band_xw * 2.4
+
 p_comp <- ggplot() +
+  # Reference chromosome length ticks (narrower, thinner, darker)
   geom_segment(
     data = ref_lines,
     aes(
-      x = x_index - 0.38, xend = x_index + 0.38,
+      x = x_index - 0.22, xend = x_index + 0.22,
       y = ref_len_mb, yend = ref_len_mb,
       color = subgenome
     ),
-    linewidth = 0.6,
-    alpha = 0.9,
+    linewidth = 0.3,
+    alpha = 0.7,
     show.legend = FALSE
   ) +
-  scale_color_manual(values = col_light, guide = "none", drop = FALSE) +
+  scale_color_manual(values = col_dark, guide = "none", drop = FALSE) +
   ggnewscale::new_scale_color() +
+  # Pill backgrounds - all light gray
   geom_linerange(
-    data = df_slots %>% filter(assigned_subgenome %in% plot_levels),
-    aes(x = x_plot, ymin = 0, ymax = contig_len_mb, color = assigned_subgenome),
-    linewidth = pill_lwd,
-    lineend = "round",
-    alpha = 1.0,
-    show.legend = FALSE
-  ) +
-  scale_color_manual(values = col_light, guide = "none", drop = FALSE) +
-  ggnewscale::new_scale_color() +
-  geom_linerange(
-    data = df_slots %>% filter(assigned_subgenome == "NA"),
+    data = df_slots,
     aes(x = x_plot, ymin = 0, ymax = contig_len_mb),
     linewidth = pill_lwd,
     lineend = "round",
-    color = "grey82",
+    color = "grey88",
     alpha = 1.0,
     show.legend = FALSE
   ) +
   ggnewscale::new_scale_fill() +
+  # Alignment segments (full pill width)
   geom_rect(
     data = seg_plot %>% filter(!off_target),
-    aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax, fill = target_subgenome),
+    aes(xmin = x_plot - seg_xw/2, xmax = x_plot + seg_xw/2,
+        ymin = ymin, ymax = ymax, fill = target_subgenome),
     color = NA,
     alpha = 1.0
   ) +
   geom_rect(
     data = seg_plot %>% filter(off_target),
-    aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+    aes(xmin = x_plot - seg_xw/2, xmax = x_plot + seg_xw/2,
+        ymin = ymin, ymax = ymax),
     fill = "red",
     color = NA,
     alpha = 0.35
   ) +
   scale_fill_manual(values = col_light, guide = "none", drop = FALSE) +
   ggnewscale::new_scale_fill() +
+  # Macro blocks (full pill width)
   geom_rect(
     data = macro_plot %>% filter(!off_target),
-    aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax, fill = target_subgenome),
+    aes(xmin = x_plot - seg_xw/2, xmax = x_plot + seg_xw/2,
+        ymin = ymin, ymax = ymax, fill = target_subgenome),
     color = NA,
     alpha = 1.0,
     show.legend = FALSE
   ) +
   geom_rect(
     data = macro_plot %>% filter(off_target),
-    aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+    aes(xmin = x_plot - seg_xw/2, xmax = x_plot + seg_xw/2,
+        ymin = ymin, ymax = ymax),
     fill = "red",
     color = NA,
     alpha = 0.5,
@@ -435,64 +440,62 @@ p_comp <- apply_legend_theme(p_comp, text_pt = 6, key_pt = 6, tight = TRUE) +
 # Interactive version (tooltips on segment/macro blocks)
 if (plot_html) {
   p_comp_html <- ggplot() +
+    # Reference chromosome length ticks (narrower, thinner, darker)
     geom_segment(
       data = ref_lines,
       aes(
-        x = x_index - 0.38, xend = x_index + 0.38,
+        x = x_index - 0.22, xend = x_index + 0.22,
         y = ref_len_mb, yend = ref_len_mb,
         color = subgenome
       ),
-      linewidth = 0.6,
-      alpha = 0.9,
+      linewidth = 0.3,
+      alpha = 0.7,
       show.legend = FALSE
     ) +
-    scale_color_manual(values = col_light, guide = "none", drop = FALSE) +
+    scale_color_manual(values = col_dark, guide = "none", drop = FALSE) +
     ggnewscale::new_scale_color() +
+    # Pill backgrounds - all light gray
     geom_linerange(
-      data = df_slots %>% filter(assigned_subgenome %in% plot_levels),
-      aes(x = x_plot, ymin = 0, ymax = contig_len_mb, color = assigned_subgenome),
-      linewidth = pill_lwd,
-      lineend = "round",
-      alpha = 1.0,
-      show.legend = FALSE
-    ) +
-    scale_color_manual(values = col_light, guide = "none", drop = FALSE) +
-    ggnewscale::new_scale_color() +
-    geom_linerange(
-      data = df_slots %>% filter(assigned_subgenome == "NA"),
+      data = df_slots,
       aes(x = x_plot, ymin = 0, ymax = contig_len_mb),
       linewidth = pill_lwd,
       lineend = "round",
-      color = "grey82",
+      color = "grey88",
       alpha = 1.0,
       show.legend = FALSE
     ) +
     ggnewscale::new_scale_fill() +
+    # Alignment segments (full pill width)
     ggiraph::geom_rect_interactive(
       data = seg_plot %>% filter(!off_target),
-      aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax, fill = target_subgenome, tooltip = tooltip),
+      aes(xmin = x_plot - seg_xw/2, xmax = x_plot + seg_xw/2,
+          ymin = ymin, ymax = ymax, fill = target_subgenome, tooltip = tooltip),
       color = NA,
       alpha = 1.0
     ) +
     ggiraph::geom_rect_interactive(
       data = seg_plot %>% filter(off_target),
-      aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax, tooltip = tooltip),
+      aes(xmin = x_plot - seg_xw/2, xmax = x_plot + seg_xw/2,
+          ymin = ymin, ymax = ymax, tooltip = tooltip),
       fill = "red",
       color = NA,
       alpha = 0.35
     ) +
     scale_fill_manual(values = col_light, guide = "none", drop = FALSE) +
     ggnewscale::new_scale_fill() +
+    # Macro blocks (full pill width)
     ggiraph::geom_rect_interactive(
       data = macro_plot %>% filter(!off_target),
-      aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax, fill = target_subgenome, tooltip = tooltip),
+      aes(xmin = x_plot - seg_xw/2, xmax = x_plot + seg_xw/2,
+          ymin = ymin, ymax = ymax, fill = target_subgenome, tooltip = tooltip),
       color = NA,
       alpha = 1.0,
       show.legend = FALSE
     ) +
     ggiraph::geom_rect_interactive(
       data = macro_plot %>% filter(off_target),
-      aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax, tooltip = tooltip),
+      aes(xmin = x_plot - seg_xw/2, xmax = x_plot + seg_xw/2,
+          ymin = ymin, ymax = ymax, tooltip = tooltip),
       fill = "red",
       color = NA,
       alpha = 0.5,
