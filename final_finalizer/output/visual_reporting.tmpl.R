@@ -199,7 +199,10 @@ ref_lines <- ref_sg %>%
 df_plot <- df %>%
   mutate(
     contig_len = if_else(is.na(length), 0, as.numeric(length)),
-    assigned_subgenome = if_else(assigned_subgenome %in% plot_levels, assigned_subgenome, "NA"),
+    assigned_subgenome = case_when(
+      !is.na(assigned_subgenome) & assigned_subgenome %in% plot_levels ~ as.character(assigned_subgenome),
+      TRUE ~ "NA"
+    ),
     assigned_chrom_id  = if_else(assigned_chrom_id %in% chrom_levels, assigned_chrom_id, "Un"),
     chrom_id = factor(assigned_chrom_id, levels = x_levels),
     best_identity = as.numeric(best_identity)
@@ -209,7 +212,10 @@ df_plot <- df %>%
 # Evidence (for radar)
 ev <- ev %>%
   mutate(
-    subgenome = if_else(subgenome %in% sg_levels, subgenome, "NA")
+    subgenome = case_when(
+      !is.na(subgenome) & subgenome %in% sg_levels ~ as.character(subgenome),
+      TRUE ~ "NA"
+    )
   ) %>%
   filter(subgenome %in% sg_levels)
 
@@ -591,8 +597,8 @@ if (has_subgenomes) {
     left_join(df_plot %>% select(original_name, assigned_subgenome, classification),
               by = c("contig" = "original_name")) %>%
     mutate(
-      assigned_subgenome = if_else(is.na(assigned_subgenome), "NA", assigned_subgenome),
-      classification = if_else(is.na(classification), "NA", classification)
+      assigned_subgenome = if_else(is.na(assigned_subgenome), "NA", as.character(assigned_subgenome)),
+      classification = if_else(is.na(classification), "NA", as.character(classification))
     ) %>%
     filter(assigned_subgenome %in% plot_levels | classification == "chrom_unassigned") %>%
     mutate(assigned_subgenome = factor(assigned_subgenome, levels = c(plot_levels, "NA")))

@@ -4,9 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-`final_finalizer` is a bioinformatics genome assembly finalization tool that classifies contigs from *de novo* genome assemblies into biological categories (chromosomes, organelles, rDNA, contaminants, debris) using protein-anchored synteny evidence, organelle/rDNA alignments, and taxonomic classification.
+`final_finalizer` is a bioinformatics genome assembly finalization tool that classifies contigs from *de novo* genome assemblies into biological categories (chromosomes, organelles, rDNA, contaminants, debris) using synteny evidence (protein-anchored or nucleotide whole-genome alignment), organelle/rDNA alignments, and taxonomic classification.
 
-**Key concept**: The tool uses protein homology (via miniprot) as the primary evidence source because proteins are more conserved than nucleotide sequences, work across distantly related species, and are robust to repetitive sequences.
+**Key concepts**:
+- **Protein mode** (default): Uses protein homology (via miniprot) as the primary evidence source. Proteins are more conserved than nucleotide sequences, work across distantly related species, and are robust to repetitive sequences. Ideal for detecting conserved gene content.
+- **Nucleotide mode**: Uses whole-genome nucleotide alignment (via minimap2) for structural composition analysis. Detects actual sequence-level identity, making it ideal for identifying structural features like chromosomal fusions, homeologous recombination, or introgression events.
 
 ## Development Commands
 
@@ -33,10 +35,14 @@ pytest -m "not integration"
 
 ### Running the tool
 ```bash
-# Basic run
+# Basic run (protein mode - default)
 ./final_finalizer.py -r reference.fasta -q assembly.fasta -o output --ref-gff3 reference.gff3
 
-# With all features enabled
+# Nucleotide mode for structural composition analysis
+# Uses permissive chaining to create megabase-scale blocks (chains through repetitive regions)
+./final_finalizer.py -r reference.fasta -q assembly.fasta -o output --synteny-mode nucleotide
+
+# With all features enabled (protein mode)
 ./final_finalizer.py -r ref.fasta -q assembly.fasta -o output \
     --ref-gff3 ref.gff3 \
     --reads hifi.fastq.gz \
@@ -93,16 +99,22 @@ final_finalizer/
 ### Data Flow
 
 1. **Reference Preparation** (`cli.py:main`)
-   - Extract proteins from GFF3 using gffread
    - Build reference ID maps (handles polyploid naming like chr1A/chr1B)
    - Prepare organelle references (chrC/chrM)
+   - **Protein mode only**: Extract proteins from GFF3 using gffread
 
-2. **Protein-Anchor Synteny** (`alignment/`)
-   - Run miniprot to align proteins to query assembly
-   - Parse PAF output in `chain_parsing.py`
-   - Filter overlapping hits using **interval tree** (O(n log n), not O(n²))
-   - Chain alignments into synteny blocks
-   - Aggregate evidence per contig × reference chromosome
+2. **Synteny Analysis** (`alignment/`) - **Mode-dependent**
+   - **Protein mode** (`--synteny-mode protein`, default):
+     - Run miniprot to align proteins to query assembly
+     - Parse PAF output in `chain_parsing.py:parse_miniprot_synteny_evidence_and_segments()`
+     - Filter overlapping hits using **interval tree** (O(n log n), not O(n²))
+     - Chain alignments into synteny blocks based on protein hits
+     - Gate-based filtering requires minimum genes, segments, and span
+   - **Nucleotide mode** (`--synteny-mode nucleotide`):
+     - Run minimap2 whole-genome alignment (query vs reference)
+     - Parse PAF output in `chain_parsing.py:parse_paf_chain_evidence_and_segments()`
+     - Chain alignments into synteny blocks based on nucleotide identity
+     - Gate-based filtering requires minimum segments and span (no gene count requirement)
 
 3. **Detection Pipeline** (`detection/`)
    - Organelle detection via BLAST (chrC, chrM)
@@ -130,7 +142,9 @@ final_finalizer/
 
 ### Key Design Patterns
 
-**Gate-based assignment**: Contigs must satisfy ALL criteria for chromosome assignment (AND logic). This prevents spurious assignments from single conserved genes or repetitive sequences. See `--assign-min-frac`, `--miniprot-min-genes`, `--miniprot-min-segments`, `--miniprot-min-span-frac`.
+**Gate-based assignment**: Contigs must satisfy ALL criteria for chromosome assignment (AND logic). This prevents spurious assignments from single conserved genes or repetitive sequences. Gate requirements differ by mode:
+- **Protein mode**: Requires ≥5 segments, ≥3 genes, ≥50kb span, ≥20% span fraction (configurable via `--miniprot-min-*` flags)
+- **Nucleotide mode**: Requires ≥1 segment (hardcoded), ≥50kb span, ≥20% span fraction. Lower segment threshold because perfect full-length alignments produce fewer segments than fragmented protein hits.
 
 **Interval tree optimization**: `chain_parsing.py:_filter_overlapping_hits_by_identity()` uses the `intervaltree` package for O(n log n) overlap detection instead of O(n²). This is critical for large assemblies with many protein alignments.
 
@@ -158,7 +172,21 @@ final_finalizer/
 
 **Organelle reference extraction**: If `--chrC-ref` or `--chrM-ref` not provided, code attempts to extract from main reference FASTA. If organelle sequences not found, organelle detection is skipped (not an error).
 
-**PAF vs miniprot parsing**: The tool supports both nucleotide synteny (minimap2 PAF) and protein-anchor synteny (miniprot PAF). `chain_parsing.py` has separate functions: `parse_paf_chain_evidence_and_segments()` for minimap2 and `parse_miniprot_synteny_evidence_and_segments()` for miniprot.
+**Synteny mode selection**: The tool supports two synteny modes controlled by `--synteny-mode`:
+- **protein** (default): Uses miniprot protein-anchored synteny. Requires `--ref-gff3`. Calls `parse_miniprot_synteny_evidence_and_segments()`.
+- **nucleotide**: Uses minimap2 whole-genome nucleotide alignment with permissive chaining for structural composition analysis. Calls `parse_paf_chain_evidence_and_segments()`. Both parsers in `chain_parsing.py` produce compatible `ChainEvidenceResult` objects.
+
+**Permissive synteny chaining in nucleotide mode**: Nucleotide mode always uses permissive minimap2 chaining parameters (`--max-chain-skip=300 -z 10000,1000 -r 50000`) to create megabase-scale synteny blocks by chaining through repetitive regions and small gaps (kb-scale). This approach:
+- Works well for both within-species and cross-species comparisons
+- Chains through homopolymer runs, tandem repeats, and ambiguous regions that would otherwise fragment alignments
+- Produces clean chromosome-scale blocks suitable for compositional analysis and visualization
+- Is appropriate for final_finalizer's goal (chromosome classification and architecture) rather than fine-scale SV detection
+
+The permissive parameters are balanced by downstream filtering (identity thresholds, minimum alignment length, gate filtering) to prevent spurious assignments.
+
+**Segment counts differ by mode**: In nucleotide mode, perfect full-length alignments often produce very few segments (even just 1!) because they're continuous matches. In protein mode, the same chromosome produces many segments (fragmented protein hits). The gate filtering accounts for this: nucleotide mode requires ≥1 segment (hardcoded), while protein mode requires ≥5 segments (configurable).
+
+**Why permissive chaining**: Even for byte-for-byte identical sequences, minimap2's conservative default parameters split alignments at complex repetitive regions (long homopolymer runs, tandem repeats). For chromosome classification and structural composition visualization, these kb-scale gaps are noise that obscures megabase-scale patterns. Permissive chaining creates continuous blocks that better represent biological chromosome architecture.
 
 **Reference length normalization**: `reference_utils.py:normalize_ref_lengths()` filters out organelles (chrC/chrM) and unlocalized scaffolds (chr*_random) from nuclear chromosome length calculations. This ensures `--chr-like-minlen` thresholds are computed correctly.
 

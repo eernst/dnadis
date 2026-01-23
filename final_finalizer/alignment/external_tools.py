@@ -157,11 +157,28 @@ def run_minimap2_synteny(
     k: Optional[int],
     w: Optional[int],
     err_path: Path,
+    permissive: bool = False,
 ) -> None:
-    """Run minimap2/mm2plus with parameterization tuned for cross-species synteny alignments.
+    """Run minimap2/mm2plus with parameterization tuned for synteny alignments.
 
-    This uses specialized parameters (-c -f1 -B2 -O1,24 -s 10 --max-chain-skip=80 -z 2000,200)
-    for genome-wide synteny analysis. Output is gzipped PAF.
+    Args:
+        permissive: If True, use permissive chaining parameters that create
+            megabase-scale blocks by chaining through repetitive regions.
+            This is the default for nucleotide mode in final_finalizer.
+            If False, use conservative parameters (legacy option, not used).
+
+    Permissive mode (-c -f1 -B2 -O1,24 -s 10 --max-chain-skip=300 -z 10000,1000 -r 50000):
+        - Chains through repetitive regions and small gaps (kb-scale)
+        - Creates continuous megabase-scale blocks for chromosome architecture analysis
+        - Suitable for both within-species and cross-species comparisons
+        - Used by default in nucleotide synteny mode
+
+    Conservative mode (-c -f1 -B2 -O1,24 -s 10 --max-chain-skip=80 -z 2000,200):
+        - Legacy option, not used by final_finalizer
+        - Fragments alignments at ambiguous repeats
+        - Preserves fine-scale structural variant detection
+
+    Output is gzipped PAF.
     """
     if file_exists_and_valid(paf_gz_out):
         logger.info(f"PAF.gz exists, reusing: {paf_gz_out}")
@@ -171,17 +188,34 @@ def run_minimap2_synteny(
     if not mapper:
         raise RuntimeError("Neither mm2plus nor minimap2 found in PATH")
 
-    cmd = [
-        mapper,
-        "-c",
-        "-f1",
-        "-B2",
-        "-O1,24",
-        "-s", "10",
-        "--max-chain-skip=80",
-        "-z", "2000,200",
-        "-t", str(threads),
-    ]
+    if permissive:
+        # Permissive chaining for within-species structural analysis
+        cmd = [
+            mapper,
+            "-c",  # Generate CIGAR
+            "-f1",  # Filter: keep all alignments
+            "-B2",  # Mismatch penalty (low for nearly identical sequences)
+            "-O1,24",  # Gap open penalty (low extension, high open)
+            "-s", "10",  # Minimal chaining score
+            "--max-chain-skip=300",  # Allow skipping many seeds (chain through repeats)
+            "-z", "10000,1000",  # High Z-drop (tolerate long gaps in chain)
+            "-r", "50000",  # Large bandwidth (50kb - tolerate structural variations)
+            "-t", str(threads),
+        ]
+    else:
+        # Conservative chaining for cross-species comparisons
+        cmd = [
+            mapper,
+            "-c",
+            "-f1",
+            "-B2",
+            "-O1,24",
+            "-s", "10",
+            "--max-chain-skip=80",
+            "-z", "2000,200",
+            "-t", str(threads),
+        ]
+
     if preset:
         cmd += ["-x", preset]
     if k is not None:
@@ -190,7 +224,8 @@ def run_minimap2_synteny(
         cmd += ["-w", str(w)]
     cmd += [str(ref), str(qry)]
 
-    logger.info(f"Running {mapper} -> {paf_gz_out} (stderr: {err_path}): " + " ".join(cmd))
+    mode = "permissive" if permissive else "conservative"
+    logger.info(f"Running {mapper} ({mode} mode) -> {paf_gz_out} (stderr: {err_path})")
     run_to_gzip(cmd, paf_gz_out, err_path)
 
 

@@ -190,7 +190,8 @@ if (nrow(df_chrom) > 0) {
       fill_category = case_when(
         contig == "chrC" ~ "chrC",
         contig == "chrM" ~ "chrM",
-        TRUE ~ assigned_subgenome
+        !is.na(assigned_subgenome) ~ as.character(assigned_subgenome),
+        TRUE ~ "NA"
       )
     )
 

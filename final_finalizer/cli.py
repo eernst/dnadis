@@ -3,7 +3,8 @@
 
 This module provides the main entry point for the final_finalizer tool,
 which classifies genome assembly contigs into biological categories using
-protein-anchored synteny blocks, organelle alignments, and taxonomic screening.
+synteny evidence (protein-anchored or nucleotide whole-genome alignment),
+organelle alignments, and taxonomic screening.
 
 Each contig receives:
 - A classification category (chrom_assigned, organelle_complete, debris, etc.)
@@ -87,6 +88,7 @@ from final_finalizer.alignment.stats import (
 )
 from final_finalizer.alignment.chain_parsing import (
     parse_miniprot_synteny_evidence_and_segments,
+    parse_paf_chain_evidence_and_segments,
 )
 from final_finalizer.detection.organelle import (
     prepare_organelle_references,
@@ -128,7 +130,7 @@ def main():
             log_file=None, config=None, dump_config=True, chr_like_minlen=None,
             add_subgenome_suffix=None, ref_id_pattern=None, reads=None,
             reads_type="hifi_onthq", skip_depth=False, depth_window_size=1000,
-            depth_target_coverage=0, keep_depth_bam=False, nt_synteny=False,
+            depth_target_coverage=0, keep_depth_bam=False, synteny_mode="protein",
             skip_organelles=False, skip_rdna=False, skip_contaminants=False,
             gffread="gffread", miniprot="miniprot", miniprot_args="",
             chrC_ref=None, chrM_ref=None, rdna_ref=None, centrifuger_idx=None,
@@ -148,7 +150,7 @@ def main():
         sys.exit(0)
 
     p = argparse.ArgumentParser(
-        description="Genome assembly finalization tool for contig classification using protein-anchored synteny blocks.",
+        description="Genome assembly finalization tool for contig classification using synteny evidence (protein-anchored or nucleotide whole-genome alignment).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
@@ -162,8 +164,9 @@ def main():
     req.add_argument(
         "--ref-gff3",
         type=_validate_input_path,
-        required=True,
+        required=False,  # Only required for --synteny-mode protein
         help="Reference GFF3 with protein-coding gene annotations. "
+        "Required for --synteny-mode protein. "
         "Used to extract proteins (gffread) and run protein-anchor synteny blocks (miniprot).",
     )
 
@@ -230,13 +233,25 @@ def main():
     )
 
     # =========================================================================
+    # Synteny mode selection
+    # =========================================================================
+    synteny = p.add_argument_group("Synteny mode")
+    synteny.add_argument(
+        "--synteny-mode",
+        choices=["protein", "nucleotide"],
+        default="protein",
+        help="Synteny evidence source for classification. "
+        "protein: Use miniprot protein-anchored synteny (requires --ref-gff3). "
+        "nucleotide: Use minimap2 whole-genome nucleotide alignment with permissive chaining "
+        "for chromosome-scale structural composition analysis. Creates megabase-scale blocks "
+        "by chaining through repetitive regions. Suitable for both within-species and cross-species comparisons. "
+        "[protein]",
+    )
+
+    # =========================================================================
     # Pipeline phase toggles
     # =========================================================================
     toggles = p.add_argument_group("Pipeline phase toggles")
-    toggles.add_argument(
-        "--nt-synteny", action="store_true",
-        help="Run nucleotide-based synteny alignments (minimap2/mm2plus) for QA/diagnostics. Optional; classification uses protein-anchored synteny only.",
-    )
     toggles.add_argument("--skip-organelles", action="store_true", help="Skip organelle detection.")
     toggles.add_argument("--skip-rdna", action="store_true", help="Skip rDNA detection.")
     toggles.add_argument("--skip-contaminants", action="store_true", help="Skip contaminant detection.")
@@ -363,7 +378,7 @@ def main():
     )
     prot_thresh.add_argument(
         "--miniprot-min-segments", type=int, default=5,
-        help="Min number of synteny segments [5]",
+        help="Min number of synteny segments in protein mode (nucleotide mode uses ≥1) [5]",
     )
     prot_thresh.add_argument(
         "--miniprot-min-span-frac", type=float, default=0.20,
@@ -436,16 +451,12 @@ def main():
     )
 
     # =========================================================================
-    # Minimap2 tuning (for --nt-synteny mode)
+    # Minimap2 tuning (for --synteny-mode nucleotide)
     # =========================================================================
-    mm2_tune = p.add_argument_group("Minimap2 tuning (for --nt-synteny mode)")
+    mm2_tune = p.add_argument_group("Minimap2 tuning (for --synteny-mode nucleotide)")
     mm2_tune.add_argument("-x", "--preset", default="asm20", help="minimap2 preset [asm20]")
     mm2_tune.add_argument("-k", "--kmer", type=int, default=None, help="minimap2 k-mer size")
     mm2_tune.add_argument("-w", "--window", type=int, default=None, help="minimap2 minimizer window size")
-    mm2_tune.add_argument(
-        "-L", "--aln-minlen", type=int, default=10_000,
-        help="Min alignment length in PRIMARY-only QA stats [10000]",
-    )
 
     args = p.parse_args()
 
@@ -457,6 +468,10 @@ def main():
             merge_config_with_args(config, args)
         except Exception as e:
             sys.exit(f"[error] Failed to load config file: {e}")
+
+    # Validate synteny mode requirements
+    if args.synteny_mode == "protein" and not args.ref_gff3:
+        sys.exit("[error] --ref-gff3 is required when using --synteny-mode protein")
 
     # Setup logging
     from final_finalizer.utils.logging_config import setup_logging, get_logger
@@ -531,64 +546,82 @@ def main():
     else:
         logger.info(f"Reference lengths TSV exists, reusing: {ref_lengths_tsv}")
 
-    # --- Phase 2: Nucleotide synteny analysis (optional QA) ---
-    logger.phase("Phase 2: Nucleotide synteny analysis (optional QA)")
-    if args.nt_synteny:
-        run_minimap2_synteny(ref, qry, paf_gz, args.threads, args.preset, args.kmer, args.window, err_log)
-        (
-            aln_sum_p,
-            match_sum_p,
-            _alnlen_sum_p,
-            _ctotal_p,
-            _crefs_p,
-            _cqlen_p,
-            _best_aln_p,
-            _best_ref_p,
-            _second_aln_p,
-            _second_ref_p,
-        ) = parse_paf_primary(paf_gz, args.aln_minlen)
-        write_stats_tsv(stats_tsv, aln_sum_p, match_sum_p)
-        logger.done(f"Stats (primary QA): {stats_tsv}")
-    else:
-        logger.info("--nt-synteny not set: skipping nucleotide alignments + primary-only QA stats.")
+    # --- Phase 2: Synteny analysis (protein or nucleotide) ---
+    # Process GFF3 if provided (optional in nucleotide mode, required in protein mode)
+    ref_gff3 = None
+    tx2loc = {}
+    tx2gene = {}
+    if args.ref_gff3:
+        filtered_ref_gff3 = Path(str(outprefix) + ".ref_gff3.filtered.gff3")
+        ref_gff3 = filter_gff3_by_ref(
+            args.ref_gff3,
+            ref_ids_raw,
+            filtered_ref_gff3,
+            ref_norm_to_orig=ref_norm_to_orig,
+        )
+        if args.synteny_mode == "protein":
+            logger.info(f"Protein-anchor mode: parsing GFF3 for protein extraction (ref GFF3: {ref_gff3})")
+        else:
+            logger.info(f"GFF3 provided in nucleotide mode: will use for gene count statistics (ref GFF3: {ref_gff3})")
 
-    # --- Phase 3: Protein-anchor synteny analysis ---
-    logger.phase("Phase 3: Protein-anchor synteny analysis")
-    ref_gff3 = args.ref_gff3  # Already a Path from _validate_input_path
-    filtered_ref_gff3 = Path(str(outprefix) + ".ref_gff3.filtered.gff3")
-    ref_gff3 = filter_gff3_by_ref(
-        ref_gff3,
-        ref_ids_raw,
-        filtered_ref_gff3,
-        ref_norm_to_orig=ref_norm_to_orig,
-    )
-    logger.info(f"Protein-anchor mode enabled (ref GFF3: {ref_gff3})")
+        tx2loc, tx2gene = parse_gff3_transcript_coords(ref_gff3, ref_id_map=ref_orig_to_norm)
+        if not (tx2loc and tx2gene):
+            if args.synteny_mode == "protein":
+                raise RuntimeError(f"No transcript features found in GFF3 (mRNA/transcript with ID=...). File: {ref_gff3}")
+            else:
+                logger.warning(f"No transcript features found in GFF3 - gene count statistics will not be available")
+                ref_gff3 = None
 
-    tx2loc, tx2gene = parse_gff3_transcript_coords(ref_gff3, ref_id_map=ref_orig_to_norm)
-    if not (tx2loc and tx2gene):
-        raise RuntimeError(f"No transcript features found in GFF3 (mRNA/transcript with ID=...). File: {ref_gff3}")
+    if args.synteny_mode == "protein":
+        logger.phase("Phase 2: Protein-anchor synteny analysis")
+        if not ref_gff3:
+            raise RuntimeError("--ref-gff3 is required for protein mode but GFF3 processing failed")
 
-    run_gffread_extract_proteins(args.gffread, ref, ref_gff3, proteins_faa, gffread_err)
-    run_miniprot(args.miniprot, qry, proteins_faa, miniprot_paf_gz, args.threads, args.miniprot_args, miniprot_err)
+        run_gffread_extract_proteins(args.gffread, ref, ref_gff3, proteins_faa, gffread_err)
+        run_miniprot(args.miniprot, qry, proteins_faa, miniprot_paf_gz, args.threads, args.miniprot_args, miniprot_err)
 
-    ev = parse_miniprot_synteny_evidence_and_segments(
-        miniprot_paf_gz=miniprot_paf_gz,
-        contig_lengths=qry_lengths,
-        tx2loc=tx2loc,
-        tx2gene=tx2gene,
-        assign_minlen=args.assign_minlen_protein,
-        assign_minmapq=args.assign_minmapq,
-        chain_q_gap=args.chain_q_gap,
-        chain_r_gap=args.chain_r_gap,
-        chain_diag_slop=args.chain_diag_slop,
-        assign_min_ident=args.assign_min_ident,
-        assign_chain_topk=args.assign_chain_topk,
-        assign_chain_score=args.assign_chain_score,
-        assign_chain_min_bp=args.assign_chain_min_bp,
-        assign_ref_score=args.assign_ref_score,
-    )
+        ev = parse_miniprot_synteny_evidence_and_segments(
+            miniprot_paf_gz=miniprot_paf_gz,
+            contig_lengths=qry_lengths,
+            tx2loc=tx2loc,
+            tx2gene=tx2gene,
+            assign_minlen=args.assign_minlen_protein,
+            assign_minmapq=args.assign_minmapq,
+            chain_q_gap=args.chain_q_gap,
+            chain_r_gap=args.chain_r_gap,
+            chain_diag_slop=args.chain_diag_slop,
+            assign_min_ident=args.assign_min_ident,
+            assign_chain_topk=args.assign_chain_topk,
+            assign_chain_score=args.assign_chain_score,
+            assign_chain_min_bp=args.assign_chain_min_bp,
+            assign_ref_score=args.assign_ref_score,
+        )
+    else:  # nucleotide mode
+        logger.phase("Phase 2: Nucleotide synteny analysis (whole-genome alignment)")
+        logger.info(f"Running minimap2 with permissive chaining for chromosome-scale structural analysis")
+        run_minimap2_synteny(
+            ref, qry, paf_gz, args.threads, args.preset, args.kmer, args.window, err_log,
+            permissive=True  # Always use permissive chaining in nucleotide mode
+        )
 
-    # --- Protein-anchor synteny gates: filter weak assignments ---
+        ev = parse_paf_chain_evidence_and_segments(
+            paf_gz_path=paf_gz,
+            contig_lengths=qry_lengths,
+            assign_minlen=args.assign_minlen,
+            assign_minmapq=args.assign_minmapq,
+            assign_tp="PI",  # Use primary + inversion alignments
+            chain_q_gap=args.chain_q_gap,
+            chain_r_gap=args.chain_r_gap,
+            chain_diag_slop=args.chain_diag_slop,
+            assign_min_ident=args.assign_min_ident,
+            assign_chain_topk=args.assign_chain_topk,
+            assign_chain_score=args.assign_chain_score,
+            assign_chain_min_bp=args.assign_chain_min_bp,
+            assign_ref_score=args.assign_ref_score,
+            ref_id_map=ref_orig_to_norm,
+        )
+
+    # --- Synteny gates: filter weak assignments ---
     seg_count, span_bp = build_segment_support_from_rows(ev.chain_segments_rows)
 
     def _passes_gate(
@@ -606,7 +639,15 @@ def main():
         spfrac = (spbp / clen) if clen > 0 else 0.0
         ngen = int(ev.qr_gene_count.get(key, 0) or 0)
 
-        ok = (nseg >= min_segments) and (spbp >= min_span_bp) and (spfrac >= min_span_frac) and (ngen >= min_genes)
+        # Adjust thresholds for nucleotide mode
+        # In nucleotide mode, perfect alignments often produce fewer segments (even 1!)
+        # because they're continuous matches, not fragmented like protein hits
+        if args.synteny_mode == "protein":
+            ok = (nseg >= min_segments) and (spbp >= min_span_bp) and (spfrac >= min_span_frac) and (ngen >= min_genes)
+        else:  # nucleotide mode
+            # Much lower segment threshold for nucleotide mode (1 is fine for full-length perfect matches)
+            # Still enforce span requirements to avoid spurious short alignments
+            ok = (nseg >= 1) and (spbp >= min_span_bp) and (spfrac >= min_span_frac)
         return ok, nseg, spbp, spfrac, ngen
 
     # Gate-aware reranking over candidate refs
@@ -691,12 +732,17 @@ def main():
         if chosen_ref_id != orig_best:
             n_switched += 1
 
-    logger.info(f"Protein-anchor gate-aware rerank: demoted={n_demoted} switched={n_switched}")
-
-    plot_suffix = "protein-anchor synteny"
-    logger.done(f"Proteins:         {proteins_faa}")
-    logger.done(f"miniprot PAF.gz:  {miniprot_paf_gz}")
-    logger.done(f"miniprot err:     {miniprot_err}")
+    if args.synteny_mode == "protein":
+        logger.info(f"Protein-anchor gate-aware rerank: demoted={n_demoted} switched={n_switched}")
+        plot_suffix = "protein-anchor synteny"
+        logger.done(f"Proteins:         {proteins_faa}")
+        logger.done(f"miniprot PAF.gz:  {miniprot_paf_gz}")
+        logger.done(f"miniprot err:     {miniprot_err}")
+    else:  # nucleotide mode
+        logger.info(f"Nucleotide synteny gate-aware rerank: demoted={n_demoted} switched={n_switched}")
+        plot_suffix = "nucleotide synteny"
+        logger.done(f"minimap2 PAF.gz:  {paf_gz}")
+        logger.done(f"minimap2 err:     {err_log}")
 
     # Write segments + evidence summary TSVs
     write_chain_segments_tsv(segments_tsv, ev.chain_segments_rows, ref_norm_to_orig=ref_norm_to_orig)
@@ -872,13 +918,17 @@ def main():
 
     # --- Phase 9: Gene count statistics ---
     logger.phase("Phase 9: Gene count statistics")
-    ref_gene_counts = count_genes_per_ref_chrom(ref_gff3, ref_id_map=ref_orig_to_norm)
-    compute_mean_gene_proportion(
-        qr_gene_count=ev.qr_gene_count,
-        chromosome_contigs=chromosome_contigs,
-        best_ref=best_ref,
-        ref_gene_counts=ref_gene_counts,
-    )
+    if ref_gff3:
+        ref_gene_counts = count_genes_per_ref_chrom(ref_gff3, ref_id_map=ref_orig_to_norm)
+        compute_mean_gene_proportion(
+            qr_gene_count=ev.qr_gene_count,
+            chromosome_contigs=chromosome_contigs,
+            best_ref=best_ref,
+            ref_gene_counts=ref_gene_counts,
+        )
+    else:
+        logger.info("No GFF3 available - skipping gene count statistics")
+        ref_gene_counts = {}
 
     # --- Phase 10: Orientation determination ---
     logger.phase("Phase 10: Orientation determination")

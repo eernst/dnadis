@@ -57,8 +57,10 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
         "depth_target_coverage": "depth_target_coverage",
         "keep_depth_bam": "keep_depth_bam",
     },
+    "synteny": {
+        "synteny_mode": "synteny_mode",
+    },
     "pipeline_toggles": {
-        "nt_synteny": "nt_synteny",
         "skip_organelles": "skip_organelles",
         "skip_rdna": "skip_rdna",
         "skip_contaminants": "skip_contaminants",
