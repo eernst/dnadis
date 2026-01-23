@@ -11,12 +11,12 @@ Contains functions for:
 """
 from __future__ import annotations
 
-import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from final_finalizer.alignment.external_tools import get_minimap2_exe, run_minimap2
+from final_finalizer.utils.logging_config import get_logger
 from final_finalizer.models import (
     ChainEvidenceResult,
     ContaminantHit,
@@ -28,6 +28,8 @@ from final_finalizer.models import (
 from final_finalizer.utils.io_utils import merge_intervals, open_maybe_gzip
 from final_finalizer.utils.reference_utils import normalize_ref_id, split_chrom_subgenome
 from final_finalizer.utils.sequence_utils import read_fasta_sequences, write_fasta
+
+logger = get_logger("classifier")
 
 
 # ----------------------------
@@ -102,7 +104,7 @@ def determine_contig_orientations(
 
         if should_reverse:
             contig_len = query_lengths.get(contig, 0) if query_lengths else 0
-            print(f"[info] Contig {contig} ({contig_len:,} bp) will be reverse-complemented (fwd={fwd}, rev={rev})", file=sys.stderr)
+            logger.info(f"Contig {contig} ({contig_len:,} bp) will be reverse-complemented (fwd={fwd}, rev={rev})")
 
     return orientations
 
@@ -179,7 +181,7 @@ def compute_mean_gene_proportion(
         return 0.0
 
     mean_ratio = sum(ratios) / len(ratios)
-    print(f"[info] Mean gene proportion (mapped/ref): {mean_ratio:.3f} ({len(ratios)} chromosome contigs)", file=sys.stderr)
+    logger.info(f"Mean gene proportion (mapped/ref): {mean_ratio:.3f} ({len(ratios)} chromosome contigs)")
     return mean_ratio
 
 
@@ -330,8 +332,8 @@ def classify_debris_and_unclassified(
     # Everything else is unclassified
     unclassified_contigs = remaining_contigs - debris_contigs
 
-    print(f"[info] Debris contigs: {len(debris_contigs)}", file=sys.stderr)
-    print(f"[info] Unclassified contigs: {len(unclassified_contigs)}", file=sys.stderr)
+    logger.info(f"Debris contigs: {len(debris_contigs)}")
+    logger.info(f"Unclassified contigs: {len(unclassified_contigs)}")
 
     return debris_contigs, unclassified_contigs, debris_hits
 

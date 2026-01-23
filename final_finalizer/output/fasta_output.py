@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import re
-import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List
 
 from final_finalizer.models import ContigClassification
+from final_finalizer.utils.logging_config import get_logger
+
+logger = get_logger("fasta_output")
 from final_finalizer.utils.sequence_utils import (
     read_fasta_sequences,
     reverse_complement,
@@ -98,6 +100,6 @@ def write_classified_fastas(
         sorted_seqs = dict(sorted(out_seqs.items(), key=lambda x: sort_key(x[0])))
         write_fasta(sorted_seqs, output_path)
 
-        print(f"[done] {category}: {output_path} ({len(sorted_seqs)} contigs)", file=sys.stderr)
+        logger.done(f"{category}: {output_path} ({len(sorted_seqs)} contigs)")
 
     return output_paths

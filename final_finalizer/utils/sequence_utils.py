@@ -11,6 +11,9 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set
 
 from final_finalizer.utils.io_utils import open_maybe_gzip
+from final_finalizer.utils.logging_config import get_logger
+
+logger = get_logger("sequence_utils")
 
 
 # ----------------------------
@@ -63,16 +66,13 @@ def read_fasta_sequences(fasta_path: Path, warn_size_gb: float = 2.0) -> Dict[st
     Returns:
         Dict mapping sequence name to sequence string
     """
-    import sys
-
     # Check file size and warn for large files
     try:
         file_size_gb = fasta_path.stat().st_size / (1024**3)
         if file_size_gb > warn_size_gb:
-            print(
-                f"[warn] Loading {file_size_gb:.1f} GB FASTA into memory. "
-                "This may use significant RAM.",
-                file=sys.stderr,
+            logger.warning(
+                f"Loading {file_size_gb:.1f} GB FASTA into memory. "
+                "This may use significant RAM."
             )
     except OSError:
         pass  # File might be gzipped, size check less meaningful
