@@ -203,9 +203,36 @@ def parse_paf_chain_evidence_and_segments(
     assign_ref_score: str,
     ref_id_map: Optional[Dict[str, str]] = None,
 ) -> ChainEvidenceResult:
-    """
-    Original nucleotide-chain mode (mm2plus PAF):
-      contig=query, ref_id=reference sequence (typically chrNA/chrNP/etc.).
+    """Parse PAF alignment file and build synteny chains for nucleotide mode.
+
+    Nucleotide mode uses whole-genome minimap2 alignment with permissive chaining
+    to create megabase-scale synteny blocks. This is ideal for chromosome-scale
+    structural composition analysis and detecting features like fusions, translocations,
+    or homeologous exchanges.
+
+    Args:
+        paf_gz_path: Path to PAF file (plain or gzipped)
+        contig_lengths: Query contig lengths dict
+        assign_minlen: Minimum alignment length (bp) to include
+        assign_minmapq: Minimum mapping quality
+        assign_tp: Which alignment types to keep (P/PI/ALL)
+        chain_q_gap: Max query gap between blocks in chain
+        chain_r_gap: Max reference gap between blocks in chain
+        chain_diag_slop: Max diagonal drift allowed in chain
+        assign_min_ident: Minimum identity (matches/aln_len) threshold
+        assign_chain_topk: Number of top-scoring chains to consider per contig-ref pair
+        assign_chain_score: Chain scoring method (matches/qbp_ident/matches_ident)
+        assign_chain_min_bp: Minimum chain union-bp to keep
+        assign_ref_score: Reference scoring method (topk/all)
+        ref_id_map: Optional mapping for reference ID normalization
+
+    Returns:
+        ChainEvidenceResult containing chains, segments, and scoring information
+
+    Note:
+        In nucleotide mode, contig=query assembly, ref_id=reference chromosome.
+        Gate filtering requires ≥1 segment (hardcoded in cli.py) because perfect
+        full-length alignments produce fewer segments than fragmented protein hits.
     """
     if assign_chain_topk < 1:
         raise ValueError("--assign-chain-topk must be >= 1")
@@ -267,6 +294,14 @@ def parse_paf_chain_evidence_and_segments(
                     gene_id=None,
                 )
             )
+
+    # Warn if no alignments were found
+    if not blocks:
+        logger.warning(
+            "No valid alignments found in PAF file after filtering. "
+            "Check if reference and query are compatible, or adjust filtering thresholds "
+            f"(minlen={assign_minlen}, minmapq={assign_minmapq}, min_ident={assign_min_ident})."
+        )
 
     return _chains_to_evidence_and_segments(
         blocks=blocks,
@@ -402,11 +437,38 @@ def parse_miniprot_synteny_evidence_and_segments(
     assign_chain_min_bp: int,
     assign_ref_score: str,
 ) -> ChainEvidenceResult:
-    """
-    Protein-anchor mode:
-      - miniprot PAF has: qname=protein/transcript, tname=query contig
-      - Map qname -> ref_id(ref chrom) + (start,end,strand) from GFF3 transcript features
-      - Build blocks in (query-contig coordinate) vs (reference transcript genomic coordinate) space
+    """Parse miniprot PAF file and build synteny chains for protein mode.
+
+    Protein mode uses protein-anchored synteny based on miniprot alignments.
+    Proteins are more conserved than nucleotide sequences, making this mode
+    ideal for gene-level classification across distantly related species.
+
+    Args:
+        miniprot_paf_gz: Path to miniprot PAF file (plain or gzipped)
+        contig_lengths: Query contig lengths dict
+        tx2loc: Mapping of transcript ID -> (ref_id, start, end, strand) from GFF3
+        tx2gene: Mapping of transcript ID -> gene ID from GFF3
+        assign_minlen: Minimum target span (bp) on query contig
+        assign_minmapq: Minimum mapping quality
+        chain_q_gap: Max query gap between blocks in chain
+        chain_r_gap: Max reference gap between blocks in chain
+        chain_diag_slop: Max diagonal drift allowed in chain
+        assign_min_ident: Minimum identity (matches/aln_len) threshold
+        assign_chain_topk: Number of top-scoring chains to consider per contig-ref pair
+        assign_chain_score: Chain scoring method (matches/qbp_ident/matches_ident)
+        assign_chain_min_bp: Minimum chain union-bp to keep
+        assign_ref_score: Reference scoring method (topk/all)
+
+    Returns:
+        ChainEvidenceResult containing chains, segments, gene counts, and scoring information
+
+    Note:
+        In protein mode, miniprot PAF has qname=protein/transcript, tname=query contig.
+        We map qname to reference chromosome coordinates via GFF3 transcript features,
+        then build blocks in (query contig coordinate) vs (reference genomic coordinate) space.
+        Overlapping hits are filtered by identity using interval trees (O(n log n)).
+        Gate filtering requires ≥5 segments, ≥3 genes (configurable via CLI) because
+        protein alignments produce many fragmented hits across a chromosome.
     """
     if assign_chain_topk < 1:
         raise ValueError("--assign-chain-topk must be >= 1")

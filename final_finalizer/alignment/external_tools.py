@@ -159,26 +159,43 @@ def run_minimap2_synteny(
     err_path: Path,
     permissive: bool = False,
 ) -> None:
-    """Run minimap2/mm2plus with parameterization tuned for synteny alignments.
+    """Run minimap2/mm2plus for whole-genome synteny alignment (nucleotide mode).
+
+    This function is used exclusively for --synteny-mode nucleotide, which performs
+    chromosome-scale structural composition analysis via whole-genome nucleotide
+    alignment. The permissive chaining parameters create megabase-scale synteny
+    blocks suitable for chromosome classification and architecture visualization.
 
     Args:
-        permissive: If True, use permissive chaining parameters that create
-            megabase-scale blocks by chaining through repetitive regions.
-            This is the default for nucleotide mode in final_finalizer.
-            If False, use conservative parameters (legacy option, not used).
+        ref: Reference genome FASTA
+        qry: Query assembly FASTA
+        paf_gz_out: Output PAF file (will be gzipped)
+        threads: Number of threads for minimap2
+        preset: Minimap2 preset (e.g., asm20 for cross-species, asm5 for same-species)
+        k: K-mer size override (optional)
+        w: Minimizer window size override (optional)
+        err_path: Path for stderr output
+        permissive: If True, use permissive chaining (default for nucleotide mode).
+            If False, use conservative parameters (legacy, not used in final_finalizer).
 
-    Permissive mode (-c -f1 -B2 -O1,24 -s 10 --max-chain-skip=300 -z 10000,1000 -r 50000):
+    Permissive mode (default for nucleotide mode):
+        Parameters: -c -f1 -B2 -O1,24 -s 10 --max-chain-skip=300 -z 10000,1000 -r 50000
         - Chains through repetitive regions and small gaps (kb-scale)
         - Creates continuous megabase-scale blocks for chromosome architecture analysis
         - Suitable for both within-species and cross-species comparisons
-        - Used by default in nucleotide synteny mode
+        - Balanced by downstream filtering (identity, length, gate thresholds)
 
-    Conservative mode (-c -f1 -B2 -O1,24 -s 10 --max-chain-skip=80 -z 2000,200):
-        - Legacy option, not used by final_finalizer
+    Conservative mode (legacy, not used):
+        Parameters: -c -f1 -B2 -O1,24 -s 10 --max-chain-skip=80 -z 2000,200
         - Fragments alignments at ambiguous repeats
-        - Preserves fine-scale structural variant detection
+        - Preserves fine-scale structural variant details
+        - Not suitable for chromosome classification (too fragmented)
 
-    Output is gzipped PAF.
+    Output:
+        Gzipped PAF file with whole-genome alignment records
+
+    Raises:
+        RuntimeError: If neither mm2plus nor minimap2 is available
     """
     if file_exists_and_valid(paf_gz_out):
         logger.info(f"PAF.gz exists, reusing: {paf_gz_out}")

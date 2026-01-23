@@ -6,7 +6,10 @@
 
 ## Features
 
-- **Chromosome assignment** using protein-anchored synteny blocks (miniprot)
+- **Dual synteny modes**:
+  - **Protein mode** (default): Protein-anchored synteny blocks (miniprot) for gene-level classification
+  - **Nucleotide mode**: Whole-genome nucleotide alignment (minimap2) for structural composition analysis
+- **Chromosome assignment** with gate-based filtering to prevent spurious assignments
 - **Subgenome resolution** for polyploid genomes with multiple chromosome sets
 - **Organelle detection** (chloroplast/chrC, mitochondrion/chrM) via BLAST
 - **rDNA contig identification** via BLAST against reference rDNA
@@ -14,6 +17,7 @@
 - **Debris detection** for assembly fragments (chromosome debris, organelle debris)
 - **Chimera flagging** for contigs with evidence from multiple chromosomes
 - **Orientation determination** for chromosome-assigned contigs
+- **Read depth analysis** (optional) with automated downsampling and caching
 - **Publication-ready visualizations** (PDF plots via R/ggplot2)
 
 ## Installation
@@ -90,7 +94,7 @@ Latest tested conda package versions (CI):
 | `-r, --ref` | Reference genome FASTA (can be gzipped) |
 | `-q, --query` | Query assembly FASTA to classify |
 | `-o, --outprefix` | Output file prefix |
-| `--ref-gff3` | Reference GFF3 with protein-coding gene annotations |
+| `--ref-gff3` | Reference GFF3 with protein-coding gene annotations. Required for `--synteny-mode protein`. |
 
 ### Common options
 
@@ -141,11 +145,20 @@ Read type to minimap2 preset mapping:
 
 **Depth caching**: Alignment and depth results are cached and automatically reused on subsequent runs if inputs match. Use `--keep-depth-bam` to retain the aligned BAM file after depth calculation (default: deleted to save space). Cached depth results can be reused even if the BAM is deleted.
 
+### Synteny mode selection
+
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--synteny-mode` | Synteny evidence source: `protein` (miniprot) or `nucleotide` (minimap2) | protein |
+
+**Protein mode** (default): Uses miniprot protein-anchored synteny. Requires `--ref-gff3`. Ideal for detecting conserved gene content across distantly related species.
+
+**Nucleotide mode**: Uses minimap2 whole-genome nucleotide alignment with permissive chaining for chromosome-scale structural composition analysis. Creates megabase-scale synteny blocks by chaining through repetitive regions. Suitable for both within-species and cross-species comparisons. Ideal for identifying structural features like chromosomal fusions, homeologous recombination, or introgression events.
+
 ### Pipeline toggles
 
 | Argument | Description |
 |----------|-------------|
-| `--nt-synteny` | Run nucleotide synteny alignments (minimap2) for QA |
 | `--skip-organelles` | Skip organelle detection |
 | `--skip-rdna` | Skip rDNA detection |
 | `--skip-contaminants` | Skip contaminant detection |
@@ -207,18 +220,21 @@ For complete column documentation for all TSV files, see [docs/output_formats.md
 
 The tool runs these phases in order:
 
-1. **Reference protein extraction** - Extract proteins from GFF3 using gffread
-2. **Protein-anchor synteny** - Align proteins to query assembly (miniprot)
+1. **Reference preparation** - Read reference genome and compute GC statistics
+2. **Synteny analysis** (mode-dependent):
+   - **Protein mode**: Extract proteins from GFF3 (gffread), align to query assembly (miniprot)
+   - **Nucleotide mode**: Whole-genome alignment with permissive chaining (minimap2)
 3. **Synteny block building** - Chain alignments into synteny blocks; identify chromosome candidates
 4. **Organelle detection** - BLAST non-chromosome contigs against chrC/chrM references
 5. **rDNA detection** - BLAST against rDNA reference
 6. **Chromosome debris detection** - High-coverage, high-identity matches to assembled chromosomes
 7. **Contaminant detection** - Centrifuger taxonomic classification
-8. **Debris classification** - Reference/protein-based debris detection for remaining contigs
-9. **Orientation determination** - Determine strand for chromosome contigs based on synteny votes
-10. **Final classification** - Assign all contigs to categories
-11. **Read depth analysis** (optional) - Align reads and compute per-contig depth metrics
-12. **Output generation** - Write classified FASTAs, summary tables, and visualizations
+8. **Debris classification** - Reference-based debris detection for remaining contigs
+9. **Gene count statistics** (if GFF3 provided) - Compute gene proportion metrics
+10. **Orientation determination** - Determine strand for chromosome contigs based on synteny votes
+11. **Final classification** - Assign all contigs to categories with confidence levels
+12. **Read depth analysis** (optional) - Align reads and compute per-contig depth metrics
+13. **Output generation** - Write classified FASTAs, summary tables, and visualizations
 
 ## Contig Classification Categories
 
@@ -270,16 +286,33 @@ Each contig is assigned a confidence level (`high`, `medium`, or `low`) indicati
 
 ### Chromosome assignment
 
+**Common thresholds (both modes):**
+
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `--assign-min-frac` | 0.10 | Min synteny coverage of contig |
 | `--assign-min-ratio` | 1.25 | Min best/second score ratio |
+| `--miniprot-min-span-frac` | 0.20 | Min span fraction of contig (applies to both modes) |
+| `--miniprot-min-span-bp` | 50000 | Min absolute span in bp (applies to both modes) |
+
+**Protein mode specific:**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
 | `--assign-minlen-protein` | 150 | Min target span (bp) for protein-anchor synteny block building |
 | `--miniprot-min-genes` | 3 | Min unique genes for assignment |
-| `--miniprot-min-segments` | 5 | Min synteny segments |
-| `--miniprot-min-span-frac` | 0.20 | Min span fraction of contig |
+| `--miniprot-min-segments` | 5 | Min synteny segments for protein mode |
+
+**Nucleotide mode specific:**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--assign-minlen` | 10000 | Min alignment span for nucleotide synteny block building |
+| Min segments | 1 | Hardcoded (nucleotide mode requires ≥1 segment) |
 
 All gate criteria must be satisfied for chromosome assignment (AND logic).
+
+**Note**: Despite the `miniprot-` prefix on some parameters, span fraction and span bp thresholds apply to both modes. The segment count threshold differs: protein mode requires ≥5 segments (configurable), while nucleotide mode requires ≥1 segment (hardcoded) because perfect full-length alignments produce fewer segments.
 
 ### Organelle detection
 
@@ -365,7 +398,7 @@ assign_min_ratio = 1.25
 
 ## Example Workflows
 
-### Basic chromosome assignment
+### Basic chromosome assignment (protein mode)
 
 ```bash
 ./final_finalizer.py \
@@ -377,6 +410,23 @@ assign_min_ratio = 1.25
     --plot \
     --plot-html
 ```
+
+### Nucleotide mode for structural composition analysis
+
+Use nucleotide mode when you want to detect chromosome-scale structural features like fusions, translocations, or homeologous exchanges. This mode uses whole-genome nucleotide alignment and is suitable for both within-species and cross-species comparisons.
+
+```bash
+./final_finalizer.py \
+    -r reference.fasta \
+    -q assembly.fasta \
+    -o assembly_nucleotide \
+    --synteny-mode nucleotide \
+    -t 32 \
+    --plot \
+    --plot-html
+```
+
+Note: Nucleotide mode does not require `--ref-gff3`, but if provided, gene count statistics will be included in the output.
 
 ### Polyploid genome with contaminant screening
 
@@ -468,22 +518,44 @@ assign_min_ratio = 1.25
 
 ## Algorithm Details
 
-### Protein-anchor synteny
+### Synteny Mode Selection
 
-The tool uses protein homology as the primary evidence source because:
+The tool supports two complementary synteny modes:
+
+#### Protein mode (default)
+
+Uses protein homology as the primary evidence source because:
 - Proteins are more conserved than nucleotide sequences
 - Works across distantly related species
 - Robust to repetitive sequences
-- Provides gene-level resolution
+- Provides gene-level resolution for functional assessment
 
 Miniprot alignments are:
-1. Filtered by alignment quality
+1. Filtered by alignment quality and identity
 2. Mapped to reference genomic coordinates via GFF3
-3. Chained into collinear synteny blocks
-4. Aggregated per contig × reference chromosome
-5. Scored and ranked for assignment
+3. Overlapping hits filtered by identity (keeps highest-identity hit at each position)
+4. Chained into collinear synteny blocks
+5. Aggregated per contig × reference chromosome
+6. Scored and ranked for assignment
 
 **Performance optimization**: The pipeline uses interval trees (via the `intervaltree` package) for efficient O(n log n) overlap detection during synteny block filtering, replacing the previous O(n²) algorithm. This significantly improves runtime for large assemblies with many protein alignments.
+
+#### Nucleotide mode
+
+Uses whole-genome nucleotide alignment for structural composition analysis:
+- Detects actual sequence-level identity and synteny
+- Ideal for identifying structural features (fusions, translocations, homeologous exchanges)
+- Works for both within-species and cross-species comparisons
+- Creates megabase-scale synteny blocks for chromosome architecture analysis
+
+Minimap2 alignments use permissive chaining parameters to create continuous chromosome-scale blocks:
+- `--max-chain-skip=300`: Chain through repetitive regions
+- `-z 10000,1000`: Tolerate long gaps in alignment chains
+- `-r 50000`: Large bandwidth (50kb) to accommodate structural variations
+
+This permissive approach chains through homopolymer runs, tandem repeats, and ambiguous regions that would otherwise fragment alignments. The resulting megabase-scale blocks are suitable for chromosome classification and compositional analysis, balanced by downstream filtering (identity thresholds, minimum alignment length, gate filtering) to prevent spurious assignments.
+
+**Gate threshold differences**: Nucleotide mode requires ≥1 segment (vs. ≥5 for protein mode) because perfect full-length nucleotide alignments produce fewer segments than fragmented protein hits.
 
 ### Gate-based assignment
 

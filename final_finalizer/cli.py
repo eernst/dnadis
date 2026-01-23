@@ -598,7 +598,9 @@ def main():
         )
     else:  # nucleotide mode
         logger.phase("Phase 2: Nucleotide synteny analysis (whole-genome alignment)")
-        logger.info(f"Running minimap2 with permissive chaining for chromosome-scale structural analysis")
+        logger.info("Running minimap2 with permissive chaining for chromosome-scale structural analysis")
+        logger.info("Note: Nucleotide mode is optimized for within-species or closely related genomes. "
+                    "For highly divergent species, protein mode may provide more reliable assignments.")
         run_minimap2_synteny(
             ref, qry, paf_gz, args.threads, args.preset, args.kmer, args.window, err_log,
             permissive=True  # Always use permissive chaining in nucleotide mode
@@ -609,7 +611,7 @@ def main():
             contig_lengths=qry_lengths,
             assign_minlen=args.assign_minlen,
             assign_minmapq=args.assign_minmapq,
-            assign_tp="PI",  # Use primary + inversion alignments
+            assign_tp=args.assign_tp,
             chain_q_gap=args.chain_q_gap,
             chain_r_gap=args.chain_r_gap,
             chain_diag_slop=args.chain_diag_slop,
@@ -624,14 +626,24 @@ def main():
     # --- Synteny gates: filter weak assignments ---
     seg_count, span_bp = build_segment_support_from_rows(ev.chain_segments_rows)
 
+    # Set min_segments based on synteny mode:
+    # - Protein mode: use configurable --miniprot-min-segments (default 5)
+    # - Nucleotide mode: always 1 (perfect alignments often produce single continuous matches)
+    if args.synteny_mode == "protein":
+        min_segments = args.miniprot_min_segments
+        min_genes = args.miniprot_min_genes
+    else:  # nucleotide mode
+        min_segments = 1
+        min_genes = 0  # Gene count not required in nucleotide mode
+
     def _passes_gate(
         q: str,
         ref_id: str,
         clen: int,
-        min_segments: int,
+        min_seg: int,
         min_span_bp: int,
         min_span_frac: float,
-        min_genes: int,
+        min_gen: int,
     ) -> tuple[bool, int, int, float, int]:
         key = (q, ref_id)
         nseg = int(seg_count.get(key, 0) or 0)
@@ -639,15 +651,8 @@ def main():
         spfrac = (spbp / clen) if clen > 0 else 0.0
         ngen = int(ev.qr_gene_count.get(key, 0) or 0)
 
-        # Adjust thresholds for nucleotide mode
-        # In nucleotide mode, perfect alignments often produce fewer segments (even 1!)
-        # because they're continuous matches, not fragmented like protein hits
-        if args.synteny_mode == "protein":
-            ok = (nseg >= min_segments) and (spbp >= min_span_bp) and (spfrac >= min_span_frac) and (ngen >= min_genes)
-        else:  # nucleotide mode
-            # Much lower segment threshold for nucleotide mode (1 is fine for full-length perfect matches)
-            # Still enforce span requirements to avoid spurious short alignments
-            ok = (nseg >= 1) and (spbp >= min_span_bp) and (spfrac >= min_span_frac)
+        # Gate: contig must meet all thresholds to be assigned
+        ok = (nseg >= min_seg) and (spbp >= min_span_bp) and (spfrac >= min_span_frac) and (ngen >= min_gen)
         return ok, nseg, spbp, spfrac, ngen
 
     # Gate-aware reranking over candidate refs
@@ -661,6 +666,7 @@ def main():
 
     n_demoted = 0
     n_switched = 0
+    n_no_candidates = 0  # Contigs with no alignment candidates
     qr_ref_score = ev.qr_weight_all if args.assign_ref_score == "all" else ev.qr_score_topk
 
     candidates_by_contig = defaultdict(list)
@@ -683,6 +689,7 @@ def main():
             second_ref[q] = ""
             second_score[q] = 0.0
             second_bp[q] = 0
+            n_no_candidates += 1
             continue
 
         cands.sort(key=lambda x: (x[0], int(ev.qr_union_bp.get((q, x[1]), 0) or 0)), reverse=True)
@@ -694,10 +701,10 @@ def main():
                 q,
                 ref_id,
                 clen,
-                args.miniprot_min_segments,
+                min_segments,
                 args.miniprot_min_span_bp,
                 args.miniprot_min_span_frac,
-                args.miniprot_min_genes,
+                min_genes,
             )
             if ok:
                 passing.append((sc, ref_id))
@@ -732,14 +739,21 @@ def main():
         if chosen_ref_id != orig_best:
             n_switched += 1
 
+    # Log gate filtering statistics
+    n_total = len(qry_lengths)
+    n_with_candidates = n_total - n_no_candidates
+    n_passing = n_with_candidates - n_demoted
+    logger.info(f"Gate filtering: {n_total} contigs, {n_with_candidates} with candidates, "
+                f"{n_passing} passing gates, {n_demoted} demoted, {n_switched} switched")
+    logger.info(f"Gate thresholds: min_segments={min_segments}, min_span_bp={args.miniprot_min_span_bp}, "
+                f"min_span_frac={args.miniprot_min_span_frac}, min_genes={min_genes}")
+
     if args.synteny_mode == "protein":
-        logger.info(f"Protein-anchor gate-aware rerank: demoted={n_demoted} switched={n_switched}")
         plot_suffix = "protein-anchor synteny"
         logger.done(f"Proteins:         {proteins_faa}")
         logger.done(f"miniprot PAF.gz:  {miniprot_paf_gz}")
         logger.done(f"miniprot err:     {miniprot_err}")
     else:  # nucleotide mode
-        logger.info(f"Nucleotide synteny gate-aware rerank: demoted={n_demoted} switched={n_switched}")
         plot_suffix = "nucleotide synteny"
         logger.done(f"minimap2 PAF.gz:  {paf_gz}")
         logger.done(f"minimap2 err:     {err_log}")

@@ -168,9 +168,12 @@ df_chrom <- df_depth %>%
     ),
     # Label for display
     # Note: assigned_subgenome may be NA (R's missing) or "NA" (string)
-    # Use !is.na() to check for actual values
+    # Check for both cases to avoid labels like "chr1NA"
     chrom_label = if_else(
-      classification == "chrom_assigned" & !is.na(assigned_subgenome) & assigned_subgenome != "",
+      classification == "chrom_assigned" &
+        !is.na(assigned_subgenome) &
+        assigned_subgenome != "" &
+        assigned_subgenome != "NA",
       paste0(chrom_id, assigned_subgenome),
       chrom_id
     )
