@@ -155,3 +155,76 @@ def run_depth_plot(
         logger.done(f"Depth plot written to: {plot_pdf}")
         if plot_html:
             logger.done(f"Depth plot written to: {plot_html_path}")
+
+
+def run_contaminant_plot(
+    contaminants_tsv: Path,
+    outprefix: Path,
+    plot_title_suffix: str,
+    plot_html: bool,
+    min_coverage: float = 0.50,
+) -> None:
+    """Generate contamination treemap showing phylogenetic breakdown.
+
+    Creates a treemap showing the taxonomic hierarchy as nested rectangles
+    (Kingdom > Family > Genus > Species) with area proportional to total
+    contamination span bp.
+
+    Args:
+        contaminants_tsv: Path to contaminants.tsv with taxonomic lineage
+        outprefix: Output prefix for generated files
+        plot_title_suffix: Suffix for plot titles
+        plot_html: Whether to generate interactive HTML version
+        min_coverage: Minimum coverage threshold for high-confidence visualization
+    """
+    if not have_rscript():
+        logger.warning("Rscript not found in PATH; skipping contaminant plot.")
+        return
+
+    # Check if file exists and has content
+    if not contaminants_tsv.exists():
+        logger.warning(f"Contaminants TSV not found: {contaminants_tsv}")
+        return
+
+    # Check for empty file (just header or no data)
+    try:
+        with contaminants_tsv.open("r") as fh:
+            lines = fh.readlines()
+            if len(lines) <= 1:
+                logger.info("No contaminants in TSV; skipping contaminant plot.")
+                return
+    except Exception as e:
+        logger.warning(f"Could not read contaminants TSV: {e}")
+        return
+
+    plot_pdf = Path(str(outprefix) + ".contaminant_treemap.pdf")
+    plot_html_path = Path(str(outprefix) + ".contaminant_treemap.html")
+    r_script_path = Path(str(outprefix) + ".contaminant_treemap.R")
+
+    # Template expected alongside this Python file
+    tmpl_path = Path(__file__).resolve().with_name("contaminant_treemap.tmpl.R")
+    if not tmpl_path.exists():
+        logger.warning(f"Missing R template for contaminant plots: {tmpl_path}")
+        return
+
+    tmpl = _read_text(tmpl_path)
+
+    filled = (
+        tmpl.replace("__CONTAMINANTS_TSV__", _esc(contaminants_tsv))
+        .replace("__OUTPDF__", _esc(plot_pdf))
+        .replace("__OUTHTML__", _esc(plot_html_path))
+        .replace("__PLOTHTML__", "TRUE" if plot_html else "FALSE")
+        .replace("__MIN_COVERAGE__", str(min_coverage))
+        .replace("__SUFFIX__", str(plot_title_suffix).replace('"', '\\"'))
+    )
+
+    with r_script_path.open("w", encoding="utf-8") as rf:
+        rf.write(filled)
+
+    logger.info(f"Running Rscript to generate contaminant treemap: {plot_pdf}")
+    try:
+        subprocess.run(["Rscript", str(r_script_path)], check=True)
+    except subprocess.CalledProcessError as e:
+        logger.warning(f"Rscript failed with code {e.returncode}; contaminant plot not generated.")
+    else:
+        logger.done(f"Contaminant treemap written to: {plot_pdf}")

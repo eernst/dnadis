@@ -119,6 +119,7 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
     },
     "thresholds_contaminant": {
         "contaminant_min_score": "contaminant_min_score",
+        "contaminant_min_coverage": "contaminant_min_coverage",
     },
     "thresholds_debris": {
         "debris_min_cov": "debris_min_cov",

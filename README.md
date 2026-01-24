@@ -40,7 +40,9 @@
 - [mosdepth](https://github.com/brentp/mosdepth) - efficient depth calculation
 - [rasusa](https://github.com/mbhall88/rasusa) - FASTQ downsampling for depth analysis
 - [centrifuger](https://github.com/mourisl/centrifuger) - contaminant detection
+- [taxonkit](https://github.com/shenwei356/taxonkit) + NCBI taxonomy database - taxonomic lineage for contaminant visualization (see below)
 - R with ggplot2, dplyr, readr, stringr, tibble, tidyr, patchwork, ggnewscale, pacman - visualization (`--plot`)
+- R with treemapify - contaminant phylogenetic breakdown visualization
 - R with ggiraph, htmlwidgets, pandoc - interactive visualization (`--plot-html`)
 
 ### Conda environment
@@ -60,8 +62,33 @@ conda install -n final_finalizer -c bioconda samtools mosdepth rasusa
 
 Optional (plotting):
 ```bash
-conda install -n final_finalizer -c conda-forge r-base r-ggplot2 r-dplyr r-readr r-stringr r-tibble r-tidyr r-patchwork r-ggnewscale r-pacman r-ggiraph r-htmlwidgets pandoc
+conda install -n final_finalizer -c conda-forge r-base r-ggplot2 r-dplyr r-readr r-stringr r-tibble r-tidyr r-patchwork r-ggnewscale r-pacman r-ggiraph r-htmlwidgets r-scales libxml2 pandoc
 ```
+
+Note: The contaminant treemap visualization requires the R `treemapify` package, which depends on `libxml2`. After installing `libxml2` via conda, you may need to create a symlink for R to find it:
+```bash
+ln -sf libxml2.so.16 $CONDA_PREFIX/lib/libxml2.so
+```
+
+Optional (taxonkit for contaminant phylogenetic visualization):
+
+For full Domain → Family → Genus → Species breakdown in the contaminant treemap, install taxonkit and the NCBI taxonomy database:
+
+```bash
+# Install taxonkit
+conda install -n final_finalizer -c bioconda taxonkit
+
+# Download and set up NCBI taxonomy database
+# Option 1: Let taxonkit download it (requires ~1.5GB)
+taxonkit download --data-dir ~/.taxonkit
+
+# Option 2: Manual download
+wget -c ftp://ftp.ncbi.nih.gov/pub/taxonomy/taxdump.tar.gz
+mkdir -p ~/.taxonkit
+tar -xzf taxdump.tar.gz -C ~/.taxonkit
+```
+
+Without taxonkit, the contaminant plot will show a simpler treemap by genus (parsed from scientific names). With taxonkit and the taxonomy database, you get a full hierarchical treemap showing the phylogenetic breakdown of detected contaminants (Domain > Family > Genus > Species).
 
 Latest tested conda package versions (CI):
 <!-- conda-versions-start -->
@@ -215,6 +242,8 @@ For complete column documentation for all TSV files, see [docs/output_formats.md
 | `*.chromosome_overview.pdf` | Multi-panel plot showing contig composition, subgenome support, and alignment identity |
 | `*.depth_overview.pdf` | Read depth visualization by classification and chromosome (if `--reads` provided) |
 | `*.depth_overview.html` | Interactive version with tooltips (if `--plot-html` and `--reads` provided) |
+| `*.contaminant_treemap.pdf` | Phylogenetic breakdown of contaminants as treemap (if contaminants detected) |
+| `*.contaminants.tsv` | Detailed contaminant summary with taxonomic lineage |
 
 ## Classification Pipeline
 
@@ -327,6 +356,7 @@ All gate criteria must be satisfied for chromosome assignment (AND logic).
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `--contaminant-min-score` | 150 | Min centrifuger score |
+| `--contaminant-min-coverage` | 0.50 | Min query coverage for high-confidence contaminant visualization |
 
 ### Debris detection
 
@@ -584,6 +614,7 @@ If you use this tool, please cite:
 - [minimap2](https://github.com/lh3/minimap2)
 - [gffread](https://github.com/gpertea/gffread)
 - [centrifuger](https://github.com/mourisl/centrifuger) (if used)
+- [taxonkit](https://github.com/shenwei356/taxonkit) (if used for contaminant visualization)
 
 ## License
 

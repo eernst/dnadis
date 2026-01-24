@@ -126,6 +126,26 @@ class ContaminantHit:
 
 
 @dataclass
+class ContaminantHitExtended:
+    """Contaminant hit with full taxonomic lineage.
+
+    Extends ContaminantHit with NCBI taxonomy hierarchy from TaxonKit.
+    Used for phylogenetic breakdown visualizations (alluvial plots).
+    """
+    taxid: int
+    sci_name: str
+    coverage: float  # Fraction of contig covered (0.0-1.0)
+    score: int  # Centrifuger score
+    kingdom: Optional[str] = None
+    phylum: Optional[str] = None
+    tax_class: Optional[str] = None  # 'class' is a reserved keyword
+    order: Optional[str] = None
+    family: Optional[str] = None
+    genus: Optional[str] = None
+    species: Optional[str] = None
+
+
+@dataclass
 class OrganelleHit:
     """Organelle detection result for a contig."""
     organelle_type: str  # "chrC" or "chrM"

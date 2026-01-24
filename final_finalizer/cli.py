@@ -113,9 +113,10 @@ from final_finalizer.output.tsv_output import (
     write_chain_segments_tsv,
     write_chain_summary_tsv,
     write_contig_summary_tsv,
+    write_contaminant_summary_tsv,
     write_macro_blocks_tsv,
 )
-from final_finalizer.output.plotting import run_plot, run_depth_plot
+from final_finalizer.output.plotting import run_plot, run_depth_plot, run_contaminant_plot
 
 
 def main():
@@ -143,8 +144,8 @@ def main():
             miniprot_min_genes=3, miniprot_min_segments=5, miniprot_min_span_frac=0.20,
             miniprot_min_span_bp=50000, organelle_min_cov=0.80, chrC_len_tolerance=0.05,
             chrM_len_tolerance=0.20, rdna_min_cov=0.50, chr_debris_min_cov=0.80,
-            chr_debris_min_identity=0.90, contaminant_min_score=150, debris_min_cov=0.50,
-            debris_min_protein_hits=2, preset="asm20", kmer=None, window=None, aln_minlen=10000,
+            chr_debris_min_identity=0.90, contaminant_min_score=150, contaminant_min_coverage=0.50,
+            debris_min_cov=0.50, debris_min_protein_hits=2, preset="asm20", kmer=None, window=None, aln_minlen=10000,
         )
         print(dump_config_template(defaults))
         sys.exit(0)
@@ -435,6 +436,10 @@ def main():
     contam_thresh.add_argument(
         "--contaminant-min-score", type=int, default=150,
         help="Min centrifuger score for contaminant classification [150]",
+    )
+    contam_thresh.add_argument(
+        "--contaminant-min-coverage", type=float, default=0.50,
+        help="Min query coverage for high-confidence contaminant visualization in alluvial plot [0.50]",
     )
 
     # =========================================================================
@@ -1062,6 +1067,17 @@ def main():
     logger.done(f"Summary:           {summary_tsv}")
     logger.done(f"Ref lengths:       {ref_lengths_tsv}")
 
+    # Write contaminant summary TSV with taxonomic lineage (for alluvial plot)
+    contaminants_tsv = Path(str(outprefix) + ".contaminants.tsv")
+    if contaminants:
+        write_contaminant_summary_tsv(
+            output_path=contaminants_tsv,
+            contaminants=contaminants,
+            query_lengths=qry_lengths,
+            depth_stats=depth_stats if depth_stats else None,
+        )
+        logger.done(f"Contaminants:      {contaminants_tsv}")
+
     clf_counts: Dict[str, int] = defaultdict(int)
     for clf in classifications:
         clf_counts[clf.classification] += 1
@@ -1088,6 +1104,15 @@ def main():
                 outprefix,
                 plot_suffix,
                 args.plot_html,
+            )
+        # Generate contaminant alluvial plot if contaminants were detected
+        if contaminants and contaminants_tsv.exists():
+            run_contaminant_plot(
+                contaminants_tsv,
+                outprefix,
+                plot_suffix,
+                args.plot_html,
+                args.contaminant_min_coverage,
             )
 
 

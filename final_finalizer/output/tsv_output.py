@@ -7,7 +7,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
-from final_finalizer.models import ContigClassification
+from final_finalizer.models import ContigClassification, ContaminantHitExtended, DepthStats
 from final_finalizer.utils.reference_utils import split_chrom_subgenome
 
 # Use a large but finite value instead of infinity to avoid parsing issues
@@ -694,3 +694,64 @@ def build_segment_support_from_rows(segment_rows):
 
     span_bp = {k: max(0, int(max_e[k]) - int(min_s[k])) for k in min_s.keys()}
     return seg_count, span_bp
+
+
+def write_contaminant_summary_tsv(
+    output_path: Path,
+    contaminants: Dict[str, ContaminantHitExtended],
+    query_lengths: Dict[str, int],
+    depth_stats: Optional[Dict[str, DepthStats]] = None,
+) -> None:
+    """Write detailed contaminant summary TSV with taxonomic lineage.
+
+    This TSV is used for the contamination alluvial plot visualization,
+    showing the phylogenetic breakdown of detected contaminants.
+
+    Args:
+        output_path: Path to output TSV file
+        contaminants: Dict mapping contig name -> ContaminantHitExtended
+        query_lengths: Dict mapping contig name -> length
+        depth_stats: Optional dict mapping contig name -> DepthStats
+    """
+    columns = [
+        "contig",
+        "length",
+        "taxid",
+        "sci_name",
+        "score",
+        "coverage",
+        "kingdom",
+        "phylum",
+        "class",
+        "order",
+        "family",
+        "genus",
+        "species",
+        "depth_mean",
+    ]
+
+    with output_path.open("w") as fh:
+        fh.write("\t".join(columns) + "\n")
+
+        for contig_name in sorted(contaminants.keys()):
+            hit = contaminants[contig_name]
+            length = query_lengths.get(contig_name, 0)
+            ds = depth_stats.get(contig_name) if depth_stats else None
+
+            row = [
+                contig_name,
+                str(length),
+                str(hit.taxid),
+                hit.sci_name or "",
+                str(hit.score),
+                f"{hit.coverage:.4f}",
+                hit.kingdom or "",
+                hit.phylum or "",
+                hit.tax_class or "",  # 'class' column
+                hit.order or "",
+                hit.family or "",
+                hit.genus or "",
+                hit.species or "",
+                f"{ds.mean_depth:.2f}" if ds else "",
+            ]
+            fh.write("\t".join(row) + "\n")
