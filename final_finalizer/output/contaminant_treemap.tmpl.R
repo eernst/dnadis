@@ -8,7 +8,7 @@ if (!requireNamespace("pacman", quietly = TRUE)) {
 library(pacman)
 pacman::p_load(
   readr, dplyr, stringr, ggplot2, tibble, tidyr,
-  treemapify, scales, ggiraph, htmlwidgets
+  treemapify, scales, ggiraph, htmlwidgets, patchwork
 )
 
 # Placeholders - replaced by Python
@@ -32,8 +32,10 @@ if (nrow(df) == 0) {
 }
 
 # Filter by coverage threshold for high-confidence visualization
+# Also exclude contigs with no depth data (depth=0 or NA)
 df_filtered <- df %>%
-  filter(coverage >= min_coverage)
+  filter(coverage >= min_coverage) %>%
+  filter(!is.na(depth_mean) & depth_mean > 0)
 
 if (nrow(df_filtered) == 0) {
   message(sprintf("No contaminants with coverage >= %.2f. Skipping treemap.", min_coverage))
@@ -158,16 +160,16 @@ if (has_taxonomy) {
       alpha = 0.7,
       colour = "black",
       fontface = "bold",
-      size = 10,
+      size = 9,
       family = base_family,
-      min.size = 3
+      min.size = 2
     ) +
     treemapify::geom_treemap_text(
       colour = "white",
       place = "centre",
-      size = 8,
+      size = 7,
       family = base_family,
-      min.size = 3,
+      min.size = 2,
       grow = FALSE
     ) +
     scale_fill_manual(values = family_colors, name = "Family") +
@@ -179,9 +181,9 @@ if (has_taxonomy) {
       legend.title = element_text(size = base_font_pt),
       legend.text = element_text(size = base_font_pt - 1)
     ) +
-    guides(fill = guide_legend(nrow = 2)) +
+    guides(fill = guide_legend(nrow = 2, keywidth = unit(0.4, "cm"), keyheight = unit(0.4, "cm"))) +
     labs(
-      title = paste0("Contamination breakdown (", plot_suffix, ")"),
+      title = paste0("Contaminants"),
       subtitle = paste0(
         domain_summary, "\n",
         total_contigs, " contigs, ",
@@ -252,8 +254,68 @@ if (has_taxonomy) {
     )
 }
 
-# Save PDF
-ggsave(out_pdf, p, width = 10, height = 7, units = "in", dpi = 300)
+# Create top 10 by depth table panel
+# Get top 10 species by mean depth, with binomial names
+top_by_depth <- df_agg %>%
+  filter(!is.na(mean_depth) & mean_depth > 0) %>%
+  arrange(desc(mean_depth)) %>%
+  head(10) %>%
+  mutate(
+    # Clean species name - remove genus prefix if duplicated
+    species_clean = str_replace_all(species, "_", " "),
+    species_clean = if_else(
+      str_starts(species_clean, paste0(genus, " ")),
+      str_replace(species_clean, paste0("^", genus, " "), ""),
+      species_clean
+    ),
+    # Create proper binomial name
+    binomial = if_else(
+      species_clean == "Unknown" | species_clean == genus | species_clean == "",
+      paste0(genus, " sp."),
+      paste0(genus, " ", species_clean)
+    ),
+    # Clean up any remaining underscores
+    binomial = str_replace_all(binomial, "_", " "),
+    # Rank for y-axis positioning
+    rank = row_number()
+  )
+
+# Create the table panel
+if (nrow(top_by_depth) > 0) {
+  p_table <- ggplot(top_by_depth, aes(y = reorder(binomial, -rank))) +
+    # Family color indicator (thin vertical line, height matches legend keys)
+    geom_tile(aes(x = 0.02, fill = family), width = 0.015, height = 0.35) +
+    # Binomial name (italic)
+    geom_text(
+      aes(x = 0.06, label = binomial),
+      hjust = 0, size = (base_font_pt - 1) / .pt, fontface = "italic", family = base_family
+    ) +
+    # Depth value (right-aligned)
+    geom_text(
+      aes(x = 0.95, label = sprintf("%.1fx", mean_depth)),
+      hjust = 1, size = (base_font_pt - 1) / .pt, family = base_family
+    ) +
+    scale_fill_manual(values = family_colors, guide = "none") +
+    scale_x_continuous(limits = c(0, 1), expand = c(0, 0)) +
+    labs(title = "Top 10 by depth") +
+    theme_void(base_family = base_family) +
+    theme(
+      plot.title = element_text(size = base_font_pt, face = "bold", hjust = 0.5, margin = margin(b = 5)),
+      plot.margin = margin(t = 10, r = 5, b = 10, l = 5)
+    )
+
+  # Combine treemap and table using patchwork
+  # Keep legend at bottom of treemap
+  p_combined <- p + p_table +
+    plot_layout(widths = c(2, 1))
+
+  # Save combined PDF (max 7 inches wide)
+  ggsave(out_pdf, p_combined, width = 7, height = 5, units = "in", dpi = 300)
+} else {
+  # No depth data - save treemap only
+  ggsave(out_pdf, p, width = 7, height = 5, units = "in", dpi = 300)
+}
+
 message("Contamination treemap saved to: ", out_pdf)
 
 # Note: Interactive HTML not supported for treemaps (treemapify lacks ggiraph integration)
