@@ -228,7 +228,7 @@ gt_tbl <- tbl_data %>%
   ) %>%
   # Footnotes for indicators
   tab_footnote(
-    footnote = "\u25CF = all circular, \u25D0 = mixed, \u25CB = all linear",
+    footnote = "\u25CF = all circularized, \u25D0 = mixed, \u25CB = all linear",
     locations = cells_column_labels(columns = circ_indicator)
   ) %>%
   # Source note with family legend
