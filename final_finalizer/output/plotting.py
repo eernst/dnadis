@@ -296,3 +296,80 @@ def run_contaminant_bandage_plot(
         logger.warning(f"Rscript failed with code {e.returncode}; bandage plot not generated.")
     else:
         logger.done(f"Contaminant bandage plot written to: {plot_pdf}")
+
+
+def run_contaminant_table(
+    contaminants_tsv: Path,
+    outprefix: Path,
+    plot_title_suffix: str,
+    top_n: int = 10,
+) -> None:
+    """Generate gt table showing top contaminants ranked by abundance.
+
+    Creates an HTML table using the gt package showing:
+    - Rank by abundance (depth × length)
+    - Domain indicator (colored badge)
+    - Family (colored left border)
+    - Binomial species name (italic)
+    - Contig count and total Mb
+    - Depth and length distributions (boxplot sparklines)
+    - Mean coverage percentage
+    - Circular indicator (●/◐/○)
+
+    Note: Requires depth data (--reads) for ranking and distribution plots.
+    PDF output is not supported because gtExtras sparklines are SVG-based
+    and require a browser engine to render.
+
+    Args:
+        contaminants_tsv: Path to contaminants.tsv with taxonomic lineage
+        outprefix: Output prefix for generated files
+        plot_title_suffix: Suffix for plot titles
+        top_n: Number of top contaminants to display (default 10)
+    """
+    if not have_rscript():
+        logger.warning("Rscript not found; skipping contaminant table.")
+        return
+
+    if not contaminants_tsv.exists():
+        return
+
+    # Check for empty file and depth data availability
+    try:
+        with contaminants_tsv.open("r") as fh:
+            lines = fh.readlines()
+            if len(lines) <= 1:
+                return
+            header = lines[0].strip().split("\t")
+            if "depth_mean" not in header:
+                logger.info("No depth data in contaminants TSV; skipping contaminant table (requires --reads).")
+                return
+    except Exception:
+        return
+
+    plot_html = Path(str(outprefix) + ".contaminant_table.html")
+    r_script_path = Path(str(outprefix) + ".contaminant_table.R")
+
+    tmpl_path = Path(__file__).resolve().with_name("contaminant_table.tmpl.R")
+    if not tmpl_path.exists():
+        logger.warning(f"Missing R template: {tmpl_path}")
+        return
+
+    tmpl = _read_text(tmpl_path)
+    filled = (
+        tmpl.replace("__CONTAMINANTS_TSV__", _esc(contaminants_tsv))
+        .replace("__OUTHTML__", _esc(plot_html))
+        .replace("__TOP_N__", str(top_n))
+        .replace("__SUFFIX__", str(plot_title_suffix).replace('"', '\\"'))
+    )
+
+    with r_script_path.open("w", encoding="utf-8") as rf:
+        rf.write(filled)
+
+    logger.info(f"Running Rscript to generate contaminant table: {plot_html}")
+    try:
+        subprocess.run(["Rscript", str(r_script_path)], check=True)
+    except subprocess.CalledProcessError as e:
+        logger.warning(f"Rscript failed with code {e.returncode}; contaminant table not generated.")
+    else:
+        if plot_html.exists():
+            logger.done(f"Contaminant table written to: {plot_html}")

@@ -116,7 +116,13 @@ from final_finalizer.output.tsv_output import (
     write_contaminant_summary_tsv,
     write_macro_blocks_tsv,
 )
-from final_finalizer.output.plotting import run_plot, run_depth_plot, run_contaminant_plot, run_contaminant_bandage_plot
+from final_finalizer.output.plotting import (
+    run_plot,
+    run_depth_plot,
+    run_contaminant_plot,
+    run_contaminant_bandage_plot,
+    run_contaminant_table,
+)
 
 
 def main():
@@ -1133,6 +1139,11 @@ def main():
                 args.plot_html,
             )
             run_contaminant_bandage_plot(
+                contaminants_tsv,
+                outprefix,
+                plot_suffix,
+            )
+            run_contaminant_table(
                 contaminants_tsv,
                 outprefix,
                 plot_suffix,
