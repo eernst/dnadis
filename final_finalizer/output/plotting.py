@@ -311,14 +311,17 @@ def run_contaminant_table(
     - Domain indicator (colored badge)
     - Family (colored left border)
     - Binomial species name (italic)
-    - Contig count and total Mb
-    - Depth and length distributions (boxplot sparklines)
+    - Contig count
+    - Total Mb with inline bar + spread showing individual contig sizes
+    - Mean depth with inline bar + spread for multi-contig entries
     - Mean coverage percentage
     - Circular indicator (●/◐/○)
 
-    Note: Requires depth data (--reads) for ranking and distribution plots.
-    PDF output is not supported because gtExtras sparklines are SVG-based
-    and require a browser engine to render.
+    The spread values highlight large contigs (potential complete genomes)
+    and depth variability across contigs of the same species.
+
+    Note: Requires depth data (--reads) for ranking. HTML-only output
+    (CSS gradient bars don't render to PDF).
 
     Args:
         contaminants_tsv: Path to contaminants.tsv with taxonomic lineage
