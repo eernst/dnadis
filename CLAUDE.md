@@ -120,7 +120,9 @@ final_finalizer/
    - Organelle detection via BLAST (chrC, chrM)
    - rDNA detection via BLAST against reference rDNA
    - Chromosome debris via minimap2 (high coverage/identity duplicates)
-   - Contaminant screening via centrifuger
+   - Contaminant screening via centrifuger with two-gate filtering:
+     - Score threshold (default 1000, ~1kb matching sequence with k=31)
+     - Coverage threshold (default 0.50, filters low-coverage hits that may represent conserved genes rather than contamination)
 
 4. **Classification** (`classification/classifier.py`)
    - **Gate-based assignment**: contigs must pass multiple criteria (min genes, segments, span) to be assigned
@@ -137,8 +139,12 @@ final_finalizer/
 
 6. **Output Generation** (`output/`)
    - Classified FASTA files (chromosomes, organelles, rDNA, etc.)
-   - TSV summary tables (contig_summary, evidence_summary, segments, macro_blocks)
-   - PDF/HTML visualizations (if R/ggplot2 available)
+   - TSV summary tables (contig_summary, evidence_summary, segments, macro_blocks, contaminants with taxonomic lineage)
+   - PDF/HTML visualizations (if R/ggplot2 available):
+     - Chromosome overview plot
+     - Read depth overview (if --reads provided)
+     - Contaminant phylogenetic treemap (if contaminants detected)
+     - Contaminant Bandage-style visualization showing individual contigs as geometric shapes (if contaminants detected)
 
 ### Key Design Patterns
 
@@ -231,8 +237,13 @@ All external tools are called via subprocess with proper error handling. Use `ut
 - `*.segments.tsv` - Individual synteny segments from chain parsing
 - `*.macro_blocks.tsv` - Aggregated synteny macro-blocks
 - `*.ref_lengths.tsv` - Reference chromosome lengths
+- `*.contaminants.tsv` - Detailed contaminant summary with taxonomic lineage (if contaminants detected)
 
-**Visualization**: `*.chromosome_overview.pdf`, `*.depth_overview.pdf`, `*.depth_overview.html` (if `--plot-html`)
+**Visualization**:
+- `*.chromosome_overview.pdf` - Main synteny visualization
+- `*.depth_overview.pdf`, `*.depth_overview.html` - Read depth plots (if `--reads` provided and `--plot-html`)
+- `*.contaminant_treemap.pdf` - Phylogenetic breakdown of contaminants (if contaminants detected)
+- `*.contaminant_bandage.pdf` - Bandage-style individual contig visualization (if contaminants detected)
 
 See `docs/output_formats.md` for complete column documentation.
 
@@ -244,7 +255,7 @@ Classification happens in `classification/classifier.py:classify_all_contigs()`.
 2. rDNA (if BLAST coverage ≥50%)
 3. Chromosome assigned (if passes ALL synteny gates)
 4. Chromosome unassigned (if length ≥ `--chr-like-minlen` but failed synteny gates)
-5. Contaminant (if centrifuger score ≥ threshold)
+5. Contaminant (if centrifuger score ≥1000 AND coverage ≥0.50; two-gate filtering prevents false positives from conserved genes)
 6. Chromosome debris (if high coverage/identity vs assembled chromosomes)
 7. Organelle debris (if partial organelle match)
 8. Debris (if reference coverage >50% or protein hits ≥2)

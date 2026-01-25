@@ -13,6 +13,7 @@ For information on log files, see the `--log-file` option in the main [README](.
 | `*.segments.tsv` | Individual synteny segments (protein alignments) |
 | `*.macro_blocks.tsv` | Aggregated synteny chains/macro-blocks |
 | `*.ref_lengths.tsv` | Reference chromosome lengths |
+| `*.contaminants.tsv` | Detailed contaminant summary with taxonomic lineage (if contaminants detected) |
 
 ---
 
@@ -259,6 +260,36 @@ Reference chromosome lengths and metadata.
 | `length` | integer | Chromosome length in base pairs |
 | `chrom_id` | string | Chromosome number without subgenome |
 | `subgenome` | string | Subgenome identifier or `NA` |
+
+---
+
+## contaminants.tsv
+
+Detailed contaminant summary with full taxonomic lineage. Generated only when contaminants are detected. Used for phylogenetic breakdown visualizations (treemap and Bandage-style plots).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `contig` | string | Contig name |
+| `length` | integer | Contig length in base pairs |
+| `taxid` | integer | NCBI taxonomy ID of best centrifuger classification hit |
+| `sci_name` | string | Scientific name of organism |
+| `score` | integer | Centrifuger score (roughly proportional to matching sequence length; score ~1000 indicates ~1kb match with k=31) |
+| `coverage` | float | Fraction of contig covered by taxonomic classification (0.0-1.0) |
+| `kingdom` | string | Kingdom (Domain for Bacteria/Archaea/Viruses, or Cavalier-Smith kingdom for eukaryotes: Animalia, Plantae, Fungi, Chromista, Protozoa) |
+| `phylum` | string | Phylum |
+| `class` | string | Class |
+| `order` | string | Order |
+| `family` | string | Family |
+| `genus` | string | Genus |
+| `species` | string | Species |
+| `depth_mean` | float | Mean read depth (if `--reads` provided) |
+| `depth_median` | float | Median read depth (if `--reads` provided) |
+
+**Notes:**
+
+- Taxonomic lineage fields (kingdom through species) are populated via taxonkit if available. If taxonkit is not installed, genus and species may be parsed from scientific names, while higher-level taxonomy will be empty.
+- The `kingdom` field uses a hybrid approach: Bacteria, Archaea, and Viruses use domain-level classification, while eukaryotes are mapped to Cavalier-Smith kingdoms (Animalia, Plantae, Fungi, Chromista, Protozoa) for more biologically meaningful grouping.
+- Coverage filtering: Contaminants with coverage below `--contaminant-min-coverage` (default 0.50) are excluded from classification as contaminants but may still appear in this file if they pass the score threshold. Low-coverage hits may represent conserved genes rather than true contamination.
 
 ---
 

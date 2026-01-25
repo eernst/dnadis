@@ -162,7 +162,6 @@ def run_contaminant_plot(
     outprefix: Path,
     plot_title_suffix: str,
     plot_html: bool,
-    min_coverage: float = 0.50,
 ) -> None:
     """Generate contamination treemap showing phylogenetic breakdown.
 
@@ -170,12 +169,13 @@ def run_contaminant_plot(
     (Kingdom > Family > Genus > Species) with area proportional to total
     contamination span bp.
 
+    Note: Coverage filtering is applied upstream in Python before writing the TSV.
+
     Args:
         contaminants_tsv: Path to contaminants.tsv with taxonomic lineage
         outprefix: Output prefix for generated files
         plot_title_suffix: Suffix for plot titles
         plot_html: Whether to generate interactive HTML version
-        min_coverage: Minimum coverage threshold for high-confidence visualization
     """
     if not have_rscript():
         logger.warning("Rscript not found in PATH; skipping contaminant plot.")
@@ -214,7 +214,6 @@ def run_contaminant_plot(
         .replace("__OUTPDF__", _esc(plot_pdf))
         .replace("__OUTHTML__", _esc(plot_html_path))
         .replace("__PLOTHTML__", "TRUE" if plot_html else "FALSE")
-        .replace("__MIN_COVERAGE__", str(min_coverage))
         .replace("__SUFFIX__", str(plot_title_suffix).replace('"', '\\"'))
     )
 
@@ -228,3 +227,72 @@ def run_contaminant_plot(
         logger.warning(f"Rscript failed with code {e.returncode}; contaminant plot not generated.")
     else:
         logger.done(f"Contaminant treemap written to: {plot_pdf}")
+
+
+def run_contaminant_bandage_plot(
+    contaminants_tsv: Path,
+    outprefix: Path,
+    plot_title_suffix: str,
+) -> None:
+    """Generate Bandage-like contamination plot showing individual contigs.
+
+    Shows individual contigs as geometric shapes:
+    - Circular contigs (name ending in "c"): Drawn as rings/donuts
+    - Linear contigs (name ending in "l"): Drawn as pills (stadium shapes)
+
+    Size uses power-scale areas so small contigs remain visible.
+    Contigs are colored by family and ordered by decreasing depth.
+
+    Note: Coverage filtering is applied upstream in Python before writing the TSV.
+    Requires depth data (--reads) for depth-ordered layout.
+
+    Args:
+        contaminants_tsv: Path to contaminants.tsv with taxonomic lineage
+        outprefix: Output prefix for generated files
+        plot_title_suffix: Suffix for plot titles
+    """
+    if not have_rscript():
+        logger.warning("Rscript not found; skipping contaminant bandage plot.")
+        return
+
+    if not contaminants_tsv.exists():
+        return
+
+    # Check for empty file and depth data availability
+    try:
+        with contaminants_tsv.open("r") as fh:
+            lines = fh.readlines()
+            if len(lines) <= 1:
+                return
+            header = lines[0].strip().split("\t")
+            if "depth_mean" not in header:
+                logger.info("No depth data in contaminants TSV; skipping bandage plot (requires --reads).")
+                return
+    except Exception:
+        return
+
+    plot_pdf = Path(str(outprefix) + ".contaminant_bandage.pdf")
+    r_script_path = Path(str(outprefix) + ".contaminant_bandage.R")
+
+    tmpl_path = Path(__file__).resolve().with_name("contaminant_bandage.tmpl.R")
+    if not tmpl_path.exists():
+        logger.warning(f"Missing R template: {tmpl_path}")
+        return
+
+    tmpl = _read_text(tmpl_path)
+    filled = (
+        tmpl.replace("__CONTAMINANTS_TSV__", _esc(contaminants_tsv))
+        .replace("__OUTPDF__", _esc(plot_pdf))
+        .replace("__SUFFIX__", str(plot_title_suffix).replace('"', '\\"'))
+    )
+
+    with r_script_path.open("w", encoding="utf-8") as rf:
+        rf.write(filled)
+
+    logger.info(f"Running Rscript to generate contaminant bandage plot: {plot_pdf}")
+    try:
+        subprocess.run(["Rscript", str(r_script_path)], check=True)
+    except subprocess.CalledProcessError as e:
+        logger.warning(f"Rscript failed with code {e.returncode}; bandage plot not generated.")
+    else:
+        logger.done(f"Contaminant bandage plot written to: {plot_pdf}")

@@ -17,7 +17,6 @@ out_pdf     <- "__OUTPDF__"
 out_html    <- "__OUTHTML__"
 plot_html   <- as.logical("__PLOTHTML__")
 plot_suffix <- "__SUFFIX__"
-min_coverage <- as.numeric("__MIN_COVERAGE__")
 
 base_family <- "Helvetica"
 base_font_pt <- 8
@@ -31,16 +30,8 @@ if (nrow(df) == 0) {
   quit(status = 0)
 }
 
-# Filter by coverage threshold for high-confidence visualization
-# Also exclude contigs with no depth data (depth=0 or NA)
-df_filtered <- df %>%
-  filter(coverage >= min_coverage) %>%
-  filter(!is.na(depth_mean) & depth_mean > 0)
-
-if (nrow(df_filtered) == 0) {
-  message(sprintf("No contaminants with coverage >= %.2f. Skipping treemap.", min_coverage))
-  quit(status = 0)
-}
+# Note: Coverage filtering already applied in Python before writing TSV
+df_filtered <- df
 
 # Check if we have actual taxonomy data or just genus from sci_name parsing
 has_taxonomy <- any(!is.na(df_filtered$kingdom) & df_filtered$kingdom != "") ||
@@ -183,12 +174,11 @@ if (has_taxonomy) {
     ) +
     guides(fill = guide_legend(nrow = 2, keywidth = unit(0.4, "cm"), keyheight = unit(0.4, "cm"))) +
     labs(
-      title = paste0("Contaminants"),
+      title = paste0("Contaminant contigs"),
       subtitle = paste0(
         domain_summary, "\n",
         total_contigs, " contigs, ",
-        label_bytes(units = "auto_binary")(total_bp),
-        " (coverage >= ", sprintf("%.0f%%", min_coverage * 100), ")"
+        label_bytes(units = "auto_binary")(total_bp)
       )
     )
 
@@ -247,8 +237,7 @@ if (has_taxonomy) {
       title = paste0("Contamination by genus (", plot_suffix, ")"),
       subtitle = paste0(
         total_contigs, " contigs, ",
-        label_bytes(units = "auto_binary")(total_bp),
-        " (coverage >= ", sprintf("%.0f%%", min_coverage * 100), ")"
+        label_bytes(units = "auto_binary")(total_bp)
       ),
       caption = "Note: Install taxonkit with NCBI taxonomy for hierarchical breakdown"
     )

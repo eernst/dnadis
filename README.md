@@ -242,7 +242,8 @@ For complete column documentation for all TSV files, see [docs/output_formats.md
 | `*.chromosome_overview.pdf` | Multi-panel plot showing contig composition, subgenome support, and alignment identity |
 | `*.depth_overview.pdf` | Read depth visualization by classification and chromosome (if `--reads` provided) |
 | `*.depth_overview.html` | Interactive version with tooltips (if `--plot-html` and `--reads` provided) |
-| `*.contaminant_treemap.pdf` | Phylogenetic breakdown of contaminants as treemap (if contaminants detected) |
+| `*.contaminant_treemap.pdf` | Phylogenetic breakdown of contaminants as hierarchical treemap (if contaminants detected) |
+| `*.contaminant_bandage.pdf` | Individual contaminant contigs visualized as Bandage-style shapes colored by taxonomy (if contaminants detected) |
 | `*.contaminants.tsv` | Detailed contaminant summary with taxonomic lineage |
 
 ## Classification Pipeline
@@ -257,7 +258,7 @@ The tool runs these phases in order:
 4. **Organelle detection** - BLAST non-chromosome contigs against chrC/chrM references
 5. **rDNA detection** - BLAST against rDNA reference
 6. **Chromosome debris detection** - High-coverage, high-identity matches to assembled chromosomes
-7. **Contaminant detection** - Centrifuger taxonomic classification
+7. **Contaminant detection** - Centrifuger taxonomic classification with two-gate filtering (score ≥1000, coverage ≥0.50)
 8. **Debris classification** - Reference-based debris detection for remaining contigs
 9. **Gene count statistics** (if GFF3 provided) - Compute gene proportion metrics
 10. **Orientation determination** - Determine strand for chromosome contigs based on synteny votes
@@ -355,8 +356,8 @@ All gate criteria must be satisfied for chromosome assignment (AND logic).
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `--contaminant-min-score` | 150 | Min centrifuger score |
-| `--contaminant-min-coverage` | 0.50 | Min query coverage for high-confidence contaminant visualization |
+| `--contaminant-min-score` | 1000 | Min centrifuger score (~1kb matching sequence with k=31) |
+| `--contaminant-min-coverage` | 0.50 | Min query coverage (low coverage may indicate conserved genes, not contamination) |
 
 ### Debris detection
 
@@ -606,6 +607,21 @@ Two complementary approaches:
 1. **Chromosome debris** - Contigs with high-coverage (≥80%) and high-identity (≥90%) matches to already-assembled chromosome contigs (detected via minimap2 asm5 alignment)
 
 2. **Reference-based debris** - Contigs with moderate reference coverage (>50%) but insufficient synteny support for chromosome assignment
+
+### Contaminant visualization
+
+When contaminants are detected (with `--centrifuger-idx`) and plotting is enabled (`--plot`), final_finalizer generates two complementary visualizations:
+
+1. **Phylogenetic treemap** (`*.contaminant_treemap.pdf`): Hierarchical treemap showing taxonomic breakdown (Kingdom → Family → Genus → Species) with area proportional to total contamination span. Requires taxonkit for full taxonomic lineage; falls back to genus-level grouping if unavailable.
+
+2. **Bandage-style plot** (`*.contaminant_bandage.pdf`): Individual contaminant contigs visualized as geometric shapes:
+   - Circular contigs (names ending in "c"): Drawn as rings/donuts
+   - Linear contigs (names ending in "l"): Drawn as pills (elongated ellipses)
+   - Size uses log-scale areas so small contigs remain visible
+   - Colored by taxonomic family
+   - Ordered by decreasing read depth (if `--reads` provided)
+
+Both visualizations filter to high-confidence contaminants (coverage ≥ `--contaminant-min-coverage`, default 0.50) to reduce noise from conserved gene matches.
 
 ## Citation
 

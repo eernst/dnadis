@@ -116,7 +116,7 @@ from final_finalizer.output.tsv_output import (
     write_contaminant_summary_tsv,
     write_macro_blocks_tsv,
 )
-from final_finalizer.output.plotting import run_plot, run_depth_plot, run_contaminant_plot
+from final_finalizer.output.plotting import run_plot, run_depth_plot, run_contaminant_plot, run_contaminant_bandage_plot
 
 
 def main():
@@ -144,7 +144,7 @@ def main():
             miniprot_min_genes=3, miniprot_min_segments=5, miniprot_min_span_frac=0.20,
             miniprot_min_span_bp=50000, organelle_min_cov=0.80, chrC_len_tolerance=0.05,
             chrM_len_tolerance=0.20, rdna_min_cov=0.50, chr_debris_min_cov=0.80,
-            chr_debris_min_identity=0.90, contaminant_min_score=150, contaminant_min_coverage=0.50,
+            chr_debris_min_identity=0.90, contaminant_min_score=1000, contaminant_min_coverage=0.50,
             debris_min_cov=0.50, debris_min_protein_hits=2, preset="asm20", kmer=None, window=None, aln_minlen=10000,
         )
         print(dump_config_template(defaults))
@@ -434,12 +434,12 @@ def main():
     # =========================================================================
     contam_thresh = p.add_argument_group("Thresholds: Contaminant detection")
     contam_thresh.add_argument(
-        "--contaminant-min-score", type=int, default=150,
-        help="Min centrifuger score for contaminant classification [150]",
+        "--contaminant-min-score", type=int, default=1000,
+        help="Min centrifuger score for contaminant classification (~1kb matching sequence with k=31) [1000]",
     )
     contam_thresh.add_argument(
         "--contaminant-min-coverage", type=float, default=0.50,
-        help="Min query coverage for high-confidence contaminant visualization in alluvial plot [0.50]",
+        help="Min query coverage for contaminant classification (low coverage may indicate conserved genes, not contamination) [0.50]",
     )
 
     # =========================================================================
@@ -477,6 +477,10 @@ def main():
     # Validate synteny mode requirements
     if args.synteny_mode == "protein" and not args.ref_gff3:
         sys.exit("[error] --ref-gff3 is required when using --synteny-mode protein")
+
+    # Validate contaminant coverage threshold
+    if not 0.0 <= args.contaminant_min_coverage <= 1.0:
+        sys.exit(f"[error] --contaminant-min-coverage must be between 0.0 and 1.0, got {args.contaminant_min_coverage}")
 
     # Setup logging
     from final_finalizer.utils.logging_config import setup_logging, get_logger
@@ -960,6 +964,19 @@ def main():
 
     # --- Phase 11: Classify all contigs ---
     logger.phase("Phase 11: Classifying all contigs")
+
+    # Filter contaminants by coverage threshold (low coverage hits may be false positives)
+    contaminants_filtered = {
+        contig: hit for contig, hit in contaminants.items()
+        if hit.coverage >= args.contaminant_min_coverage
+    }
+    if len(contaminants_filtered) < len(contaminants):
+        n_filtered = len(contaminants) - len(contaminants_filtered)
+        logger.info(
+            f"Filtered {n_filtered} low-coverage contaminant hits "
+            f"(coverage < {args.contaminant_min_coverage:.0%})"
+        )
+
     classifications = classify_all_contigs(
         query_fasta=qry,
         query_lengths=qry_lengths,
@@ -971,7 +988,7 @@ def main():
         chrM_contig=chrM_contig,
         organelle_debris=organelle_debris,
         rdna_contigs=rdna_contigs,
-        contaminants=contaminants,
+        contaminants=contaminants_filtered,
         chromosome_debris=chromosome_debris,
         other_debris=other_debris,
         add_subgenome_suffix=args.add_subgenome_suffix,
@@ -1068,11 +1085,12 @@ def main():
     logger.done(f"Ref lengths:       {ref_lengths_tsv}")
 
     # Write contaminant summary TSV with taxonomic lineage (for alluvial plot)
+    # Use filtered contaminants (coverage >= threshold) for consistency with classification
     contaminants_tsv = Path(str(outprefix) + ".contaminants.tsv")
-    if contaminants:
+    if contaminants_filtered:
         write_contaminant_summary_tsv(
             output_path=contaminants_tsv,
-            contaminants=contaminants,
+            contaminants=contaminants_filtered,
             query_lengths=qry_lengths,
             depth_stats=depth_stats if depth_stats else None,
         )
@@ -1105,14 +1123,19 @@ def main():
                 plot_suffix,
                 args.plot_html,
             )
-        # Generate contaminant alluvial plot if contaminants were detected
-        if contaminants and contaminants_tsv.exists():
+        # Generate contaminant plots if contaminants were detected
+        # Note: Coverage filtering already applied when writing contaminants_tsv
+        if contaminants_filtered and contaminants_tsv.exists():
             run_contaminant_plot(
                 contaminants_tsv,
                 outprefix,
                 plot_suffix,
                 args.plot_html,
-                args.contaminant_min_coverage,
+            )
+            run_contaminant_bandage_plot(
+                contaminants_tsv,
+                outprefix,
+                plot_suffix,
             )
 
 
