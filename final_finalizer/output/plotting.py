@@ -307,21 +307,21 @@ def run_contaminant_table(
     """Generate gt table showing top contaminants ranked by abundance.
 
     Creates an HTML table using the gt package showing:
-    - Rank by abundance (depth × length)
+    - Rank by abundance (depth × length) or total length if no depth data
     - Domain indicator (colored badge)
     - Family (colored left border)
     - Binomial species name (italic)
     - Contig count
     - Total Mb with inline bar + spread showing individual contig sizes
-    - Mean depth with inline bar + spread for multi-contig entries
+    - Mean depth with inline bar + spread (only if depth data available)
     - Mean coverage percentage
     - Circular indicator (●/◐/○)
 
     The spread values highlight large contigs (potential complete genomes)
     and depth variability across contigs of the same species.
 
-    Note: Requires depth data (--reads) for ranking. HTML-only output
-    (CSS gradient bars don't render to PDF).
+    Note: HTML-only output (CSS gradient bars don't render to PDF).
+    Depth column is excluded if no depth data available.
 
     Args:
         contaminants_tsv: Path to contaminants.tsv with taxonomic lineage
@@ -336,15 +336,11 @@ def run_contaminant_table(
     if not contaminants_tsv.exists():
         return
 
-    # Check for empty file and depth data availability
+    # Check for empty file
     try:
         with contaminants_tsv.open("r") as fh:
             lines = fh.readlines()
             if len(lines) <= 1:
-                return
-            header = lines[0].strip().split("\t")
-            if "depth_mean" not in header:
-                logger.info("No depth data in contaminants TSV; skipping contaminant table (requires --reads).")
                 return
     except Exception:
         return

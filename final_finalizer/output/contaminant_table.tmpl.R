@@ -29,14 +29,13 @@ if (nrow(df) == 0) {
 }
 
 # Check for depth data
-if (!"depth_mean" %in% names(df) || all(is.na(df$depth_mean))) {
-  message("No depth data available. Skipping contaminant table (requires --reads).")
-  quit(status = 0)
-}
+has_depth <- "depth_mean" %in% names(df) && !all(is.na(df$depth_mean))
 
-# Filter to contigs with non-NA depth (include depth=0)
-df <- df %>%
-  filter(!is.na(depth_mean))
+if (has_depth) {
+  # Filter to contigs with non-NA depth (include depth=0)
+  df <- df %>%
+    filter(!is.na(depth_mean))
+}
 
 if (nrow(df) == 0) {
   message("No contaminants with depth data. Skipping table.")
@@ -61,8 +60,8 @@ df <- df %>%
       TRUE ~ paste0(genus, " ", species_clean)
     ),
     binomial = str_replace_all(binomial, "_", " "),
-    # Abundance metric: depth × length (proxy for sequencing effort)
-    abundance = depth_mean * length
+    # Abundance metric: depth × length if available, otherwise just length
+    abundance = if (has_depth) depth_mean * length else length
   )
 
 # Aggregate by binomial with min/max for spread displays
@@ -72,9 +71,9 @@ df_agg <- df %>%
     n_contigs = n(),
     total_bp = sum(length),
     abundance = sum(abundance),
-    depth_mean_agg = mean(depth_mean),
-    depth_min = min(depth_mean),
-    depth_max = max(depth_mean),
+    depth_mean_agg = if (has_depth) mean(depth_mean) else NA_real_,
+    depth_min = if (has_depth) min(depth_mean) else NA_real_,
+    depth_max = if (has_depth) max(depth_mean) else NA_real_,
     length_min = min(length),
     length_max = max(length),
     n_circular = sum(is_circular),
@@ -130,62 +129,53 @@ df_agg <- df_agg %>%
 
 # Calculate bar percentages (relative to max in each column)
 max_total <- max(df_agg$total_mb)
-max_depth <- max(df_agg$depth_mean_agg)
 
 df_agg <- df_agg %>%
   mutate(
     total_pct = total_mb / max_total * 100,
-    depth_pct = depth_mean_agg / max_depth * 100,
     # Text displays with spread for multi-contig entries
     # Total: shows aggregate Mb plus individual contig size range
     total_text = if_else(
       n_contigs == 1,
       sprintf("%.2f Mb", total_mb),
       sprintf("%.2f Mb (%.2f\u2013%.2f)", total_mb, length_min / 1e6, length_max / 1e6)
-    ),
-    # Depth: shows mean depth plus range
-    depth_text = if_else(
-      n_contigs == 1,
-      sprintf("%.0f\u00D7", depth_mean_agg),
-      sprintf("%.0f\u00D7 (%.0f\u2013%.0f)", depth_mean_agg, depth_min, depth_max)
     )
   )
 
-# Create table data
-tbl_data <- df_agg %>%
-  select(
-    rank,
-    domain_abbr,
-    domain_color,
-    family,
-    family_color,
-    binomial,
-    n_contigs,
-    total_text,
-    total_pct,
-    depth_text,
-    depth_pct,
-    mean_coverage,
-    circ_indicator
-  )
+# Add depth columns only if depth data available
+if (has_depth) {
+  max_depth <- max(df_agg$depth_mean_agg)
+  df_agg <- df_agg %>%
+    mutate(
+      depth_pct = depth_mean_agg / max_depth * 100,
+      depth_text = if_else(
+        n_contigs == 1,
+        sprintf("%.0f\u00D7", depth_mean_agg),
+        sprintf("%.0f\u00D7 (%.0f\u2013%.0f)", depth_mean_agg, depth_min, depth_max)
+      )
+    )
+}
 
-# Build gt table
+# Create table data - conditionally include depth columns
+if (has_depth) {
+  tbl_data <- df_agg %>%
+    select(
+      rank, domain_abbr, domain_color, family, family_color, binomial,
+      n_contigs, total_text, total_pct, depth_text, depth_pct,
+      mean_coverage, circ_indicator
+    )
+} else {
+  tbl_data <- df_agg %>%
+    select(
+      rank, domain_abbr, domain_color, family, family_color, binomial,
+      n_contigs, total_text, total_pct,
+      mean_coverage, circ_indicator
+    )
+}
+
+# Build gt table - base structure
 gt_tbl <- tbl_data %>%
   gt() %>%
-  # Column labels
-  cols_label(
-    rank = "",
-    domain_abbr = "Domain",
-    family = "Family",
-    binomial = "Species",
-    n_contigs = "n",
-    total_text = "Total Mb",
-    depth_text = "Depth",
-    mean_coverage = "Cov%",
-    circ_indicator = "Circ"
-  ) %>%
-  # Hide helper columns
-  cols_hide(c(domain_color, family_color, total_pct, depth_pct)) %>%
   # Format coverage as percentage
   fmt_percent(columns = mean_coverage, decimals = 0) %>%
   # Style domain with background color badge
@@ -225,46 +215,16 @@ gt_tbl <- tbl_data %>%
       )
     }
   ) %>%
-  # Depth with CSS gradient bar background
-  text_transform(
-    locations = cells_body(columns = depth_text),
-    fn = function(x) {
-      pcts <- tbl_data$depth_pct
-      paste0(
-        "<div style='background: linear-gradient(to right, rgba(128,128,128,0.3) ", pcts,
-        "%, transparent ", pcts, "%); padding: 2px 4px; border-radius: 2px; white-space: nowrap;'>",
-        x, "</div>"
-      )
-    }
-  ) %>%
   # Column alignment
   cols_align(align = "center", columns = c(rank, n_contigs, circ_indicator, mean_coverage)) %>%
-  cols_align(align = "left", columns = c(total_text, depth_text)) %>%
-  # Column widths
-  cols_width(
-    rank ~ px(30),
-    domain_abbr ~ px(50),
-    family ~ px(120),
-    binomial ~ px(180),
-    n_contigs ~ px(30),
-    total_text ~ px(150),
-    depth_text ~ px(130),
-    mean_coverage ~ px(45),
-    circ_indicator ~ px(35)
-  ) %>%
+  cols_align(align = "left", columns = total_text) %>%
   # Table styling
   tab_style(style = cell_text(size = px(11)), locations = cells_body()) %>%
   tab_style(style = cell_text(size = px(11), weight = "bold"), locations = cells_column_labels()) %>%
-  # Reduce row padding for compact display
   tab_options(
     data_row.padding = px(4),
     column_labels.padding = px(6),
     table.font.size = px(11)
-  ) %>%
-  # Title and subtitle
-  tab_header(
-    title = md(paste0("**Top ", nrow(tbl_data), " Contaminants**")),
-    subtitle = md(paste0("Ranked by abundance (depth \u00D7 length) \u2014 ", plot_suffix))
   ) %>%
   # Footnotes for indicators
   tab_footnote(
@@ -281,6 +241,55 @@ gt_tbl <- tbl_data %>%
       }), collapse = " ")
     ))
   )
+
+# Add depth-specific formatting if depth data available
+if (has_depth) {
+  gt_tbl <- gt_tbl %>%
+    cols_label(
+      rank = "", domain_abbr = "Domain", family = "Family", binomial = "Species",
+      n_contigs = "n", total_text = "Total Mb", depth_text = "Depth",
+      mean_coverage = "Cov%", circ_indicator = "Circ"
+    ) %>%
+    cols_hide(c(domain_color, family_color, total_pct, depth_pct)) %>%
+    text_transform(
+      locations = cells_body(columns = depth_text),
+      fn = function(x) {
+        pcts <- tbl_data$depth_pct
+        paste0(
+          "<div style='background: linear-gradient(to right, rgba(128,128,128,0.3) ", pcts,
+          "%, transparent ", pcts, "%); padding: 2px 4px; border-radius: 2px; white-space: nowrap;'>",
+          x, "</div>"
+        )
+      }
+    ) %>%
+    cols_align(align = "left", columns = depth_text) %>%
+    cols_width(
+      rank ~ px(30), domain_abbr ~ px(50), family ~ px(120), binomial ~ px(180),
+      n_contigs ~ px(30), total_text ~ px(150), depth_text ~ px(130),
+      mean_coverage ~ px(45), circ_indicator ~ px(35)
+    ) %>%
+    tab_header(
+      title = md(paste0("**Top ", nrow(tbl_data), " Contaminants**")),
+      subtitle = md(paste0("Ranked by abundance (depth \u00D7 length) \u2014 ", plot_suffix))
+    )
+} else {
+  gt_tbl <- gt_tbl %>%
+    cols_label(
+      rank = "", domain_abbr = "Domain", family = "Family", binomial = "Species",
+      n_contigs = "n", total_text = "Total Mb",
+      mean_coverage = "Cov%", circ_indicator = "Circ"
+    ) %>%
+    cols_hide(c(domain_color, family_color, total_pct)) %>%
+    cols_width(
+      rank ~ px(30), domain_abbr ~ px(50), family ~ px(120), binomial ~ px(180),
+      n_contigs ~ px(30), total_text ~ px(150),
+      mean_coverage ~ px(45), circ_indicator ~ px(35)
+    ) %>%
+    tab_header(
+      title = md(paste0("**Top ", nrow(tbl_data), " Contaminants**")),
+      subtitle = md(paste0("Ranked by total length \u2014 ", plot_suffix))
+    )
+}
 
 # Save as HTML
 gtsave(gt_tbl, out_html)
