@@ -210,9 +210,15 @@ df_plot <- df %>%
     assigned_chrom_id  = if_else(assigned_chrom_id %in% chrom_levels, assigned_chrom_id, "Un"),
     chrom_id = factor(assigned_chrom_id, levels = x_levels),
     best_identity = as.numeric(best_identity),
+    # Orientation: TRUE if contig should be shown reversed to match reference
+    is_reversed = if ("reversed" %in% names(.)) reversed == "yes" else FALSE,
     # Telomere columns (may not exist in older output files)
-    has_5p_telo = if ("has_5p_telomere" %in% names(.)) has_5p_telomere == "yes" else FALSE,
-    has_3p_telo = if ("has_3p_telomere" %in% names(.)) has_3p_telomere == "yes" else FALSE
+    # Raw values before orientation adjustment
+    raw_5p_telo = if ("has_5p_telomere" %in% names(.)) has_5p_telomere == "yes" else FALSE,
+    raw_3p_telo = if ("has_3p_telomere" %in% names(.)) has_3p_telomere == "yes" else FALSE,
+    # Flip telomere positions for reversed contigs so they appear at correct visual ends
+    has_5p_telo = if_else(is_reversed, raw_3p_telo, raw_5p_telo),
+    has_3p_telo = if_else(is_reversed, raw_5p_telo, raw_3p_telo)
   ) %>%
   filter(contig_len >= chr_like_minlen)
 
@@ -242,7 +248,10 @@ df_slots <- df_plot %>%
     total_width = 0.80,
     dx = if_else(n_in_bin > 1, total_width / n_in_bin, 0),
     x_offset = if_else(n_in_bin > 1, (slot - (n_in_bin + 1) / 2) * dx, 0),
-    x_plot = x_index + x_offset
+    x_plot = x_index + x_offset,
+    # Use assigned_subgenome from df_plot (already extracted from summary file)
+    # Must be a factor with levels matching col_dark for scale_color_manual to work
+    ref_subgenome = factor(assigned_subgenome, levels = names(col_dark))
   ) %>%
   ungroup()
 
@@ -267,7 +276,7 @@ seg_plot <- seg %>%
     contig_len_mb = contig_len / 1e6
   ) %>%
   left_join(
-    df_slots %>% select(original_name, chrom_id, x_plot, contig_len_mb_slot = contig_len_mb),
+    df_slots %>% select(original_name, chrom_id, x_plot, contig_len_mb_slot = contig_len_mb, is_reversed),
     by = c("contig" = "original_name")
   ) %>%
   filter(!is.na(x_plot)) %>%
@@ -276,8 +285,11 @@ seg_plot <- seg %>%
     off_target = (target_chrom_id != assigned_chrom_id),
 
     max_len_mb = if_else(is.na(contig_len_mb_slot), contig_len_mb, contig_len_mb_slot),
-    qstart_mb = pmax(0, pmin(qstart_mb, max_len_mb)),
-    qend_mb   = pmax(0, pmin(qend_mb,   max_len_mb))
+    # Flip coordinates for reversed contigs to show in reference orientation
+    qstart_flip = if_else(is_reversed, max_len_mb - qend_mb, qstart_mb),
+    qend_flip   = if_else(is_reversed, max_len_mb - qstart_mb, qend_mb),
+    qstart_mb = pmax(0, pmin(qstart_flip, max_len_mb)),
+    qend_mb   = pmax(0, pmin(qend_flip,   max_len_mb))
   ) %>%
   filter(qend_mb > qstart_mb) %>%
   mutate(
@@ -310,7 +322,8 @@ macro_plot <- macro %>%
         original_name,
         assigned_chrom_id = as.character(chrom_id),
         x_plot,
-        contig_len_mb_slot = contig_len_mb
+        contig_len_mb_slot = contig_len_mb,
+        is_reversed
       ),
     by = c("contig" = "original_name")
   ) %>%
@@ -319,8 +332,11 @@ macro_plot <- macro %>%
     off_target = (target_chrom_id != assigned_chrom_id),
 
     max_len_mb = if_else(is.na(contig_len_mb_slot), contig_len_mb, contig_len_mb_slot),
-    qstart_mb = pmax(0, pmin(qstart_mb, max_len_mb)),
-    qend_mb   = pmax(0, pmin(qend_mb,   max_len_mb))
+    # Flip coordinates for reversed contigs to show in reference orientation
+    qstart_flip = if_else(is_reversed, max_len_mb - qend_mb, qstart_mb),
+    qend_flip   = if_else(is_reversed, max_len_mb - qstart_mb, qend_mb),
+    qstart_mb = pmax(0, pmin(qstart_flip, max_len_mb)),
+    qend_mb   = pmax(0, pmin(qend_flip,   max_len_mb))
   ) %>%
   filter(qend_mb > qstart_mb) %>%
   mutate(
@@ -342,8 +358,8 @@ macro_plot <- macro %>%
     )
   )
 
-# Width for alignment segments - wider to fill the pill background
-seg_xw <- band_xw * 2.4
+# Width for pill backgrounds and alignment segments (same width for both)
+pill_xw <- band_xw * 2.4
 
 p_comp <- ggplot() +
   # Reference chromosome length ticks (narrower, thinner, darker)
@@ -360,28 +376,44 @@ p_comp <- ggplot() +
   ) +
   scale_color_manual(values = col_dark, guide = "none", drop = FALSE) +
   ggnewscale::new_scale_color() +
-  # Pill backgrounds - all light gray
-  geom_linerange(
+  # Telomere indicators - slightly darker circles behind pill background
+  # 5' telomere (bottom of contig)
+  geom_point(
+    data = df_slots %>% filter(has_5p_telo),
+    aes(x = x_plot, y = 0),
+    color = "grey75",
+    size = pill_xw * 5,
+    show.legend = FALSE
+  ) +
+  # 3' telomere (top of contig)
+  geom_point(
+    data = df_slots %>% filter(has_3p_telo),
+    aes(x = x_plot, y = contig_len_mb),
+    color = "grey75",
+    size = pill_xw * 5,
+    show.legend = FALSE
+  ) +
+  # Pill backgrounds - all light gray (same width as alignment blocks)
+  geom_rect(
     data = df_slots,
-    aes(x = x_plot, ymin = 0, ymax = contig_len_mb),
-    linewidth = pill_lwd,
-    lineend = "round",
-    color = "grey88",
-    alpha = 1.0,
+    aes(xmin = x_plot - pill_xw/2, xmax = x_plot + pill_xw/2,
+        ymin = 0, ymax = contig_len_mb),
+    fill = "grey88",
+    color = NA,
     show.legend = FALSE
   ) +
   ggnewscale::new_scale_fill() +
   # Alignment segments (full pill width)
   geom_rect(
     data = seg_plot %>% filter(!off_target),
-    aes(xmin = x_plot - seg_xw/2, xmax = x_plot + seg_xw/2,
+    aes(xmin = x_plot - pill_xw/2, xmax = x_plot + pill_xw/2,
         ymin = ymin, ymax = ymax, fill = target_subgenome),
     color = NA,
     alpha = 1.0
   ) +
   geom_rect(
     data = seg_plot %>% filter(off_target),
-    aes(xmin = x_plot - seg_xw/2, xmax = x_plot + seg_xw/2,
+    aes(xmin = x_plot - pill_xw/2, xmax = x_plot + pill_xw/2,
         ymin = ymin, ymax = ymax),
     fill = "red",
     color = NA,
@@ -392,7 +424,7 @@ p_comp <- ggplot() +
   # Macro blocks (full pill width)
   geom_rect(
     data = macro_plot %>% filter(!off_target),
-    aes(xmin = x_plot - seg_xw/2, xmax = x_plot + seg_xw/2,
+    aes(xmin = x_plot - pill_xw/2, xmax = x_plot + pill_xw/2,
         ymin = ymin, ymax = ymax, fill = target_subgenome),
     color = NA,
     alpha = 1.0,
@@ -400,32 +432,11 @@ p_comp <- ggplot() +
   ) +
   geom_rect(
     data = macro_plot %>% filter(off_target),
-    aes(xmin = x_plot - seg_xw/2, xmax = x_plot + seg_xw/2,
+    aes(xmin = x_plot - pill_xw/2, xmax = x_plot + pill_xw/2,
         ymin = ymin, ymax = ymax),
     fill = "red",
     color = NA,
     alpha = 0.5,
-    show.legend = FALSE
-  ) +
-  # Telomere indicators - small triangles at contig ends
-  # 5' telomere (bottom of contig) - triangle pointing up
-  geom_point(
-    data = df_slots %>% filter(has_5p_telo),
-    aes(x = x_plot, y = -0.4),
-    shape = 24,  # triangle pointing up
-    size = 1.2,
-    fill = "grey30",
-    color = NA,
-    show.legend = FALSE
-  ) +
-  # 3' telomere (top of contig) - triangle pointing down
-  geom_point(
-    data = df_slots %>% filter(has_3p_telo),
-    aes(x = x_plot, y = contig_len_mb + 0.4),
-    shape = 25,  # triangle pointing down
-    size = 1.2,
-    fill = "grey30",
-    color = NA,
     show.legend = FALSE
   ) +
   scale_fill_manual(values = col_dark, guide = "none", drop = FALSE) +
@@ -478,28 +489,46 @@ if (plot_html) {
     ) +
     scale_color_manual(values = col_dark, guide = "none", drop = FALSE) +
     ggnewscale::new_scale_color() +
-    # Pill backgrounds - all light gray
-    geom_linerange(
+    # Telomere indicators - slightly darker circles behind pill background
+    # 5' telomere (bottom of contig)
+    ggiraph::geom_point_interactive(
+      data = df_slots %>% filter(has_5p_telo),
+      aes(x = x_plot, y = 0,
+          tooltip = paste0(original_name, "\n5' telomere detected")),
+      color = "grey75",
+      size = pill_xw * 5,
+      show.legend = FALSE
+    ) +
+    # 3' telomere (top of contig)
+    ggiraph::geom_point_interactive(
+      data = df_slots %>% filter(has_3p_telo),
+      aes(x = x_plot, y = contig_len_mb,
+          tooltip = paste0(original_name, "\n3' telomere detected")),
+      color = "grey75",
+      size = pill_xw * 5,
+      show.legend = FALSE
+    ) +
+    # Pill backgrounds - all light gray (same width as alignment blocks)
+    geom_rect(
       data = df_slots,
-      aes(x = x_plot, ymin = 0, ymax = contig_len_mb),
-      linewidth = pill_lwd,
-      lineend = "round",
-      color = "grey88",
-      alpha = 1.0,
+      aes(xmin = x_plot - pill_xw/2, xmax = x_plot + pill_xw/2,
+          ymin = 0, ymax = contig_len_mb),
+      fill = "grey88",
+      color = NA,
       show.legend = FALSE
     ) +
     ggnewscale::new_scale_fill() +
     # Alignment segments (full pill width)
     ggiraph::geom_rect_interactive(
       data = seg_plot %>% filter(!off_target),
-      aes(xmin = x_plot - seg_xw/2, xmax = x_plot + seg_xw/2,
+      aes(xmin = x_plot - pill_xw/2, xmax = x_plot + pill_xw/2,
           ymin = ymin, ymax = ymax, fill = target_subgenome, tooltip = tooltip),
       color = NA,
       alpha = 1.0
     ) +
     ggiraph::geom_rect_interactive(
       data = seg_plot %>% filter(off_target),
-      aes(xmin = x_plot - seg_xw/2, xmax = x_plot + seg_xw/2,
+      aes(xmin = x_plot - pill_xw/2, xmax = x_plot + pill_xw/2,
           ymin = ymin, ymax = ymax, tooltip = tooltip),
       fill = "red",
       color = NA,
@@ -510,7 +539,7 @@ if (plot_html) {
     # Macro blocks (full pill width)
     ggiraph::geom_rect_interactive(
       data = macro_plot %>% filter(!off_target),
-      aes(xmin = x_plot - seg_xw/2, xmax = x_plot + seg_xw/2,
+      aes(xmin = x_plot - pill_xw/2, xmax = x_plot + pill_xw/2,
           ymin = ymin, ymax = ymax, fill = target_subgenome, tooltip = tooltip),
       color = NA,
       alpha = 1.0,
@@ -518,32 +547,11 @@ if (plot_html) {
     ) +
     ggiraph::geom_rect_interactive(
       data = macro_plot %>% filter(off_target),
-      aes(xmin = x_plot - seg_xw/2, xmax = x_plot + seg_xw/2,
+      aes(xmin = x_plot - pill_xw/2, xmax = x_plot + pill_xw/2,
           ymin = ymin, ymax = ymax, tooltip = tooltip),
       fill = "red",
       color = NA,
       alpha = 0.5,
-      show.legend = FALSE
-    ) +
-    # Telomere indicators - small triangles at contig ends
-    # 5' telomere (bottom of contig) - triangle pointing up
-    ggiraph::geom_point_interactive(
-      data = df_slots %>% filter(has_5p_telo),
-      aes(x = x_plot, y = -0.4, tooltip = paste0(original_name, "\n5' telomere detected")),
-      shape = 24,  # triangle pointing up
-      size = 1.2,
-      fill = "grey30",
-      color = NA,
-      show.legend = FALSE
-    ) +
-    # 3' telomere (top of contig) - triangle pointing down
-    ggiraph::geom_point_interactive(
-      data = df_slots %>% filter(has_3p_telo),
-      aes(x = x_plot, y = contig_len_mb + 0.4, tooltip = paste0(original_name, "\n3' telomere detected")),
-      shape = 25,  # triangle pointing down
-      size = 1.2,
-      fill = "grey30",
-      color = NA,
       show.legend = FALSE
     ) +
     scale_fill_manual(values = col_dark, guide = "none", drop = FALSE) +
