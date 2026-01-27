@@ -194,7 +194,7 @@ x_levels <- c(chrom_levels, "Un")
 x_tbl <- tibble(chrom_id = factor(x_levels, levels = x_levels),
                 x_index = seq_along(x_levels) * chrom_spacing)
 
-ref_lines <- ref_sg %>%
+ref_lines_base <- ref_sg %>%
   mutate(chrom_id = factor(chrom_id, levels = x_levels)) %>%
   left_join(x_tbl, by = "chrom_id") %>%
   filter(!is.na(x_index)) %>%
@@ -259,6 +259,31 @@ n_per_chrom <- df_slots %>% count(chrom_id, name = "n_contigs")
 max_n <- max(n_per_chrom$n_contigs, na.rm = TRUE)
 if (!is.finite(max_n) || max_n <= 0) max_n <- 1
 band_xw <- max(0.02, min(0.08, 0.80 / max_n * 0.80))
+
+# Reference lines: vertical lines to left of leftmost pill, one per subgenome with assigned contigs
+# Basic data prep (x_ref calculation deferred until after pill_xw is defined)
+ref_lines_data <- df_slots %>%
+  group_by(chrom_id) %>%
+  summarise(
+    x_left = min(x_plot),  # leftmost pill position in this bin
+    subgenomes_present = list(unique(assigned_subgenome)),
+    .groups = "drop"
+  ) %>%
+  tidyr::unnest(subgenomes_present) %>%
+  rename(assigned_subgenome = subgenomes_present) %>%
+  left_join(
+    ref_lines_base %>% select(chrom_id, subgenome, ref_len_mb),
+    by = c("chrom_id" = "chrom_id", "assigned_subgenome" = "subgenome")
+  ) %>%
+  filter(!is.na(ref_len_mb)) %>%
+  # Arrange subgenomes and count within each chrom_id
+  group_by(chrom_id) %>%
+  arrange(assigned_subgenome, .by_group = TRUE) %>%
+  mutate(
+    n_sg = n(),
+    sg_idx = row_number()
+  ) %>%
+  ungroup()
 
 pill_lwd <- dplyr::case_when(
   max_n <= 3  ~ 4,
@@ -361,20 +386,32 @@ macro_plot <- macro %>%
 # Width for pill backgrounds and alignment segments (same width for both)
 pill_xw <- band_xw * 2.4
 
+# Reference line parameters
+ref_tick_offset <- pill_xw * 0.4  # gap between lines and pill
+ref_line_width <- 0.4  # linewidth in mm
+ref_line_spacing <- 0.04  # x-axis spacing between lines (data units)
+
+# Calculate x positions for reference lines (now that pill_xw is defined)
+ref_lines <- ref_lines_data %>%
+  mutate(
+    # Position from right to left (rightmost = closest to pill)
+    x_ref = x_left - pill_xw/2 - ref_tick_offset - (n_sg - sg_idx) * ref_line_spacing * 2
+  )
+
 p_comp <- ggplot() +
-  # Reference chromosome length ticks (narrower, thinner, darker)
+  # Reference chromosome length lines (vertical, to left of leftmost pill per bin)
   geom_segment(
     data = ref_lines,
     aes(
-      x = x_index - 0.22, xend = x_index + 0.22,
-      y = ref_len_mb, yend = ref_len_mb,
-      color = subgenome
+      x = x_ref, xend = x_ref,
+      y = 0, yend = ref_len_mb,
+      color = assigned_subgenome
     ),
-    linewidth = 0.3,
-    alpha = 0.7,
+    linewidth = ref_line_width,
+    alpha = 0.9,
     show.legend = FALSE
   ) +
-  scale_color_manual(values = col_dark, guide = "none", drop = FALSE) +
+  scale_color_manual(values = col_light, guide = "none", drop = FALSE) +
   ggnewscale::new_scale_color() +
   # Telomere indicators - slightly darker circles behind pill background
   # 5' telomere (bottom of contig)
@@ -475,19 +512,19 @@ p_comp <- apply_legend_theme(p_comp, text_pt = 6, key_pt = 6, tight = TRUE) +
 # Interactive version (tooltips on segment/macro blocks)
 if (plot_html) {
   p_comp_html <- ggplot() +
-    # Reference chromosome length ticks (narrower, thinner, darker)
+    # Reference chromosome length lines (vertical, to left of leftmost pill per bin)
     geom_segment(
       data = ref_lines,
       aes(
-        x = x_index - 0.22, xend = x_index + 0.22,
-        y = ref_len_mb, yend = ref_len_mb,
-        color = subgenome
+        x = x_ref, xend = x_ref,
+        y = 0, yend = ref_len_mb,
+        color = assigned_subgenome
       ),
-      linewidth = 0.3,
-      alpha = 0.7,
+      linewidth = ref_line_width,
+      alpha = 0.9,
       show.legend = FALSE
     ) +
-    scale_color_manual(values = col_dark, guide = "none", drop = FALSE) +
+    scale_color_manual(values = col_light, guide = "none", drop = FALSE) +
     ggnewscale::new_scale_color() +
     # Telomere indicators - slightly darker circles behind pill background
     # 5' telomere (bottom of contig)
