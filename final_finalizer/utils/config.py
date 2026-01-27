@@ -131,6 +131,14 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
         "window": "window",
         "aln_minlen": "aln_minlen",
     },
+    "full_length_detection": {
+        "full_length_ref_coverage": "full_length_ref_coverage",
+        "disable_telomere_detection": "disable_telomere_detection",
+        "telomere_motif": "telomere_motif",
+        "telomere_window": "telomere_window",
+        "telomere_min_repeats": "telomere_min_repeats",
+        "subgenome_k": "subgenome_k",
+    },
 }
 
 

@@ -24,6 +24,7 @@ from final_finalizer.models import (
     DebrisHit,
     OrganelleHit,
     RdnaHit,
+    TelomereResult,
 )
 from final_finalizer.utils.io_utils import merge_intervals, open_maybe_gzip
 from final_finalizer.utils.reference_utils import normalize_ref_id, split_chrom_subgenome
@@ -339,6 +340,179 @@ def classify_debris_and_unclassified(
 
 
 # ----------------------------
+# Full-length vs fragment classification
+# ----------------------------
+def classify_full_length(
+    ref_coverage: float,
+    has_5p_telomere: bool,
+    has_3p_telomere: bool,
+    full_length_threshold: float = 0.70,
+) -> Tuple[bool, str]:
+    """Classify a contig as full-length or fragment based on telomeres and coverage.
+
+    Classification logic (in priority order):
+    1. Both telomeres present -> full_length (high confidence)
+    2. One telomere + coverage >= threshold -> full_length (medium confidence)
+    3. One telomere + coverage < threshold -> fragment (medium confidence)
+    4. No telomeres + coverage >= threshold -> full_length (low confidence)
+    5. No telomeres + coverage < threshold -> fragment (low confidence)
+
+    Args:
+        ref_coverage: Fraction of reference chromosome spanned (0.0-1.0)
+        has_5p_telomere: Telomere detected at 5' end
+        has_3p_telomere: Telomere detected at 3' end
+        full_length_threshold: Reference coverage threshold for full-length (default 0.70)
+
+    Returns:
+        Tuple of (is_full_length, confidence)
+    """
+    n_telomeres = int(has_5p_telomere) + int(has_3p_telomere)
+
+    if n_telomeres == 2:
+        # Both telomeres = assembly-complete, high confidence
+        return True, "high"
+    elif n_telomeres == 1:
+        # One telomere - coverage determines classification
+        if ref_coverage >= full_length_threshold:
+            return True, "medium"
+        else:
+            return False, "medium"
+    else:
+        # No telomeres - coverage-based with low confidence
+        if ref_coverage >= full_length_threshold:
+            return True, "low"
+        else:
+            return False, "low"
+
+
+# ----------------------------
+# Query subgenome inference
+# ----------------------------
+def infer_query_subgenomes(
+    classifications: List[ContigClassification],
+    qr_best_chain_ident: Dict[Tuple[str, str], float],
+    subgenome_k: float = 1.0,
+) -> None:
+    """Infer query subgenomes when multiple contigs map to the same reference.
+
+    Uses identity-based clustering with adaptive threshold computed per reference
+    subgenome. For each reference subgenome (A, T, P, etc.), we:
+    1. Find the best (highest identity) contig per reference chromosome
+    2. Compute std_dev from those "primary representative" identities
+    3. Use k * std_dev as the gap threshold for detecting secondary query subgenomes
+
+    This approach ensures we compare apples to apples - the threshold is based on
+    the variation among primary copies within the same reference subgenome, not
+    mixing different reference subgenomes that may have different baseline identities.
+
+    Args:
+        classifications: List of ContigClassification objects (modified in place)
+        qr_best_chain_ident: Dict of (contig, ref_id) -> best chain identity
+        subgenome_k: Multiplier for std_dev threshold (default 1.0)
+    """
+    import statistics
+
+    # Collect identities for all chromosome-assigned contigs
+    chrom_clfs = [c for c in classifications if c.classification == "chrom_assigned" and c.assigned_ref_id]
+
+    if not chrom_clfs:
+        return
+
+    # Set seq_identity_vs_ref for all contigs
+    for clf in chrom_clfs:
+        ident = qr_best_chain_ident.get((clf.original_name, clf.assigned_ref_id), 0.0)
+        if ident > 0:
+            clf.seq_identity_vs_ref = ident
+
+    # Group contigs by reference chromosome
+    ref_to_clfs: Dict[str, List[ContigClassification]] = defaultdict(list)
+    for clf in chrom_clfs:
+        ref_to_clfs[clf.assigned_ref_id].append(clf)
+
+    # Group reference chromosomes by reference subgenome (A, T, P, etc.)
+    # and find the best (highest identity) contig per reference chromosome
+    ref_subgenome_to_best_idents: Dict[Optional[str], List[float]] = defaultdict(list)
+    for ref_id, ref_clfs in ref_to_clfs.items():
+        # Get the best identity for this reference chromosome
+        best_ident = max(
+            qr_best_chain_ident.get((clf.original_name, ref_id), 0.0)
+            for clf in ref_clfs
+        )
+        if best_ident > 0:
+            # Extract reference subgenome from ref_id (e.g., "chr1A" -> "A")
+            _, ref_subgenome = split_chrom_subgenome(ref_id)
+            ref_subgenome_to_best_idents[ref_subgenome].append(best_ident)
+
+    # Compute threshold per reference subgenome
+    ref_subgenome_thresholds: Dict[Optional[str], float] = {}
+    for ref_subgenome, best_idents in ref_subgenome_to_best_idents.items():
+        if len(best_idents) < 2:
+            # Can't compute std_dev with < 2 values, use a default
+            ref_subgenome_thresholds[ref_subgenome] = 0.05  # 5% default threshold
+            continue
+
+        try:
+            std_dev = statistics.stdev(best_idents)
+            mean_ident = statistics.mean(best_idents)
+        except statistics.StatisticsError:
+            ref_subgenome_thresholds[ref_subgenome] = 0.05
+            continue
+
+        if std_dev < 0.001:
+            # Very small std_dev - use a minimum threshold
+            ref_subgenome_thresholds[ref_subgenome] = 0.02  # 2% minimum
+        else:
+            ref_subgenome_thresholds[ref_subgenome] = subgenome_k * std_dev
+
+        logger.info(
+            f"Subgenome clustering ({ref_subgenome or 'default'}): "
+            f"n={len(best_idents)}, mean_ident={mean_ident:.4f}, "
+            f"std_dev={std_dev:.4f}, threshold={ref_subgenome_thresholds[ref_subgenome]:.4f}"
+        )
+
+    # Cluster contigs per reference chromosome using reference-subgenome-specific thresholds
+    for ref_id, ref_clfs in ref_to_clfs.items():
+        if len(ref_clfs) <= 1:
+            # Single contig - no subgenome suffix needed
+            ref_clfs[0].query_subgenome = None
+            ref_clfs[0].query_subgenome_grp = 1
+            continue
+
+        # Get the threshold for this reference subgenome
+        _, ref_subgenome = split_chrom_subgenome(ref_id)
+        threshold = ref_subgenome_thresholds.get(ref_subgenome, 0.05)
+
+        # Sort by identity descending
+        ref_clfs.sort(
+            key=lambda c: qr_best_chain_ident.get((c.original_name, ref_id), 0.0),
+            reverse=True
+        )
+
+        # Greedy clustering: start new cluster when identity gap > threshold
+        cluster_id = 1
+        prev_ident = qr_best_chain_ident.get((ref_clfs[0].original_name, ref_id), 0.0)
+        ref_clfs[0].query_subgenome_grp = cluster_id
+        ref_clfs[0].query_subgenome = None  # Primary subgenome has no suffix
+
+        for i in range(1, len(ref_clfs)):
+            curr_ident = qr_best_chain_ident.get((ref_clfs[i].original_name, ref_id), 0.0)
+            gap = prev_ident - curr_ident
+
+            if gap > threshold:
+                # Identity gap too large - new subgenome cluster
+                cluster_id += 1
+
+            ref_clfs[i].query_subgenome_grp = cluster_id
+            # Assign letter suffix for non-primary clusters (B, C, D, ...)
+            if cluster_id > 1:
+                ref_clfs[i].query_subgenome = chr(ord('A') + cluster_id - 1)
+            else:
+                ref_clfs[i].query_subgenome = None
+
+            prev_ident = curr_ident
+
+
+# ----------------------------
 # Contig naming
 # ----------------------------
 def generate_contig_names(
@@ -347,29 +521,44 @@ def generate_contig_names(
     add_subgenome_suffix: Optional[str],
     ref_norm_to_orig: Optional[Dict[str, str]] = None,
 ) -> Dict[str, str]:
-    """Generate new contig names based on classification.
+    """Generate new contig names with full-length/fragment distinction.
 
-    - Chromosome contigs: inherit reference name (e.g., chr5T)
-    - Multiple contigs to same ref: add _1, _2 suffix by descending length
-    - Non-chromosome: contig_N (N increases with decreasing length)
+    Naming scheme: chr<ref>(_<query_subgenome>)?(_f<frag>|_c<copy>)?
+
+    Examples:
+    - chr1A: Full-length chr1A, single copy, primary subgenome
+    - chr1A_B: Full-length chr1A, query subgenome B
+    - chr1A_f1: Fragment 1 of chr1A
+    - chr1A_B_f1: Fragment 1 of chr1A, query subgenome B
+    - chr1A_c1, chr1A_c2: Multiple full-length copies (unusual)
+
+    Args:
+        classifications: List of ContigClassification with is_full_length and query_subgenome set
+        query_lengths: Dict of contig name -> length
+        add_subgenome_suffix: Optional suffix to add if ref lacks subgenome
+        ref_norm_to_orig: Optional mapping of normalized -> original ref IDs
+
+    Returns:
+        Dict mapping original contig name -> new name
     """
     name_mapping: Dict[str, str] = {}
 
-    # Group chromosome contigs by assigned reference
-    ref_to_contigs: Dict[str, List[str]] = defaultdict(list)
+    # Build lookup by original name
+    clf_by_name = {clf.original_name: clf for clf in classifications}
+
+    # Group chromosome contigs by (assigned_ref_id, query_subgenome)
+    groups: Dict[Tuple[str, Optional[str]], List[ContigClassification]] = defaultdict(list)
     non_chrom_contigs: List[str] = []
 
     for clf in classifications:
         if clf.classification == "chrom_assigned" and clf.assigned_ref_id:
-            ref_to_contigs[clf.assigned_ref_id].append(clf.original_name)
+            key = (clf.assigned_ref_id, clf.query_subgenome)
+            groups[key].append(clf)
         else:
             non_chrom_contigs.append(clf.original_name)
 
     # Name chromosome contigs
-    for ref_id, contigs in ref_to_contigs.items():
-        # Sort by length descending
-        contigs.sort(key=lambda c: query_lengths.get(c, 0), reverse=True)
-
+    for (ref_id, query_sub), contigs in groups.items():
         base_name = ref_norm_to_orig.get(ref_id, ref_id) if ref_norm_to_orig else ref_id
         # Add subgenome suffix if reference doesn't have one and user requested it
         if add_subgenome_suffix:
@@ -377,11 +566,29 @@ def generate_contig_names(
             if sub == "NA":
                 base_name = f"{chrom_id}{add_subgenome_suffix}"
 
-        if len(contigs) == 1:
-            name_mapping[contigs[0]] = base_name
-        else:
-            for i, contig in enumerate(contigs, start=1):
-                name_mapping[contig] = f"{base_name}_{i}"
+        # Add query subgenome suffix if present
+        if query_sub:
+            base_name = f"{base_name}_{query_sub}"
+
+        # Separate full-length and fragments
+        full_length = [c for c in contigs if c.is_full_length]
+        fragments = [c for c in contigs if not c.is_full_length]
+
+        # Sort each group by length descending
+        full_length.sort(key=lambda c: c.contig_len, reverse=True)
+        fragments.sort(key=lambda c: c.contig_len, reverse=True)
+
+        # Name full-length contigs
+        if len(full_length) == 1:
+            name_mapping[full_length[0].original_name] = base_name
+        elif len(full_length) > 1:
+            # Multiple full-length copies - use _c1, _c2
+            for i, clf in enumerate(full_length, start=1):
+                name_mapping[clf.original_name] = f"{base_name}_c{i}"
+
+        # Name fragments - use _f1, _f2
+        for i, clf in enumerate(fragments, start=1):
+            name_mapping[clf.original_name] = f"{base_name}_f{i}"
 
     # Name non-chromosome contigs
     # Sort by length descending
@@ -420,6 +627,11 @@ def classify_all_contigs(
     rdna_hits: Optional[Dict[str, RdnaHit]] = None,
     chrom_debris_hits: Optional[Dict[str, DebrisHit]] = None,
     other_debris_hits: Optional[Dict[str, DebrisHit]] = None,
+    # New parameters for full-length/fragment and subgenome inference
+    ref_lengths: Optional[Dict[str, int]] = None,
+    telomere_results: Optional[Dict[str, 'TelomereResult']] = None,
+    full_length_threshold: float = 0.70,
+    subgenome_k: float = 1.0,
 ) -> List[ContigClassification]:
     """Classify all contigs and assign confidence levels.
 
@@ -523,6 +735,37 @@ def classify_all_contigs(
         # Compute synteny score (0-1) based on gene proportion
         synteny_score = min(1.0, gene_proportion * 2) if gene_proportion else 0.0
 
+        # Compute reference coverage (span-based, robust to divergence)
+        ref_cov = None
+        if ref_lengths and ev.qr_ref_span_bp:
+            ref_span = ev.qr_ref_span_bp.get((contig, ref_id), 0)
+            ref_len = ref_lengths.get(ref_id, 0)
+            if ref_len > 0:
+                ref_cov = ref_span / ref_len
+
+        # Get telomere detection results
+        has_5p = False
+        has_3p = False
+        if telomere_results and contig in telomere_results:
+            telo = telomere_results[contig]
+            has_5p = telo.has_5p_telomere
+            has_3p = telo.has_3p_telomere
+
+        # Classify as full-length or fragment
+        is_full = False
+        fl_confidence = "low"
+        if ref_cov is not None:
+            is_full, fl_confidence = classify_full_length(
+                ref_coverage=ref_cov,
+                has_5p_telomere=has_5p,
+                has_3p_telomere=has_3p,
+                full_length_threshold=full_length_threshold,
+            )
+        else:
+            # No ref_lengths available - default to fragment with low confidence
+            is_full = False
+            fl_confidence = "low"
+
         # Compute confidence
         # High: good synteny (>20% genes) AND GC similar to reference (<2 std)
         # Medium: moderate synteny OR borderline GC
@@ -552,6 +795,12 @@ def classify_all_contigs(
             gc_deviation=gc_dev,
             synteny_score=synteny_score,
             classification_confidence=confidence,
+            # Full-length vs fragment fields
+            ref_coverage=ref_cov,
+            is_full_length=is_full,
+            full_length_confidence=fl_confidence,
+            has_5p_telomere=has_5p,
+            has_3p_telomere=has_3p,
         ))
         classified_contigs.add(contig)
 
@@ -827,6 +1076,14 @@ def classify_all_contigs(
                 gc_deviation=gc_dev,
                 classification_confidence="low",
             ))
+
+    # Infer query subgenomes when multiple contigs map to same reference
+    if ev.qr_best_chain_ident:
+        infer_query_subgenomes(
+            classifications=classifications,
+            qr_best_chain_ident=ev.qr_best_chain_ident,
+            subgenome_k=subgenome_k,
+        )
 
     # Generate names
     name_mapping = generate_contig_names(

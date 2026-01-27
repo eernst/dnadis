@@ -41,6 +41,26 @@ class Chain:
 
 
 @dataclass
+class TelomereResult:
+    """Telomere detection result for a contig.
+
+    Telomeres are repetitive sequences at chromosome ends. Their presence
+    indicates assembly completeness - a contig with both telomeres represents
+    a complete chromosome regardless of reference coverage.
+
+    Attributes:
+        has_5p_telomere: Telomere detected at 5' end
+        has_3p_telomere: Telomere detected at 3' end
+        telomere_5p_count: Number of telomere repeats at 5' end
+        telomere_3p_count: Number of telomere repeats at 3' end
+    """
+    has_5p_telomere: bool
+    has_3p_telomere: bool
+    telomere_5p_count: int
+    telomere_3p_count: int
+
+
+@dataclass
 class ChainEvidenceResult:
     """Result container for chain evidence and segment parsing functions."""
     qlens_from_paf: Dict[str, int]
@@ -62,6 +82,10 @@ class ChainEvidenceResult:
     chain_segments_rows: List[Tuple]
     macro_block_rows: List[Tuple]
     chain_summary_rows: List[Tuple]
+    # Reference span coverage (extent-based, robust to divergence)
+    qr_ref_span_bp: Dict[Tuple[str, str], int] = None  # (contig, ref_id) -> reference span bp
+    # Best chain identity per (contig, ref_id) for subgenome inference
+    qr_best_chain_ident: Dict[Tuple[str, str], float] = None  # (contig, ref_id) -> identity
 
 
 # ----------------------------
@@ -114,6 +138,16 @@ class ContigClassification:
     depth_std: Optional[float] = None
     depth_breadth_1x: Optional[float] = None
     depth_breadth_10x: Optional[float] = None
+    # Full-length vs fragment classification
+    ref_coverage: Optional[float] = None  # Fraction of reference chromosome spanned (0.0-1.0)
+    is_full_length: Optional[bool] = None  # True if full-length, False if fragment
+    full_length_confidence: Optional[str] = None  # "high"/"medium"/"low"
+    has_5p_telomere: Optional[bool] = None  # Telomere at 5' end
+    has_3p_telomere: Optional[bool] = None  # Telomere at 3' end
+    # Query subgenome inference (when multiple contigs map to same ref)
+    query_subgenome: Optional[str] = None  # "B", "C", etc. or None if primary/single
+    query_subgenome_grp: Optional[int] = None  # Numeric cluster ID (1, 2, 3...)
+    seq_identity_vs_ref: Optional[float] = None  # Sequence identity (0.0-1.0)
 
 
 @dataclass

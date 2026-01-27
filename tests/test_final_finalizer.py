@@ -273,3 +273,314 @@ def test_filter_overlapping_hits_higher_identity_wins():
 
     # chr1A should have no hits left
     assert len(filtered.get(("contigA", "chr1A", "+"), [])) == 0
+
+
+# ----------------------------
+# Telomere detection tests
+# ----------------------------
+def test_telomere_detection_plant_motif():
+    """Test telomere detection with plant telomere motif TTTAGGG."""
+    from final_finalizer.detection.telomere import detect_telomeres_single, _count_telomere_repeats
+
+    # Test _count_telomere_repeats directly
+    # Plant telomere motif: TTTAGGG (forward) / CCCTAAA (reverse)
+    motif = "TTTAGGG"
+
+    # Sequence with 5 forward repeats
+    seq_with_telomere = "TTTAGGGTTTAGGGTTTAGGGTTTAGGGTTTAGGG"
+    count = _count_telomere_repeats(seq_with_telomere, motif, min_repeats=3)
+    assert count == 5, f"Expected 5 repeats, got {count}"
+
+    # Sequence with reverse complement repeats
+    seq_with_rc_telomere = "CCCTAAACCCTAAACCCTAAACCCTAAA"
+    count_rc = _count_telomere_repeats(seq_with_rc_telomere, motif, min_repeats=3)
+    assert count_rc == 4, f"Expected 4 RC repeats, got {count_rc}"
+
+    # Sequence with only 2 repeats (below threshold)
+    seq_short = "TTTAGGGTTTAGGG"
+    count_short = _count_telomere_repeats(seq_short, motif, min_repeats=3)
+    assert count_short == 0, f"Expected 0 (below threshold), got {count_short}"
+
+
+def test_telomere_detection_at_contig_ends():
+    """Test telomere detection at contig 5' and 3' ends."""
+    from final_finalizer.detection.telomere import detect_telomeres_single
+
+    # Create a synthetic contig with telomeres at both ends
+    # 5' end: CCCTAAA repeats (reverse complement telomere on + strand)
+    # 3' end: TTTAGGG repeats (forward telomere)
+    telomere_5p = "CCCTAAA" * 10  # 70 bp
+    middle = "A" * 500
+    telomere_3p = "TTTAGGG" * 10  # 70 bp
+    contig = telomere_5p + middle + telomere_3p
+
+    result = detect_telomeres_single(
+        sequence=contig,
+        motif="TTTAGGG",
+        window_size=100,
+        min_repeats=3,
+    )
+
+    assert result.has_5p_telomere, "Should detect 5' telomere"
+    assert result.has_3p_telomere, "Should detect 3' telomere"
+    assert result.telomere_5p_count >= 3
+    assert result.telomere_3p_count >= 3
+
+
+def test_telomere_detection_no_telomeres():
+    """Test that contigs without telomeres are correctly identified."""
+    from final_finalizer.detection.telomere import detect_telomeres_single
+
+    # Random sequence without telomeres
+    contig = "ACGTACGTACGT" * 100
+
+    result = detect_telomeres_single(
+        sequence=contig,
+        motif="TTTAGGG",
+        window_size=100,
+        min_repeats=3,
+    )
+
+    assert not result.has_5p_telomere
+    assert not result.has_3p_telomere
+    assert result.telomere_5p_count == 0
+    assert result.telomere_3p_count == 0
+
+
+# ----------------------------
+# Full-length classification tests
+# ----------------------------
+def test_classify_full_length_both_telomeres():
+    """Test that both telomeres = high confidence full-length."""
+    from final_finalizer.classification.classifier import classify_full_length
+
+    # Both telomeres - should be full-length with high confidence regardless of coverage
+    is_full, confidence = classify_full_length(
+        ref_coverage=0.50,  # Low coverage
+        has_5p_telomere=True,
+        has_3p_telomere=True,
+        full_length_threshold=0.70,
+    )
+    assert is_full is True
+    assert confidence == "high"
+
+
+def test_classify_full_length_one_telomere_high_coverage():
+    """Test that one telomere + high coverage = medium confidence full-length."""
+    from final_finalizer.classification.classifier import classify_full_length
+
+    is_full, confidence = classify_full_length(
+        ref_coverage=0.80,  # Above threshold
+        has_5p_telomere=True,
+        has_3p_telomere=False,
+        full_length_threshold=0.70,
+    )
+    assert is_full is True
+    assert confidence == "medium"
+
+
+def test_classify_full_length_one_telomere_low_coverage():
+    """Test that one telomere + low coverage = medium confidence fragment."""
+    from final_finalizer.classification.classifier import classify_full_length
+
+    is_full, confidence = classify_full_length(
+        ref_coverage=0.50,  # Below threshold
+        has_5p_telomere=True,
+        has_3p_telomere=False,
+        full_length_threshold=0.70,
+    )
+    assert is_full is False
+    assert confidence == "medium"
+
+
+def test_classify_full_length_no_telomeres_high_coverage():
+    """Test that no telomeres + high coverage = low confidence full-length."""
+    from final_finalizer.classification.classifier import classify_full_length
+
+    is_full, confidence = classify_full_length(
+        ref_coverage=0.85,  # Above threshold
+        has_5p_telomere=False,
+        has_3p_telomere=False,
+        full_length_threshold=0.70,
+    )
+    assert is_full is True
+    assert confidence == "low"
+
+
+def test_classify_full_length_no_telomeres_low_coverage():
+    """Test that no telomeres + low coverage = low confidence fragment."""
+    from final_finalizer.classification.classifier import classify_full_length
+
+    is_full, confidence = classify_full_length(
+        ref_coverage=0.40,  # Below threshold
+        has_5p_telomere=False,
+        has_3p_telomere=False,
+        full_length_threshold=0.70,
+    )
+    assert is_full is False
+    assert confidence == "low"
+
+
+# ----------------------------
+# Naming scheme tests
+# ----------------------------
+def test_generate_contig_names_full_length_single():
+    """Test naming for single full-length contig."""
+    from final_finalizer.classification.classifier import generate_contig_names
+    from final_finalizer.models import ContigClassification
+
+    clf = ContigClassification(
+        original_name="contig_001",
+        new_name="",
+        classification="chrom_assigned",
+        reversed=False,
+        contaminant_taxid=None,
+        contaminant_sci=None,
+        assigned_ref_id="chr1A",
+        ref_gene_proportion=0.5,
+        contig_len=1000000,
+        is_full_length=True,
+        query_subgenome=None,
+    )
+
+    name_mapping = generate_contig_names(
+        classifications=[clf],
+        query_lengths={"contig_001": 1000000},
+        add_subgenome_suffix=None,
+    )
+
+    assert name_mapping["contig_001"] == "chr1A"
+
+
+def test_generate_contig_names_fragment():
+    """Test naming for fragment contigs."""
+    from final_finalizer.classification.classifier import generate_contig_names
+    from final_finalizer.models import ContigClassification
+
+    clfs = [
+        ContigClassification(
+            original_name="contig_001",
+            new_name="",
+            classification="chrom_assigned",
+            reversed=False,
+            contaminant_taxid=None,
+            contaminant_sci=None,
+            assigned_ref_id="chr1A",
+            ref_gene_proportion=0.3,
+            contig_len=500000,
+            is_full_length=False,  # Fragment
+            query_subgenome=None,
+        ),
+        ContigClassification(
+            original_name="contig_002",
+            new_name="",
+            classification="chrom_assigned",
+            reversed=False,
+            contaminant_taxid=None,
+            contaminant_sci=None,
+            assigned_ref_id="chr1A",
+            ref_gene_proportion=0.2,
+            contig_len=300000,
+            is_full_length=False,  # Fragment
+            query_subgenome=None,
+        ),
+    ]
+
+    name_mapping = generate_contig_names(
+        classifications=clfs,
+        query_lengths={"contig_001": 500000, "contig_002": 300000},
+        add_subgenome_suffix=None,
+    )
+
+    # Both are fragments, should get _f1, _f2 suffix by length
+    assert name_mapping["contig_001"] == "chr1A_f1"
+    assert name_mapping["contig_002"] == "chr1A_f2"
+
+
+def test_generate_contig_names_query_subgenome():
+    """Test naming with query subgenome suffix."""
+    from final_finalizer.classification.classifier import generate_contig_names
+    from final_finalizer.models import ContigClassification
+
+    clfs = [
+        ContigClassification(
+            original_name="contig_001",
+            new_name="",
+            classification="chrom_assigned",
+            reversed=False,
+            contaminant_taxid=None,
+            contaminant_sci=None,
+            assigned_ref_id="chr1A",
+            ref_gene_proportion=0.5,
+            contig_len=1000000,
+            is_full_length=True,
+            query_subgenome=None,  # Primary
+        ),
+        ContigClassification(
+            original_name="contig_002",
+            new_name="",
+            classification="chrom_assigned",
+            reversed=False,
+            contaminant_taxid=None,
+            contaminant_sci=None,
+            assigned_ref_id="chr1A",
+            ref_gene_proportion=0.4,
+            contig_len=900000,
+            is_full_length=True,
+            query_subgenome="B",  # Query subgenome B
+        ),
+    ]
+
+    name_mapping = generate_contig_names(
+        classifications=clfs,
+        query_lengths={"contig_001": 1000000, "contig_002": 900000},
+        add_subgenome_suffix=None,
+    )
+
+    assert name_mapping["contig_001"] == "chr1A"  # Primary, no suffix
+    assert name_mapping["contig_002"] == "chr1A_B"  # Query subgenome B
+
+
+def test_generate_contig_names_multiple_full_length_copies():
+    """Test naming when multiple full-length copies exist (unusual case)."""
+    from final_finalizer.classification.classifier import generate_contig_names
+    from final_finalizer.models import ContigClassification
+
+    clfs = [
+        ContigClassification(
+            original_name="contig_001",
+            new_name="",
+            classification="chrom_assigned",
+            reversed=False,
+            contaminant_taxid=None,
+            contaminant_sci=None,
+            assigned_ref_id="chr1A",
+            ref_gene_proportion=0.5,
+            contig_len=1000000,
+            is_full_length=True,
+            query_subgenome=None,
+        ),
+        ContigClassification(
+            original_name="contig_002",
+            new_name="",
+            classification="chrom_assigned",
+            reversed=False,
+            contaminant_taxid=None,
+            contaminant_sci=None,
+            assigned_ref_id="chr1A",
+            ref_gene_proportion=0.5,
+            contig_len=900000,
+            is_full_length=True,  # Also full-length!
+            query_subgenome=None,
+        ),
+    ]
+
+    name_mapping = generate_contig_names(
+        classifications=clfs,
+        query_lengths={"contig_001": 1000000, "contig_002": 900000},
+        add_subgenome_suffix=None,
+    )
+
+    # Multiple full-length copies get _c1, _c2 suffix
+    assert name_mapping["contig_001"] == "chr1A_c1"
+    assert name_mapping["contig_002"] == "chr1A_c2"

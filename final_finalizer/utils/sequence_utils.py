@@ -6,9 +6,10 @@ Contains functions for FASTA reading, writing, and DNA sequence manipulation.
 """
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 from final_finalizer.utils.io_utils import open_maybe_gzip
 from final_finalizer.utils.logging_config import get_logger
@@ -221,3 +222,159 @@ def calculate_gc_stats(gc_contents: Dict[str, float]) -> tuple[float, float]:
     std_dev = variance ** 0.5
 
     return mean, std_dev
+
+
+# ----------------------------
+# GC content caching
+# ----------------------------
+
+
+def write_gc_content_tsv(
+    tsv_path: Path,
+    metadata_path: Path,
+    ref_gc: Dict[str, float],
+    qry_gc: Dict[str, float],
+    ref_path: Path,
+    qry_path: Path,
+) -> None:
+    """Write GC content cache file with metadata for validation.
+
+    Args:
+        tsv_path: Path for TSV output
+        metadata_path: Path for JSON metadata
+        ref_gc: Reference GC content dict
+        qry_gc: Query GC content dict
+        ref_path: Path to reference FASTA (for cache validation)
+        qry_path: Path to query FASTA (for cache validation)
+    """
+    # Write TSV with source column
+    with tsv_path.open("w") as f:
+        f.write("source\tseqid\tgc_content\n")
+        for seqid, gc in ref_gc.items():
+            f.write(f"reference\t{seqid}\t{gc:.6f}\n")
+        for seqid, gc in qry_gc.items():
+            f.write(f"query\t{seqid}\t{gc:.6f}\n")
+
+    # Write metadata for cache validation
+    ref_resolved = ref_path.resolve()
+    qry_resolved = qry_path.resolve()
+
+    metadata = {
+        "ref_path": str(ref_resolved),
+        "ref_name": ref_path.name,
+        "ref_mtime": ref_resolved.stat().st_mtime if ref_resolved.exists() else 0,
+        "ref_size": ref_resolved.stat().st_size if ref_resolved.exists() else 0,
+        "query_path": str(qry_resolved),
+        "query_name": qry_path.name,
+        "query_mtime": qry_resolved.stat().st_mtime if qry_resolved.exists() else 0,
+        "query_size": qry_resolved.stat().st_size if qry_resolved.exists() else 0,
+        "ref_seqs": len(ref_gc),
+        "query_seqs": len(qry_gc),
+    }
+
+    with metadata_path.open("w") as f:
+        json.dump(metadata, f, indent=2)
+
+
+def read_gc_content_tsv(tsv_path: Path) -> Tuple[Dict[str, float], Dict[str, float]]:
+    """Read cached GC content from TSV file.
+
+    Args:
+        tsv_path: Path to GC content TSV
+
+    Returns:
+        Tuple of (ref_gc, qry_gc) dicts
+    """
+    ref_gc: Dict[str, float] = {}
+    qry_gc: Dict[str, float] = {}
+
+    with tsv_path.open() as f:
+        header = f.readline()  # Skip header
+        for line in f:
+            parts = line.strip().split("\t")
+            if len(parts) != 3:
+                continue
+            source, seqid, gc_str = parts
+            gc = float(gc_str)
+            if source == "reference":
+                ref_gc[seqid] = gc
+            elif source == "query":
+                qry_gc[seqid] = gc
+
+    return ref_gc, qry_gc
+
+
+def check_gc_cache(
+    tsv_path: Path,
+    metadata_path: Path,
+    ref_path: Path,
+    qry_path: Path,
+) -> bool:
+    """Check if GC content cache is valid.
+
+    Validates that:
+    - TSV and metadata files exist
+    - Reference and query paths match
+    - File modification times haven't changed
+    - File sizes haven't changed
+
+    Args:
+        tsv_path: Path to GC content TSV
+        metadata_path: Path to metadata JSON
+        ref_path: Current reference FASTA path
+        qry_path: Current query FASTA path
+
+    Returns:
+        True if cache is valid and can be reused
+    """
+    if not tsv_path.exists() or not metadata_path.exists():
+        return False
+
+    try:
+        with metadata_path.open() as f:
+            metadata = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return False
+
+    ref_resolved = ref_path.resolve()
+    qry_resolved = qry_path.resolve()
+
+    # Check reference file
+    if metadata.get("ref_path") != str(ref_resolved):
+        logger.info(
+            f"GC cache invalid: ref path changed "
+            f"(cached={metadata.get('ref_name', 'unknown')}, current={ref_path.name})"
+        )
+        return False
+
+    try:
+        ref_stat = ref_resolved.stat()
+        if metadata.get("ref_mtime", 0) != ref_stat.st_mtime:
+            logger.info(f"GC cache invalid: ref file modified ({ref_path.name})")
+            return False
+        if metadata.get("ref_size", 0) != ref_stat.st_size:
+            logger.info(f"GC cache invalid: ref file size changed ({ref_path.name})")
+            return False
+    except OSError:
+        return False
+
+    # Check query file
+    if metadata.get("query_path") != str(qry_resolved):
+        logger.info(
+            f"GC cache invalid: query path changed "
+            f"(cached={metadata.get('query_name', 'unknown')}, current={qry_path.name})"
+        )
+        return False
+
+    try:
+        qry_stat = qry_resolved.stat()
+        if metadata.get("query_mtime", 0) != qry_stat.st_mtime:
+            logger.info(f"GC cache invalid: query file modified ({qry_path.name})")
+            return False
+        if metadata.get("query_size", 0) != qry_stat.st_size:
+            logger.info(f"GC cache invalid: query file size changed ({qry_path.name})")
+            return False
+    except OSError:
+        return False
+
+    return True

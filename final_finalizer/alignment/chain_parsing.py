@@ -605,6 +605,7 @@ def _chains_to_evidence_and_segments(
 
     # Evidence across kept chains
     qr_intervals = defaultdict(list)  # (q, ref_id) -> list[(qs,qe)]
+    qr_ref_intervals = defaultdict(list)  # (q, ref_id) -> list[(rs,re)] for reference coverage
     qr_matches = defaultdict(int)
     qr_alnlen = defaultdict(int)
     qr_gene_ids = defaultdict(set)  # (q, ref_id) -> set(gene_id)
@@ -743,6 +744,11 @@ def _chains_to_evidence_and_segments(
             qr_matches[key_qr] += msum
             qr_alnlen[key_qr] += alnsum
 
+            # Track reference intervals for reference coverage calculation
+            ch_blocks = chain_blocks[chain_idx]
+            for blk in ch_blocks:
+                qr_ref_intervals[key_qr].append((blk.rs, blk.re))
+
             qr_chain_weights[key_qr].append(w)
             qr_weight_all[key_qr] += w
             qr_nchains_kept[key_qr] += 1
@@ -760,6 +766,12 @@ def _chains_to_evidence_and_segments(
     for key, ivs in qr_intervals.items():
         _m, total = merge_intervals(ivs)
         qr_union_bp[key] = total
+
+    # finalize per-(q,ref_id) reference span bp for reference coverage
+    qr_ref_span_bp = defaultdict(int)
+    for key, ivs in qr_ref_intervals.items():
+        _m, total = merge_intervals(ivs)
+        qr_ref_span_bp[key] = total
 
     contig_total = defaultdict(int)
     contig_refs = defaultdict(set)
@@ -860,4 +872,6 @@ def _chains_to_evidence_and_segments(
         chain_segments_rows=chain_segments_rows,
         macro_block_rows=macro_block_rows,
         chain_summary_rows=chain_summary_rows,
+        qr_ref_span_bp=dict(qr_ref_span_bp),
+        qr_best_chain_ident=dict(qr_best_chain_ident),
     )

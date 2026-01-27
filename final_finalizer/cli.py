@@ -65,8 +65,11 @@ from final_finalizer.utils.io_utils import file_exists_and_valid
 from final_finalizer.utils.sequence_utils import (
     calculate_gc_content_fasta,
     calculate_gc_stats,
+    check_gc_cache,
     read_fasta_lengths,
+    read_gc_content_tsv,
     write_filtered_fasta,
+    write_gc_content_tsv,
 )
 from final_finalizer.utils.reference_utils import (
     compile_ref_id_patterns,
@@ -469,6 +472,35 @@ def main():
     mm2_tune.add_argument("-k", "--kmer", type=int, default=None, help="minimap2 k-mer size")
     mm2_tune.add_argument("-w", "--window", type=int, default=None, help="minimap2 minimizer window size")
 
+    # =========================================================================
+    # Full-length detection and subgenome inference
+    # =========================================================================
+    fl_grp = p.add_argument_group("Full-length detection and subgenome inference")
+    fl_grp.add_argument(
+        "--full-length-ref-coverage", type=float, default=0.70,
+        help="Reference span coverage threshold for full-length classification [0.70]",
+    )
+    fl_grp.add_argument(
+        "--disable-telomere-detection", action="store_true",
+        help="Disable telomere detection (enabled by default)",
+    )
+    fl_grp.add_argument(
+        "--telomere-motif", type=str, default="TTTAGGG",
+        help="Telomere repeat motif [TTTAGGG for plants, TTAGGG for vertebrates]",
+    )
+    fl_grp.add_argument(
+        "--telomere-window", type=int, default=10000,
+        help="Window size at contig ends to search for telomeres [10000]",
+    )
+    fl_grp.add_argument(
+        "--telomere-min-repeats", type=int, default=3,
+        help="Minimum consecutive telomere repeats to call telomere [3]",
+    )
+    fl_grp.add_argument(
+        "--subgenome-k", type=float, default=1.0,
+        help="Multiplier for std_dev-based query subgenome clustering threshold [1.0]",
+    )
+
     args = p.parse_args()
 
     # Load config file if provided (CLI args override config)
@@ -518,10 +550,20 @@ def main():
     qry_lengths = read_fasta_lengths(qry)
     logger.info(f"Query contigs: {len(qry_lengths)}")
 
-    # Compute GC content for reference and query
-    logger.info("Computing GC content for reference and query sequences")
-    ref_gc_all = calculate_gc_content_fasta(ref)
-    qry_gc = calculate_gc_content_fasta(qry)
+    # GC content cache paths
+    gc_content_tsv = Path(str(outprefix) + ".gc_content.tsv")
+    gc_content_metadata = Path(str(outprefix) + ".gc_content.metadata.json")
+
+    # Compute or load cached GC content for reference and query
+    if check_gc_cache(gc_content_tsv, gc_content_metadata, ref, qry):
+        logger.info(f"Reusing cached GC content: {gc_content_tsv}")
+        ref_gc_all, qry_gc = read_gc_content_tsv(gc_content_tsv)
+    else:
+        logger.info("Computing GC content for reference and query sequences")
+        ref_gc_all = calculate_gc_content_fasta(ref)
+        qry_gc = calculate_gc_content_fasta(qry)
+        write_gc_content_tsv(gc_content_tsv, gc_content_metadata, ref_gc_all, qry_gc, ref, qry)
+        logger.info(f"Cached GC content: {gc_content_tsv}")
 
     # Compute reference GC baseline (nuclear chromosomes only, exclude organelles)
     # Filter to only include sequences matching chromosome patterns
@@ -968,6 +1010,21 @@ def main():
         query_lengths=qry_lengths,
     )
 
+    # --- Phase 10.5: Telomere detection (optional) ---
+    telomere_results = None
+    if not args.disable_telomere_detection:
+        logger.phase("Phase 10.5: Telomere detection")
+        from final_finalizer.detection.telomere import detect_telomeres
+        telomere_results = detect_telomeres(
+            query_fasta=qry,
+            contig_names=chromosome_contigs,  # Only analyze chromosome-assigned contigs
+            motif=args.telomere_motif,
+            window_size=args.telomere_window,
+            min_repeats=args.telomere_min_repeats,
+        )
+    else:
+        logger.info("Phase 10.5: Skipping telomere detection (--disable-telomere-detection)")
+
     # --- Phase 11: Classify all contigs ---
     logger.phase("Phase 11: Classifying all contigs")
 
@@ -1008,6 +1065,11 @@ def main():
         rdna_hits=rdna_hits,
         chrom_debris_hits=chrom_debris_hits,
         other_debris_hits=other_debris_hits,
+        # Full-length and subgenome inference parameters
+        ref_lengths=ref_lengths,
+        telomere_results=telomere_results,
+        full_length_threshold=args.full_length_ref_coverage,
+        subgenome_k=args.subgenome_k,
     )
 
     for clf in classifications:

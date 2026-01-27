@@ -112,6 +112,15 @@ def write_contig_summary_tsv(
         "assigned_chrom_id",
         "status",
         "length",
+        # Full-length vs fragment fields
+        "ref_coverage",
+        "is_full_length",
+        "full_length_confidence",
+        "query_subgenome",
+        "seq_identity_vs_ref",
+        "has_5p_telomere",
+        "has_3p_telomere",
+        # Evidence fields
         "gc_content",
         "gc_deviation",
         "synteny_score",
@@ -239,6 +248,15 @@ def write_contig_summary_tsv(
             contaminant_sci = clf.contaminant_sci if clf and clf.contaminant_sci else ""
             ref_gene_proportion = clf.ref_gene_proportion if clf and clf.ref_gene_proportion is not None else ""
 
+            # Full-length vs fragment columns
+            ref_cov_str = f"{clf.ref_coverage:.4f}" if clf and clf.ref_coverage is not None else ""
+            is_full_length = "yes" if clf and clf.is_full_length else ("no" if clf and clf.is_full_length is not None else "")
+            fl_confidence = clf.full_length_confidence if clf and clf.full_length_confidence else ""
+            query_subgenome = clf.query_subgenome if clf and clf.query_subgenome else ""
+            seq_identity = f"{clf.seq_identity_vs_ref:.6f}" if clf and clf.seq_identity_vs_ref is not None else ""
+            has_5p_telo = "yes" if clf and clf.has_5p_telomere else ("no" if clf and clf.has_5p_telomere is not None else "")
+            has_3p_telo = "yes" if clf and clf.has_3p_telomere else ("no" if clf and clf.has_3p_telomere is not None else "")
+
             # Evidence strength columns
             gc_content = f"{clf.gc_content:.4f}" if clf and clf.gc_content is not None else ""
             gc_deviation = f"{clf.gc_deviation:.2f}" if clf and clf.gc_deviation is not None else ""
@@ -275,6 +293,15 @@ def write_contig_summary_tsv(
                         str(assigned_chrom_id),
                         str(status),
                         str(int(contig_len)),  # length
+                        # Full-length vs fragment fields
+                        ref_cov_str,
+                        is_full_length,
+                        fl_confidence,
+                        query_subgenome,
+                        seq_identity,
+                        has_5p_telo,
+                        has_3p_telo,
+                        # Evidence fields
                         gc_content,
                         gc_deviation,
                         synteny_score,
