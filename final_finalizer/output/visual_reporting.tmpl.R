@@ -454,7 +454,7 @@ p_comp <- ggplot() +
         ymin = ymin, ymax = ymax),
     fill = "red",
     color = NA,
-    alpha = 0.35
+    alpha = 1.0
   ) +
   scale_fill_manual(values = col_light, guide = "none", drop = FALSE) +
   ggnewscale::new_scale_fill() +
@@ -473,7 +473,7 @@ p_comp <- ggplot() +
         ymin = ymin, ymax = ymax),
     fill = "red",
     color = NA,
-    alpha = 0.5,
+    alpha = 1.0,
     show.legend = FALSE
   ) +
   scale_fill_manual(values = col_dark, guide = "none", drop = FALSE) +
@@ -569,7 +569,7 @@ if (plot_html) {
           ymin = ymin, ymax = ymax, tooltip = tooltip),
       fill = "red",
       color = NA,
-      alpha = 0.35
+      alpha = 1.0
     ) +
     scale_fill_manual(values = col_light, guide = "none", drop = FALSE) +
     ggnewscale::new_scale_fill() +
@@ -588,7 +588,7 @@ if (plot_html) {
           ymin = ymin, ymax = ymax, tooltip = tooltip),
       fill = "red",
       color = NA,
-      alpha = 0.5,
+      alpha = 1.0,
       show.legend = FALSE
     ) +
     scale_fill_manual(values = col_dark, guide = "none", drop = FALSE) +
