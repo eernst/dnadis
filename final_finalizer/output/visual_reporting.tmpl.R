@@ -209,7 +209,10 @@ df_plot <- df %>%
     ),
     assigned_chrom_id  = if_else(assigned_chrom_id %in% chrom_levels, assigned_chrom_id, "Un"),
     chrom_id = factor(assigned_chrom_id, levels = x_levels),
-    best_identity = as.numeric(best_identity)
+    best_identity = as.numeric(best_identity),
+    # Telomere columns (may not exist in older output files)
+    has_5p_telo = if ("has_5p_telomere" %in% names(.)) has_5p_telomere == "yes" else FALSE,
+    has_3p_telo = if ("has_3p_telomere" %in% names(.)) has_3p_telomere == "yes" else FALSE
   ) %>%
   filter(contig_len >= chr_like_minlen)
 
@@ -404,6 +407,27 @@ p_comp <- ggplot() +
     alpha = 0.5,
     show.legend = FALSE
   ) +
+  # Telomere indicators - small triangles at contig ends
+  # 5' telomere (bottom of contig) - triangle pointing up
+  geom_point(
+    data = df_slots %>% filter(has_5p_telo),
+    aes(x = x_plot, y = -0.4),
+    shape = 24,  # triangle pointing up
+    size = 1.2,
+    fill = "grey30",
+    color = NA,
+    show.legend = FALSE
+  ) +
+  # 3' telomere (top of contig) - triangle pointing down
+  geom_point(
+    data = df_slots %>% filter(has_3p_telo),
+    aes(x = x_plot, y = contig_len_mb + 0.4),
+    shape = 25,  # triangle pointing down
+    size = 1.2,
+    fill = "grey30",
+    color = NA,
+    show.legend = FALSE
+  ) +
   scale_fill_manual(values = col_dark, guide = "none", drop = FALSE) +
   guides(
     fill = guide_legend(
@@ -501,6 +525,27 @@ if (plot_html) {
       alpha = 0.5,
       show.legend = FALSE
     ) +
+    # Telomere indicators - small triangles at contig ends
+    # 5' telomere (bottom of contig) - triangle pointing up
+    ggiraph::geom_point_interactive(
+      data = df_slots %>% filter(has_5p_telo),
+      aes(x = x_plot, y = -0.4, tooltip = paste0(original_name, "\n5' telomere detected")),
+      shape = 24,  # triangle pointing up
+      size = 1.2,
+      fill = "grey30",
+      color = NA,
+      show.legend = FALSE
+    ) +
+    # 3' telomere (top of contig) - triangle pointing down
+    ggiraph::geom_point_interactive(
+      data = df_slots %>% filter(has_3p_telo),
+      aes(x = x_plot, y = contig_len_mb + 0.4, tooltip = paste0(original_name, "\n3' telomere detected")),
+      shape = 25,  # triangle pointing down
+      size = 1.2,
+      fill = "grey30",
+      color = NA,
+      show.legend = FALSE
+    ) +
     scale_fill_manual(values = col_dark, guide = "none", drop = FALSE) +
     guides(
       fill = guide_legend(
@@ -579,11 +624,27 @@ if (has_subgenomes) {
         hjust = if_else(vx < 0, 1, 0),
         vjust = 0.5
       )
-  } else {
+  } else if (n_sets == 3) {
+    # Triangle: offset labels outward from center
     verts %>%
       mutate(
-        lx = vx,
-        ly = vy,
+        # Push labels away from centroid (0, ~0.29)
+        centroid_y = sqrt(3)/6,
+        dir_x = vx - 0,
+        dir_y = vy - centroid_y,
+        dir_len = sqrt(dir_x^2 + dir_y^2),
+        lx = vx + 0.12 * dir_x / dir_len,
+        ly = vy + 0.12 * dir_y / dir_len,
+        hjust = 0.5,
+        vjust = 0.5
+      ) %>%
+      select(-centroid_y, -dir_x, -dir_y, -dir_len)
+  } else {
+    # Square (4 subgenomes): offset labels to corners
+    verts %>%
+      mutate(
+        lx = vx * 1.2,
+        ly = vy * 1.2,
         hjust = 0.5,
         vjust = 0.5
       )
@@ -683,9 +744,7 @@ if (has_subgenomes) {
     theme(
       plot.title = element_text(hjust = 0.5, size = base_font_pt, family = base_family),
       axis.ticks = element_blank(),
-      panel.grid.major.y = element_line(color = "grey85", linewidth = 0.4),
-      panel.grid.major.x = element_blank(),
-      panel.grid.minor   = element_blank(),
+      panel.grid = element_blank(),
       plot.margin = margin(5.5, 5.5, 5.5, 5.5)
     ) +
     labs(
@@ -712,9 +771,7 @@ if (has_subgenomes) {
       plot.title = element_text(hjust = 0.5, size = base_font_pt, family = base_family),
       axis.title.x = element_blank(),
       axis.ticks = element_blank(),
-      panel.grid.major.y = element_line(color = "grey85", linewidth = 0.4),
-      panel.grid.major.x = element_blank(),
-      panel.grid.minor   = element_blank(),
+      panel.grid = element_blank(),
       plot.margin = margin(5.5, 5.5, 5.5, 5.5)
     ) +
     labs(
