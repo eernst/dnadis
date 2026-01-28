@@ -139,7 +139,7 @@ def main():
             threads=8, plot=False, plot_html=False, verbose=False, quiet=False,
             log_file=None, config=None, dump_config=True, chr_like_minlen=None,
             add_subgenome_suffix=None, ref_id_pattern=None, reads=None,
-            reads_type="hifi_onthq", skip_depth=False, depth_window_size=1000,
+            reads_type="lrhq", skip_depth=False, depth_window_size=1000,
             depth_target_coverage=0, keep_depth_bam=False, synteny_mode="protein",
             skip_organelles=False, skip_rdna=False, skip_contaminants=False,
             gffread="gffread", miniprot="miniprot", miniprot_args="",
@@ -221,8 +221,8 @@ def main():
         help="Reads for depth analysis (FASTQ/BAM/CRAM). Auto-detects format and alignment status.",
     )
     depth_grp.add_argument(
-        "--reads-type", choices=["hifi_onthq", "ont", "sr"], default="hifi_onthq",
-        help="Read type for minimap2 alignment: hifi_onthq (lr:hqae for HiFi/ONT Q20+), ont (map-ont), sr (sr) [hifi_onthq]",
+        "--reads-type", choices=["lrhq", "r9", "sr"], default="lrhq",
+        help="Read type for minimap2 alignment: lrhq (lr:hqae for HiFi/ONT Q20+), r9 (map-ont), sr (sr) [lrhq]",
     )
     depth_grp.add_argument(
         "--skip-depth", action="store_true",
@@ -833,7 +833,7 @@ def main():
     ref_lengths = ref_lengths_norm
     if args.chr_like_minlen is None:
         min_nuclear = get_min_nuclear_chrom_length(ref_lengths)
-        chr_like_minlen = int(min_nuclear * 0.25) if min_nuclear > 0 else 1_000_000
+        chr_like_minlen = int(min_nuclear * 0.25) if min_nuclear > 0 else 100_000
         logger.info(f"chr_like_minlen not specified, using 25% of smallest nuclear chrom: {chr_like_minlen}")
     else:
         chr_like_minlen = args.chr_like_minlen

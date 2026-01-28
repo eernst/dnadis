@@ -152,7 +152,7 @@ Latest tested conda package versions (CI):
 | Argument | Description | Default |
 |----------|-------------|---------|
 | `--reads` | Reads for depth analysis (FASTQ/BAM/CRAM). Auto-detects format. | none |
-| `--reads-type` | Read type: `hifi_onthq`, `ont`, or `sr` | hifi_onthq |
+| `--reads-type` | Read type: `lrhq`, `r9`, or `sr` | lrhq |
 | `--skip-depth` | Skip depth analysis even if `--reads` provided | off |
 | `--depth-window-size` | Window size for mosdepth | 1000 |
 | `--depth-target-coverage` | Target coverage for downsampling before alignment (0 to disable) | 0 |
@@ -164,8 +164,8 @@ The `--reads` option accepts:
 - Pre-aligned BAM/CRAM files (used directly)
 
 Read type to minimap2 preset mapping:
-- `hifi_onthq` → `-x lr:hqae` (PacBio HiFi/Duplex, ONT Q20+; high-quality long reads with error rate < 1%)
-- `ont` → `-x map-ont` (ONT reads, standard accuracy)
+- `lrhq` → `-x lr:hqae` (PacBio HiFi/Duplex, ONT Q20+; high-quality long reads with error rate < 1%)
+- `r9` → `-x map-ont` (ONT reads, standard accuracy)
 - `sr` → `-x sr` (Illumina short reads)
 
 **Read downsampling**: If `--depth-target-coverage` is set to a non-zero value (e.g., 20 for 20X coverage), reads are automatically downsampled before alignment using rasusa (for FASTQ) or samtools (for BAM/CRAM). This reduces computational time while maintaining sufficient coverage for depth-based quality assessment. Pre-aligned BAM/CRAM files are not downsampled. Default: 0 (disabled).
@@ -412,7 +412,7 @@ chr_like_minlen = 1000000
 # Read Depth Analysis
 [read_depth]
 reads = "/path/to/reads.fastq.gz"
-reads_type = "hifi_onthq"
+reads_type = "lrhq"
 depth_target_coverage = 20.0
 keep_depth_bam = false
 
@@ -496,7 +496,7 @@ Note: Nucleotide mode does not require `--ref-gff3`, but if provided, gene count
     -o assembly_classified \
     --ref-gff3 reference.gff3 \
     --reads hifi_reads.fastq.gz \
-    --reads-type hifi_onthq \
+    --reads-type lrhq \
     --plot \
     --plot-html \
     -t 32
@@ -540,7 +540,7 @@ Note: Nucleotide mode does not require `--ref-gff3`, but if provided, gene count
     -o assembly_classified \
     --ref-gff3 reference.gff3 \
     --reads hifi_reads.fastq.gz \
-    --reads-type hifi_onthq \
+    --reads-type lrhq \
     --depth-target-coverage 20 \
     --keep-depth-bam \
     --plot \
