@@ -135,7 +135,7 @@ Latest tested conda package versions (CI):
 | `--log-file` | Write logs to file (in addition to stderr) | none |
 | `--config` | Load configuration from TOML file (CLI args override) | none |
 | `--dump-config` | Print TOML config template and exit | off |
-| `-C, --chr-like-minlen` | Min contig length for chromosome classification | 80% of smallest nuclear ref chromosome |
+| `-C, --chr-like-minlen` | Min contig length for chromosome classification | 25% of smallest nuclear ref chromosome |
 | `--add-subgenome-suffix` | Suffix for non-polyploid references (e.g., 'A') | none |
 
 ### Classification references

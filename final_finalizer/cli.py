@@ -833,8 +833,8 @@ def main():
     ref_lengths = ref_lengths_norm
     if args.chr_like_minlen is None:
         min_nuclear = get_min_nuclear_chrom_length(ref_lengths)
-        chr_like_minlen = int(min_nuclear * 0.8) if min_nuclear > 0 else 1_000_000
-        logger.info(f"chr_like_minlen not specified, using 80% of smallest nuclear chrom: {chr_like_minlen}")
+        chr_like_minlen = int(min_nuclear * 0.25) if min_nuclear > 0 else 1_000_000
+        logger.info(f"chr_like_minlen not specified, using 25% of smallest nuclear chrom: {chr_like_minlen}")
     else:
         chr_like_minlen = args.chr_like_minlen
 
