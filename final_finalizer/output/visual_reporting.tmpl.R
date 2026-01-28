@@ -828,7 +828,7 @@ if (has_subgenomes) {
       assigned_subgenome = if_else(is.na(assigned_subgenome), "NA", as.character(assigned_subgenome)),
       classification = if_else(is.na(classification), "NA", as.character(classification))
     ) %>%
-    filter(assigned_subgenome %in% plot_levels | classification == "chrom_unassigned") %>%
+    filter(assigned_subgenome %in% plot_levels) %>%
     mutate(assigned_subgenome = factor(assigned_subgenome, levels = c(plot_levels, "NA")))
 
   frame <- if (n_sets == 2) {
@@ -860,15 +860,9 @@ if (has_subgenomes) {
     geom_point(
       data = radar_xy %>% filter(!is.na(rx), !is.na(ry)),
       aes(x = rx, y = ry, color = assigned_subgenome),
-      shape = 16, alpha = 0.80, size = 1.6, show.legend = TRUE
+      shape = 16, alpha = 0.80, size = 1.6, show.legend = FALSE
     ) +
-    scale_color_manual(
-      values = col_dark,
-      breaks = "NA",
-      labels = "Unassigned contigs",
-      drop = FALSE
-    ) +
-    guides(color = guide_legend(title = NULL, override.aes = list(size = 2))) +
+    scale_color_manual(values = col_dark, drop = FALSE) +
     coord_fixed(ratio = 1, xlim = radar_xlim, ylim = radar_ylim, clip = "off") +
     theme_classic(base_family = base_family, base_size = base_font_pt) +
     theme(
