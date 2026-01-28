@@ -500,6 +500,10 @@ def main():
         "--subgenome-k", type=float, default=1.0,
         help="Multiplier for std_dev-based query subgenome clustering threshold [1.0]",
     )
+    fl_grp.add_argument(
+        "--rearrangement-threshold", type=float, default=0.10,
+        help="Minimum off-target span fraction to flag as rearrangement candidate [0.10]",
+    )
 
     args = p.parse_args()
 
@@ -1070,6 +1074,7 @@ def main():
         telomere_results=telomere_results,
         full_length_threshold=args.full_length_ref_coverage,
         subgenome_k=args.subgenome_k,
+        rearrangement_threshold=args.rearrangement_threshold,
     )
 
     for clf in classifications:

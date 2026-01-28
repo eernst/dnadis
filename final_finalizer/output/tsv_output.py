@@ -120,6 +120,7 @@ def write_contig_summary_tsv(
         "seq_identity_vs_ref",
         "has_5p_telomere",
         "has_3p_telomere",
+        "rearrangement_candidates",
         # Evidence fields
         "gc_content",
         "gc_deviation",
@@ -256,6 +257,7 @@ def write_contig_summary_tsv(
             seq_identity = f"{clf.seq_identity_vs_ref:.6f}" if clf and clf.seq_identity_vs_ref is not None else ""
             has_5p_telo = "yes" if clf and clf.has_5p_telomere else ("no" if clf and clf.has_5p_telomere is not None else "")
             has_3p_telo = "yes" if clf and clf.has_3p_telomere else ("no" if clf and clf.has_3p_telomere is not None else "")
+            rearrangement_candidates = clf.rearrangement_candidates if clf and clf.rearrangement_candidates else ""
 
             # Evidence strength columns
             gc_content = f"{clf.gc_content:.4f}" if clf and clf.gc_content is not None else ""
@@ -301,6 +303,7 @@ def write_contig_summary_tsv(
                         seq_identity,
                         has_5p_telo,
                         has_3p_telo,
+                        rearrangement_candidates,
                         # Evidence fields
                         gc_content,
                         gc_deviation,

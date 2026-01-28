@@ -584,3 +584,192 @@ def test_generate_contig_names_multiple_full_length_copies():
     # Multiple full-length copies get _c1, _c2 suffix
     assert name_mapping["contig_001"] == "chr1A_c1"
     assert name_mapping["contig_002"] == "chr1A_c2"
+
+
+# ----------------------------
+# Rearrangement hypothesis detection tests (cluster-based)
+# ----------------------------
+def test_compute_largest_cluster_single_ref():
+    """Test cluster computation with chains to single ref within gap tolerance."""
+    from final_finalizer.classification.classifier import compute_largest_cluster_metrics_per_ref
+
+    # All chains to same ref, close together - should form one cluster
+    # Row format: (contig, contig_len, ref_id, chrom_id, subgenome, strand, chain_id,
+    #              qstart, qend, qspan_bp, union_bp, ...)
+    macro_block_rows = [
+        ("contig1", 1000000, "chr1A", "chr1", "A", "+", 1, 100000, 300000, 200000, 150000, 0, 0, 0, 0, 0, 0),
+        ("contig1", 1000000, "chr1A", "chr1", "A", "+", 2, 500000, 700000, 200000, 180000, 0, 0, 0, 0, 0, 0),
+    ]
+
+    result = compute_largest_cluster_metrics_per_ref(macro_block_rows)
+
+    # chr1A: one cluster spanning 100000 to 700000 = 600000, with 330000 aligned bp
+    span, aligned = result[("contig1", "chr1A")]
+    assert span == 600000
+    assert aligned == 330000
+
+
+def test_compute_largest_cluster_gap_splits_clusters():
+    """Test that large gaps between same-ref chains create separate clusters."""
+    from final_finalizer.classification.classifier import compute_largest_cluster_metrics_per_ref
+
+    # chr12A chains with 1 Mb gap between them (> 500kb default max_gap)
+    macro_block_rows = [
+        ("contig1", 5000000, "chr12A", "chr12", "A", "-", 1, 100000, 300000, 200000, 150000, 0, 0, 0, 0, 0, 0),
+        ("contig1", 5000000, "chr12A", "chr12", "A", "-", 2, 1500000, 1700000, 200000, 180000, 0, 0, 0, 0, 0, 0),
+    ]
+
+    result = compute_largest_cluster_metrics_per_ref(macro_block_rows)
+
+    # chr12A: two separate clusters, each with span 200000
+    # Largest cluster has span 200000
+    span, aligned = result[("contig1", "chr12A")]
+    assert span == 200000
+
+
+def test_compute_largest_cluster_ignores_intervening_chains():
+    """Test that chains to other refs don't affect clustering of same-ref chains."""
+    from final_finalizer.classification.classifier import compute_largest_cluster_metrics_per_ref
+
+    # chr12A chains with chr1A chain between them, but gap < max_gap
+    macro_block_rows = [
+        ("contig1", 1000000, "chr12A", "chr12", "A", "-", 1, 100000, 300000, 200000, 150000, 0, 0, 0, 0, 0, 0),
+        ("contig1", 1000000, "chr1A", "chr1", "A", "+", 1, 400000, 500000, 100000, 80000, 0, 0, 0, 0, 0, 0),
+        ("contig1", 1000000, "chr12A", "chr12", "A", "-", 2, 600000, 800000, 200000, 180000, 0, 0, 0, 0, 0, 0),
+    ]
+
+    result = compute_largest_cluster_metrics_per_ref(macro_block_rows)
+
+    # chr12A: gap between chains is 600000-300000=300000 < 500kb, so one cluster
+    # spanning 100000 to 800000 = 700000
+    span, aligned = result[("contig1", "chr12A")]
+    assert span == 700000
+    assert aligned == 330000  # 150000 + 180000
+
+
+def test_compute_largest_cluster_selects_largest():
+    """Test that the largest cluster is selected when multiple exist."""
+    from final_finalizer.classification.classifier import compute_largest_cluster_metrics_per_ref
+
+    # chr12A has two clusters: small one then large one separated by big gap
+    macro_block_rows = [
+        ("contig1", 5000000, "chr12A", "chr12", "A", "-", 1, 50000, 100000, 50000, 40000, 0, 0, 0, 0, 0, 0),
+        # 1.4 Mb gap > 500kb max_gap
+        ("contig1", 5000000, "chr12A", "chr12", "A", "-", 2, 1500000, 1800000, 300000, 250000, 0, 0, 0, 0, 0, 0),
+        ("contig1", 5000000, "chr12A", "chr12", "A", "-", 3, 1850000, 2000000, 150000, 120000, 0, 0, 0, 0, 0, 0),
+    ]
+
+    result = compute_largest_cluster_metrics_per_ref(macro_block_rows)
+
+    # chr12A: first cluster = 50000, second cluster spans 1500000-2000000 = 500000
+    span, aligned = result[("contig1", "chr12A")]
+    assert span == 500000
+    assert aligned == 370000  # 250000 + 120000
+
+
+def test_detect_rearrangement_candidates_no_offtarget():
+    """Test that no rearrangement is detected when off-target is below threshold."""
+    from final_finalizer.classification.classifier import detect_rearrangement_candidates
+
+    # (span, aligned_bp) tuples - need good density to pass
+    qr_cluster_metrics = {
+        ("contig1", "chr1A"): (900000, 700000),  # 90% span, 78% density
+        ("contig1", "chr2A"): (50000, 40000),    # 5% span (below 10% threshold)
+    }
+    contig_refs = {"chr1A", "chr2A"}
+
+    result = detect_rearrangement_candidates(
+        contig="contig1",
+        assigned_ref_id="chr1A",
+        contig_len=1000000,
+        qr_cluster_metrics=qr_cluster_metrics,
+        contig_refs=contig_refs,
+        threshold=0.10,
+    )
+
+    assert result is None  # No off-target >= 10%
+
+
+def test_detect_rearrangement_candidates_single_offtarget():
+    """Test detection of single off-target chromosome with sufficient density."""
+    from final_finalizer.classification.classifier import detect_rearrangement_candidates
+
+    qr_cluster_metrics = {
+        ("contig1", "chr1A"): (700000, 500000),  # 70% span
+        ("contig1", "chr5B"): (200000, 100000),  # 20% span, 50% density (passes both)
+    }
+    contig_refs = {"chr1A", "chr5B"}
+
+    result = detect_rearrangement_candidates(
+        contig="contig1",
+        assigned_ref_id="chr1A",
+        contig_len=1000000,
+        qr_cluster_metrics=qr_cluster_metrics,
+        contig_refs=contig_refs,
+        threshold=0.10,
+    )
+
+    assert result == "chr5B"
+
+
+def test_detect_rearrangement_candidates_low_density_rejected():
+    """Test that off-target with large span but low density is rejected."""
+    from final_finalizer.classification.classifier import detect_rearrangement_candidates
+
+    qr_cluster_metrics = {
+        ("contig1", "chr1A"): (700000, 500000),  # 70% span
+        ("contig1", "chr5B"): (200000, 20000),   # 20% span but only 10% density (< 15% min)
+    }
+    contig_refs = {"chr1A", "chr5B"}
+
+    result = detect_rearrangement_candidates(
+        contig="contig1",
+        assigned_ref_id="chr1A",
+        contig_len=1000000,
+        qr_cluster_metrics=qr_cluster_metrics,
+        contig_refs=contig_refs,
+        threshold=0.10,
+        min_density=0.15,
+    )
+
+    assert result is None  # Density too low
+
+
+def test_detect_rearrangement_candidates_multiple_offtarget():
+    """Test detection of multiple off-target chromosomes, ordered by span fraction."""
+    from final_finalizer.classification.classifier import detect_rearrangement_candidates
+
+    qr_cluster_metrics = {
+        ("contig1", "chr1A"): (500000, 400000),  # 50% span
+        ("contig1", "chr2A"): (150000, 50000),   # 15% span, 33% density
+        ("contig1", "chr5B"): (250000, 100000),  # 25% span, 40% density (highest span)
+    }
+    contig_refs = {"chr1A", "chr2A", "chr5B"}
+
+    result = detect_rearrangement_candidates(
+        contig="contig1",
+        assigned_ref_id="chr1A",
+        contig_len=1000000,
+        qr_cluster_metrics=qr_cluster_metrics,
+        contig_refs=contig_refs,
+        threshold=0.10,
+    )
+
+    # Should be ordered by span fraction (highest first)
+    assert result == "chr5B,chr2A"
+
+
+def test_detect_rearrangement_candidates_no_assignment():
+    """Test that no rearrangement is detected when contig has no assignment."""
+    from final_finalizer.classification.classifier import detect_rearrangement_candidates
+
+    result = detect_rearrangement_candidates(
+        contig="contig1",
+        assigned_ref_id="",  # No assignment
+        contig_len=1000000,
+        qr_cluster_metrics={},
+        contig_refs=set(),
+        threshold=0.10,
+    )
+
+    assert result is None

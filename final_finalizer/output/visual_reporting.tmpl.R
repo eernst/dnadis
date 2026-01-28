@@ -6,7 +6,7 @@ if (!requireNamespace("pacman", quietly = TRUE)) {
 library(pacman)
 pacman::p_load(
   readr, dplyr, stringr, ggplot2, ggnewscale, tibble, tidyr, patchwork,
-  grid, ggiraph, htmlwidgets
+  grid, ggiraph, htmlwidgets, ggrepel
 )
 
 summary_file <- "__SUMMARY__"
@@ -260,6 +260,64 @@ max_n <- max(n_per_chrom$n_contigs, na.rm = TRUE)
 if (!is.finite(max_n) || max_n <= 0) max_n <- 1
 band_xw <- max(0.02, min(0.08, 0.80 / max_n * 0.80))
 
+# ----------------------------
+# Rearrangement hypothesis labels
+# ----------------------------
+# Helper to extract short chromosome IDs (e.g., "chr2A,chr5B" -> "2A,5B")
+extract_short_chrom_ids <- function(candidates) {
+  if (is.na(candidates) || candidates == "") return(NA_character_)
+  ids <- str_split(candidates, ",")[[1]]
+  short_ids <- str_replace(ids, "^[Cc]hr", "")
+  paste(short_ids, collapse = ",")
+}
+
+# Check if rearrangement_candidates column exists
+has_rearr_col <- "rearrangement_candidates" %in% names(df_plot)
+
+# Filter contigs with rearrangement candidates and create labels
+if (has_rearr_col) {
+  df_rearr <- df_plot %>%
+    filter(!is.na(rearrangement_candidates) & rearrangement_candidates != "") %>%
+    mutate(
+      short_ids = sapply(rearrangement_candidates, extract_short_chrom_ids, USE.NAMES = FALSE),
+      rearr_label = paste0(short_ids, "\n\u21C4"),  # ⇄ symbol + chromosome IDs
+      # Extract first candidate for coloring (most significant off-target)
+      first_candidate = str_split_fixed(rearrangement_candidates, ",", 2)[, 1],
+      # Extract subgenome from first candidate (last character if single letter A-Z)
+      offtarget_subgenome = str_extract(first_candidate, "[A-Z]$"),
+      # Extract chrom_id from first candidate (everything before the subgenome suffix)
+      offtarget_chrom_id = str_replace(first_candidate, "[A-Z]$", ""),
+      # Determine if homeologous exchange (same chrom_id, different subgenome)
+      is_homeologous = (offtarget_chrom_id == assigned_chrom_id),
+      # Set color: use off-target subgenome dark color if homeologous, red if not
+      label_color = if_else(
+        is_homeologous & !is.na(offtarget_subgenome) & offtarget_subgenome %in% names(sg_cols_dark),
+        sg_cols_dark[offtarget_subgenome],
+        "red"
+      )
+    )
+
+  # Join rearrangement data with positioning info
+  rearr_labels <- df_rearr %>%
+    inner_join(
+      df_slots %>% select(original_name, x_plot, contig_len_mb),
+      by = "original_name"
+    ) %>%
+    mutate(label_y = contig_len_mb)
+
+  # Calculate minimum y for labels (above tallest contig)
+  max_contig_height <- max(df_slots$contig_len_mb, na.rm = TRUE)
+  rearr_label_ymin <- max_contig_height + 0.5  # Labels must be above all pills
+
+  # Calculate y-axis expansion needed for labels (as fraction of max height)
+  # Add ~15% extra space at top for labels
+  y_expand_top <- 0.15
+} else {
+  rearr_labels <- tibble()
+  rearr_label_ymin <- Inf
+  y_expand_top <- 0.02  # Minimal expansion when no labels
+}
+
 # Reference lines: vertical lines to left of leftmost pill, one per subgenome with assigned contigs
 # Basic data prep (x_ref calculation deferred until after pill_xw is defined)
 ref_lines_data <- df_slots %>%
@@ -387,7 +445,7 @@ macro_plot <- macro %>%
 pill_xw <- band_xw * 2.4
 
 # Reference line parameters
-ref_tick_offset <- pill_xw * 0.4  # gap between lines and pill
+ref_tick_offset <- pill_xw * 0.5  # gap between lines and pill
 ref_line_width <- 0.4  # linewidth in mm
 ref_line_spacing <- 0.04  # x-axis spacing between lines (data units)
 
@@ -476,6 +534,31 @@ p_comp <- ggplot() +
     alpha = 1.0,
     show.legend = FALSE
   ) +
+  # Rearrangement hypothesis labels (colored by type: subgenome color for homeologous, red for non-homeologous)
+  {
+    if (nrow(rearr_labels) > 0) {
+      # Create list of layers, one per unique color (ggrepel doesn't support per-point segment colors)
+      label_layers <- lapply(unique(rearr_labels$label_color), function(col) {
+        ggrepel::geom_text_repel(
+          data = rearr_labels %>% filter(label_color == col),
+          aes(x = x_plot, y = label_y, label = rearr_label),
+          color = col,
+          size = base_font_pt / .pt * 0.5,
+          family = base_family,
+          direction = "y",
+          ylim = c(rearr_label_ymin, NA),  # Force labels above all pills
+          box.padding = 0.3,
+          point.padding = 0.5,
+          segment.color = col,
+          segment.size = 0.2,
+          max.overlaps = 20,
+          min.segment.length = 0,
+          show.legend = FALSE
+        )
+      })
+      label_layers
+    }
+  } +
   scale_fill_manual(values = col_dark, guide = "none", drop = FALSE) +
   guides(
     fill = guide_legend(
@@ -490,6 +573,9 @@ p_comp <- ggplot() +
     breaks = x_tbl$x_index,
     labels = str_replace(as.character(x_tbl$chrom_id), "^chr", ""),
     expand = expansion(mult = c(0.01, 0.01))
+  ) +
+  scale_y_continuous(
+    expand = expansion(mult = c(0.02, y_expand_top))
   ) +
   theme_classic(base_family = base_family, base_size = base_font_pt) +
   axis_theme +
@@ -591,6 +677,30 @@ if (plot_html) {
       alpha = 1.0,
       show.legend = FALSE
     ) +
+    # Rearrangement hypothesis labels (colored by type: subgenome color for homeologous, red for non-homeologous)
+    {
+      if (nrow(rearr_labels) > 0) {
+        # Create list of layers, one per unique color (ggrepel doesn't support per-point segment colors)
+        label_layers <- lapply(unique(rearr_labels$label_color), function(col) {
+          ggrepel::geom_text_repel(
+            data = rearr_labels %>% filter(label_color == col),
+            aes(x = x_plot, y = label_y, label = rearr_label),
+            color = col,
+            size = base_font_pt / .pt * 0.5,
+            family = base_family,
+            direction = "y",
+            ylim = c(rearr_label_ymin, NA),  # Force labels above all pills
+            box.padding = 0.3,
+            segment.color = col,
+            segment.size = 0.2,
+            max.overlaps = 20,
+            min.segment.length = 0,
+            show.legend = FALSE
+          )
+        })
+        label_layers
+      }
+    } +
     scale_fill_manual(values = col_dark, guide = "none", drop = FALSE) +
     guides(
       fill = guide_legend(
@@ -605,6 +715,9 @@ if (plot_html) {
       breaks = x_tbl$x_index,
       labels = str_replace(as.character(x_tbl$chrom_id), "^chr", ""),
       expand = expansion(mult = c(0.01, 0.01))
+    ) +
+    scale_y_continuous(
+      expand = expansion(mult = c(0.02, y_expand_top))
     ) +
     theme_classic(base_family = base_family, base_size = base_font_pt) +
     axis_theme +
@@ -835,7 +948,7 @@ if (has_subgenomes) {
 }
 
 #message("macro rows: ", nrow(macro_plot), "  seg rows: ", nrow(seg_plot))
-ggsave(out_pdf, plot = full_plot, width = 6, height = 6, units = "in", dpi = 300)
+ggsave(out_pdf, plot = full_plot, width = 6, height = 6, units = "in", dpi = 300, device = cairo_pdf)
 
 if (plot_html) {
   if (has_subgenomes) {

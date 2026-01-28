@@ -386,6 +386,151 @@ def classify_full_length(
 
 
 # ----------------------------
+# Rearrangement hypothesis detection
+# ----------------------------
+def compute_largest_cluster_metrics_per_ref(
+    macro_block_rows: List[Tuple],
+    max_gap: int = 500000,
+) -> Dict[Tuple[str, str], Tuple[int, int]]:
+    """Compute the largest cluster metrics for each (contig, ref_id) pair.
+
+    Clusters chains to the same ref_id by proximity (ignoring intervening chains
+    to other refs), then returns the span and aligned_bp of the largest cluster.
+
+    This approach:
+    - Groups same-target chains that are close together (gap < max_gap)
+    - Ignores what's between them (small chains to other targets don't matter)
+    - Separates distant same-target chains into different clusters
+    - Returns metrics for the largest cluster only
+
+    Args:
+        macro_block_rows: List of tuples from chain parsing:
+            (contig, contig_len, ref_id, chrom_id, subgenome, strand, chain_id,
+             qstart, qend, qspan_bp, union_bp, ...)
+        max_gap: Maximum gap (bp) between consecutive same-target chains to
+            cluster them together. Default 500kb.
+
+    Returns:
+        Dict mapping (contig, ref_id) -> (span_bp, aligned_bp) of largest cluster
+    """
+    # Group chains by (contig, ref_id)
+    chains_by_key: Dict[Tuple[str, str], List[Tuple[int, int, int]]] = defaultdict(list)
+
+    for row in macro_block_rows:
+        if len(row) < 11:
+            continue
+        contig = row[0]
+        ref_id = row[2]
+        qstart = int(row[7])
+        qend = int(row[8])
+        union_bp = int(row[10])  # union_bp is index 10
+        chains_by_key[(contig, ref_id)].append((qstart, qend, union_bp))
+
+    results: Dict[Tuple[str, str], Tuple[int, int]] = {}
+
+    for key, chains in chains_by_key.items():
+        if not chains:
+            continue
+
+        # Sort chains by qstart
+        chains.sort(key=lambda x: x[0])
+
+        # Cluster chains by gap between consecutive same-target chains
+        clusters: List[List[Tuple[int, int, int]]] = []
+        current_cluster = [chains[0]]
+
+        for chain in chains[1:]:
+            # Gap from end of current cluster to start of this chain
+            cluster_end = max(c[1] for c in current_cluster)
+            gap = chain[0] - cluster_end
+
+            if gap <= max_gap:
+                current_cluster.append(chain)
+            else:
+                clusters.append(current_cluster)
+                current_cluster = [chain]
+
+        clusters.append(current_cluster)
+
+        # Find largest cluster by span
+        best_span = 0
+        best_aligned = 0
+        for cluster in clusters:
+            cluster_start = min(c[0] for c in cluster)
+            cluster_end = max(c[1] for c in cluster)
+            span = cluster_end - cluster_start
+            aligned = sum(c[2] for c in cluster)
+            if span > best_span:
+                best_span = span
+                best_aligned = aligned
+
+        results[key] = (best_span, best_aligned)
+
+    return results
+
+
+def detect_rearrangement_candidates(
+    contig: str,
+    assigned_ref_id: str,
+    contig_len: int,
+    qr_cluster_metrics: Dict[Tuple[str, str], Tuple[int, int]],
+    contig_refs: Set[str],
+    threshold: float = 0.10,
+    min_density: float = 0.15,
+) -> Optional[str]:
+    """Detect potential chromosome rearrangements based on off-target alignment clusters.
+
+    A contig is flagged for rearrangement if its largest cluster of alignments to an
+    off-target chromosome has:
+    - Span ≥ threshold fraction of the contig length
+    - Density (aligned_bp / span) ≥ min_density
+
+    Clusters are groups of same-target chains that are close together (within max_gap),
+    regardless of what other chains appear between them. This captures rearrangement
+    blocks while ignoring scattered alignments.
+
+    Args:
+        contig: Contig name
+        assigned_ref_id: The reference chromosome this contig is assigned to
+        contig_len: Length of the contig in bp
+        qr_cluster_metrics: Dict mapping (contig, ref_id) -> (span_bp, aligned_bp)
+        contig_refs: Set of reference chromosomes this contig has alignments to
+        threshold: Minimum span fraction to flag as rearrangement (default 0.10)
+        min_density: Minimum alignment density within span (default 0.15)
+
+    Returns:
+        Comma-separated list of off-target chromosomes meeting criteria,
+        ordered by span fraction (highest first).
+        Returns None if no rearrangements detected.
+    """
+    if not assigned_ref_id or contig_len <= 0:
+        return None
+
+    candidates = []
+    for ref_id in contig_refs:
+        if ref_id == assigned_ref_id:
+            continue
+        metrics = qr_cluster_metrics.get((contig, ref_id))
+        if not metrics:
+            continue
+        span_bp, aligned_bp = metrics
+        if span_bp <= 0:
+            continue
+
+        span_fraction = span_bp / contig_len
+        density = aligned_bp / span_bp
+
+        if span_fraction >= threshold and density >= min_density:
+            candidates.append((span_fraction, ref_id))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda x: -x[0])
+    return ",".join(ref_id for _, ref_id in candidates)
+
+
+# ----------------------------
 # Query subgenome inference
 # ----------------------------
 def infer_query_subgenomes(
@@ -632,6 +777,7 @@ def classify_all_contigs(
     telomere_results: Optional[Dict[str, 'TelomereResult']] = None,
     full_length_threshold: float = 0.70,
     subgenome_k: float = 1.0,
+    rearrangement_threshold: float = 0.10,
 ) -> List[ContigClassification]:
     """Classify all contigs and assign confidence levels.
 
@@ -689,6 +835,9 @@ def classify_all_contigs(
 
     classifications: List[ContigClassification] = []
     classified_contigs: Set[str] = set()
+
+    # Compute cluster metrics per (contig, ref_id) for rearrangement detection
+    qr_cluster_metrics = compute_largest_cluster_metrics_per_ref(ev.macro_block_rows)
 
     # Helper to compute GC deviation vs REFERENCE (for chrom_assigned validation)
     def _gc_deviation_vs_ref(contig: str) -> Optional[float]:
@@ -781,6 +930,16 @@ def classify_all_contigs(
         elif gc_dev is not None and gc_dev > 2.0 and confidence == "high":
             confidence = "medium"
 
+        # Detect potential rearrangements (largest off-target cluster ≥ threshold)
+        rearrangement_candidates = detect_rearrangement_candidates(
+            contig=contig,
+            assigned_ref_id=ref_id,
+            contig_len=contig_len,
+            qr_cluster_metrics=qr_cluster_metrics,
+            contig_refs=ev.contig_refs.get(contig, set()),
+            threshold=rearrangement_threshold,
+        )
+
         classifications.append(ContigClassification(
             original_name=contig,
             new_name="",  # Will be filled later
@@ -801,6 +960,8 @@ def classify_all_contigs(
             full_length_confidence=fl_confidence,
             has_5p_telomere=has_5p,
             has_3p_telomere=has_3p,
+            # Rearrangement hypothesis
+            rearrangement_candidates=rearrangement_candidates,
         ))
         classified_contigs.add(contig)
 

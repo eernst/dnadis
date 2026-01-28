@@ -148,6 +148,8 @@ class ContigClassification:
     query_subgenome: Optional[str] = None  # "B", "C", etc. or None if primary/single
     query_subgenome_grp: Optional[int] = None  # Numeric cluster ID (1, 2, 3...)
     seq_identity_vs_ref: Optional[float] = None  # Sequence identity (0.0-1.0)
+    # Rearrangement hypothesis detection
+    rearrangement_candidates: Optional[str] = None  # Comma-separated off-target chromosomes (e.g., "chr2A,chr5B")
 
 
 @dataclass
