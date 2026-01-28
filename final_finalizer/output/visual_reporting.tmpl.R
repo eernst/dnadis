@@ -193,10 +193,9 @@ if (has_subgenomes) {
 chrom_spacing <- 1.15
 
 # For vertical orientation: chromosomes on y-axis, chr1 at top (highest y)
-# Un at bottom (lowest y)
-y_levels <- c("Un", rev(chrom_levels))  # Un, chr20, chr19, ..., chr1
+y_levels <- rev(chrom_levels)  # chr20, chr19, ..., chr1
 y_tbl <- tibble(chrom_id = factor(y_levels, levels = y_levels),
-                y_index = seq_along(y_levels) * chrom_spacing)  # Un=lowest, chr1=highest
+                y_index = seq_along(y_levels) * chrom_spacing)  # chr20=lowest, chr1=highest
 
 ref_lines_base <- ref_sg %>%
   mutate(chrom_id = factor(chrom_id, levels = y_levels)) %>%
@@ -241,7 +240,7 @@ ev <- ev %>%
 # ----------------------------
 df_slots <- df_plot %>%
   mutate(contig_len_mb = contig_len / 1e6) %>%
-  filter(assigned_chrom_id != "Un" | classification == "chrom_unassigned") %>%
+  filter(assigned_chrom_id != "Un") %>%
   left_join(y_tbl, by = "chrom_id") %>%
   filter(!is.na(y_index)) %>%
   group_by(chrom_id) %>%

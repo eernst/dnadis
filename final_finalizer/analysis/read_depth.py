@@ -137,14 +137,14 @@ def is_aligned_bam(bam_path: Path) -> bool:
         return False
 
 
-VALID_READ_TYPES = ("hifi_onthq", "ont", "sr")
+VALID_READ_TYPES = ("lrhq", "r9", "sr")
 
 
 def get_minimap2_preset(reads_type: str) -> str:
     """Get minimap2 preset for read type.
 
     Args:
-        reads_type: One of "hifi_onthq", "ont", "sr"
+        reads_type: One of "lrhq", "r9", "sr"
 
     Returns:
         Minimap2 -x preset string
@@ -153,15 +153,15 @@ def get_minimap2_preset(reads_type: str) -> str:
         ValueError: If reads_type is not a valid option
 
     Notes:
-        - "hifi_onthq" uses lr:hqae (long reads, high quality, all-vs-all, end-to-end)
+        - "lrhq" uses lr:hqae (long reads, high quality, all-vs-all, end-to-end)
           Suitable for PacBio HiFi, Duplex, and ONT Q20+ with error rate < 1%
-        - "ont" uses map-ont for standard-accuracy ONT reads
+        - "r9" uses map-ont for standard-accuracy ONT reads (R9 chemistry)
         - "sr" uses sr for Illumina short reads
     """
     presets = {
-        "hifi_onthq": "lr:hqae",  # Long reads, high quality, error rate < 1% (HiFi, Duplex, ONT Q20+)
-        "ont": "map-ont",         # ONT reads, standard accuracy
-        "sr": "sr",               # Short reads (Illumina)
+        "lrhq": "lr:hqae",   # Long reads, high quality, error rate < 1% (HiFi, Duplex, ONT Q20+)
+        "r9": "map-ont",     # ONT reads, standard accuracy (R9 chemistry)
+        "sr": "sr",          # Short reads (Illumina)
     }
     if reads_type not in presets:
         raise ValueError(
@@ -635,7 +635,7 @@ def align_reads_to_assembly(
         assembly: Path to assembly FASTA
         output_bam: Path for output sorted BAM
         threads: Number of threads
-        reads_type: Read type for preset selection ("hifi_onthq", "ont", "sr")
+        reads_type: Read type for preset selection ("lrhq", "r9", "sr")
         work_dir: Working directory for intermediate files
         err_path: Path for error log (optional)
 
@@ -952,7 +952,7 @@ def calculate_depth_metrics(
     contig_lengths: Dict[str, int],
     work_dir: Path,
     threads: int,
-    reads_type: str = "hifi_onthq",
+    reads_type: str = "lrhq",
     window_size: int = 1000,
     target_coverage: Optional[float] = 20.0,
     keep_bam: bool = False,
@@ -974,7 +974,7 @@ def calculate_depth_metrics(
         contig_lengths: Dictionary of contig names to lengths
         work_dir: Working directory for intermediate files
         threads: Number of threads to use
-        reads_type: Read type for minimap2 preset ("hifi_onthq", "ont", "sr")
+        reads_type: Read type for minimap2 preset ("lrhq", "r9", "sr")
         window_size: Window size for mosdepth (default 1000bp)
         target_coverage: Target coverage for downsampling before alignment.
             Set to None or 0 to disable downsampling (default: disabled).

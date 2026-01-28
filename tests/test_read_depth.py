@@ -46,8 +46,8 @@ def test_detect_read_format_fastq_gz(tmp_path):
 
 def test_get_minimap2_preset():
     """Test minimap2 preset mapping for different read types."""
-    assert get_minimap2_preset("hifi_onthq") == "lr:hqae"
-    assert get_minimap2_preset("ont") == "map-ont"
+    assert get_minimap2_preset("lrhq") == "lr:hqae"
+    assert get_minimap2_preset("r9") == "map-ont"
     assert get_minimap2_preset("sr") == "sr"
     # Unknown type should raise ValueError
     with pytest.raises(ValueError, match="Invalid reads_type"):
