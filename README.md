@@ -322,8 +322,8 @@ Each contig is assigned a confidence level (`high`, `medium`, or `low`) indicati
 |-----------|---------|-------------|
 | `--assign-min-frac` | 0.10 | Min synteny coverage of contig |
 | `--assign-min-ratio` | 1.25 | Min best/second score ratio |
-| `--miniprot-min-span-frac` | 0.20 | Min span fraction of contig (applies to both modes) |
-| `--miniprot-min-span-bp` | 50000 | Min absolute span in bp (applies to both modes) |
+| `--min-span-frac` | 0.20 | Min span fraction of contig |
+| `--min-span-bp` | 50000 | Min absolute span in bp |
 
 **Protein mode specific:**
 
@@ -340,9 +340,7 @@ Each contig is assigned a confidence level (`high`, `medium`, or `low`) indicati
 | `--assign-minlen` | 10000 | Min alignment span for nucleotide synteny block building |
 | Min segments | 1 | Hardcoded (nucleotide mode requires ≥1 segment) |
 
-All gate criteria must be satisfied for chromosome assignment (AND logic).
-
-**Note**: Despite the `miniprot-` prefix on some parameters, span fraction and span bp thresholds apply to both modes. The segment count threshold differs: protein mode requires ≥5 segments (configurable), while nucleotide mode requires ≥1 segment (hardcoded) because perfect full-length alignments produce fewer segments.
+All gate criteria must be satisfied for chromosome assignment (AND logic). The segment count threshold differs: protein mode requires ≥5 segments (configurable), while nucleotide mode requires ≥1 segment (hardcoded) because perfect full-length alignments produce fewer segments.
 
 ### Organelle detection
 

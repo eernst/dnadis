@@ -149,8 +149,8 @@ def main():
             assign_min_ident=0.0, assign_tp="PI", chain_q_gap=200000,
             chain_r_gap=400000, chain_diag_slop=150000, assign_chain_min_bp=0,
             assign_chain_score="matches", assign_chain_topk=3, assign_ref_score="all",
-            miniprot_min_genes=3, miniprot_min_segments=5, miniprot_min_span_frac=0.20,
-            miniprot_min_span_bp=50000, organelle_min_cov=0.80, chrC_len_tolerance=0.05,
+            miniprot_min_genes=3, miniprot_min_segments=5, min_span_frac=0.20,
+            min_span_bp=50000, organelle_min_cov=0.80, chrC_len_tolerance=0.05,
             chrM_len_tolerance=0.20, rdna_min_cov=0.50, chr_debris_min_cov=0.80,
             chr_debris_min_identity=0.90, contaminant_min_score=1000, contaminant_min_coverage=0.50,
             debris_min_cov=0.50, debris_min_protein_hits=2, preset="asm20", kmer=None, window=None, aln_minlen=10000,
@@ -390,12 +390,12 @@ def main():
         help="Min number of synteny segments in protein mode (nucleotide mode uses ≥1) [5]",
     )
     prot_thresh.add_argument(
-        "--miniprot-min-span-frac", type=float, default=0.20,
-        help="Min span fraction of contig [0.20]",
+        "--min-span-frac", type=float, default=0.20,
+        help="Min span fraction of contig for chromosome assignment (both modes) [0.20]",
     )
     prot_thresh.add_argument(
-        "--miniprot-min-span-bp", type=int, default=50_000,
-        help="Min absolute span in bp [50000]",
+        "--min-span-bp", type=int, default=50_000,
+        help="Min absolute span in bp for chromosome assignment (both modes) [50000]",
     )
 
     # =========================================================================
@@ -762,8 +762,8 @@ def main():
                 ref_id,
                 clen,
                 min_segments,
-                args.miniprot_min_span_bp,
-                args.miniprot_min_span_frac,
+                args.min_span_bp,
+                args.min_span_frac,
                 min_genes,
             )
             if ok:
@@ -805,8 +805,8 @@ def main():
     n_passing = n_with_candidates - n_demoted
     logger.info(f"Gate filtering: {n_total} contigs, {n_with_candidates} with candidates, "
                 f"{n_passing} passing gates, {n_demoted} demoted, {n_switched} switched")
-    logger.info(f"Gate thresholds: min_segments={min_segments}, min_span_bp={args.miniprot_min_span_bp}, "
-                f"min_span_frac={args.miniprot_min_span_frac}, min_genes={min_genes}")
+    logger.info(f"Gate thresholds: min_segments={min_segments}, min_span_bp={args.min_span_bp}, "
+                f"min_span_frac={args.min_span_frac}, min_genes={min_genes}")
 
     if args.synteny_mode == "protein":
         plot_suffix = "protein-anchor synteny"
