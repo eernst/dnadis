@@ -13,6 +13,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Development Commands
 
 ### Running tests
+
+**Important:** Use the `final_finalizer` conda environment for testing. Integration tests require external tools (gffread, miniprot, etc.) that are installed in this environment:
+
+```bash
+conda activate final_finalizer
+```
+
 ```bash
 # Run all tests
 pytest
