@@ -293,6 +293,57 @@ Detailed contaminant summary with full taxonomic lineage. Generated only when co
 
 ---
 
+## Metrics Calculation Details
+
+This section explains how key metrics are computed from alignment data.
+
+### Alignment Identity
+
+The tool computes alignment identity as `matches / aln_len` from PAF alignment fields:
+- **matches** (PAF column 10): Number of matching bases in the alignment
+- **aln_len** (PAF column 11): Alignment block length (includes matches + mismatches + gaps)
+
+This is an **alignment-weighted identity** that:
+- Aggregates across all chains per (contig, reference) pair by summing matches and aln_len separately
+- Differs from traditional BLAST-style percent identity because it's computed from minimap2/miniprot's internal alignment scoring
+- Provides a robust metric for comparing synteny strength across chromosome sets
+
+**Mode differences:**
+- **Nucleotide mode**: Represents true sequence-level identity from whole-genome alignment
+- **Protein mode**: Reflects protein alignment identity mapped to query genomic coordinates (miniprot aligns proteins to genome, so this is not protein-to-protein identity)
+
+The `best_identity` column in `contig_summary.tsv` is the identity to the assigned reference chromosome, computed as `best_matches / best_aln_len`.
+
+### Union Base Pairs (union_bp)
+
+The `union_bp` metric represents non-overlapping base pairs on the query contig covered by alignments to a reference chromosome. It is computed by:
+
+1. Collecting all alignment intervals `[start, end)` for a (contig, reference) pair
+2. Merging overlapping intervals into non-overlapping regions
+3. Summing the lengths of merged intervals
+
+This measures the **breadth of alignment coverage** rather than raw alignment length, preventing double-counting of overlapping alignments.
+
+### Chain Scoring (score_topk vs score_all)
+
+Two scoring aggregations are provided for each (contig, reference) pair:
+
+| Metric | Description | Use Case |
+|--------|-------------|----------|
+| `score_topk` | Sum of top-K chain scores (K = `--assign-chain-topk`, default 3) | Focuses on strongest evidence; reduces impact of noisy secondary chains |
+| `score_all` | Sum of ALL chain scores | Considers total cumulative evidence; better for fragmented assemblies |
+
+The `--assign-ref-score` parameter controls which is used for chromosome assignment:
+- `topk`: Use `score_topk` (focuses on best chains)
+- `all` (default): Use `score_all` (considers all evidence)
+
+Individual chain scores are computed using the formula specified by `--assign-chain-score`:
+- `matches` (default): Total matching bases in chain
+- `qbp_ident`: Query base pairs × identity (balances coverage and quality)
+- `matches_ident`: Matching bases × identity (most stringent)
+
+---
+
 ## Usage Tips
 
 ### Filtering for High-Confidence Assignments

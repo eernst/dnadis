@@ -600,6 +600,41 @@ This prevents spurious assignments from:
 - Repetitive sequences
 - Low-complexity regions
 
+### Chain scoring modes
+
+The `--assign-chain-score` parameter controls how synteny chains are weighted for chromosome assignment:
+
+| Mode | Formula | Description |
+|------|---------|-------------|
+| `matches` (default) | `matches` | Most permissive. Favors chains with high absolute matching base count, regardless of alignment quality. Best for initial assignments. |
+| `qbp_ident` | `qbp × identity` | Balances coverage and identity. Favors chains that cover large query regions with good identity. Useful for discriminating between homeologs. |
+| `matches_ident` | `matches × identity` | Most stringent. Heavily weights high-identity alignments. Use when reference and query are closely related and you want to penalize divergent matches. |
+
+Where:
+- `matches`: Total matching bases across chain
+- `qbp`: Query base pairs (union of alignment intervals on query contig)
+- `identity`: matches / aln_len
+
+The chain score determines ranking for `--assign-chain-topk` (default: top 3 chains per contig-reference pair contribute to assignment score).
+
+### Subgenome discrimination
+
+For polyploid genomes (e.g., wheat with A, B, D subgenomes), final_finalizer discriminates between chromosome sets using alignment identity distributions.
+
+**How it works:**
+1. Reference chromosomes are labeled with subgenome suffixes (chr1A, chr1B, chr1D)
+2. Query contigs are assigned to reference chromosomes based on synteny evidence
+3. Identity distributions distinguish homeologous chromosome sets
+4. Visualization shows identity grouped by assigned subgenome with mean ± SD error bars
+
+**Expected pattern:**
+- Within-subgenome assignments show higher identity (e.g., query A-subgenome → reference chr*A: ~98-99% identity)
+- Cross-subgenome assignments show lower identity (e.g., query A-subgenome → reference chr*B: ~94-96% identity)
+
+**Identity calculation:** Identity is computed per (contig, reference) pair as the aggregate across all chains: `sum(matches) / sum(aln_len)`. For polyploid genomes, this metric effectively captures the evolutionary distance between homeologous chromosome sets.
+
+**For non-polyploid genomes:** Use `--add-subgenome-suffix A` to add a single subgenome label to the reference. This can be used to "bootstrap" a synthetic hybrid reference chromosome set.
+
 ### Debris detection
 
 Two complementary approaches:
@@ -622,6 +657,17 @@ When contaminants are detected (with `--centrifuger-idx`) and plotting is enable
    - Ordered by decreasing read depth (if `--reads` provided)
 
 Both visualizations filter to high-confidence contaminants (coverage ≥ `--contaminant-min-coverage`, default 0.50) to reduce noise from conserved gene matches.
+
+## Glossary
+
+| Term | Definition |
+|------|------------|
+| **Alignment identity** | Fraction of matching bases in alignment (`matches / aln_len`). Differs from BLAST "percent identity" which includes query length normalization. |
+| **Synteny block/chain** | Group of collinear alignments chained together based on query position, reference position, and diagonal offset. Represents a contiguous region of conserved gene order. |
+| **Union bp** | Total non-overlapping base pairs covered by alignments, computed by merging overlapping intervals. Measures breadth of alignment coverage. |
+| **Gate-based filtering** | Chromosome assignment requires passing ALL criteria (AND logic): minimum segments, genes, span bp, and span fraction. Prevents spurious assignments from single conserved genes or repetitive elements. |
+| **Homeologs** | Corresponding chromosomes from different subgenomes in a polyploid (e.g., chr1A vs chr1B in wheat). Show sequence similarity (85-95% identity) but are distinct from homologs (between species) or paralogs (within genome). |
+| **Subgenome** | One of multiple ancestral genome copies in a polyploid. Identified by single-letter suffix (A, B, C, etc.) on chromosome names. |
 
 ## Citation
 
