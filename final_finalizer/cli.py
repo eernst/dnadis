@@ -123,7 +123,6 @@ from final_finalizer.output.plotting import (
     run_plot,
     run_depth_plot,
     run_contaminant_plot,
-    run_contaminant_bandage_plot,
     run_contaminant_table,
 )
 
@@ -1204,11 +1203,6 @@ def main():
                 outprefix,
                 plot_suffix,
                 args.plot_html,
-            )
-            run_contaminant_bandage_plot(
-                contaminants_tsv,
-                outprefix,
-                plot_suffix,
             )
             run_contaminant_table(
                 contaminants_tsv,

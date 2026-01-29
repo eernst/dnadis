@@ -243,7 +243,7 @@ For complete column documentation for all TSV files, see [docs/output_formats.md
 | `*.depth_overview.pdf` | Read depth visualization by classification and chromosome (if `--reads` provided) |
 | `*.depth_overview.html` | Interactive version with tooltips (if `--plot-html` and `--reads` provided) |
 | `*.contaminant_treemap.pdf` | Phylogenetic breakdown of contaminants as hierarchical treemap (if contaminants detected) |
-| `*.contaminant_bandage.pdf` | Individual contaminant contigs visualized as Bandage-style shapes colored by taxonomy (if contaminants detected) |
+| `*.contaminant_table.html` | Interactive HTML table showing top contaminants ranked by abundance with inline visualizations (if contaminants detected) |
 | `*.contaminants.tsv` | Detailed contaminant summary with taxonomic lineage |
 
 ## Classification Pipeline
@@ -649,14 +649,9 @@ When contaminants are detected (with `--centrifuger-idx`) and plotting is enable
 
 1. **Phylogenetic treemap** (`*.contaminant_treemap.pdf`): Hierarchical treemap showing taxonomic breakdown (Kingdom → Family → Genus → Species) with area proportional to total contamination span. Requires taxonkit for full taxonomic lineage; falls back to genus-level grouping if unavailable.
 
-2. **Bandage-style plot** (`*.contaminant_bandage.pdf`): Individual contaminant contigs visualized as geometric shapes:
-   - Circular contigs (names ending in "c"): Drawn as rings/donuts
-   - Linear contigs (names ending in "l"): Drawn as pills (elongated ellipses)
-   - Size uses log-scale areas so small contigs remain visible
-   - Colored by taxonomic family
-   - Ordered by decreasing read depth (if `--reads` provided)
+2. **Contaminant table** (`*.contaminant_table.html`): Interactive HTML table showing top contaminants ranked by abundance (depth × length if depth data available, otherwise total length). Features include species-level aggregation with binomial names, inline gradient bars for Total Mb and Depth columns, colored domain badges, family grouping, and min-max spread values for multi-contig entries. HTML-only output (CSS gradients don't render to PDF).
 
-Both visualizations filter to high-confidence contaminants (coverage ≥ `--contaminant-min-coverage`, default 0.50) to reduce noise from conserved gene matches.
+Both visualizations filter to high-confidence contaminants (coverage ≥ `--contaminant-min-coverage`, default 0.50) to reduce noise from conserved gene matches. See [docs/output_formats.md](docs/output_formats.md#contaminant-table-visualization-html) for detailed documentation on the table format and interpretation.
 
 ## Glossary
 
