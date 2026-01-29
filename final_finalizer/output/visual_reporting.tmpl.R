@@ -891,9 +891,34 @@ if (has_subgenomes) {
     filter(!is.na(best_identity), assigned_subgenome %in% plot_levels) %>%
     mutate(assigned_sg = factor(assigned_subgenome, levels = plot_levels))
 
+  # Calculate mean and SD per subgenome for error bars
+  id_stats <- df_id_assigned %>%
+    group_by(assigned_sg) %>%
+    summarise(
+      mean_id = mean(best_identity, na.rm = TRUE),
+      sd_id = sd(best_identity, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      ymin = pmax(0, mean_id - sd_id),
+      ymax = pmin(1, mean_id + sd_id)
+    )
+
   p_id <- ggplot(df_id_assigned, aes(x = assigned_sg, y = pmax(0, pmin(1, best_identity)), color = assigned_sg)) +
     geom_jitter(width = 0.18, height = 0, alpha = 0.55, size = 1.2, show.legend = FALSE) +
-    stat_summary(fun = median, geom = "point", shape = 95, size = 7, show.legend = FALSE) +
+    # Show mean ± 1 SD as error bars
+    geom_errorbar(
+      data = id_stats,
+      aes(x = assigned_sg, y = mean_id, ymin = ymin, ymax = ymax, color = assigned_sg),
+      width = 0.1, linewidth = 0.4, show.legend = FALSE,
+      position = position_nudge(x = 0.35)
+    ) +
+    geom_point(
+      data = id_stats,
+      aes(x = assigned_sg, y = mean_id, color = assigned_sg),
+      shape = 16, size = 1.5, show.legend = FALSE,
+      position = position_nudge(x = 0.35)
+    ) +
     scale_color_manual(values = col_dark, drop = FALSE) +
     scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
     theme_classic(base_family = base_family, base_size = base_font_pt) +
