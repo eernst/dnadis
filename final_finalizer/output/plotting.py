@@ -303,3 +303,120 @@ def run_contaminant_table(
     else:
         if plot_html.exists():
             logger.done(f"Contaminant table written to: {plot_html}")
+
+
+def run_classification_summary_bar(
+    summary_tsv: Path,
+    outprefix: Path,
+    plot_title_suffix: str,
+    plot_html: bool = False,
+) -> None:
+    """Generate 100% stacked bar chart showing classification proportions.
+
+    Creates a horizontal bar chart with:
+    - Each segment representing a classification category
+    - Labels below showing classification name, contig count (%), and total Mbp (%)
+    - Optional interactive HTML version with tooltips
+
+    Args:
+        summary_tsv: Path to contig_summary.tsv
+        outprefix: Output prefix for generated files
+        plot_title_suffix: Suffix for plot titles
+        plot_html: Whether to generate HTML version
+    """
+    if not have_rscript():
+        logger.warning("Rscript not found; skipping classification summary bar.")
+        return
+
+    if not summary_tsv.exists():
+        return
+
+    plot_pdf = Path(str(outprefix) + ".classification_summary_bar.pdf")
+    plot_html_path = Path(str(outprefix) + ".classification_summary_bar.html")
+    r_script_path = Path(str(outprefix) + ".classification_summary_bar.R")
+
+    tmpl_path = Path(__file__).resolve().with_name("classification_summary_bar.tmpl.R")
+    if not tmpl_path.exists():
+        logger.warning(f"Missing R template: {tmpl_path}")
+        return
+
+    tmpl = _read_text(tmpl_path)
+    filled = (
+        tmpl.replace("__SUMMARY__", _esc(summary_tsv))
+        .replace("__OUTPDF__", _esc(plot_pdf))
+        .replace("__OUTHTML__", _esc(plot_html_path))
+        .replace("__PLOTHTML__", "TRUE" if plot_html else "FALSE")
+        .replace("__SUFFIX__", str(plot_title_suffix).replace('"', '\\"'))
+    )
+
+    with r_script_path.open("w", encoding="utf-8") as rf:
+        rf.write(filled)
+
+    logger.info(f"Running Rscript to generate classification summary bar: {plot_pdf}")
+    try:
+        subprocess.run(["Rscript", str(r_script_path)], check=True)
+    except subprocess.CalledProcessError as e:
+        logger.warning(f"Rscript failed with code {e.returncode}; classification summary bar not generated.")
+    else:
+        logger.done(f"Classification summary bar written to: {plot_pdf}")
+        if plot_html and plot_html_path.exists():
+            logger.done(f"Classification summary bar HTML written to: {plot_html_path}")
+
+
+def run_classification_summary_contigs(
+    summary_tsv: Path,
+    outprefix: Path,
+    plot_title_suffix: str,
+    plot_html: bool = False,
+) -> None:
+    """Generate visualization showing individual contigs as shapes.
+
+    Creates a plot with:
+    - Contigs drawn as pills (linear) or rings (circular) based on name suffix
+    - Length drawn to linear scale
+    - Faceted by classification with stats in each facet
+    - Optional interactive HTML version with tooltips
+
+    Args:
+        summary_tsv: Path to contig_summary.tsv
+        outprefix: Output prefix for generated files
+        plot_title_suffix: Suffix for plot titles
+        plot_html: Whether to generate HTML version
+    """
+    if not have_rscript():
+        logger.warning("Rscript not found; skipping classification summary contigs.")
+        return
+
+    if not summary_tsv.exists():
+        return
+
+    plot_pdf = Path(str(outprefix) + ".classification_summary_contigs.pdf")
+    plot_html_path = Path(str(outprefix) + ".classification_summary_contigs.html")
+    r_script_path = Path(str(outprefix) + ".classification_summary_contigs.R")
+
+    tmpl_path = Path(__file__).resolve().with_name("classification_summary_contigs.tmpl.R")
+    if not tmpl_path.exists():
+        logger.warning(f"Missing R template: {tmpl_path}")
+        return
+
+    tmpl = _read_text(tmpl_path)
+    filled = (
+        tmpl.replace("__SUMMARY__", _esc(summary_tsv))
+        .replace("__OUTPDF__", _esc(plot_pdf))
+        .replace("__OUTHTML__", _esc(plot_html_path))
+        .replace("__PLOTHTML__", "TRUE" if plot_html else "FALSE")
+        .replace("__SUFFIX__", str(plot_title_suffix).replace('"', '\\"'))
+    )
+
+    with r_script_path.open("w", encoding="utf-8") as rf:
+        rf.write(filled)
+
+    logger.info(f"Running Rscript to generate classification summary contigs: {plot_pdf}")
+    try:
+        subprocess.run(["Rscript", str(r_script_path)], check=True)
+    except subprocess.CalledProcessError as e:
+        logger.warning(f"Rscript failed with code {e.returncode}; classification summary contigs not generated.")
+    else:
+        logger.done(f"Classification summary contigs written to: {plot_pdf}")
+        if plot_html and plot_html_path.exists():
+            logger.done(f"Classification summary contigs HTML written to: {plot_html_path}")

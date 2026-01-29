@@ -254,6 +254,17 @@ All external tools are called via subprocess with proper error handling. Use `ut
 
 See `docs/output_formats.md` for complete column documentation.
 
+## Plot Design Guidelines
+
+When creating or modifying visualizations:
+
+- **Maximum width**: 7.2 inches for all PDF outputs (fits standard page margins)
+- **DPI**: 300 for print-quality output
+- **Device**: Use `cairo_pdf` for better font rendering
+- **HTML versions**: Create interactive HTML versions using ggiraph where appropriate
+- **Font**: Use a consistent base font family (e.g., "Helvetica" or system default)
+- **Colors**: Use colorblind-friendly palettes where possible
+
 ## Modifying Classification Logic
 
 Classification happens in `classification/classifier.py:classify_all_contigs()`. The function applies a decision tree:

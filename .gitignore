@@ -10,6 +10,7 @@ build/
 .vscode/
 .idea/
 *.code-workspace
+.lintr
 
 # Test outputs
 test_output/

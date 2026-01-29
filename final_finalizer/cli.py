@@ -124,6 +124,8 @@ from final_finalizer.output.plotting import (
     run_depth_plot,
     run_contaminant_plot,
     run_contaminant_table,
+    run_classification_summary_bar,
+    run_classification_summary_contigs,
 )
 
 
@@ -1184,6 +1186,19 @@ def main():
             macro_blocks_tsv,
             outprefix,
             chr_like_minlen,
+            plot_suffix,
+            args.plot_html,
+        )
+        # Generate classification summary plots
+        run_classification_summary_bar(
+            summary_tsv,
+            outprefix,
+            plot_suffix,
+            args.plot_html,
+        )
+        run_classification_summary_contigs(
+            summary_tsv,
+            outprefix,
             plot_suffix,
             args.plot_html,
         )
