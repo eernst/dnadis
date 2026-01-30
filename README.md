@@ -284,23 +284,33 @@ The tool runs these phases in order:
 
 Each contig is assigned a confidence level (`high`, `medium`, or `low`) indicating the reliability of its classification based on multiple lines of evidence.
 
+**Mode-dependent criteria**: Confidence scoring for `chrom_assigned` and `debris` categories differs between protein and nucleotide synteny modes to account for the different types of evidence available.
+
 ### Confidence Criteria by Category
 
 | Classification | High | Medium | Low |
 |----------------|------|--------|-----|
-| **chrom_assigned** | Gene proportion ≥20% AND GC deviation <2σ | Gene proportion 10-20% OR GC deviation 2-3σ | Gene proportion <10% OR GC deviation >3σ |
+| **chrom_assigned** (protein mode) | Gene proportion ≥20% AND GC deviation <2σ | Gene proportion 10-20% OR GC deviation 2-3σ | Gene proportion <10% OR GC deviation >3σ |
+| **chrom_assigned** (nucleotide mode) | Ref coverage ≥30% AND identity ≥50% AND GC deviation <2σ | Ref coverage 10-30% OR GC deviation 2-3σ | Ref coverage <10% OR identity <50% OR GC deviation >3σ |
 | **chrom_unassigned** | — | GC deviation <2σ | GC deviation ≥2σ |
 | **organelle_complete** | Coverage ≥90% | Coverage 80-90% | — |
 | **organelle_debris** | — | Coverage ≥60% | Coverage <60% |
 | **rDNA** | Coverage ≥80% AND identity ≥95% | Coverage 50-80% OR identity <95% | Coverage <60% |
 | **contaminant** | Coverage ≥80% OR GC deviation >2σ | Coverage 50-80% | Coverage <50% |
 | **chrom_debris** | Coverage ≥90%, identity ≥95%, GC deviation <3σ | Coverage 80-90% OR identity 90-95% OR GC deviation ≥3σ | — |
-| **debris** | Coverage ≥80% OR ≥5 protein hits | Coverage 50-80% OR 2-5 protein hits | GC deviation >3σ AND no synteny |
+| **debris** (protein mode) | Coverage ≥80% OR ≥5 protein hits | Coverage 50-80% OR 2-5 protein hits | GC deviation >3σ AND no synteny |
+| **debris** (nucleotide mode) | Coverage ≥80% | Coverage 50-80% | Coverage <55% OR GC deviation >3σ |
 | **unclassified** | — | — | Always (no evidence) |
 
 ### Evidence Factors
 
-**Gene proportion** (`ref_gene_proportion`): Fraction of reference chromosome genes aligned to the query contig (e.g., 0.85 = 85% of reference genes found on this contig). Higher values indicate stronger synteny support. This metric assesses completeness relative to the reference chromosome.
+**Gene proportion** (`ref_gene_proportion`) [protein mode only]: Fraction of reference chromosome genes aligned to the query contig (e.g., 0.85 = 85% of reference genes found on this contig). Higher values indicate stronger synteny support. This metric assesses completeness relative to the reference chromosome.
+
+**Reference coverage** (`ref_coverage`) [both modes]: Fraction of reference chromosome spanned by aligned segments (0.0-1.0). In nucleotide mode, this is the primary metric for assessing chromosome assignment quality.
+
+**Synteny score** (`synteny_score`) [mode-dependent]: Summary score for assignment strength, computed differently by mode:
+- Protein mode: `min(1.0, gene_proportion × 2)` — normalized gene proportion
+- Nucleotide mode: `min(1.0, ref_coverage)` — directly uses reference coverage
 
 **GC deviation**: How many standard deviations (σ) the contig's GC content differs from a GC baseline. Large deviations may indicate contamination or unusual sequences.
 - For `chrom_assigned`: compared to reference nuclear genome GC (validates synteny-based assignment)
@@ -308,9 +318,9 @@ Each contig is assigned a confidence level (`high`, `medium`, or `low`) indicati
 
 **Coverage**: Fraction of contig covered by alignments (0.0-1.0). Higher coverage indicates more complete matches.
 
-**Identity**: Alignment identity (0.0-1.0). Values ≥0.95 indicate very high sequence similarity.
+**Identity**: Alignment identity (0.0-1.0). Values ≥0.95 indicate very high sequence similarity. In nucleotide mode, identity <0.5 triggers a confidence downgrade for `chrom_assigned` contigs.
 
-**Protein hits**: Number of unique reference protein-coding genes with miniprot alignments to the contig.
+**Protein hits** [protein mode only]: Number of unique reference protein-coding genes with miniprot alignments to the contig.
 
 ## Thresholds
 
