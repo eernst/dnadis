@@ -778,6 +778,7 @@ def classify_all_contigs(
     full_length_threshold: float = 0.70,
     subgenome_k: float = 1.0,
     rearrangement_threshold: float = 0.10,
+    synteny_mode: str = "protein",
 ) -> List[ContigClassification]:
     """Classify all contigs and assign confidence levels.
 
@@ -795,14 +796,24 @@ def classify_all_contigs(
     - debris: Assembly fragments with reference homology
     - unclassified: Sequences with no classification evidence
 
-    Confidence levels are based on:
+    Confidence levels are mode-dependent:
+
+    **Protein mode** (default):
     - Gene proportion: Fraction of reference genes aligned to contig
     - GC deviation: Standard deviations from GC baseline
+    - Protein hits: Number of miniprot alignments
+
+    **Nucleotide mode**:
+    - Reference coverage: Fraction of reference chromosome spanned by synteny blocks
+    - Chain identity: Alignment identity of best chain
+    - GC deviation: Same as protein mode
+
+    Common to both modes:
+    - GC deviation baselines:
       - chrom_assigned: compared to reference nuclear GC
-      - other categories: compared to assembly chromosome GC (more appropriate for divergent genomes)
+      - other categories: compared to assembly chromosome GC
     - Coverage: Alignment coverage fraction (0.0-1.0)
     - Identity: Alignment identity (0.0-1.0)
-    - Protein hits: Number of miniprot alignments
 
     Args:
         query_fasta: Path to query FASTA
@@ -828,6 +839,7 @@ def classify_all_contigs(
         rdna_hits: Dict of contig -> RdnaHit with detection details
         chrom_debris_hits: Dict of contig -> DebrisHit from chromosome debris detection
         other_debris_hits: Dict of contig -> DebrisHit from reference/protein detection
+        synteny_mode: "protein" or "nucleotide" — controls confidence criteria
 
     Returns:
         List of ContigClassification objects with assigned names, categories, and confidence levels
@@ -881,8 +893,18 @@ def classify_all_contigs(
         gene_proportion = (gene_count / ref_total_genes) if ref_total_genes > 0 else None
         gc_dev = _gc_deviation_vs_ref(contig)  # Use reference GC for chrom_assigned validation
 
-        # Compute synteny score (0-1) based on gene proportion
-        synteny_score = min(1.0, gene_proportion * 2) if gene_proportion else 0.0
+        # Compute synteny score (0-1): gene proportion in protein mode, ref coverage in nucleotide mode
+        if synteny_mode == "nucleotide":
+            # Compute ref_cov early so we can use it for synteny_score
+            _ref_cov_for_score = None
+            if ref_lengths and ev.qr_ref_span_bp:
+                _ref_span = ev.qr_ref_span_bp.get((contig, ref_id), 0)
+                _ref_len = ref_lengths.get(ref_id, 0)
+                if _ref_len > 0:
+                    _ref_cov_for_score = _ref_span / _ref_len
+            synteny_score = min(1.0, _ref_cov_for_score) if _ref_cov_for_score else 0.0
+        else:
+            synteny_score = min(1.0, gene_proportion * 2) if gene_proportion else 0.0
 
         # Compute reference coverage (span-based, robust to divergence)
         ref_cov = None
@@ -915,16 +937,29 @@ def classify_all_contigs(
             is_full = False
             fl_confidence = "low"
 
-        # Compute confidence
-        # High: good synteny (>20% genes) AND GC similar to reference (<2 std)
-        # Medium: moderate synteny OR borderline GC
-        # Low: weak synteny AND/OR very different GC
-        confidence = "high"
-        if gene_proportion is None or gene_proportion < 0.1:
-            confidence = "low"
-        elif gene_proportion < 0.2:
-            confidence = "medium"
-        # GC deviation penalty
+        # Compute confidence (mode-dependent criteria)
+        if synteny_mode == "nucleotide":
+            # Nucleotide mode: use ref_coverage and chain identity instead of gene_proportion
+            confidence = "high"
+            if ref_cov is None or ref_cov < 0.1:
+                confidence = "low"
+            elif ref_cov < 0.3:
+                confidence = "medium"
+            # Identity penalty: low identity suggests spurious assignment
+            best_ident = ev.qr_best_chain_ident.get((contig, ref_id), 0.0)
+            if best_ident > 0 and best_ident < 0.5:
+                confidence = "low"
+        else:
+            # Protein mode: use gene proportion
+            # High: good synteny (>20% genes) AND GC similar to reference (<2 std)
+            # Medium: moderate synteny OR borderline GC
+            # Low: weak synteny AND/OR very different GC
+            confidence = "high"
+            if gene_proportion is None or gene_proportion < 0.1:
+                confidence = "low"
+            elif gene_proportion < 0.2:
+                confidence = "medium"
+        # GC deviation penalty (both modes)
         if gc_dev is not None and gc_dev > 3.0:
             confidence = "low"
         elif gc_dev is not None and gc_dev > 2.0 and confidence == "high":
@@ -1187,16 +1222,24 @@ def classify_all_contigs(
             gc_dev = _gc_deviation_vs_asm(contig)  # Use assembly chromosome GC baseline
             hit = other_debris_hits.get(contig) if other_debris_hits else None
 
-            # Confidence based on detection evidence
-            # High: ≥80% coverage OR ≥5 protein hits
-            # Medium: ≥50% coverage OR ≥2 protein hits (our threshold)
-            # Low: borderline OR GC very different from assembly chromosomes with no synteny
+            # Confidence based on detection evidence (mode-dependent)
             confidence = "medium"
             if hit:
-                if hit.coverage >= 0.80 or hit.protein_hits >= 5:
-                    confidence = "high"
-                elif hit.coverage < 0.55 and hit.protein_hits < 3:
-                    confidence = "low"
+                if synteny_mode == "nucleotide":
+                    # Nucleotide mode: protein_hits is always 0, use coverage/identity only
+                    if hit.coverage >= 0.80:
+                        confidence = "high"
+                    elif hit.coverage < 0.55:
+                        confidence = "low"
+                else:
+                    # Protein mode: use coverage and protein hits
+                    # High: ≥80% coverage OR ≥5 protein hits
+                    # Medium: ≥50% coverage OR ≥2 protein hits (our threshold)
+                    # Low: borderline
+                    if hit.coverage >= 0.80 or hit.protein_hits >= 5:
+                        confidence = "high"
+                    elif hit.coverage < 0.55 and hit.protein_hits < 3:
+                        confidence = "low"
 
             # GC deviation penalty
             if gc_dev is not None and gc_dev > 3.0 and not ref_id:

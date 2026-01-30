@@ -1076,6 +1076,7 @@ def main():
         full_length_threshold=args.full_length_ref_coverage,
         subgenome_k=args.subgenome_k,
         rearrangement_threshold=args.rearrangement_threshold,
+        synteny_mode=args.synteny_mode,
     )
 
     for clf in classifications:
