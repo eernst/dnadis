@@ -49,7 +49,7 @@ def run_plot(
     r_script_path = Path(str(outprefix) + ".chromosome_overview.R")
 
     # Template expected alongside this Python file
-    tmpl_path = Path(__file__).resolve().with_name("visual_reporting.tmpl.R")
+    tmpl_path = Path(__file__).resolve().with_name("chromosome_overview.tmpl.R")
     if not tmpl_path.exists():
         raise FileNotFoundError(
             f"Missing R template: {tmpl_path}\n"
