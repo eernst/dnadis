@@ -8,8 +8,17 @@ if (!requireNamespace("pacman", quietly = TRUE)) {
 library(pacman)
 pacman::p_load(
   readr, dplyr, stringr, ggplot2, tibble, tidyr,
-  treemapify, scales, ggiraph, htmlwidgets, patchwork
+  treemapify, scales, ggiraph, htmlwidgets, patchwork, showtext, sysfonts
 )
+
+# Register Liberation Sans for consistent cross-platform rendering
+sysfonts::font_add("Liberation Sans",
+  regular    = "/usr/share/fonts/liberation-sans/LiberationSans-Regular.ttf",
+  bold       = "/usr/share/fonts/liberation-sans/LiberationSans-Bold.ttf",
+  italic     = "/usr/share/fonts/liberation-sans/LiberationSans-Italic.ttf",
+  bolditalic = "/usr/share/fonts/liberation-sans/LiberationSans-BoldItalic.ttf"
+)
+showtext_auto()
 
 # Placeholders - replaced by Python
 contam_file <- "__CONTAMINANTS_TSV__"
@@ -18,7 +27,7 @@ out_html    <- "__OUTHTML__"
 plot_html   <- as.logical("__PLOTHTML__")
 plot_suffix <- "__SUFFIX__"
 
-base_family <- "Helvetica"
+base_family <- "Liberation Sans"
 base_font_pt <- 8
 
 # Read contaminant data

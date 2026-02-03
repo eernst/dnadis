@@ -23,11 +23,30 @@ SCRIPT_TO_TEMPLATE = {
     "contaminant_treemap": "contaminant_treemap.tmpl.R",
     "contaminant_table": "contaminant_table.tmpl.R",
     "classification_summary_bar": "classification_summary_bar.tmpl.R",
-    "classification_summary_contigs": "classification_summary_contigs.tmpl.R",
 }
 
 # Regex to find all __PLACEHOLDER__ tokens in a template
 PLACEHOLDER_RE = re.compile(r"__([A-Z_]+)__")
+
+# Which TSV file suffix provides the value for each placeholder
+# (relative to the output prefix)
+PLACEHOLDER_TSV = {
+    "__SUMMARY__": ".contig_summary.tsv",
+    "__REF__": ".ref_lengths.tsv",
+    "__SEGMENTS__": ".segments.tsv",
+    "__EVIDENCE__": ".evidence_summary.tsv",
+    "__MACRO__": ".macro_blocks.tsv",
+    "__CONTAMINANTS_TSV__": ".contaminants.tsv",
+}
+
+# Output file suffixes per script type
+SCRIPT_OUTPUT_SUFFIXES = {
+    "chromosome_overview": (".chromosome_overview.pdf", ".chromosome_overview.html"),
+    "depth_overview": (".depth_overview.pdf", ".depth_overview.html"),
+    "contaminant_treemap": (".contaminant_treemap.pdf", ".contaminant_treemap.html"),
+    "contaminant_table": (None, ".contaminant_table.html"),
+    "classification_summary_bar": (".classification_summary_bar.pdf", ".classification_summary_bar.html"),
+}
 
 
 def find_generated_scripts(run_dir: Path) -> list[tuple[str, Path]]:
@@ -41,21 +60,37 @@ def find_generated_scripts(run_dir: Path) -> list[tuple[str, Path]]:
     return found
 
 
-def extract_placeholder_values(
+def detect_prefix(run_dir: Path, scripts: list[tuple[str, Path]]) -> Path:
+    """Detect the output prefix from a generated R script filename.
+
+    E.g. if the script is 'la8230_vs_diploids.chromosome_overview.R'
+    the prefix is run_dir / 'la8230_vs_diploids'.
+    """
+    for suffix, script_path in scripts:
+        stem = script_path.name
+        expected_end = f".{suffix}.R"
+        if stem.endswith(expected_end):
+            prefix_name = stem[: -len(expected_end)]
+            return run_dir / prefix_name
+    sys.exit("Error: could not detect output prefix from R script names")
+
+
+def extract_non_path_placeholders(
     template_text: str, generated_text: str
 ) -> dict[str, str]:
-    """Extract placeholder values by matching context around each placeholder.
-
-    For each __FOO__ in the template, takes the surrounding text (same line,
-    before and after the placeholder) and searches for that context in the
-    generated script to recover the substituted value.
+    """Extract non-path placeholder values (PLOTHTML, CHRLIKE, SUFFIX, TOP_N)
+    by matching context around each placeholder in the generated script.
     """
-    values: dict[str, str] = {}
+    # Only extract placeholders that aren't TSV paths or output paths
+    path_placeholders = set(PLACEHOLDER_TSV.keys()) | {
+        "__OUTPDF__", "__OUTHTML__",
+    }
 
+    values: dict[str, str] = {}
     for match in PLACEHOLDER_RE.finditer(template_text):
         placeholder = match.group(0)
-        if placeholder in values:
-            continue  # already extracted from first occurrence
+        if placeholder in values or placeholder in path_placeholders:
+            continue
 
         start, end = match.start(), match.end()
 
@@ -70,13 +105,12 @@ def extract_placeholder_values(
         context_after = template_text[end:line_end]
 
         # Build regex: literal context before + capture group + literal context after
-        # Use non-greedy match for the value
         pattern = re.escape(context_before) + r"(.+?)" + re.escape(context_after)
         m = re.search(pattern, generated_text)
         if m:
             values[placeholder] = m.group(1)
         else:
-            # Fallback: try without trailing context (handles trailing whitespace diffs)
+            # Fallback: try without trailing context
             pattern_no_trail = re.escape(context_before) + r"(.+)"
             m2 = re.search(pattern_no_trail, generated_text)
             if m2:
@@ -85,10 +119,44 @@ def extract_placeholder_values(
     return values
 
 
+def esc(s: Path | str) -> str:
+    """Escape path for R (forward slashes)."""
+    return str(s).replace("\\", "/")
+
+
+def build_placeholder_values(
+    suffix: str,
+    prefix: Path,
+    template_text: str,
+    generated_text: str,
+) -> dict[str, str]:
+    """Build placeholder → value mapping from TSVs in run_dir and the generated script."""
+    values: dict[str, str] = {}
+
+    # Path-based placeholders: resolve from prefix + known TSV suffixes
+    for placeholder, tsv_suffix in PLACEHOLDER_TSV.items():
+        if placeholder in template_text:
+            values[placeholder] = esc(str(prefix) + tsv_suffix)
+
+    # Output file placeholders
+    pdf_suffix, html_suffix = SCRIPT_OUTPUT_SUFFIXES[suffix]
+    if "__OUTPDF__" in template_text and pdf_suffix:
+        values["__OUTPDF__"] = esc(str(prefix) + pdf_suffix)
+    if "__OUTHTML__" in template_text and html_suffix:
+        values["__OUTHTML__"] = esc(str(prefix) + html_suffix)
+
+    # Non-path placeholders: extract from generated script (PLOTHTML, CHRLIKE, SUFFIX, TOP_N)
+    non_path = extract_non_path_placeholders(template_text, generated_text)
+    values.update(non_path)
+
+    return values
+
+
 def refresh_script(
     suffix: str,
     generated_path: Path,
     template_dir: Path,
+    prefix: Path,
     dry_run: bool = False,
 ) -> bool:
     """Re-render a single generated R script from the current template.
@@ -105,13 +173,12 @@ def refresh_script(
     template_text = template_path.read_text(encoding="utf-8")
     generated_text = generated_path.read_text(encoding="utf-8")
 
-    # Extract placeholder values from the existing generated script
-    values = extract_placeholder_values(template_text, generated_text)
+    # Build placeholder values from TSVs in run_dir + generated script
+    values = build_placeholder_values(suffix, prefix, template_text, generated_text)
 
     # Check we found all placeholders
-    all_placeholders = set(PLACEHOLDER_RE.findall(template_text))
-    found_keys = {k.strip("_") for k in values}  # strip __ wrappers
-    missing = {f"__{p}__" for p in all_placeholders} - set(values.keys())
+    all_placeholders = {f"__{p}__" for p in PLACEHOLDER_RE.findall(template_text)}
+    missing = all_placeholders - set(values.keys())
     if missing:
         print(f"  WARN {suffix}: could not extract values for: {', '.join(sorted(missing))}", file=sys.stderr)
 
@@ -126,7 +193,7 @@ def refresh_script(
         return False
 
     if dry_run:
-        print(f"  {suffix}: would update ({len(values)} placeholders extracted)")
+        print(f"  {suffix}: would update ({len(values)} placeholders)")
         return True
 
     generated_path.write_text(filled, encoding="utf-8")
@@ -201,6 +268,12 @@ def main():
     if not scripts:
         sys.exit(f"No generated .R scripts found in {run_dir}")
 
+    # Detect output prefix from script filenames
+    prefix = detect_prefix(run_dir, scripts)
+    print(f"Run folder: {run_dir}")
+    print(f"Prefix:     {prefix}")
+    print(f"Templates:  {template_dir}")
+
     # Filter by --only patterns
     if args.only:
         scripts = [
@@ -210,14 +283,12 @@ def main():
         if not scripts:
             sys.exit(f"No scripts matched --only {' '.join(args.only)}")
 
-    print(f"Run folder: {run_dir}")
-    print(f"Templates:  {template_dir}")
     print(f"Found {len(scripts)} script(s):")
     print()
 
     updated = []
     for suffix, script_path in scripts:
-        changed = refresh_script(suffix, script_path, template_dir, dry_run=args.dry_run)
+        changed = refresh_script(suffix, script_path, template_dir, prefix, dry_run=args.dry_run)
         if changed:
             updated.append((suffix, script_path))
 
@@ -226,7 +297,6 @@ def main():
         return
 
     if not updated and not args.no_run:
-        # Even if nothing changed, user might want to re-run
         print("\nNo scripts changed. Use Rscript directly to re-run existing scripts.")
         return
 

@@ -6,15 +6,24 @@ if (!requireNamespace("pacman", quietly = TRUE)) {
 library(pacman)
 pacman::p_load(
   readr, dplyr, stringr, ggplot2, tibble, tidyr, patchwork,
-  grid, ggiraph, htmlwidgets
+  grid, ggiraph, htmlwidgets, ggokabeito, colorspace, showtext, sysfonts
 )
+
+# Register Liberation Sans for consistent cross-platform rendering
+sysfonts::font_add("Liberation Sans",
+  regular    = "/usr/share/fonts/liberation-sans/LiberationSans-Regular.ttf",
+  bold       = "/usr/share/fonts/liberation-sans/LiberationSans-Bold.ttf",
+  italic     = "/usr/share/fonts/liberation-sans/LiberationSans-Italic.ttf",
+  bolditalic = "/usr/share/fonts/liberation-sans/LiberationSans-BoldItalic.ttf"
+)
+showtext_auto()
 
 summary_file <- "__SUMMARY__"
 out_pdf      <- "__OUTPDF__"
 out_html     <- "__OUTHTML__"
 plot_html    <- as.logical("__PLOTHTML__")
 plot_title_suffix <- "__SUFFIX__"
-base_family <- "Helvetica"
+base_family <- "Liberation Sans"
 base_font_pt <- 8
 axis_title_margin_pt <- 4
 axis_text_margin_pt <- 4
@@ -76,22 +85,23 @@ classification_order <- c(
   "unclassified"
 )
 
-# Color palette for classifications
-# Each debris category uses a lighter shade of its parent classification
+# Okabe-Ito colorblind-friendly palette
+# Each debris category uses a lightened shade of its parent classification
+oi <- palette_okabe_ito()
 classification_colors <- c(
-  "chrom_assigned" = "#1F77B4",
-  "chrom_debris" = "#AEC7E8",
-  "chrom_unassigned" = "#9ECAE1",
-  "chrC" = "#2CA02C",
-  "chrC_debris" = "#98DF8A",
-  "chrM" = "#D62728",
-  "chrM_debris" = "#FF9896",
-  "organelle_complete" = "#66C2A5",
-  "organelle_debris" = "#C7C7C7",
-  "rDNA" = "#FF7F0E",
-  "contaminant" = "#8C564B",
-  "debris" = "#C5B0D5",
-  "unclassified" = "#7F7F7F"
+  "chrom_assigned"     = oi[5],                      # blue
+  "chrom_debris"       = lighten(oi[5], amount = 0.5),
+  "chrom_unassigned"   = oi[2],                      # sky blue
+  "chrC"               = oi[3],                      # bluish green
+  "chrC_debris"        = lighten(oi[3], amount = 0.5),
+  "chrM"               = oi[6],                      # vermillion
+  "chrM_debris"        = lighten(oi[6], amount = 0.5),
+  "organelle_complete" = oi[3],                      # bluish green (same as chrC)
+  "organelle_debris"   = oi[4],                      # yellow
+  "rDNA"               = oi[1],                      # orange
+  "contaminant"        = oi[7],                      # reddish purple
+  "debris"             = oi[9],                      # gray
+  "unclassified"       = oi[8]                       # dark gray (black)
 )
 
 # Prepare data for plotting

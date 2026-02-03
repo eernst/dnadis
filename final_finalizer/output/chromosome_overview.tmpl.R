@@ -6,8 +6,17 @@ if (!requireNamespace("pacman", quietly = TRUE)) {
 library(pacman)
 pacman::p_load(
   readr, dplyr, stringr, ggplot2, ggnewscale, tibble, tidyr, patchwork,
-  grid, ggiraph, htmlwidgets, ggrepel
+  grid, ggiraph, htmlwidgets, ggrepel, showtext, sysfonts
 )
+
+# Register Liberation Sans for consistent cross-platform rendering
+sysfonts::font_add("Liberation Sans",
+  regular    = "/usr/share/fonts/liberation-sans/LiberationSans-Regular.ttf",
+  bold       = "/usr/share/fonts/liberation-sans/LiberationSans-Bold.ttf",
+  italic     = "/usr/share/fonts/liberation-sans/LiberationSans-Italic.ttf",
+  bolditalic = "/usr/share/fonts/liberation-sans/LiberationSans-BoldItalic.ttf"
+)
+showtext_auto()
 
 summary_file <- "__SUMMARY__"
 ref_file     <- "__REF__"
@@ -19,7 +28,7 @@ out_html     <- "__OUTHTML__"
 plot_html    <- as.logical("__PLOTHTML__")
 chr_like_minlen <- as.numeric("__CHRLIKE__")
 plot_title_suffix <- "__SUFFIX__"
-base_family <- "Helvetica"
+base_family <- "Liberation Sans"
 base_font_pt <- 8
 axis_title_margin_pt <- 4
 axis_text_margin_pt <- 4

@@ -125,7 +125,6 @@ from final_finalizer.output.plotting import (
     run_contaminant_plot,
     run_contaminant_table,
     run_classification_summary_bar,
-    run_classification_summary_contigs,
 )
 
 
@@ -137,7 +136,8 @@ def main():
         # Create a minimal namespace with defaults
         defaults = argparse.Namespace(
             ref=None, query=None, outprefix=None, ref_gff3=None,
-            threads=8, plot=False, plot_html=False, verbose=False, quiet=False,
+            threads=8, plot=False, plot_html=False, assembly_name="", reference_name="",
+            verbose=False, quiet=False,
             log_file=None, config=None, dump_config=True, chr_like_minlen=None,
             add_subgenome_suffix=None, ref_id_pattern=None, reads=None,
             reads_type="lrhq", skip_depth=False, depth_window_size=1000,
@@ -188,6 +188,8 @@ def main():
     common.add_argument("-t", "--threads", type=_positive_int, default=8, help="Threads for minimap2/miniprot [8]")
     common.add_argument("--plot", action="store_true", help="Generate overview plots with R/ggplot2")
     common.add_argument("--plot-html", action="store_true", help="Also generate interactive HTML plot (ggiraph)")
+    common.add_argument("--assembly-name", type=str, default="", metavar="NAME", help="Assembly name for plot subtitles (default: omitted)")
+    common.add_argument("--reference-name", type=str, default="", metavar="NAME", help="Reference name for plot subtitles (default: omitted)")
     common.add_argument("-v", "--verbose", action="store_true", help="Enable verbose (DEBUG level) logging")
     common.add_argument("--quiet", action="store_true", help="Suppress INFO messages (only show warnings and errors)")
     common.add_argument("--log-file", type=str, default=None, metavar="PATH", help="Also write logs to this file")
@@ -1196,12 +1198,8 @@ def main():
             outprefix,
             plot_suffix,
             args.plot_html,
-        )
-        run_classification_summary_contigs(
-            summary_tsv,
-            outprefix,
-            plot_suffix,
-            args.plot_html,
+            assembly_name=args.assembly_name,
+            reference_name=args.reference_name,
         )
         # Generate depth overview plot if depth data was computed
         if depth_stats:
