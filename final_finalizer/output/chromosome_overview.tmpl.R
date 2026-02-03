@@ -9,13 +9,28 @@ pacman::p_load(
   grid, ggiraph, htmlwidgets, ggrepel, showtext, sysfonts
 )
 
-# Register Liberation Sans for consistent cross-platform rendering
-sysfonts::font_add("Liberation Sans",
-  regular    = "/usr/share/fonts/liberation-sans/LiberationSans-Regular.ttf",
-  bold       = "/usr/share/fonts/liberation-sans/LiberationSans-Bold.ttf",
-  italic     = "/usr/share/fonts/liberation-sans/LiberationSans-Italic.ttf",
-  bolditalic = "/usr/share/fonts/liberation-sans/LiberationSans-BoldItalic.ttf"
-)
+# Font setup: try Helvetica Neue / Helvetica (macOS) then Liberation Sans (Linux)
+.resolve_font <- function(family) {
+  slug <- tolower(gsub(" ", "", family))
+  path <- systemfonts::match_fonts(family)$path
+  if (nzchar(path) && grepl(slug, tolower(gsub("[- ]", "", basename(path)))))
+    return(path)
+  NULL
+}
+base_family <- "sans"
+for (.fam in c("Helvetica Neue", "Helvetica", "Liberation Sans")) {
+  .r <- .resolve_font(.fam)
+  if (!is.null(.r)) {
+    sysfonts::font_add(.fam,
+      regular    = .r,
+      bold       = systemfonts::match_fonts(.fam, weight = "bold")$path,
+      italic     = systemfonts::match_fonts(.fam, italic = TRUE)$path,
+      bolditalic = systemfonts::match_fonts(.fam, italic = TRUE, weight = "bold")$path
+    )
+    base_family <- .fam
+    break
+  }
+}
 showtext_auto()
 
 summary_file <- "__SUMMARY__"
@@ -28,7 +43,6 @@ out_html     <- "__OUTHTML__"
 plot_html    <- as.logical("__PLOTHTML__")
 chr_like_minlen <- as.numeric("__CHRLIKE__")
 plot_title_suffix <- "__SUFFIX__"
-base_family <- "Liberation Sans"
 base_font_pt <- 8
 axis_title_margin_pt <- 4
 axis_text_margin_pt <- 4
