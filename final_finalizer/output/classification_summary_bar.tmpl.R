@@ -134,20 +134,19 @@ df_agg <- df_agg %>%
     x_center = (xmin + xmax) / 2
   )
 
-# Build subtitle: "929.2 Mb · n=455 contigs", optionally prefixed with assembly name
-subtitle_parts <- c(
-  sprintf("%.1f Mb", assembly_total_mb),
-  paste0("n=", assembly_total_contigs, " contigs")
-)
-subtitle_text <- paste(subtitle_parts, collapse = " \u00b7 ")
+# Build subtitle: assembly name on first line (if provided), stats on second line
+stats_line <- paste0(comma(assembly_total_mb, accuracy = 0.1), " Mb",
+                     "  n=", comma(assembly_total_contigs), " contigs")
 if (nzchar(assembly_name)) {
-  subtitle_text <- paste0(assembly_name, " \u00b7 ", subtitle_text)
+  subtitle_text <- paste0(assembly_name, "\n", stats_line)
+} else {
+  subtitle_text <- stats_line
 }
 
 # ============================================
 # TOP BAR: All categories with proper colors, only label chr_assigned
 # ============================================
-bar1_ymin <- 0.665
+bar1_ymin <- 0.60
 bar1_ymax <- 0.90
 
 # Top bar uses all categories from df_agg with their proper colors
@@ -156,7 +155,7 @@ df_bar1 <- df_agg %>%
   mutate(
     tooltip = paste0(
       classification_labels[as.character(classification)],
-      "\n", sprintf("%.1f Mb (%.1f%%)", total_mb, pct_mb),
+      "\n", paste0(comma(total_mb, accuracy = 0.1), " Mb (", sprintf("%.1f%%", pct_mb), ")"),
       "\nn=", n_contigs, " (", sprintf("%.1f%%", pct_contigs), ")"
     )
   )
@@ -180,8 +179,8 @@ df_chr_label <- df_chr %>%
   mutate(
     label_text = paste0(
       classification_labels[as.character(classification)], "\n",
-      sprintf("%.1f Mb (%.1f%%)", total_mb, pct_mb), "\n",
-      "n=", n_contigs, " (", sprintf("%.1f%%", pct_contigs), ")"
+      paste0(comma(total_mb, accuracy = 0.1), " Mb (", sprintf("%.1f%%", pct_mb), ")"), "\n",
+      "n=", comma(n_contigs), " (", sprintf("%.1f%%", pct_contigs), ")"
     )
   )
 
@@ -208,13 +207,13 @@ if (nrow(df_other) > 0) {
     mutate(
       tooltip = paste0(
         classification_labels[as.character(classification)],
-        "\n", sprintf("%.1f Mb (%.1f%%)", total_mb, pct_mb), " of assembly",
+        "\n", paste0(comma(total_mb, accuracy = 0.1), " Mb (", sprintf("%.1f%%", pct_mb), ")"), " of assembly",
         "\nn=", n_contigs, " (", sprintf("%.1f%%", pct_contigs), " of assembly)"
       ),
       label_text = paste0(
         classification_labels[as.character(classification)], "\n",
-        sprintf("%.1f Mb (%.1f%%)", total_mb, pct_mb), "\n",
-        "n=", n_contigs, " (", sprintf("%.1f%%", pct_contigs), ")"
+        paste0(comma(total_mb, accuracy = 0.1), " Mb (", sprintf("%.1f%%", pct_mb), ")"), "\n",
+        "n=", comma(n_contigs), " (", sprintf("%.1f%%", pct_contigs), ")"
       )
     )
 
@@ -287,9 +286,29 @@ repel_params <- list(
 # ============================================
 plot_height <- 3.0
 y_min <- -0.35
-y_max <- 1.0
+y_max <- 1.10
+
+# Subtitle-to-bar ribbon: fans from center of subtitle to full bar width
+ribbon_top_y <- y_max - 0.01       # just below subtitle
+ribbon_bot_y <- bar1_ymax          # top of bar
+ribbon_center <- 50                # center of x-axis
+ribbon_narrow <- 2                 # half-width at top (narrow point near subtitle)
+ribbon_n <- 20
+ribbon_t <- seq(0, 1, length.out = ribbon_n)
+ribbon_s <- 0.5 - 0.5 * cos(pi * ribbon_t)
+ribbon_left  <- (ribbon_center - ribbon_narrow) + ribbon_s * (0 - (ribbon_center - ribbon_narrow))
+ribbon_right <- (ribbon_center + ribbon_narrow) + ribbon_s * (100 - (ribbon_center + ribbon_narrow))
+ribbon_y_seq <- ribbon_top_y + ribbon_t * (ribbon_bot_y - ribbon_top_y)
+subtitle_ribbon <- data.frame(
+  x = c(ribbon_left, rev(ribbon_right)),
+  y = c(ribbon_y_seq, rev(ribbon_y_seq))
+)
+subtitle_ribbon_color <- "grey95"
 
 p <- ggplot() +
+  # Subtitle-to-bar ribbon
+  geom_polygon(data = subtitle_ribbon, aes(x = x, y = y),
+               fill = subtitle_ribbon_color, color = NA) +
   # Connector ribbons (draw first so bars overlay edges)
   {
     if (nrow(df_bar2) > 0) {
@@ -323,15 +342,6 @@ p <- ggplot() +
       )
     }
   } +
-  # Tick marks at 25%, 50%, 75%
-  annotate("segment", x = c(25, 50, 75), xend = c(25, 50, 75),
-           y = bar1_ymax, yend = bar1_ymax + 0.015,
-           color = "gray80", linewidth = 0.3) +
-  # Axis labels at top
-  annotate("text", x = 0, y = bar1_ymax + 0.03, label = "0%",
-           size = axis_font_pt / .pt, family = base_family, hjust = 0) +
-  annotate("text", x = 100, y = bar1_ymax + 0.03, label = "100%",
-           size = axis_font_pt / .pt, family = base_family, hjust = 1) +
   # "Remaining X%" annotation (left-aligned)
   {
     if (nrow(df_bar2) > 0) {
@@ -381,12 +391,12 @@ p <- ggplot() +
   theme_void(base_family = base_family) +
   theme(
     plot.title = element_text(hjust = 0.5, size = 11, face = "bold"),
-    plot.subtitle = element_text(hjust = 0.5, size = 9, color = "grey40"),
+    plot.subtitle = element_text(hjust = 0.5, size = 9, color = "grey20"),
     legend.position = "none",
     plot.margin = margin(t = 10, r = 15, b = 15, l = 15)
   ) +
   labs(
-    title = "Contig classification summary",
+    title = "Contig classification",
     subtitle = subtitle_text
   )
 
@@ -397,6 +407,9 @@ message("Classification summary bar plot saved to: ", out_pdf)
 # Interactive HTML version
 if (plot_html) {
   p_html <- ggplot() +
+    # Subtitle-to-bar ribbon
+    geom_polygon(data = subtitle_ribbon, aes(x = x, y = y),
+                 fill = subtitle_ribbon_color, color = NA) +
     # Connector ribbons
     {
       if (nrow(df_bar2) > 0) {
@@ -430,15 +443,6 @@ if (plot_html) {
         )
       }
     } +
-    # Tick marks at 25%, 50%, 75%
-    annotate("segment", x = c(25, 50, 75), xend = c(25, 50, 75),
-             y = bar1_ymax, yend = bar1_ymax + 0.015,
-             color = "gray80", linewidth = 0.3) +
-    # Axis labels
-    annotate("text", x = 0, y = bar1_ymax + 0.03, label = "0%",
-             size = axis_font_pt / .pt, family = base_family, hjust = 0) +
-    annotate("text", x = 100, y = bar1_ymax + 0.03, label = "100%",
-             size = axis_font_pt / .pt, family = base_family, hjust = 1) +
     # Remaining annotation (left-aligned)
     {
       if (nrow(df_bar2) > 0) {
@@ -488,12 +492,12 @@ if (plot_html) {
     theme_void(base_family = base_family) +
     theme(
       plot.title = element_text(hjust = 0.5, size = 11, face = "bold"),
-      plot.subtitle = element_text(hjust = 0.5, size = 9, color = "grey40"),
+      plot.subtitle = element_text(hjust = 0.5, size = 9, color = "grey20"),
       legend.position = "none",
       plot.margin = margin(t = 10, r = 15, b = 15, l = 15)
     ) +
     labs(
-      title = "Contig classification summary",
+      title = "Contig classification",
       subtitle = subtitle_text
     )
 
