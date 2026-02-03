@@ -309,7 +309,7 @@ if (has_rearr_col) {
     filter(!is.na(rearrangement_candidates) & rearrangement_candidates != "") %>%
     mutate(
       short_ids = sapply(rearrangement_candidates, extract_short_chrom_ids, USE.NAMES = FALSE),
-      rearr_label = paste0("\u21C4 ", short_ids),  # ⇄ symbol + chromosome IDs
+      rearr_label = paste0("<-> ", short_ids),  # rearrangement indicator + chromosome IDs
       # Extract first candidate for coloring (most significant off-target)
       first_candidate = str_split_fixed(rearrangement_candidates, ",", 2)[, 1],
       # Extract subgenome from first candidate (last character if single letter A-Z)
@@ -888,15 +888,15 @@ if (has_subgenomes) {
     coord_fixed(ratio = 1, xlim = radar_xlim, ylim = radar_ylim, clip = "off") +
     theme_classic(base_family = base_family, base_size = base_font_pt) +
     theme(
-      plot.title = element_text(hjust = 0.5, size = base_font_pt, family = base_family, margin = margin(b = 4)),
-      axis.title = element_blank(),
+      axis.title.x = element_text(hjust = 0.5, size = base_font_pt, family = base_family, margin = margin(t = -2)),
+      axis.title.y = element_blank(),
       axis.text  = element_blank(),
       axis.ticks = element_blank(),
       axis.line = element_blank(),
       panel.grid = element_blank(),
       plot.margin = margin(2, 2, 2, 2)
     ) +
-    labs(title = "Chromosome-set support", x = NULL, y = NULL)
+    labs(x = "Chromosome-set support", y = NULL)
 
   p_radar <- apply_legend_theme(p_radar, text_pt = 6, key_pt = 6, tight = TRUE) +
     theme(legend.position = legend_pos, legend.justification = c(0.5, 1))
@@ -947,13 +947,11 @@ if (has_subgenomes) {
     theme_classic(base_family = base_family, base_size = base_font_pt) +
     axis_theme +
     theme(
-      plot.title = element_text(hjust = 0.5, size = base_font_pt, family = base_family, margin = margin(b = 8)),
       axis.ticks = element_blank(),
       panel.grid = element_blank(),
       plot.margin = margin(5.5, 5.5, 5.5, 5.5)
     ) +
     labs(
-      title = "Identity to assigned reference chromosome",
       x = "Assigned subgenome",
       y = "Alignment identity proxy"
     )
@@ -973,14 +971,11 @@ if (has_subgenomes) {
     theme_classic(base_family = base_family, base_size = base_font_pt) +
     axis_theme +
     theme(
-      plot.title = element_text(hjust = 0.5, size = base_font_pt, family = base_family, margin = margin(b = 8)),
-      axis.title.x = element_blank(),
       axis.ticks = element_blank(),
       panel.grid = element_blank(),
       plot.margin = margin(5.5, 5.5, 5.5, 5.5)
     ) +
     labs(
-      title = "Identity to assigned reference chromosome",
       x = NULL,
       y = "Alignment identity proxy"
     )
