@@ -14,6 +14,7 @@ from final_finalizer.detection.organelle import (
     prepare_organelle_references,
 )
 from final_finalizer.detection.rdna import detect_rdna_contigs, prepare_rdna_reference
+from final_finalizer.detection.rdna_consensus import build_rdna_consensus
 
 __all__ = [
     # blast.py
@@ -27,6 +28,8 @@ __all__ = [
     # rdna.py
     "prepare_rdna_reference",
     "detect_rdna_contigs",
+    # rdna_consensus.py
+    "build_rdna_consensus",
     # debris.py
     "detect_chromosome_debris",
     # contaminant.py

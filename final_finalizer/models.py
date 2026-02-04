@@ -219,6 +219,71 @@ class BlastHitSummary:
 
 
 @dataclass
+class RdnaSubFeature:
+    """A sub-feature within a 45S rDNA repeat unit.
+
+    Attributes:
+        name: Feature name (e.g., "18S", "ITS1", "5.8S", "ITS2", "28S")
+        start: Start position (0-based) relative to consensus
+        end: End position (0-based, exclusive) relative to consensus
+    """
+    name: str
+    start: int
+    end: int
+
+
+@dataclass
+class RdnaConsensus:
+    """Consensus 45S rDNA repeat unit derived from the query assembly.
+
+    Attributes:
+        sequence: The consensus/exemplar DNA sequence
+        length: Length of the consensus sequence
+        n_copies_extracted: Number of individual 45S copies extracted
+        n_copies_clustered: Number of copies in the largest cluster
+        method: Method used to derive consensus ("cdhit+mafft", "cdhit_rep", "blast_central")
+        sub_features: List of annotated sub-features (18S, ITS1, 5.8S, ITS2, 28S)
+        source_contig: Contig from which the exemplar was extracted (if applicable)
+    """
+    sequence: str
+    length: int
+    n_copies_extracted: int
+    n_copies_clustered: int
+    method: str
+    sub_features: List[RdnaSubFeature]
+    source_contig: Optional[str] = None
+
+
+@dataclass
+class RdnaLocus:
+    """An rDNA locus annotation on a contig.
+
+    Represents a single rDNA hit found by BLASTing the consensus 45S
+    against all assembly contigs.
+
+    Attributes:
+        contig: Contig name
+        start: Start position on contig (0-based)
+        end: End position on contig (0-based, exclusive)
+        strand: "+" or "-"
+        identity: Alignment identity to consensus (0.0-1.0)
+        consensus_coverage: Fraction of consensus covered (0.0-1.0)
+        copy_type: "full", "partial", or "fragment"
+        sub_features: List of sub-feature names present (e.g., ["18S", "5.8S", "28S"])
+        is_nor_candidate: True if part of a tandem cluster of >= min_tandem copies
+    """
+    contig: str
+    start: int
+    end: int
+    strand: str
+    identity: float
+    consensus_coverage: float
+    copy_type: str
+    sub_features: List[str]
+    is_nor_candidate: bool
+
+
+@dataclass
 class DepthStats:
     """Read depth statistics for a contig.
 

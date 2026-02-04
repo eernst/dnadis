@@ -7,7 +7,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
-from final_finalizer.models import ContigClassification, ContaminantHitExtended, DepthStats
+from final_finalizer.models import ContigClassification, ContaminantHitExtended, DepthStats, RdnaLocus
 from final_finalizer.utils.reference_utils import split_chrom_subgenome
 
 # Use a large but finite value instead of infinity to avoid parsing issues
@@ -783,5 +783,50 @@ def write_contaminant_summary_tsv(
                 hit.genus or "",
                 hit.species or "",
                 f"{ds.mean_depth:.2f}" if ds else "",
+            ]
+            fh.write("\t".join(row) + "\n")
+
+
+def write_rdna_annotations_tsv(
+    output_path: Path,
+    loci: List[RdnaLocus],
+    classifications: Optional[Dict[str, str]] = None,
+) -> None:
+    """Write rDNA annotation TSV with per-locus details.
+
+    Args:
+        output_path: Path to output TSV file
+        loci: List of RdnaLocus annotations
+        classifications: Optional dict mapping contig name -> classification string
+    """
+    columns = [
+        "contig",
+        "start",
+        "end",
+        "strand",
+        "identity",
+        "consensus_coverage",
+        "copy_type",
+        "sub_features",
+        "is_nor_candidate",
+        "contig_classification",
+    ]
+
+    with output_path.open("w") as fh:
+        fh.write("\t".join(columns) + "\n")
+
+        for locus in sorted(loci, key=lambda l: (l.contig, l.start)):
+            clf = classifications.get(locus.contig, "") if classifications else ""
+            row = [
+                locus.contig,
+                str(locus.start),
+                str(locus.end),
+                locus.strand,
+                f"{locus.identity:.4f}",
+                f"{locus.consensus_coverage:.4f}",
+                locus.copy_type,
+                ",".join(locus.sub_features) if locus.sub_features else "",
+                "TRUE" if locus.is_nor_candidate else "FALSE",
+                clf,
             ]
             fh.write("\t".join(row) + "\n")

@@ -118,6 +118,7 @@ from final_finalizer.output.tsv_output import (
     write_contig_summary_tsv,
     write_contaminant_summary_tsv,
     write_macro_blocks_tsv,
+    write_rdna_annotations_tsv,
 )
 from final_finalizer.output.plotting import (
     run_plot,
@@ -153,7 +154,9 @@ def main():
             assign_chain_score="matches", assign_chain_topk=3, assign_ref_score="all",
             miniprot_min_genes=3, miniprot_min_segments=5, min_span_frac=0.20,
             min_span_bp=50000, organelle_min_cov=0.80, chrC_len_tolerance=0.05,
-            chrM_len_tolerance=0.20, rdna_min_cov=0.50, chr_debris_min_cov=0.80,
+            chrM_len_tolerance=0.20, rdna_min_cov=0.50,
+            build_rdna_consensus=False, rdna_ref_features=None,
+            chr_debris_min_cov=0.80,
             chr_debris_min_identity=0.90, contaminant_min_score=1000, contaminant_min_coverage=0.50,
             debris_min_cov=0.50, debris_min_protein_hits=2, preset="asm20", kmer=None, window=None, aln_minlen=10000,
         )
@@ -426,6 +429,17 @@ def main():
     rdna_thresh.add_argument(
         "--rdna-min-cov", type=float, default=0.50,
         help="Min query coverage for rDNA classification [0.50]",
+    )
+    rdna_thresh.add_argument(
+        "--build-rdna-consensus", action="store_true",
+        help="Build a consensus 45S rDNA from the query assembly and use it to "
+        "annotate rDNA loci across all contigs, detect NOR locations, and "
+        "improve rDNA classification.",
+    )
+    rdna_thresh.add_argument(
+        "--rdna-ref-features", type=str, default=None, metavar="TSV",
+        help="Sub-feature coordinate TSV for the rDNA reference (columns: feature, start, end). "
+        "Default: use bundled Arabidopsis 45S features if using default reference.",
     )
 
     # =========================================================================
@@ -911,6 +925,7 @@ def main():
     # --- Phase 5: rDNA detection ---
     rdna_contigs: Set[str] = set()
     rdna_hits: Dict = {}
+    rdna_hit_intervals: Dict[str, list] = {}  # Raw BLAST intervals for consensus building
     already_classified = {chrC_contig, chrM_contig} | organelle_debris
     already_classified.discard(None)
 
@@ -920,7 +935,7 @@ def main():
         rdna_ref = prepare_rdna_reference(args.rdna_ref, script_dir)
 
         if rdna_ref:
-            rdna_contigs, rdna_hits = detect_rdna_contigs(
+            rdna_contigs, rdna_hits, rdna_hit_intervals = detect_rdna_contigs(
                 query_fasta=blast_query_fasta,
                 query_lengths=blast_query_lengths,
                 rdna_ref=rdna_ref,
@@ -1118,6 +1133,88 @@ def main():
             logger.done(f"Depth analysis complete for {len(depth_stats)} contigs")
     elif args.reads and args.skip_depth:
         logger.info("Phase 11.5: Skipping depth analysis (--skip-depth)")
+
+    # --- Phase 11.7: rDNA consensus building (optional) ---
+    rdna_consensus_obj = None
+    rdna_loci = []
+    if getattr(args, 'build_rdna_consensus', False) and not args.skip_rdna and rdna_hit_intervals:
+        logger.phase("Phase 11.7: Building rDNA consensus from query assembly")
+        from final_finalizer.detection.rdna_consensus import build_rdna_consensus
+
+        # Build classification lookup for annotation
+        clf_lookup = {clf.original_name: clf.classification for clf in classifications}
+
+        rdna_ref_features = None
+        if getattr(args, 'rdna_ref_features', None):
+            rdna_ref_features = Path(args.rdna_ref_features)
+
+        rdna_consensus_obj, rdna_loci = build_rdna_consensus(
+            query_fasta=qry,
+            query_lengths=qry_lengths,
+            rdna_hit_intervals=rdna_hit_intervals,
+            seed_ref_path=rdna_ref,
+            work_dir=work_dir / "rdna_consensus",
+            threads=args.threads,
+            rdna_ref_features_path=rdna_ref_features,
+            classifications=clf_lookup,
+        )
+
+        if rdna_consensus_obj:
+            # Write consensus FASTA
+            consensus_fasta_out = Path(str(outprefix) + ".rdna_consensus.fasta")
+            from final_finalizer.utils.sequence_utils import write_fasta
+            write_fasta({"rdna_consensus": rdna_consensus_obj.sequence}, consensus_fasta_out)
+            logger.done(f"rDNA consensus:    {consensus_fasta_out} ({rdna_consensus_obj.length:,} bp, method={rdna_consensus_obj.method})")
+
+            # Reclassify contigs using consensus-based rDNA coverage
+            # Only reclassify contigs that are not already chromosomes or organelles
+            if rdna_loci:
+                from final_finalizer.detection.rdna_consensus import identify_rdna_contigs_from_loci
+                exclude_from_reclass = chromosome_contigs | {chrC_contig, chrM_contig} | organelle_debris
+                exclude_from_reclass.discard(None)
+
+                new_rdna_contigs, rdna_coverage_map = identify_rdna_contigs_from_loci(
+                    loci=rdna_loci,
+                    query_lengths=qry_lengths,
+                    min_coverage=args.rdna_min_cov,
+                    exclude_contigs=exclude_from_reclass,
+                )
+
+                # Update classifications for newly identified rDNA contigs
+                n_reclassified = 0
+                for clf in classifications:
+                    if clf.original_name in new_rdna_contigs and clf.classification not in (
+                        "chrom_assigned", "organelle_complete", "organelle_debris", "rDNA",
+                    ):
+                        old_class = clf.classification
+                        clf.classification = "rDNA"
+                        clf.classification_confidence = "medium"
+                        cov = rdna_coverage_map.get(clf.original_name, 0.0)
+                        logger.info(
+                            f"Reclassified {clf.original_name} from {old_class} -> rDNA "
+                            f"(consensus coverage={cov:.2f})"
+                        )
+                        n_reclassified += 1
+                        rdna_contigs.add(clf.original_name)
+
+                if n_reclassified:
+                    logger.done(f"Reclassified {n_reclassified} contigs as rDNA using consensus probe")
+
+                # Update clf_lookup after reclassification
+                clf_lookup = {clf.original_name: clf.classification for clf in classifications}
+
+                # Write annotations TSV (with updated classifications)
+                annotations_tsv = Path(str(outprefix) + ".rdna_annotations.tsv")
+                write_rdna_annotations_tsv(
+                    output_path=annotations_tsv,
+                    loci=rdna_loci,
+                    classifications=clf_lookup,
+                )
+                logger.done(f"rDNA annotations:  {annotations_tsv} ({len(rdna_loci)} loci)")
+        else:
+            logger.warning("rDNA consensus building did not produce a result")
+    elif getattr(args, 'build_rdna_consensus', False) and args.skip_rdna:
+        logger.info("Phase 11.7: Skipping rDNA consensus (--skip-rdna)")
 
     # --- Phase 12: Write FASTA outputs ---
     logger.phase("Phase 12: Writing FASTA outputs")

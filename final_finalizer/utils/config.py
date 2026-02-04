@@ -112,6 +112,8 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
     },
     "thresholds_rdna": {
         "rdna_min_cov": "rdna_min_cov",
+        "build_rdna_consensus": "build_rdna_consensus",
+        "rdna_ref_features": "rdna_ref_features",
     },
     "thresholds_chromosome_debris": {
         "chr_debris_min_cov": "chr_debris_min_cov",

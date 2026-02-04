@@ -310,3 +310,126 @@ def run_miniprot(
 
     logger.info(f"Running miniprot -> {paf_gz_out} (stderr: {err_path}): " + " ".join(cmd))
     run_to_gzip(cmd, paf_gz_out, err_path)
+
+
+def run_cdhit_est(
+    input_fasta: Path,
+    output_prefix: Path,
+    identity: float = 0.95,
+    threads: int = 1,
+    err_path: Optional[Path] = None,
+) -> bool:
+    """Run cd-hit-est to cluster nucleotide sequences.
+
+    Args:
+        input_fasta: Input FASTA file with sequences to cluster
+        output_prefix: Output prefix (creates prefix and prefix.clstr)
+        identity: Sequence identity threshold (0.0-1.0) [0.95]
+        threads: Number of threads
+        err_path: Path for stderr output
+
+    Returns:
+        True if successful, False if cd-hit-est not available
+    """
+    if not have_exe("cd-hit-est"):
+        return False
+
+    if file_exists_and_valid(output_prefix):
+        logger.info(f"cd-hit-est output exists, reusing: {output_prefix}")
+        return True
+
+    # Choose word size based on identity threshold (cd-hit-est requirement)
+    if identity >= 0.90:
+        word_size = 8
+    elif identity >= 0.88:
+        word_size = 7
+    elif identity >= 0.85:
+        word_size = 6
+    elif identity >= 0.80:
+        word_size = 5
+    else:
+        word_size = 4
+
+    cmd = [
+        "cd-hit-est",
+        "-i", str(input_fasta),
+        "-o", str(output_prefix),
+        "-c", str(identity),
+        "-n", str(word_size),
+        "-T", str(threads),
+        "-M", "0",  # Unlimited memory
+        "-d", "0",  # Full sequence name in output
+    ]
+
+    logger.info(f"Running cd-hit-est (identity={identity}) -> {output_prefix}")
+
+    if err_path:
+        err_path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        if err_path:
+            with err_path.open("wb") as err_fh:
+                ret = subprocess.run(cmd, stderr=err_fh, stdout=subprocess.DEVNULL, check=False)
+        else:
+            ret = subprocess.run(cmd, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL, check=False)
+        if ret.returncode != 0:
+            logger.warning(f"cd-hit-est failed with return code {ret.returncode}")
+            return False
+    except Exception as e:
+        logger.warning(f"cd-hit-est failed: {e}")
+        return False
+
+    return True
+
+
+def run_mafft(
+    input_fasta: Path,
+    output_fasta: Path,
+    threads: int = 1,
+    err_path: Optional[Path] = None,
+) -> bool:
+    """Run MAFFT multiple sequence alignment.
+
+    Args:
+        input_fasta: Input FASTA with sequences to align
+        output_fasta: Output aligned FASTA
+        threads: Number of threads
+        err_path: Path for stderr output
+
+    Returns:
+        True if successful, False if MAFFT not available
+    """
+    if not have_exe("mafft"):
+        return False
+
+    if file_exists_and_valid(output_fasta):
+        logger.info(f"MAFFT output exists, reusing: {output_fasta}")
+        return True
+
+    cmd = [
+        "mafft",
+        "--auto",
+        "--thread", str(threads),
+        str(input_fasta),
+    ]
+
+    logger.info(f"Running MAFFT -> {output_fasta}")
+
+    if err_path:
+        err_path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        if err_path:
+            with output_fasta.open("w") as out_fh, err_path.open("wb") as err_fh:
+                ret = subprocess.run(cmd, stdout=out_fh, stderr=err_fh, check=False)
+        else:
+            with output_fasta.open("w") as out_fh:
+                ret = subprocess.run(cmd, stdout=out_fh, stderr=subprocess.DEVNULL, check=False)
+        if ret.returncode != 0:
+            logger.warning(f"MAFFT failed with return code {ret.returncode}")
+            return False
+    except Exception as e:
+        logger.warning(f"MAFFT failed: {e}")
+        return False
+
+    return True

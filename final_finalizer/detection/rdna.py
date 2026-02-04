@@ -63,13 +63,16 @@ def detect_rdna_contigs(
     threads: int,
     min_coverage: float,
     exclude_contigs: Set[str],
-) -> Tuple[Set[str], Dict[str, RdnaHit]]:
+) -> Tuple[Set[str], Dict[str, RdnaHit], Dict[str, List[Tuple[int, int]]]]:
     """Identify contigs with significant rDNA content.
 
     Returns:
         Tuple of:
         - set of contig names with coverage >= min_coverage
         - dict mapping contig name to RdnaHit with coverage and identity details
+        - dict mapping ALL contig names (including those below threshold) to
+          their raw BLAST hit intervals [(start, end), ...] for downstream
+          rDNA consensus building
     """
     work_dir.mkdir(parents=True, exist_ok=True)
 
@@ -142,4 +145,4 @@ def detect_rdna_contigs(
             rdna_hits[qseqid] = RdnaHit(coverage=coverage, identity=identity)
             logger.info(f"rDNA contig: {qseqid} ({qlen:,} bp, cov={coverage:.2f}, ident={identity:.3f})")
 
-    return rdna_contigs, rdna_hits
+    return rdna_contigs, rdna_hits, dict(query_intervals)
