@@ -737,9 +737,16 @@ def _run_blastn_subunits(
     """
     import subprocess
 
+    # Check if output exists and is newer than inputs
     if output_path.exists():
-        logger.info(f"BLAST subunit output exists, reusing: {output_path}")
-        return
+        out_mtime = output_path.stat().st_mtime
+        input_mtime = max(query_fasta.stat().st_mtime,
+                          max(f.stat().st_mtime for f in db_path.parent.glob(f"{db_path.name}.n*"))
+                          if list(db_path.parent.glob(f"{db_path.name}.n*")) else 0)
+        if out_mtime >= input_mtime:
+            logger.info(f"BLAST subunit output exists, reusing: {output_path}")
+            return
+        logger.info(f"Inputs newer than BLAST output; re-running: {output_path}")
 
     cmd = [
         "blastn",

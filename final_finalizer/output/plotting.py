@@ -39,6 +39,7 @@ def run_plot(
     chr_like_minlen: int,
     plot_title_suffix: str,
     plot_html: bool,
+    rdna_annotations_tsv: Optional[Path] = None,
 ):
     if not have_rscript():
         logger.warning("--plot specified, but Rscript not found in PATH; skipping plot.")
@@ -63,12 +64,16 @@ def run_plot(
         # ensure backslashes don't accidentally escape quotes on Windows
         return str(s).replace("\\", "/")
 
+    # Handle optional rdna_annotations_tsv
+    rdna_file_str = esc(rdna_annotations_tsv) if rdna_annotations_tsv and rdna_annotations_tsv.exists() else ""
+
     filled = (
         tmpl.replace("__SUMMARY__", esc(summary_tsv))
         .replace("__REF__", esc(ref_lengths_tsv))
         .replace("__SEGMENTS__", esc(segments_tsv))
         .replace("__EVIDENCE__", esc(chain_summary_tsv))
         .replace("__MACRO__", esc(macro_blocks_tsv))
+        .replace("__RDNA_ANNOTATIONS__", rdna_file_str)
         .replace("__OUTPDF__", esc(plot_pdf))
         .replace("__OUTHTML__", esc(plot_html_path))
         .replace("__PLOTHTML__", "TRUE" if plot_html else "FALSE")

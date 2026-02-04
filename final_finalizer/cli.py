@@ -1137,6 +1137,7 @@ def main():
     # --- Phase 11.7: rDNA consensus building (optional) ---
     rdna_consensus_obj = None
     rdna_loci = []
+    rdna_annotations_tsv = None
     if getattr(args, 'build_rdna_consensus', False) and not args.skip_rdna and rdna_hit_intervals:
         logger.phase("Phase 11.7: Building rDNA consensus from query assembly")
         from final_finalizer.detection.rdna_consensus import build_rdna_consensus
@@ -1204,13 +1205,13 @@ def main():
                 clf_lookup = {clf.original_name: clf.classification for clf in classifications}
 
                 # Write annotations TSV (with updated classifications)
-                annotations_tsv = Path(str(outprefix) + ".rdna_annotations.tsv")
+                rdna_annotations_tsv = Path(str(outprefix) + ".rdna_annotations.tsv")
                 write_rdna_annotations_tsv(
-                    output_path=annotations_tsv,
+                    output_path=rdna_annotations_tsv,
                     loci=rdna_loci,
                     classifications=clf_lookup,
                 )
-                logger.done(f"rDNA annotations:  {annotations_tsv} ({len(rdna_loci)} loci)")
+                logger.done(f"rDNA annotations:  {rdna_annotations_tsv} ({len(rdna_loci)} loci)")
         else:
             logger.warning("rDNA consensus building did not produce a result")
     elif getattr(args, 'build_rdna_consensus', False) and args.skip_rdna:
@@ -1288,6 +1289,7 @@ def main():
             chr_like_minlen,
             plot_suffix,
             args.plot_html,
+            rdna_annotations_tsv=rdna_annotations_tsv,
         )
         # Generate classification summary plots
         run_classification_summary_bar(

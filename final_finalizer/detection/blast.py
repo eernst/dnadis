@@ -28,11 +28,18 @@ def run_makeblastdb(
     if not have_exe("makeblastdb"):
         raise RuntimeError("makeblastdb executable not found in PATH")
 
-    # Check if database already exists
+    # Check if database already exists and is newer than input FASTA
     db_files = list(db_path.parent.glob(f"{db_path.name}.n*"))
     if db_files:
-        logger.info(f"BLAST database exists, reusing: {db_path}")
-        return
+        input_mtime = fasta_path.stat().st_mtime
+        oldest_db = min(f.stat().st_mtime for f in db_files)
+        if oldest_db >= input_mtime:
+            logger.info(f"BLAST database exists, reusing: {db_path}")
+            return
+        # Input is newer than DB; remove stale DB files and rebuild
+        logger.info(f"Input FASTA newer than BLAST database; rebuilding: {db_path}")
+        for f in db_files:
+            f.unlink()
 
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -83,8 +90,17 @@ def run_blastn_megablast(
         err_path: Optional path for stderr output
     """
     if output_path.exists():
-        logger.info(f"BLAST output exists, reusing: {output_path}")
-        return
+        # Check if query or any DB is newer than output
+        out_mtime = output_path.stat().st_mtime
+        input_mtime = query_fasta.stat().st_mtime if query_fasta.exists() else 0
+        for dbp in db_paths:
+            dbp_path = Path(dbp)
+            for f in dbp_path.parent.glob(f"{dbp_path.name}.n*"):
+                input_mtime = max(input_mtime, f.stat().st_mtime)
+        if out_mtime >= input_mtime:
+            logger.info(f"BLAST output exists, reusing: {output_path}")
+            return
+        logger.info(f"Inputs newer than BLAST output; re-running: {output_path}")
 
     if not have_exe("blastn"):
         raise RuntimeError("blastn executable not found in PATH")

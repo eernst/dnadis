@@ -36,6 +36,7 @@ PLACEHOLDER_TSV = {
     "__SEGMENTS__": ".segments.tsv",
     "__EVIDENCE__": ".evidence_summary.tsv",
     "__MACRO__": ".macro_blocks.tsv",
+    "__RDNA_ANNOTATIONS__": ".rdna_annotations.tsv",
     "__CONTAMINANTS_TSV__": ".contaminants.tsv",
 }
 
@@ -136,7 +137,13 @@ def build_placeholder_values(
     # Path-based placeholders: resolve from prefix + known TSV suffixes
     for placeholder, tsv_suffix in PLACEHOLDER_TSV.items():
         if placeholder in template_text:
-            values[placeholder] = esc(str(prefix) + tsv_suffix)
+            tsv_path = Path(str(prefix) + tsv_suffix)
+            # For optional TSVs, use empty string if file doesn't exist
+            # (R templates handle missing files gracefully)
+            if tsv_path.exists():
+                values[placeholder] = esc(tsv_path)
+            else:
+                values[placeholder] = ""
 
     # Output file placeholders
     pdf_suffix, html_suffix = SCRIPT_OUTPUT_SUFFIXES[suffix]

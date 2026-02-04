@@ -38,6 +38,7 @@ ref_file     <- "__REF__"
 seg_file     <- "__SEGMENTS__"
 ev_file      <- "__EVIDENCE__"
 macro_file   <- "__MACRO__"
+rdna_file    <- "__RDNA_ANNOTATIONS__"
 out_pdf      <- "__OUTPDF__"
 out_html     <- "__OUTHTML__"
 plot_html    <- as.logical("__PLOTHTML__")
@@ -136,6 +137,29 @@ ev <- readr::read_tsv(
     score_all = col_double()
   )
 )
+
+# Load rDNA annotations (optional)
+rdna_annot <- if (nzchar(rdna_file) && file.exists(rdna_file)) {
+  readr::read_tsv(
+    rdna_file,
+    show_col_types = FALSE,
+    col_types = cols(
+      contig = col_character(),
+      start = col_double(),
+      end = col_double(),
+      strand = col_character(),
+      identity = col_double(),
+      consensus_coverage = col_double(),
+      copy_type = col_character(),
+      sub_features = col_character(),
+      is_nor_candidate = col_character(),
+      contig_classification = col_character()
+    )
+  ) %>%
+    filter(copy_type == "full")  # Only full-copy rDNA
+} else {
+  tibble()  # Empty tibble if no rDNA annotations
+}
 
 # Subgenome suffix labels present in the ref lengths file (single-letter A-Z)
 sg_levels <- ref_lengths %>%
@@ -470,6 +494,45 @@ macro_plot <- macro %>%
     )
   )
 
+# Prepare rDNA annotations for plotting (overlay on pills)
+rdna_plot <- if (nrow(rdna_annot) > 0) {
+  rdna_annot %>%
+    filter(contig %in% df_slots$original_name) %>%
+    mutate(
+      start_mb = start / 1e6,
+      end_mb = end / 1e6
+    ) %>%
+    left_join(
+      df_slots %>% select(original_name, y_plot, contig_len_mb, is_reversed),
+      by = c("contig" = "original_name")
+    ) %>%
+    filter(!is.na(y_plot)) %>%
+    mutate(
+      # Flip coordinates for reversed contigs to show in reference orientation
+      start_flip = if_else(is_reversed, contig_len_mb - end_mb, start_mb),
+      end_flip = if_else(is_reversed, contig_len_mb - start_mb, end_mb),
+      start_mb = pmax(0, pmin(start_flip, contig_len_mb)),
+      end_mb = pmax(0, pmin(end_flip, contig_len_mb))
+    ) %>%
+    filter(end_mb > start_mb) %>%
+    mutate(
+      ymin = y_plot - pill_yw/2,
+      ymax = y_plot + pill_yw/2,
+      xmin = start_mb,
+      xmax = end_mb,
+      tooltip = paste0(
+        "rDNA full copy\n",
+        "contig: ", contig, "\n",
+        "start: ", sprintf("%.3f", start_mb), " Mbp\n",
+        "end: ", sprintf("%.3f", end_mb), " Mbp\n",
+        "identity: ", sprintf("%.4f", identity), "\n",
+        "coverage: ", sprintf("%.4f", consensus_coverage)
+      )
+    )
+} else {
+  tibble()  # Empty tibble
+}
+
 # Reference line parameters
 ref_tick_offset <- pill_yw * 0.5  # gap between lines and pill
 ref_line_width <- 0.4  # linewidth in mm
@@ -560,6 +623,21 @@ p_comp <- ggplot() +
     alpha = 1.0,
     show.legend = FALSE
   ) +
+  # rDNA full-copy annotations (bold purple, on top of everything)
+  {
+    if (nrow(rdna_plot) > 0) {
+      geom_rect(
+        data = rdna_plot,
+        aes(xmin = xmin, xmax = xmax,
+            ymin = ymin, ymax = ymax),
+        fill = "#7B2D8E",
+        color = "#7B2D8E",
+        linewidth = 0.05,
+        alpha = 1.0,
+        show.legend = FALSE
+      )
+    }
+  } +
   # Rearrangement hypothesis labels (colored by type: subgenome color for homeologous, red for non-homeologous)
   {
     if (nrow(rearr_labels) > 0) {
@@ -704,6 +782,20 @@ if (plot_html) {
       alpha = 1.0,
       show.legend = FALSE
     ) +
+    # rDNA full-copy annotations (bold purple, on top of everything, with tooltips)
+    {
+      if (nrow(rdna_plot) > 0) {
+        ggiraph::geom_rect_interactive(
+          data = rdna_plot,
+          aes(xmin = xmin, xmax = xmax,
+              ymin = ymin, ymax = ymax, tooltip = tooltip),
+          fill = "#7B2D8E",
+          color = NA,
+          alpha = 0.85,
+          show.legend = FALSE
+        )
+      }
+    } +
     # Rearrangement hypothesis labels (colored by type: subgenome color for homeologous, red for non-homeologous)
     {
       if (nrow(rearr_labels) > 0) {
