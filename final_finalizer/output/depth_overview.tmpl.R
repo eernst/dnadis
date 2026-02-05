@@ -169,40 +169,23 @@ p_class_depth <- ggplot(df_depth, aes(x = display_class, y = depth_mean, fill = 
 
 # ----------------------------
 # Middle: Depth for chromosome-assigned contigs, ordered by chromosome
-# Includes chrC and chrM organelles if present
 # ----------------------------
 df_chrom <- df_depth %>%
-  filter(
-    classification == "chrom_assigned" |
-    contig == "chrC" |
-    contig == "chrM"
-  ) %>%
+  filter(classification == "chrom_assigned") %>%
   mutate(
-    # Use contig name for organelles, assigned_chrom_id for others
-    chrom_id = case_when(
-      contig == "chrC" ~ "chrC",
-      contig == "chrM" ~ "chrM",
-      TRUE ~ assigned_chrom_id
-    ),
-    # Extract numeric part for sorting (organelles get special values)
-    chrom_sort = case_when(
-      contig == "chrC" ~ 9998L,
-      contig == "chrM" ~ 9999L,
-      TRUE ~ chrom_num
-    ),
+    chrom_id = assigned_chrom_id,
     # Label for display
     # Note: assigned_subgenome may be NA (R's missing) or "NA" (string)
     # Check for both cases to avoid labels like "chr1NA"
     chrom_label = if_else(
-      classification == "chrom_assigned" &
-        !is.na(assigned_subgenome) &
+      !is.na(assigned_subgenome) &
         assigned_subgenome != "" &
         assigned_subgenome != "NA",
       paste0(chrom_id, assigned_subgenome),
       chrom_id
     )
   ) %>%
-  arrange(chrom_sort, chrom_label, desc(length_mb)) %>%
+  arrange(chrom_num, chrom_label, desc(length_mb)) %>%
   mutate(plot_order = row_number())
 
 if (nrow(df_chrom) > 0) {
@@ -211,14 +194,11 @@ if (nrow(df_chrom) > 0) {
     group_by(chrom_label) %>%
     summarise(mid_pos = mean(plot_order), .groups = "drop")
 
-  # Color by subgenome for regular chromosomes, distinct colors for organelles
+  # Color by subgenome
   df_chrom <- df_chrom %>%
     mutate(
-      fill_category = case_when(
-        contig == "chrC" ~ "chrC",
-        contig == "chrM" ~ "chrM",
-        !is.na(assigned_subgenome) ~ as.character(assigned_subgenome),
-        TRUE ~ "NA"
+      fill_category = if_else(
+        !is.na(assigned_subgenome), as.character(assigned_subgenome), "NA"
       )
     )
 
@@ -226,8 +206,7 @@ if (nrow(df_chrom) > 0) {
     geom_col(aes(fill = fill_category), width = 0.8, alpha = 0.85) +
     scale_fill_manual(
       values = c("A" = "#1F77B4", "B" = "#FF7F0E", "NA" = "#7F7F7F",
-                 "At" = "#1F77B4", "Dt" = "#FF7F0E", "G" = "#2CA02C",
-                 "chrC" = "#2CA02C", "chrM" = "#D62728"),
+                 "At" = "#1F77B4", "Dt" = "#FF7F0E", "G" = "#2CA02C"),
       name = "Subgenome"
     ) +
     scale_x_continuous(
@@ -373,8 +352,7 @@ if (plot_html) {
       ) +
       scale_fill_manual(
         values = c("A" = "#1F77B4", "B" = "#FF7F0E", "NA" = "#7F7F7F",
-                   "At" = "#1F77B4", "Dt" = "#FF7F0E", "G" = "#2CA02C",
-                   "chrC" = "#2CA02C", "chrM" = "#D62728"),
+                   "At" = "#1F77B4", "Dt" = "#FF7F0E", "G" = "#2CA02C"),
         name = "Subgenome"
       ) +
       scale_x_continuous(
