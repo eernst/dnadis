@@ -194,21 +194,35 @@ if (nrow(df_chrom) > 0) {
     group_by(chrom_label) %>%
     summarise(mid_pos = mean(plot_order), .groups = "drop")
 
+  # Discover unique subgenomes and build dynamic color palette
+  sg_levels <- df_chrom %>%
+    filter(!is.na(assigned_subgenome) & assigned_subgenome != "NA") %>%
+    distinct(assigned_subgenome) %>%
+    pull(assigned_subgenome) %>%
+    sort()
+
+  # Palette for up to 4 subgenomes (matches chromosome_overview)
+  pal_subgenome <- c("#1F77B4", "#FF7F0E", "#17A589", "#2E7D32")
+  sg_colors <- if (length(sg_levels) > 0) {
+    setNames(pal_subgenome[seq_along(sg_levels)], sg_levels)
+  } else {
+    c("G" = "#1F77B4")  # Single genome fallback
+  }
+  sg_colors <- c(sg_colors, "NA" = "#7F7F7F")
+
   # Color by subgenome
   df_chrom <- df_chrom %>%
     mutate(
       fill_category = if_else(
-        !is.na(assigned_subgenome), as.character(assigned_subgenome), "NA"
+        !is.na(assigned_subgenome) & assigned_subgenome != "NA",
+        as.character(assigned_subgenome),
+        "NA"
       )
     )
 
   p_chrom_depth <- ggplot(df_chrom, aes(x = plot_order, y = depth_mean)) +
     geom_col(aes(fill = fill_category), width = 0.8, alpha = 0.85) +
-    scale_fill_manual(
-      values = c("A" = "#1F77B4", "B" = "#FF7F0E", "NA" = "#7F7F7F",
-                 "At" = "#1F77B4", "Dt" = "#FF7F0E", "G" = "#2CA02C"),
-      name = "Subgenome"
-    ) +
+    scale_fill_manual(values = sg_colors, name = "Subgenome") +
     scale_x_continuous(
       breaks = chrom_breaks$mid_pos,
       labels = str_replace(chrom_breaks$chrom_label, "^chr", ""),
@@ -350,11 +364,7 @@ if (plot_html) {
         aes(fill = fill_category, tooltip = tooltip),
         width = 0.8, alpha = 0.85
       ) +
-      scale_fill_manual(
-        values = c("A" = "#1F77B4", "B" = "#FF7F0E", "NA" = "#7F7F7F",
-                   "At" = "#1F77B4", "Dt" = "#FF7F0E", "G" = "#2CA02C"),
-        name = "Subgenome"
-      ) +
+      scale_fill_manual(values = sg_colors, name = "Subgenome") +
       scale_x_continuous(
         breaks = chrom_breaks$mid_pos,
         labels = str_replace(chrom_breaks$chrom_label, "^chr", ""),
