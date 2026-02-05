@@ -150,7 +150,6 @@ final_finalizer/
    - PDF/HTML visualizations (if R/ggplot2 available):
      - Chromosome overview plot
      - Read depth overview (if --reads provided)
-     - Contaminant phylogenetic treemap (if contaminants detected)
      - Contaminant summary table (if contaminants detected)
 
 ### Key Design Patterns
@@ -249,7 +248,6 @@ All external tools are called via subprocess with proper error handling. Use `ut
 **Visualization**:
 - `*.chromosome_overview.pdf` - Main synteny visualization
 - `*.depth_overview.pdf`, `*.depth_overview.html` - Read depth plots (if `--reads` provided and `--plot-html`)
-- `*.contaminant_treemap.pdf` - Phylogenetic breakdown of contaminants (if contaminants detected)
 - `*.contaminant_table.html` - Interactive HTML table of top contaminants ranked by abundance with inline gradient bars (if contaminants detected)
 
 See `docs/output_formats.md` for complete column documentation.

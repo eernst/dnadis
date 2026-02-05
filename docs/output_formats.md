@@ -24,7 +24,6 @@ For information on log files, see the `--log-file` option in the main [README](.
 | `*.chromosome_overview.pdf` | Multi-panel synteny visualization showing contig composition and alignment identity |
 | `*.depth_overview.pdf` | Read depth visualization by classification and chromosome (if `--reads` provided) |
 | `*.depth_overview.html` | Interactive depth visualization with tooltips (if `--plot-html` and `--reads` provided) |
-| `*.contaminant_treemap.pdf` | Phylogenetic breakdown of contaminants as hierarchical treemap (if contaminants detected) |
 | `*.contaminant_table.html` | Interactive table of top contaminants ranked by abundance (if contaminants detected) |
 
 ---
@@ -277,7 +276,7 @@ Reference chromosome lengths and metadata.
 
 ## contaminants.tsv
 
-Detailed contaminant summary with full taxonomic lineage. Generated only when contaminants are detected. Used for phylogenetic breakdown visualizations (treemap and summary table).
+Detailed contaminant summary with full taxonomic lineage. Generated only when contaminants are detected. Used for the contaminant summary table visualization.
 
 | Column | Type | Description |
 |--------|------|-------------|

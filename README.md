@@ -40,9 +40,8 @@
 - [mosdepth](https://github.com/brentp/mosdepth) - efficient depth calculation
 - [rasusa](https://github.com/mbhall88/rasusa) - FASTQ downsampling for depth analysis
 - [centrifuger](https://github.com/mourisl/centrifuger) - contaminant detection
-- [taxonkit](https://github.com/shenwei356/taxonkit) + NCBI taxonomy database - taxonomic lineage for contaminant visualization (see below)
+- [taxonkit](https://github.com/shenwei356/taxonkit) + NCBI taxonomy database - taxonomic lineage for contaminant table (see below)
 - R with ggplot2, dplyr, readr, stringr, tibble, tidyr, patchwork, ggnewscale, pacman - visualization (`--plot`)
-- R with treemapify - contaminant phylogenetic breakdown visualization
 - R with ggiraph, htmlwidgets, pandoc - interactive visualization (`--plot-html`)
 
 ### Conda environment
@@ -65,14 +64,9 @@ Optional (plotting):
 conda install -n final_finalizer -c conda-forge r-base r-ggplot2 r-dplyr r-readr r-stringr r-tibble r-tidyr r-patchwork r-ggnewscale r-pacman r-ggiraph r-htmlwidgets r-scales libxml2 pandoc
 ```
 
-Note: The contaminant treemap visualization requires the R `treemapify` package, which depends on `libxml2`. After installing `libxml2` via conda, you may need to create a symlink for R to find it:
-```bash
-ln -sf libxml2.so.16 $CONDA_PREFIX/lib/libxml2.so
-```
+Optional (taxonkit for contaminant table taxonomic lineage):
 
-Optional (taxonkit for contaminant phylogenetic visualization):
-
-For full Domain → Family → Genus → Species breakdown in the contaminant treemap, install taxonkit and the NCBI taxonomy database:
+For full Domain → Family → Genus → Species breakdown in the contaminant table, install taxonkit and the NCBI taxonomy database:
 
 ```bash
 # Install taxonkit
@@ -88,7 +82,7 @@ mkdir -p ~/.taxonkit
 tar -xzf taxdump.tar.gz -C ~/.taxonkit
 ```
 
-Without taxonkit, the contaminant plot will show a simpler treemap by genus (parsed from scientific names). With taxonkit and the taxonomy database, you get a full hierarchical treemap showing the phylogenetic breakdown of detected contaminants (Domain > Family > Genus > Species).
+Without taxonkit, the contaminant table will show species names parsed from scientific names. With taxonkit and the taxonomy database, you get full taxonomic lineage (Domain, Family, Genus, Species) in the contaminant table.
 
 Latest tested conda package versions (CI):
 <!-- conda-versions-start -->
@@ -242,7 +236,6 @@ For complete column documentation for all TSV files, see [docs/output_formats.md
 | `*.chromosome_overview.pdf` | Multi-panel plot showing contig composition, subgenome support, and alignment identity |
 | `*.depth_overview.pdf` | Read depth visualization by classification and chromosome (if `--reads` provided) |
 | `*.depth_overview.html` | Interactive version with tooltips (if `--plot-html` and `--reads` provided) |
-| `*.contaminant_treemap.pdf` | Phylogenetic breakdown of contaminants as hierarchical treemap (if contaminants detected) |
 | `*.contaminant_table.html` | Interactive HTML table showing top contaminants ranked by abundance with inline visualizations (if contaminants detected) |
 | `*.contaminants.tsv` | Detailed contaminant summary with taxonomic lineage |
 
@@ -653,13 +646,9 @@ Two complementary approaches:
 
 ### Contaminant visualization
 
-When contaminants are detected (with `--centrifuger-idx`) and plotting is enabled (`--plot`), final_finalizer generates two complementary visualizations:
+When contaminants are detected (with `--centrifuger-idx`) and plotting is enabled (`--plot`), final_finalizer generates a **contaminant table** (`*.contaminant_table.html`): an interactive HTML table showing top contaminants ranked by abundance (depth × length if depth data available, otherwise total length). Features include species-level aggregation with binomial names, inline gradient bars for Total Mb and Depth columns, colored domain badges, family grouping, and min-max spread values for multi-contig entries. HTML-only output (CSS gradients don't render to PDF).
 
-1. **Phylogenetic treemap** (`*.contaminant_treemap.pdf`): Hierarchical treemap showing taxonomic breakdown (Kingdom → Family → Genus → Species) with area proportional to total contamination span. Requires taxonkit for full taxonomic lineage; falls back to genus-level grouping if unavailable.
-
-2. **Contaminant table** (`*.contaminant_table.html`): Interactive HTML table showing top contaminants ranked by abundance (depth × length if depth data available, otherwise total length). Features include species-level aggregation with binomial names, inline gradient bars for Total Mb and Depth columns, colored domain badges, family grouping, and min-max spread values for multi-contig entries. HTML-only output (CSS gradients don't render to PDF).
-
-Both visualizations filter to high-confidence contaminants (coverage ≥ `--contaminant-min-coverage`, default 0.50) to reduce noise from conserved gene matches. See [docs/output_formats.md](docs/output_formats.md#contaminant-table-visualization-html) for detailed documentation on the table format and interpretation.
+The table filters to high-confidence contaminants (coverage ≥ `--contaminant-min-coverage`, default 0.50) to reduce noise from conserved gene matches. See [docs/output_formats.md](docs/output_formats.md#contaminant-table-visualization-html) for detailed documentation on the table format and interpretation.
 
 ## Glossary
 

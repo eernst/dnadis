@@ -123,7 +123,6 @@ from final_finalizer.output.tsv_output import (
 from final_finalizer.output.plotting import (
     run_plot,
     run_depth_plot,
-    run_contaminant_plot,
     run_contaminant_table,
     run_classification_summary_bar,
 )
@@ -1308,15 +1307,9 @@ def main():
                 plot_suffix,
                 args.plot_html,
             )
-        # Generate contaminant plots if contaminants were detected
+        # Generate contaminant table if contaminants were detected
         # Note: Coverage filtering already applied when writing contaminants_tsv
         if contaminants_filtered and contaminants_tsv.exists():
-            run_contaminant_plot(
-                contaminants_tsv,
-                outprefix,
-                plot_suffix,
-                args.plot_html,
-            )
             run_contaminant_table(
                 contaminants_tsv,
                 outprefix,
