@@ -245,7 +245,7 @@ if (nrow(df_chrom) > 0) {
     )
 
   p_chrom_depth <- ggplot(df_chrom, aes(x = depth_mean, y = plot_order)) +
-    geom_col(aes(fill = fill_category), width = 0.8, alpha = 0.85) +
+    geom_col(aes(fill = fill_category), width = 0.8, alpha = 0.85, orientation = "y") +
     scale_fill_manual(values = sg_colors, name = "Subgenome") +
     scale_y_continuous(
       breaks = chrom_breaks$mid_pos,
@@ -326,7 +326,7 @@ p_breadth <- apply_legend_theme(p_breadth, text_pt = 6, key_pt = 6, tight = TRUE
 full_plot <- p_chrom_depth | (p_class_depth / p_breadth) +
   plot_layout(widths = c(1, 1))
 
-ggsave(out_pdf, plot = full_plot, width = 10, height = 7, units = "in", dpi = 300)
+ggsave(out_pdf, plot = full_plot, width = 7.2, height = 5, units = "in", dpi = 300)
 message("Depth overview plot saved to: ", out_pdf)
 
 # ----------------------------
@@ -388,7 +388,7 @@ if (plot_html) {
     p_chrom_depth_html <- ggplot(df_chrom_tooltip, aes(x = depth_mean, y = plot_order)) +
       ggiraph::geom_col_interactive(
         aes(fill = fill_category, tooltip = tooltip),
-        width = 0.8, alpha = 0.85
+        width = 0.8, alpha = 0.85, orientation = "y"
       ) +
       scale_fill_manual(values = sg_colors, name = "Subgenome") +
       scale_y_continuous(
@@ -419,7 +419,7 @@ if (plot_html) {
   full_plot_html <- p_chrom_depth_html | (p_class_depth_html / p_breadth) +
     plot_layout(widths = c(1, 1))
 
-  girafe_obj <- ggiraph::girafe(ggobj = full_plot_html, width_svg = 10, height_svg = 7)
+  girafe_obj <- ggiraph::girafe(ggobj = full_plot_html, width_svg = 7.2, height_svg = 5)
   girafe_obj <- ggiraph::girafe_options(
     girafe_obj,
     opts_tooltip(css = paste0(
