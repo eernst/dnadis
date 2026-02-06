@@ -1111,7 +1111,7 @@ if (plot_html) {
     full_plot_html <- (p_comp_html | p_id / p_placeholder) + plot_layout(widths = c(7, 3), heights = c(1, 1))
   }
 
-  girafe_obj <- ggiraph::girafe(ggobj = full_plot_html)
+  girafe_obj <- ggiraph::girafe(ggobj = full_plot_html, width_svg = 7.2, height_svg = 7.2)
   girafe_obj <- ggiraph::girafe_options(
     girafe_obj,
     opts_tooltip(css = paste0(
