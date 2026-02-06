@@ -182,7 +182,7 @@ if (n_sets > 8) {
 has_subgenomes <- (n_sets >= 2)
 
 # Okabe-Ito colorblind-friendly palette for subgenomes (up to 8)
-# Sky blue and black are placed last as they have lower contrast
+# Sky blue (low contrast) and black (achromatic) are placed last
 oi <- palette_okabe_ito()
 pal_dark <- c(
   oi[1],  # orange

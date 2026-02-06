@@ -202,7 +202,7 @@ if (nrow(df_chrom) > 0) {
     sort()
 
   # Okabe-Ito palette for subgenomes (up to 8, matches chromosome_overview)
-  # Sky blue and black are placed last as they have lower contrast
+  # Sky blue (low contrast) and black (achromatic) are placed last
   oi <- palette_okabe_ito()
   pal_subgenome <- c(
     oi[1],  # orange
