@@ -180,33 +180,35 @@ df_depth <- df %>%
   arrange(display_class, chrom_num, assigned_chrom_id, desc(length_mb))
 
 # ----------------------------
-# Top: Mean depth by classification (box + violin)
+# Right top: Mean depth by classification (box + violin)
 # Organelles (chrC and chrM) are plotted separately
+# TRANSPOSED: depth on x-axis, classification on y-axis
 # ----------------------------
-p_class_depth <- ggplot(df_depth, aes(x = display_class, y = depth_mean, fill = display_class)) +
+p_class_depth <- ggplot(df_depth, aes(x = depth_mean, y = display_class, fill = display_class)) +
   geom_violin(alpha = 0.5, scale = "width", width = 0.7) +
   geom_boxplot(alpha = 0.7, outlier.shape = NA, width = 0.3) +
-  geom_jitter(aes(color = display_class), width = 0.12, alpha = 0.5, size = 1.2, show.legend = FALSE) +
+  geom_jitter(aes(color = display_class), height = 0.12, alpha = 0.5, size = 1.2, show.legend = FALSE) +
   scale_fill_manual(values = classification_colors, drop = FALSE, guide = "none") +
   scale_color_manual(values = classification_colors, drop = FALSE) +
-  scale_x_discrete(
-    labels = function(x) str_replace_all(x, "_", "\n")
+  scale_y_discrete(
+    labels = function(x) str_replace_all(x, "_", " ")
   ) +
   theme_classic(base_family = base_family, base_size = base_font_pt) +
   axis_theme +
   theme(
     plot.title = element_text(hjust = 0.5, size = base_font_pt, family = base_family),
-    axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, size = base_font_pt - 1),
-    panel.grid.major.y = element_line(color = "grey90", linewidth = 0.3)
+    axis.text.y = element_text(size = base_font_pt - 1),
+    panel.grid.major.x = element_line(color = "grey90", linewidth = 0.3)
   ) +
   labs(
     title = paste0("Read depth by classification (", plot_title_suffix, ")"),
-    x = "Classification",
-    y = "Mean read depth (x)"
+    x = "Mean read depth (x)",
+    y = "Classification"
   )
 
 # ----------------------------
-# Middle: Depth for chromosome-assigned contigs, ordered by chromosome
+# Left: Depth for chromosome-assigned contigs, ordered by chromosome
+# TRANSPOSED: depth on x-axis, chromosomes on y-axis (horizontal bars)
 # ----------------------------
 df_chrom <- df_depth %>%
   filter(classification == "chrom_assigned") %>%
@@ -227,7 +229,7 @@ df_chrom <- df_depth %>%
   mutate(plot_order = row_number())
 
 if (nrow(df_chrom) > 0) {
-  # Create x-axis breaks at chromosome boundaries
+  # Create y-axis breaks at chromosome boundaries
   chrom_breaks <- df_chrom %>%
     group_by(chrom_label) %>%
     summarise(mid_pos = mean(plot_order), .groups = "drop")
@@ -242,10 +244,10 @@ if (nrow(df_chrom) > 0) {
       )
     )
 
-  p_chrom_depth <- ggplot(df_chrom, aes(x = plot_order, y = depth_mean)) +
+  p_chrom_depth <- ggplot(df_chrom, aes(x = depth_mean, y = plot_order)) +
     geom_col(aes(fill = fill_category), width = 0.8, alpha = 0.85) +
     scale_fill_manual(values = sg_colors, name = "Subgenome") +
-    scale_x_continuous(
+    scale_y_continuous(
       breaks = chrom_breaks$mid_pos,
       labels = str_replace(chrom_breaks$chrom_label, "^chr", ""),
       expand = expansion(mult = c(0.01, 0.01))
@@ -254,14 +256,14 @@ if (nrow(df_chrom) > 0) {
     axis_theme +
     theme(
       plot.title = element_text(hjust = 0.5, size = base_font_pt, family = base_family),
-      axis.text.x = element_text(size = base_font_pt - 1),
-      panel.grid.major.y = element_line(color = "grey90", linewidth = 0.3),
+      axis.text.y = element_text(size = base_font_pt - 1),
+      panel.grid.major.x = element_line(color = "grey90", linewidth = 0.3),
       legend.position = "top"
     ) +
     labs(
       title = "Chromosome contig depth",
-      x = "Chromosome",
-      y = "Mean depth (x)"
+      x = "Mean depth (x)",
+      y = "Chromosome"
     )
 
   p_chrom_depth <- apply_legend_theme(p_chrom_depth, text_pt = 6, key_pt = 6, tight = TRUE) +
@@ -273,8 +275,9 @@ if (nrow(df_chrom) > 0) {
 }
 
 # ----------------------------
-# Bottom: Breadth coverage (1x and 10x) by classification
+# Right bottom: Breadth coverage (1x and 10x) by classification
 # Organelles (chrC and chrM) are plotted separately
+# TRANSPOSED: breadth on x-axis, classification on y-axis
 # ----------------------------
 df_breadth <- df_depth %>%
   select(contig, classification, display_class, depth_breadth_1x, depth_breadth_10x) %>%
@@ -292,25 +295,25 @@ df_breadth <- df_depth %>%
     metric = factor(metric, levels = c(">=1x", ">=10x"))
   )
 
-p_breadth <- ggplot(df_breadth, aes(x = display_class, y = breadth, fill = metric)) +
+p_breadth <- ggplot(df_breadth, aes(x = breadth, y = display_class, fill = metric)) +
   geom_boxplot(alpha = 0.7, position = position_dodge(width = 0.75), width = 0.6, outlier.size = 0.8) +
   scale_fill_manual(values = c(">=1x" = "#66C2A5", ">=10x" = "#1F77B4"), name = "Coverage") +
-  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2), labels = scales::percent) +
-  scale_x_discrete(
-    labels = function(x) str_replace_all(x, "_", "\n")
+  scale_x_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2), labels = scales::percent) +
+  scale_y_discrete(
+    labels = function(x) str_replace_all(x, "_", " ")
   ) +
   theme_classic(base_family = base_family, base_size = base_font_pt) +
   axis_theme +
   theme(
     plot.title = element_text(hjust = 0.5, size = base_font_pt, family = base_family),
-    axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, size = base_font_pt - 1),
-    panel.grid.major.y = element_line(color = "grey90", linewidth = 0.3),
+    axis.text.y = element_text(size = base_font_pt - 1),
+    panel.grid.major.x = element_line(color = "grey90", linewidth = 0.3),
     legend.position = "top"
   ) +
   labs(
     title = "Coverage breadth by classification",
-    x = "Classification",
-    y = "Fraction of bases covered"
+    x = "Fraction of bases covered",
+    y = "Classification"
   )
 
 p_breadth <- apply_legend_theme(p_breadth, text_pt = 6, key_pt = 6, tight = TRUE) +
@@ -318,18 +321,19 @@ p_breadth <- apply_legend_theme(p_breadth, text_pt = 6, key_pt = 6, tight = TRUE
 
 # ----------------------------
 # Combine plots
+# Layout: chromosome depth on LEFT, classification depth and breadth STACKED on RIGHT
 # ----------------------------
-full_plot <- p_class_depth / p_chrom_depth / p_breadth +
-  plot_layout(heights = c(1, 1, 1))
+full_plot <- p_chrom_depth | (p_class_depth / p_breadth) +
+  plot_layout(widths = c(1, 1))
 
-ggsave(out_pdf, plot = full_plot, width = 8, height = 10, units = "in", dpi = 300)
+ggsave(out_pdf, plot = full_plot, width = 10, height = 7, units = "in", dpi = 300)
 message("Depth overview plot saved to: ", out_pdf)
 
 # ----------------------------
 # Interactive HTML version
 # ----------------------------
 if (plot_html) {
-  # Top plot with tooltips
+  # Right top plot with tooltips (transposed)
   df_depth_tooltip <- df_depth %>%
     mutate(
       tooltip = paste0(
@@ -343,33 +347,33 @@ if (plot_html) {
       )
     )
 
-  p_class_depth_html <- ggplot(df_depth_tooltip, aes(x = display_class, y = depth_mean, fill = display_class)) +
+  p_class_depth_html <- ggplot(df_depth_tooltip, aes(x = depth_mean, y = display_class, fill = display_class)) +
     geom_violin(alpha = 0.5, scale = "width", width = 0.7) +
     geom_boxplot(alpha = 0.7, outlier.shape = NA, width = 0.3) +
     ggiraph::geom_point_interactive(
       aes(color = display_class, tooltip = tooltip),
-      position = position_jitter(width = 0.12),
+      position = position_jitter(height = 0.12),
       alpha = 0.5, size = 1.2, show.legend = FALSE
     ) +
     scale_fill_manual(values = classification_colors, drop = FALSE, guide = "none") +
     scale_color_manual(values = classification_colors, drop = FALSE) +
-    scale_x_discrete(
-      labels = function(x) str_replace_all(x, "_", "\n")
+    scale_y_discrete(
+      labels = function(x) str_replace_all(x, "_", " ")
     ) +
     theme_classic(base_family = base_family, base_size = base_font_pt) +
     axis_theme +
     theme(
       plot.title = element_text(hjust = 0.5, size = base_font_pt, family = base_family),
-      axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, size = base_font_pt - 1),
-      panel.grid.major.y = element_line(color = "grey90", linewidth = 0.3)
+      axis.text.y = element_text(size = base_font_pt - 1),
+      panel.grid.major.x = element_line(color = "grey90", linewidth = 0.3)
     ) +
     labs(
       title = paste0("Read depth by classification (", plot_title_suffix, ")"),
-      x = "Classification",
-      y = "Mean read depth (x)"
+      x = "Mean read depth (x)",
+      y = "Classification"
     )
 
-  # Chromosome depth with tooltips
+  # Left chromosome depth plot with tooltips (transposed)
   if (nrow(df_chrom) > 0) {
     df_chrom_tooltip <- df_chrom %>%
       mutate(
@@ -381,13 +385,13 @@ if (plot_html) {
         )
       )
 
-    p_chrom_depth_html <- ggplot(df_chrom_tooltip, aes(x = plot_order, y = depth_mean)) +
+    p_chrom_depth_html <- ggplot(df_chrom_tooltip, aes(x = depth_mean, y = plot_order)) +
       ggiraph::geom_col_interactive(
         aes(fill = fill_category, tooltip = tooltip),
         width = 0.8, alpha = 0.85
       ) +
       scale_fill_manual(values = sg_colors, name = "Subgenome") +
-      scale_x_continuous(
+      scale_y_continuous(
         breaks = chrom_breaks$mid_pos,
         labels = str_replace(chrom_breaks$chrom_label, "^chr", ""),
         expand = expansion(mult = c(0.01, 0.01))
@@ -396,14 +400,14 @@ if (plot_html) {
       axis_theme +
       theme(
         plot.title = element_text(hjust = 0.5, size = base_font_pt, family = base_family),
-        axis.text.x = element_text(size = base_font_pt - 1),
-        panel.grid.major.y = element_line(color = "grey90", linewidth = 0.3),
+        axis.text.y = element_text(size = base_font_pt - 1),
+        panel.grid.major.x = element_line(color = "grey90", linewidth = 0.3),
         legend.position = "top"
       ) +
       labs(
         title = "Chromosome contig depth",
-        x = "Chromosome",
-        y = "Mean depth (x)"
+        x = "Mean depth (x)",
+        y = "Chromosome"
       )
 
     p_chrom_depth_html <- apply_legend_theme(p_chrom_depth_html, text_pt = 6, key_pt = 6, tight = TRUE) +
@@ -412,10 +416,10 @@ if (plot_html) {
     p_chrom_depth_html <- p_chrom_depth
   }
 
-  full_plot_html <- p_class_depth_html / p_chrom_depth_html / p_breadth +
-    plot_layout(heights = c(1, 1, 1))
+  full_plot_html <- p_chrom_depth_html | (p_class_depth_html / p_breadth) +
+    plot_layout(widths = c(1, 1))
 
-  girafe_obj <- ggiraph::girafe(ggobj = full_plot_html, width_svg = 8, height_svg = 10)
+  girafe_obj <- ggiraph::girafe(ggobj = full_plot_html, width_svg = 10, height_svg = 7)
   girafe_obj <- ggiraph::girafe_options(
     girafe_obj,
     opts_tooltip(css = paste0(
