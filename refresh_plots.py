@@ -154,6 +154,15 @@ def build_placeholder_values(
     non_path = extract_non_path_placeholders(template_text, generated_text)
     values.update(non_path)
 
+    # Defaults for placeholders that couldn't be extracted
+    # (e.g., when template structure changed since script was generated)
+    defaults = {
+        "__PLOTHTML__": "TRUE",
+    }
+    for placeholder, default in defaults.items():
+        if placeholder in template_text and placeholder not in values:
+            values[placeholder] = default
+
     return values
 
 

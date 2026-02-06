@@ -102,9 +102,9 @@ if (n_sets > 8) {
 # Sky blue (low contrast) and black (achromatic) are placed last
 oi <- palette_okabe_ito()
 pal_subgenome <- c(
+  oi[5],  # blue
   oi[1],  # orange
   oi[3],  # bluish green
-  oi[5],  # blue
   oi[6],  # vermillion
   oi[7],  # reddish purple
   oi[4],  # yellow
