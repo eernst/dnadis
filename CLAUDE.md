@@ -78,6 +78,8 @@ pytest -m "not integration"
 final_finalizer/
 ├── models.py              # Data models (Block, Chain, ContigClassification, etc.)
 ├── cli.py                 # Main entry point and argument parsing
+├── data/                  # Bundled reference data
+│   └── rfam/              # Rfam 15.0 subset: eukaryotic rRNA covariance models (auto-pressed on first use)
 ├── alignment/             # Alignment and synteny block building
 │   ├── external_tools.py  # Wrappers for miniprot, minimap2, gffread, BLAST
 │   ├── chain_parsing.py   # PAF/miniprot parsing → synteny blocks (O(n log n) interval tree)
@@ -87,6 +89,7 @@ final_finalizer/
 ├── detection/             # Feature detection modules
 │   ├── organelle.py       # chrC/chrM detection via BLAST
 │   ├── rdna.py            # rDNA detection via BLAST
+│   ├── rdna_consensus.py  # Consensus 45S rDNA building and sub-feature annotation
 │   ├── debris.py          # Chromosome debris detection via minimap2
 │   └── contaminant.py     # Centrifuger taxonomic classification
 ├── analysis/              # Read depth analysis
@@ -202,6 +205,10 @@ The permissive parameters are balanced by downstream filtering (identity thresho
 
 **Reference length normalization**: `reference_utils.py:normalize_ref_lengths()` filters out organelles (chrC/chrM) and unlocalized scaffolds (chr*_random) from nuclear chromosome length calculations. This ensures `--chr-like-minlen` thresholds are computed correctly.
 
+**rDNA consensus building**: When `--build-rdna-consensus` is enabled, the tool builds a species-specific 45S rDNA consensus from the query assembly and annotates rRNA sub-features (18S, 5.8S, 25S/28S, ITS1, ITS2). Sub-feature annotation uses Infernal/cmscan with bundled Rfam 15.0 covariance models for structure-based boundary detection. The bundled Rfam database (`data/rfam/euk-rrna.cm`) contains 4 eukaryotic rRNA models (5S, 5.8S, 18S, 28S) and is automatically pressed (indexed) on first use. Requires Infernal (`conda install -c bioconda infernal`). Output includes a GFF3 file (`*.rdna_annotations.gff3`) with hierarchical features using proper Sequence Ontology terms (SO:0001637 for rRNA_gene, SO:0000252 for rRNA, SO:0000635 for ITS).
+
+**Rfam database auto-pressing**: The bundled Rfam covariance models are stored in text format and automatically pressed to binary indices (`.i1f`, `.i1i`, `.i1m`, `.i1p`) by Infernal on first use. The tool checks for existing indices and only presses if they're missing or outdated. This eliminates the need for manual database preparation.
+
 ## Testing Philosophy
 
 Tests are in `tests/` directory. 21 tests total:
@@ -225,6 +232,7 @@ Tests are in `tests/` directory. 21 tests total:
 - mosdepth - depth calculation
 - rasusa - FASTQ downsampling
 - centrifuger - contaminant detection
+- infernal (cmscan) - structure-based rRNA annotation with Rfam models (for --build-rdna-consensus)
 - Rscript (with ggplot2, dplyr, etc.) - visualization
 
 **Python packages**:
@@ -244,6 +252,9 @@ All external tools are called via subprocess with proper error handling. Use `ut
 - `*.macro_blocks.tsv` - Aggregated synteny macro-blocks
 - `*.ref_lengths.tsv` - Reference chromosome lengths
 - `*.contaminants.tsv` - Detailed contaminant summary with taxonomic lineage (if contaminants detected)
+
+**GFF3 outputs**:
+- `*.rdna_annotations.gff3` - Hierarchical rRNA gene annotations with 18S, 5.8S, 25S, ITS1, ITS2 sub-features (if `--build-rdna-consensus` used)
 
 **Visualization**:
 - `*.chromosome_overview.pdf` - Main synteny visualization

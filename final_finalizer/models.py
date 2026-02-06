@@ -233,6 +233,20 @@ class RdnaSubFeature:
 
 
 @dataclass
+class RdnaSubFeatureLocus:
+    """A sub-feature with coordinates mapped to a specific contig locus.
+
+    Attributes:
+        name: Feature name (e.g., "18S_rRNA", "ITS1", "5.8S_rRNA", "ITS2", "28S_rRNA")
+        start: Start position on contig (0-based)
+        end: End position on contig (0-based, exclusive)
+    """
+    name: str
+    start: int
+    end: int
+
+
+@dataclass
 class RdnaConsensus:
     """Consensus 45S rDNA repeat unit derived from the query assembly.
 
@@ -269,7 +283,7 @@ class RdnaLocus:
         identity: Alignment identity to consensus (0.0-1.0)
         consensus_coverage: Fraction of consensus covered (0.0-1.0)
         copy_type: "full", "partial", or "fragment"
-        sub_features: List of sub-feature names present (e.g., ["18S", "5.8S", "28S"])
+        sub_feature_loci: List of sub-features with mapped contig coordinates
         is_nor_candidate: True if part of a tandem cluster of >= min_tandem copies
     """
     contig: str
@@ -279,8 +293,13 @@ class RdnaLocus:
     identity: float
     consensus_coverage: float
     copy_type: str
-    sub_features: List[str]
+    sub_feature_loci: List[RdnaSubFeatureLocus]
     is_nor_candidate: bool
+
+    @property
+    def sub_features(self) -> List[str]:
+        """Return list of sub-feature names for backward compatibility."""
+        return [sf.name for sf in self.sub_feature_loci]
 
 
 @dataclass

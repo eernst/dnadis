@@ -13,6 +13,7 @@
 - **Subgenome resolution** for polyploid genomes with multiple chromosome sets
 - **Organelle detection** (chloroplast/chrC, mitochondrion/chrM) via BLAST
 - **rDNA contig identification** via BLAST against reference rDNA
+- **rDNA consensus building and annotation** (optional) with structure-based sub-feature detection (18S, 5.8S, 25S, ITS1, ITS2) using Infernal/Rfam
 - **Contaminant screening** via centrifuger taxonomic classification
 - **Debris detection** for assembly fragments (chromosome debris, organelle debris)
 - **Chimera flagging** for contigs with evidence from multiple chromosomes
@@ -41,6 +42,7 @@
 - [rasusa](https://github.com/mbhall88/rasusa) - FASTQ downsampling for depth analysis
 - [centrifuger](https://github.com/mourisl/centrifuger) - contaminant detection
 - [taxonkit](https://github.com/shenwei356/taxonkit) + NCBI taxonomy database - taxonomic lineage for contaminant table (see below)
+- [infernal](http://eddylab.org/infernal/) - structure-based rRNA annotation with Rfam covariance models (for `--build-rdna-consensus`; bundled Rfam database)
 - R with ggplot2, dplyr, readr, stringr, tibble, tidyr, patchwork, ggnewscale, pacman - visualization (`--plot`)
 - R with ggiraph, htmlwidgets, pandoc - interactive visualization (`--plot-html`)
 
@@ -62,6 +64,11 @@ conda install -n final_finalizer -c bioconda samtools mosdepth rasusa
 Optional (plotting):
 ```bash
 conda install -n final_finalizer -c conda-forge r-base r-ggplot2 r-dplyr r-readr r-stringr r-tibble r-tidyr r-patchwork r-ggnewscale r-pacman r-ggiraph r-htmlwidgets r-scales libxml2 pandoc
+```
+
+Optional (Infernal for rDNA sub-feature annotation):
+```bash
+conda install -n final_finalizer -c bioconda infernal
 ```
 
 Optional (taxonkit for contaminant table taxonomic lineage):
@@ -139,6 +146,7 @@ Latest tested conda package versions (CI):
 | `--chrC-ref` | Chloroplast reference FASTA (default: extract from --ref) |
 | `--chrM-ref` | Mitochondrion reference FASTA (default: extract from --ref) |
 | `--rdna-ref` | rDNA reference FASTA, or 'default' for bundled Arabidopsis 45S |
+| `--build-rdna-consensus` | Build consensus 45S rDNA from query assembly, annotate sub-features (18S/5.8S/25S/ITS), and output GFF3 annotations |
 | `--centrifuger-idx` | Centrifuger index prefix for contaminant screening |
 
 ### Read depth analysis
@@ -206,6 +214,7 @@ Read type to minimap2 preset mapping:
 | `*.segments.tsv` | Individual synteny segments |
 | `*.macro_blocks.tsv` | Aggregated synteny macro-blocks |
 | `*.ref_lengths.tsv` | Reference chromosome lengths |
+| `*.rdna_annotations.gff3` | Hierarchical rRNA gene annotations with 18S, 5.8S, 25S, ITS1, ITS2 sub-features (if `--build-rdna-consensus` used) |
 
 ### Key columns in `contig_summary.tsv`
 
@@ -258,6 +267,34 @@ The tool runs these phases in order:
 11. **Final classification** - Assign all contigs to categories with confidence levels
 12. **Read depth analysis** (optional) - Align reads and compute per-contig depth metrics
 13. **Output generation** - Write classified FASTAs, summary tables, and visualizations
+
+## rDNA Consensus and Annotation
+
+When `--build-rdna-consensus` is enabled, the tool builds a species-specific consensus 45S rDNA sequence from the query assembly and uses it to annotate ribosomal RNA genes with accurate sub-feature boundaries.
+
+**Pipeline:**
+1. Extract rDNA-containing regions from the assembly using BLAST against a reference 45S sequence
+2. Self-align extracted regions to detect repeat periodicity
+3. Cluster individual copies and select a consensus representative
+4. Annotate rRNA sub-features (18S, 5.8S, 25S/28S) and internal transcribed spacers (ITS1, ITS2) using Infernal/cmscan with Rfam covariance models
+5. Write GFF3 file with hierarchical feature structure (rRNA_gene parent with rRNA and ITS children)
+
+**Sub-feature annotation:**
+Uses Infernal covariance models from Rfam 15.0 for structure-based rRNA boundary detection. Provides accurate gene boundaries based on conserved secondary structure. Bundled models (5S, 5.8S, 18S, 28S) are stored in `final_finalizer/data/rfam/euk-rrna.cm` and automatically pressed (indexed) on first use.
+
+**Output files:**
+- `*.rdna_annotations.gff3`: Hierarchical GFF3 with proper Sequence Ontology terms (SO:0001637 for rRNA_gene, SO:0000252 for rRNA, SO:0000635 for ITS)
+- Each rRNA locus includes properly nested child features for 18S, ITS1, 5.8S, ITS2, and 25S (or 28S)
+
+**Dependencies:**
+- Required: BLAST+ (makeblastdb, blastn) for locus detection
+- Required: [Infernal](http://eddylab.org/infernal/) for sub-feature annotation (install via conda: `conda install -c bioconda infernal`)
+
+**Use cases:**
+- Locate nucleolar organizer regions (NORs) on chromosomes
+- Quantify rDNA copy number across the genome
+- Generate species-specific probe for improved rDNA detection
+- Annotate rRNA gene boundaries for downstream analysis
 
 ## Contig Classification Categories
 
@@ -669,6 +706,9 @@ If you use this tool, please cite:
 - [gffread](https://github.com/gpertea/gffread)
 - [centrifuger](https://github.com/mourisl/centrifuger) (if used)
 - [taxonkit](https://github.com/shenwei356/taxonkit) (if used for contaminant visualization)
+- [Infernal](http://eddylab.org/infernal/) and [Rfam](https://rfam.org/) (if `--build-rdna-consensus` used for rRNA annotation):
+  - Nawrocki EP, Eddy SR (2013). Infernal 1.1: 100-fold faster RNA homology searches. Bioinformatics, 29(22):2933-2935. https://doi.org/10.1093/bioinformatics/btt509
+  - Kalvari I, et al. (2021). Rfam 14: expanded coverage of metagenomic, viral and microRNA families. Nucleic Acids Research, 49(D1):D192-D200. https://doi.org/10.1093/nar/gkaa1047
 
 ## License
 

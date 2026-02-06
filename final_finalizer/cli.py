@@ -118,6 +118,7 @@ from final_finalizer.output.tsv_output import (
     write_contig_summary_tsv,
     write_contaminant_summary_tsv,
     write_macro_blocks_tsv,
+    write_rdna_annotations_gff3,
     write_rdna_annotations_tsv,
 )
 from final_finalizer.output.plotting import (
@@ -1211,6 +1212,16 @@ def main():
                     classifications=clf_lookup,
                 )
                 logger.done(f"rDNA annotations:  {rdna_annotations_tsv} ({len(rdna_loci)} loci)")
+
+                # Write GFF3 annotations (with sub-feature coordinates)
+                rdna_annotations_gff3 = Path(str(outprefix) + ".rdna_annotations.gff3")
+                write_rdna_annotations_gff3(
+                    output_path=rdna_annotations_gff3,
+                    loci=rdna_loci,
+                    query_lengths=query_lengths,
+                    classifications=clf_lookup,
+                )
+                logger.done(f"rDNA GFF3:         {rdna_annotations_gff3}")
         else:
             logger.warning("rDNA consensus building did not produce a result")
     elif getattr(args, 'build_rdna_consensus', False) and args.skip_rdna:

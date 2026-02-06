@@ -16,6 +16,7 @@ For information on log files, see the `--log-file` option in the main [README](.
 | `*.macro_blocks.tsv` | Aggregated synteny chains/macro-blocks |
 | `*.ref_lengths.tsv` | Reference chromosome lengths |
 | `*.contaminants.tsv` | Detailed contaminant summary with taxonomic lineage (if contaminants detected) |
+| `*.rdna_annotations.gff3` | Hierarchical rRNA gene annotations with sub-features (if `--build-rdna-consensus` used) |
 
 ### Visualization Files (when --plot enabled)
 
@@ -447,6 +448,95 @@ awk -F'\t' '$1=="contig_name"' output.evidence_summary.tsv
 # Find contigs with evidence to multiple subgenomes
 awk -F'\t' 'NR>1 {print $1}' output.evidence_summary.tsv | sort | uniq -c | awk '$1>1'
 ```
+
+---
+
+## rdna_annotations.gff3
+
+Hierarchical GFF3 file containing rRNA gene annotations with sub-feature boundaries. Generated when `--build-rdna-consensus` is used.
+
+### File Format
+
+Standard GFF3 format with hierarchical parent-child relationships:
+- **Parent features**: `rRNA_gene` (SO:0001637) representing each rDNA locus
+- **Child features**: `rRNA` (SO:0000252) for 18S, 5.8S, 25S/28S; `intron` (SO:0000188) for ITS1, ITS2
+
+### GFF3 Columns
+
+| Column | Description |
+|--------|-------------|
+| seqid | Contig name (chromosome-assigned contigs use new names, e.g., `chr5A`) |
+| source | `final_finalizer` |
+| type | Feature type: `rRNA_gene`, `rRNA`, or `intron` |
+| start | 1-based start coordinate |
+| end | 1-based end coordinate (inclusive) |
+| score | Alignment score or bit score (`.` if not applicable) |
+| strand | `+` or `-` |
+| phase | `.` (not used for rRNA features) |
+| attributes | Semicolon-separated key=value pairs (see below) |
+
+### Attributes
+
+**Parent rRNA_gene features:**
+- `ID`: Unique identifier (e.g., `rRNA_gene_chr5A_1`)
+- `Name`: Descriptive name (e.g., `45S_rDNA_unit`)
+- `Note`: Free-text description
+- `classification`: Contig classification category (e.g., `chrom_assigned`, `rDNA`)
+
+**Child rRNA features:**
+- `ID`: Unique identifier (e.g., `rRNA_18S_chr5A_1_1`)
+- `Parent`: Parent rRNA_gene ID
+- `Name`: Sub-feature name (e.g., `18S`, `5.8S`, `25S`, `28S`)
+- `product`: Standard rRNA product name (e.g., `18S ribosomal RNA`)
+- `gene_biotype`: `rRNA`
+
+**Child intron features (ITS):**
+- `ID`: Unique identifier (e.g., `ITS1_chr5A_1_1`)
+- `Parent`: Parent rRNA_gene ID
+- `Name`: ITS name (e.g., `ITS1`, `ITS2`)
+- `Note`: Description (e.g., `internal transcribed spacer 1`)
+
+### Coordinate System
+
+- Coordinates are **1-based, fully-closed intervals** following GFF3 specification
+- Sub-features are ordered 5' to 3' within each locus: 18S → ITS1 → 5.8S → ITS2 → 25S (or 28S)
+- Strand indicates the orientation of the rDNA unit relative to the contig
+
+### Sub-feature Annotation Method
+
+Sub-feature annotation uses Infernal with Rfam 15.0 covariance models for structure-based rRNA boundary detection:
+
+- Bundled models in `final_finalizer/data/rfam/euk-rrna.cm`: RF01960 (18S), RF00002 (5.8S), RF02543 (28S/25S)
+- Provides accurate gene boundaries based on conserved RNA secondary structure
+- Boundary coordinates derived from cmscan alignment output
+- Requires Infernal: `conda install -c bioconda infernal`
+
+### Example GFF3 Entry
+
+```gff3
+##gff-version 3
+chr5A	final_finalizer	rRNA_gene	125000	133500	.	+	.	ID=rRNA_gene_chr5A_1;Name=45S_rDNA_unit;classification=chrom_assigned
+chr5A	final_finalizer	rRNA	125000	126800	.	+	.	ID=rRNA_18S_chr5A_1_1;Parent=rRNA_gene_chr5A_1;Name=18S;product=18S ribosomal RNA;gene_biotype=rRNA
+chr5A	final_finalizer	intron	126801	127000	.	+	.	ID=ITS1_chr5A_1_1;Parent=rRNA_gene_chr5A_1;Name=ITS1;Note=internal transcribed spacer 1
+chr5A	final_finalizer	rRNA	127001	127160	.	+	.	ID=rRNA_5.8S_chr5A_1_1;Parent=rRNA_gene_chr5A_1;Name=5.8S;product=5.8S ribosomal RNA;gene_biotype=rRNA
+chr5A	final_finalizer	intron	127161	127400	.	+	.	ID=ITS2_chr5A_1_1;Parent=rRNA_gene_chr5A_1;Name=ITS2;Note=internal transcribed spacer 2
+chr5A	final_finalizer	rRNA	127401	133500	.	+	.	ID=rRNA_25S_chr5A_1_1;Parent=rRNA_gene_chr5A_1;Name=25S;product=25S ribosomal RNA;gene_biotype=rRNA
+```
+
+### Use Cases
+
+- **Genome browser visualization**: Load GFF3 into IGV, JBrowse, or UCSC Genome Browser to visualize rDNA loci
+- **NOR identification**: Identify nucleolar organizer regions (clusters of rDNA repeats on specific chromosomes)
+- **Copy number analysis**: Count rRNA_gene features per chromosome
+- **Feature extraction**: Extract specific rRNA sub-sequences (e.g., 18S for phylogenetics) using GFF3 coordinates
+- **Comparative genomics**: Compare rDNA organization across assemblies or species
+
+### Notes
+
+- The file uses proper Sequence Ontology (SO) terms compatible with genome annotation standards
+- Contig names in the GFF3 match the renamed contigs in output FASTA files (e.g., chromosome-assigned contigs use new names like `chr5A`)
+- Multiple rDNA loci on the same contig are numbered sequentially (e.g., `rRNA_gene_chr5A_1`, `rRNA_gene_chr5A_2`)
+- The bundled Rfam database is a minimal subset containing only eukaryotic rRNA models relevant for 45S annotation
 
 ---
 

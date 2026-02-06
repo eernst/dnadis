@@ -830,3 +830,135 @@ def write_rdna_annotations_tsv(
                 clf,
             ]
             fh.write("\t".join(row) + "\n")
+
+
+# Sequence Ontology term mappings for rDNA sub-features
+_RDNA_SO_TERMS = {
+    "18S": "rRNA_18S",  # SO:0001000
+    "5.8S": "rRNA_5_8S",  # SO:0001001
+    "25S": "rRNA_28S",  # SO:0001002 (25S is the plant homolog of 28S)
+    "28S": "rRNA_28S",  # SO:0001002
+    "ITS1": "internal_transcribed_spacer_region",  # SO:0000372
+    "ITS2": "internal_transcribed_spacer_region",  # SO:0000372
+}
+
+
+def _escape_gff3_value(value: str) -> str:
+    """Escape special characters in GFF3 attribute values.
+
+    GFF3 requires URL-encoding of: tab, newline, semicolon, equals, percent, ampersand.
+    """
+    # Characters that need to be percent-encoded in GFF3
+    replacements = [
+        ("%", "%25"),  # Must be first
+        ("\t", "%09"),
+        ("\n", "%0A"),
+        ("\r", "%0D"),
+        (";", "%3B"),
+        ("=", "%3D"),
+        ("&", "%26"),
+        (",", "%2C"),
+    ]
+    for char, encoded in replacements:
+        value = value.replace(char, encoded)
+    return value
+
+
+def write_rdna_annotations_gff3(
+    output_path: Path,
+    loci: List[RdnaLocus],
+    query_lengths: Dict[str, int],
+    classifications: Optional[Dict[str, str]] = None,
+) -> None:
+    """Write rDNA annotation GFF3 with hierarchical feature structure.
+
+    Produces a properly formatted GFF3 file with:
+    - rRNA_gene features (SO:0001637) as parent features for each locus
+    - rRNA sub-features (18S, 5.8S, 28S) and ITS regions as children
+
+    GFF3 uses 1-based, fully-closed coordinates [start, end].
+
+    Args:
+        output_path: Path to output GFF3 file
+        loci: List of RdnaLocus annotations
+        query_lengths: Dict mapping contig name -> length (for ##sequence-region)
+        classifications: Optional dict mapping contig name -> classification string
+    """
+    # Get unique contigs from loci, sorted
+    contigs_with_loci = sorted(set(l.contig for l in loci))
+
+    with output_path.open("w") as fh:
+        # GFF3 header
+        fh.write("##gff-version 3\n")
+
+        # Write sequence-region pragmas for contigs with annotations
+        for contig in contigs_with_loci:
+            length = query_lengths.get(contig, 0)
+            if length > 0:
+                fh.write(f"##sequence-region {contig} 1 {length}\n")
+
+        # Write features sorted by contig and position
+        for locus in sorted(loci, key=lambda l: (l.contig, l.start)):
+            # Convert to 1-based GFF3 coordinates
+            gff_start = locus.start + 1  # Convert from 0-based to 1-based
+            gff_end = locus.end  # Already exclusive, so this is the last included base
+
+            # Build parent feature ID
+            parent_id = f"rRNA_gene_{locus.contig}_{gff_start}_{gff_end}"
+
+            # Build attributes for the parent rRNA_gene feature
+            attrs = [f"ID={_escape_gff3_value(parent_id)}"]
+            attrs.append(f"copy_type={locus.copy_type}")
+            attrs.append(f"identity={locus.identity:.4f}")
+            attrs.append(f"is_nor_candidate={'true' if locus.is_nor_candidate else 'false'}")
+
+            if classifications:
+                clf = classifications.get(locus.contig, "")
+                if clf:
+                    attrs.append(f"contig_classification={_escape_gff3_value(clf)}")
+
+            # Write parent feature (rRNA_gene)
+            fh.write("\t".join([
+                locus.contig,
+                "final_finalizer",
+                "rRNA_gene",  # SO:0001637
+                str(gff_start),
+                str(gff_end),
+                ".",  # score
+                locus.strand,
+                ".",  # phase (not applicable)
+                ";".join(attrs),
+            ]) + "\n")
+
+            # Write sub-features with mapped coordinates
+            for sf in locus.sub_feature_loci:
+                # Convert sub-feature coordinates to 1-based
+                sf_gff_start = sf.start + 1
+                sf_gff_end = sf.end  # Already exclusive
+
+                # Get SO term for this feature type
+                so_type = _RDNA_SO_TERMS.get(sf.name, "rRNA")
+
+                # Build sub-feature ID
+                sf_id = f"{sf.name}_{locus.contig}_{sf_gff_start}_{sf_gff_end}"
+
+                sf_attrs = [
+                    f"ID={_escape_gff3_value(sf_id)}",
+                    f"Parent={_escape_gff3_value(parent_id)}",
+                ]
+
+                # For ITS regions, add Name to distinguish ITS1 from ITS2
+                if sf.name in ("ITS1", "ITS2"):
+                    sf_attrs.append(f"Name={sf.name}")
+
+                fh.write("\t".join([
+                    locus.contig,
+                    "final_finalizer",
+                    so_type,
+                    str(sf_gff_start),
+                    str(sf_gff_end),
+                    ".",  # score
+                    locus.strand,
+                    ".",  # phase
+                    ";".join(sf_attrs),
+                ]) + "\n")

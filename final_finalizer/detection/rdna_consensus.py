@@ -33,7 +33,7 @@ from final_finalizer.detection.blast import (
     run_blastn_megablast,
     run_makeblastdb,
 )
-from final_finalizer.models import RdnaConsensus, RdnaLocus, RdnaSubFeature
+from final_finalizer.models import RdnaConsensus, RdnaLocus, RdnaSubFeature, RdnaSubFeatureLocus
 from final_finalizer.utils.io_utils import file_exists_and_valid, have_exe, merge_intervals
 from final_finalizer.utils.logging_config import get_logger
 from final_finalizer.utils.sequence_utils import (
@@ -512,266 +512,239 @@ def cluster_and_select_exemplar(
 
 
 # ---------------------------------------------------------------------------
-# Phase 4: Sub-feature annotation on the consensus
+# Phase 4: Sub-feature annotation using Infernal/Rfam
 # ---------------------------------------------------------------------------
 
-def _load_features_tsv(features_path: Path) -> List[RdnaSubFeature]:
-    """Load sub-feature coordinates from a TSV file.
+def _find_rfam_cm_database() -> Optional[Path]:
+    """Find the bundled Rfam covariance model database.
 
-    Format: feature_name<tab>start<tab>end (1-based inclusive)
+    Auto-presses the database if index files are missing.
 
     Returns:
-        List of RdnaSubFeature objects (converted to 0-based half-open)
+        Path to euk-rrna.cm if found and pressed, else None.
     """
-    features = []
-    with features_path.open("r") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            parts = line.split("\t")
-            if len(parts) < 3:
-                continue
-            name = parts[0]
-            try:
-                start = int(parts[1]) - 1  # Convert to 0-based
-                end = int(parts[2])  # Already exclusive in 0-based
-            except ValueError:
-                continue
-            features.append(RdnaSubFeature(name=name, start=start, end=end))
-    return features
+    import subprocess
+
+    # Look relative to this module
+    module_dir = Path(__file__).resolve().parent.parent
+    cm_path = module_dir / "data" / "rfam" / "euk-rrna.cm"
+
+    if not cm_path.exists():
+        return None
+
+    # Check if pressed (index files exist)
+    i1m_path = Path(str(cm_path) + ".i1m")
+    if i1m_path.exists():
+        return cm_path
+
+    # Auto-press the database
+    if not have_exe("cmpress"):
+        logger.warning(f"Rfam CM found but cmpress not available to create index")
+        return None
+
+    logger.info(f"Pressing Rfam CM database: {cm_path}")
+    try:
+        ret = subprocess.call(
+            ["cmpress", str(cm_path)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if ret == 0 and i1m_path.exists():
+            logger.info("Rfam CM database pressed successfully")
+            return cm_path
+        else:
+            logger.warning(f"cmpress failed with return code {ret}")
+            return None
+    except Exception as e:
+        logger.warning(f"Failed to press CM database: {e}")
+        return None
 
 
-def _find_default_features_tsv(script_dir: Path) -> Optional[Path]:
-    """Find the bundled Arabidopsis 45S features TSV."""
-    search_paths = [
-        script_dir / "data" / "athal-45s-features.tsv",
-        script_dir.parent / "data" / "athal-45s-features.tsv",
-    ]
-    for path in search_paths:
-        if path.exists():
-            return path
-    return None
-
-
-def annotate_sub_features(
+def annotate_sub_features_infernal(
     consensus_seq: str,
-    seed_ref_path: Path,
-    seed_features: List[RdnaSubFeature],
     work_dir: Path,
     threads: int,
+    cm_database: Optional[Path] = None,
 ) -> List[RdnaSubFeature]:
-    """Map sub-features from the seed reference onto the consensus.
+    """Annotate rRNA sub-features using Infernal covariance models.
 
-    Extracts the three rRNA subunit sequences (18S, 5.8S, 25S) from
-    the seed reference and BLASTs each individually against the
-    consensus.  This gives direct, per-subunit coordinate placement
-    that works across divergent species (unlike the previous approach
-    of linear projection from a single alignment).
+    Uses cmscan against Rfam models for structure-based annotation,
+    providing more accurate boundaries than homology-based projection.
 
-    ITS1 and ITS2 are defined as the gaps between the three subunits:
-      ITS1 = 18S end  →  5.8S start
-      ITS2 = 5.8S end →  25S start
+    The bundled Rfam database contains:
+    - RF00001: 5S_rRNA (not in 45S, but included for completeness)
+    - RF00002: 5_8S_rRNA
+    - RF01960: SSU_rRNA_eukarya (18S)
+    - RF02543: LSU_rRNA_eukarya (25S/28S)
 
-    Uses ``blastn -task blastn`` (word size 11) instead of megablast
-    so that even the short 5.8S (~164 bp) aligns reliably across
-    kingdoms.
+    ITS1 and ITS2 are derived as the gaps between rRNA genes.
 
     Args:
         consensus_seq: The consensus 45S sequence
-        seed_ref_path: Path to the seed rDNA reference FASTA
-        seed_features: Sub-feature coordinates on the seed reference
         work_dir: Working directory
         threads: Number of threads
+        cm_database: Optional path to CM database (auto-detected if None)
 
     Returns:
-        List of RdnaSubFeature with coordinates on the consensus
+        List of RdnaSubFeature with coordinates on the consensus,
+        or empty list if Infernal is unavailable or fails.
     """
+    import subprocess
+
+    # Check for cmscan
+    if not have_exe("cmscan"):
+        logger.info("cmscan not available; will use BLAST-based annotation")
+        return []
+
+    # Find CM database
+    if cm_database is None:
+        cm_database = _find_rfam_cm_database()
+    if cm_database is None:
+        logger.warning("Rfam CM database not found; will use BLAST-based annotation")
+        return []
+
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    # Identify the three rRNA subunit features from the seed features
-    rRNA_NAMES = ("18S", "5.8S", "25S")
-    subunit_feats = {f.name: f for f in seed_features if f.name in rRNA_NAMES}
-
-    if len(subunit_feats) < 3:
-        logger.warning(
-            f"Seed features must include 18S, 5.8S, and 25S; "
-            f"found {list(subunit_feats.keys())}"
-        )
-        return []
-
-    # Read seed reference sequence
-    seed_seqs = read_fasta_sequences(seed_ref_path)
-    if not seed_seqs:
-        logger.warning("Could not read seed reference FASTA")
-        return []
-    seed_seq = next(iter(seed_seqs.values()))
-
-    # Extract each subunit sequence from the seed and write as a
-    # multi-FASTA query
-    subunit_fasta = work_dir / "subunit_queries.fa"
-    subunit_seqs = {}
-    for name in rRNA_NAMES:
-        feat = subunit_feats[name]
-        subunit_seqs[name] = seed_seq[feat.start : feat.end]
-    write_fasta(subunit_seqs, subunit_fasta)
-
-    # Write consensus as BLAST database
-    consensus_fasta = work_dir / "consensus_for_annotation.fa"
+    # Write consensus sequence
+    consensus_fasta = work_dir / "consensus_for_infernal.fa"
     write_fasta({"rdna_consensus": consensus_seq}, consensus_fasta)
 
-    db_path = work_dir / "consensus_db"
-    run_makeblastdb(
-        consensus_fasta, db_path,
-        err_path=work_dir / "makeblastdb_consensus.err",
-    )
+    # Run cmscan
+    tbl_out = work_dir / "cmscan_rrna.tbl"
+    cmscan_out = work_dir / "cmscan_rrna.out"
+    err_path = work_dir / "cmscan.err"
 
-    # BLAST subunits against consensus using blastn (not megablast)
-    # for cross-species sensitivity
-    blast_out = work_dir / "subunits_vs_consensus.txt"
-    _run_blastn_subunits(
-        query_fasta=subunit_fasta,
-        db_path=db_path,
-        output_path=blast_out,
-        threads=threads,
-        err_path=work_dir / "blastn_subunits.err",
-    )
+    cmd = [
+        "cmscan",
+        "--cpu", str(threads),
+        "--tblout", str(tbl_out),
+        "-o", str(cmscan_out),
+        "--noali",  # Skip alignment output for speed
+        str(cm_database),
+        str(consensus_fasta),
+    ]
 
-    if not file_exists_and_valid(blast_out):
-        logger.warning("BLAST subunit annotation failed")
+    logger.info(f"Running Infernal cmscan for sub-feature annotation")
+
+    with err_path.open("wb") as err_fh:
+        ret = subprocess.call(cmd, stderr=err_fh)
+
+    if ret != 0:
+        logger.warning(f"cmscan failed with return code {ret}; falling back to BLAST")
         return []
 
-    # Parse best hit per subunit (highest bitscore)
-    best_hits: Dict[str, Tuple[int, int, float]] = {}  # name -> (cons_start, cons_end, bitscore)
+    if not file_exists_and_valid(tbl_out):
+        logger.warning("cmscan produced no output; falling back to BLAST")
+        return []
 
-    with blast_out.open("r") as fh:
+    # Parse tabular output
+    # Format: target_name accession query_name accession mdl mdl_from mdl_to seq_from seq_to strand ...
+    hits: Dict[str, Tuple[int, int, float]] = {}  # model_name -> (start, end, score)
+
+    # Model name mappings to our feature names
+    MODEL_TO_FEATURE = {
+        "SSU_rRNA_eukarya": "18S",
+        "5_8S_rRNA": "5.8S",
+        "LSU_rRNA_eukarya": "25S",
+        "5S_rRNA": "5S",  # Not in 45S but may appear
+    }
+
+    with tbl_out.open("r") as fh:
         for line in fh:
-            fields = line.rstrip("\n").split("\t")
-            if len(fields) < 12:
+            if line.startswith("#"):
                 continue
+            fields = line.split()
+            if len(fields) < 15:
+                continue
+
             try:
-                qname = fields[0]
-                sstart = int(fields[8])
-                send = int(fields[9])
-                bitscore = float(fields[11])
+                model_name = fields[0]
+                seq_from = int(fields[7])
+                seq_to = int(fields[8])
+                strand = fields[9]
+                score = float(fields[14])
+                inc = fields[16]  # '!' for significant, '?' for below threshold
             except (ValueError, IndexError):
                 continue
 
-            if qname not in rRNA_NAMES:
+            # Only use significant hits
+            if inc != "!":
                 continue
 
-            s_lo = min(sstart, send) - 1   # convert to 0-based
-            s_hi = max(sstart, send)
+            # Skip 5S (not part of 45S)
+            if model_name == "5S_rRNA":
+                continue
 
-            prev = best_hits.get(qname)
-            if prev is None or bitscore > prev[2]:
-                best_hits[qname] = (s_lo, s_hi, bitscore)
+            feature_name = MODEL_TO_FEATURE.get(model_name)
+            if feature_name is None:
+                continue
 
-    mapped = [name for name in rRNA_NAMES if name in best_hits]
-    if not mapped:
-        logger.warning("No subunit aligned to consensus")
+            # Normalize coordinates (cmscan outputs 1-based)
+            start = min(seq_from, seq_to) - 1  # Convert to 0-based
+            end = max(seq_from, seq_to)
+
+            # Keep best hit per model
+            prev = hits.get(feature_name)
+            if prev is None or score > prev[2]:
+                hits[feature_name] = (start, end, score)
+
+    if not hits:
+        logger.warning("No significant rRNA hits from cmscan")
         return []
 
-    # Build the feature list: 18S, ITS1, 5.8S, ITS2, 25S
+    # Build feature list
     result: List[RdnaSubFeature] = []
 
-    for name in rRNA_NAMES:
-        if name in best_hits:
-            s, e, _ = best_hits[name]
-            result.append(RdnaSubFeature(name=name, start=s, end=e))
+    for name in ("18S", "5.8S", "25S"):
+        if name in hits:
+            start, end, score = hits[name]
+            result.append(RdnaSubFeature(name=name, start=start, end=end))
+            logger.info(f"  {name:5s}: {start}-{end} ({end - start} bp, score={score:.1f})")
 
-    # Sort by start position so we can derive ITS regions
+    if not result:
+        return []
+
+    # Sort by position
     result.sort(key=lambda f: f.start)
 
-    # Insert ITS1 and ITS2 between adjacent subunits
-    # Expected order on the consensus: 18S ... 5.8S ... 25S
-    # (or reverse, depending on consensus phase)
+    # Derive ITS regions from gaps between rRNA genes
     rrna_by_name = {f.name: f for f in result}
     its_features: List[RdnaSubFeature] = []
 
     if "18S" in rrna_by_name and "5.8S" in rrna_by_name:
         f18s = rrna_by_name["18S"]
         f58s = rrna_by_name["5.8S"]
-        if f18s.end <= f58s.start:
+        if f18s.end < f58s.start:
             its_features.append(RdnaSubFeature(
                 name="ITS1", start=f18s.end, end=f58s.start,
             ))
-        elif f58s.end <= f18s.start:
+            logger.info(f"  ITS1 : {f18s.end}-{f58s.start} ({f58s.start - f18s.end} bp, derived)")
+        elif f58s.end < f18s.start:
             # Reverse order on consensus
             its_features.append(RdnaSubFeature(
                 name="ITS1", start=f58s.end, end=f18s.start,
             ))
+            logger.info(f"  ITS1 : {f58s.end}-{f18s.start} ({f18s.start - f58s.end} bp, derived)")
 
     if "5.8S" in rrna_by_name and "25S" in rrna_by_name:
         f58s = rrna_by_name["5.8S"]
         f25s = rrna_by_name["25S"]
-        if f58s.end <= f25s.start:
+        if f58s.end < f25s.start:
             its_features.append(RdnaSubFeature(
                 name="ITS2", start=f58s.end, end=f25s.start,
             ))
-        elif f25s.end <= f58s.start:
+            logger.info(f"  ITS2 : {f58s.end}-{f25s.start} ({f25s.start - f58s.end} bp, derived)")
+        elif f25s.end < f58s.start:
             its_features.append(RdnaSubFeature(
                 name="ITS2", start=f25s.end, end=f58s.start,
             ))
+            logger.info(f"  ITS2 : {f25s.end}-{f58s.start} ({f58s.start - f25s.end} bp, derived)")
 
     result.extend(its_features)
     result.sort(key=lambda f: f.start)
 
-    for f in result:
-        logger.info(f"  {f.name:5s}: {f.start}-{f.end} ({f.end - f.start} bp)")
-    logger.info(f"Mapped {len(result)} sub-features to consensus")
+    logger.info(f"Infernal annotated {len(result)} sub-features on consensus")
     return result
-
-
-def _run_blastn_subunits(
-    query_fasta: Path,
-    db_path: Path,
-    output_path: Path,
-    threads: int,
-    err_path: Optional[Path] = None,
-) -> None:
-    """Run blastn (not megablast) for cross-species rRNA subunit search.
-
-    Uses word_size=11 and evalue=1e-5 for sensitivity on short, conserved
-    sequences like the 5.8S rRNA (~164 bp).
-    """
-    import subprocess
-
-    # Check if output exists and is newer than inputs
-    if output_path.exists():
-        out_mtime = output_path.stat().st_mtime
-        input_mtime = max(query_fasta.stat().st_mtime,
-                          max(f.stat().st_mtime for f in db_path.parent.glob(f"{db_path.name}.n*"))
-                          if list(db_path.parent.glob(f"{db_path.name}.n*")) else 0)
-        if out_mtime >= input_mtime:
-            logger.info(f"BLAST subunit output exists, reusing: {output_path}")
-            return
-        logger.info(f"Inputs newer than BLAST output; re-running: {output_path}")
-
-    cmd = [
-        "blastn",
-        "-num_threads", str(threads),
-        "-task", "blastn",
-        "-db", str(db_path),
-        "-query", str(query_fasta),
-        "-evalue", "1e-5",
-        "-max_hsps", "5",
-        "-max_target_seqs", "1",
-        "-outfmt", "6 std staxids",
-        "-out", str(output_path),
-    ]
-
-    logger.info(f"Running blastn subunit annotation -> {output_path}")
-
-    if err_path:
-        err_path.parent.mkdir(parents=True, exist_ok=True)
-        with err_path.open("wb") as err_fh:
-            ret = subprocess.call(cmd, stderr=err_fh)
-    else:
-        ret = subprocess.call(cmd, stderr=subprocess.DEVNULL)
-
-    if ret != 0:
-        raise RuntimeError(f"blastn subunit annotation failed with return code {ret}")
 
 
 # ---------------------------------------------------------------------------
@@ -890,7 +863,7 @@ def annotate_contigs_with_consensus(
                 identity=locus_dict["identity"],
                 consensus_coverage=locus_dict["consensus_coverage"],
                 copy_type=locus_dict["copy_type"],
-                sub_features=locus_dict["sub_features"],
+                sub_feature_loci=locus_dict["sub_feature_loci"],
                 is_nor_candidate=False,  # Set below
             ))
 
@@ -989,19 +962,53 @@ def _merge_hits_into_loci(
         else:
             copy_type = "fragment"
 
-        # Determine which sub-features are present
-        present_features = []
+        # Determine which sub-features are present and map their coordinates
+        # to the contig using the BLAST hit alignment
+        sub_feature_loci: List[RdnaSubFeatureLocus] = []
         for feat in sub_features:
-            # Check if any hit overlaps this sub-feature on the consensus
+            # Collect contig coordinate intervals for this feature across all hits
+            contig_intervals = []
             for h in group:
                 if h["qstart"] <= feat.end and h["qend"] >= feat.start:
-                    # Compute overlap fraction
-                    overlap_start = max(h["qstart"], feat.start)
-                    overlap_end = min(h["qend"], feat.end)
-                    feat_len = feat.end - feat.start
-                    if feat_len > 0 and (overlap_end - overlap_start) / feat_len >= 0.5:
-                        present_features.append(feat.name)
-                        break
+                    # Clip feature coords to this hit's consensus span
+                    clip_start = max(feat.start, h["qstart"])
+                    clip_end = min(feat.end, h["qend"])
+                    if clip_end <= clip_start:
+                        continue
+
+                    # Map consensus coordinates to contig coordinates
+                    # The mapping depends on strand orientation
+                    if h["strand"] == "+":
+                        # Forward strand: contig coords increase with consensus coords
+                        contig_start = h["sstart"] + (clip_start - h["qstart"])
+                        contig_end = h["sstart"] + (clip_end - h["qstart"])
+                    else:
+                        # Reverse strand: contig coords decrease with consensus coords
+                        # For "-" strand, sstart < send but maps to reversed consensus
+                        contig_end = h["send"] - (clip_start - h["qstart"])
+                        contig_start = h["send"] - (clip_end - h["qstart"])
+
+                    if contig_end > contig_start:
+                        contig_intervals.append((contig_start, contig_end))
+
+            if contig_intervals:
+                # Merge overlapping intervals
+                merged, total_bp = merge_intervals(contig_intervals)
+                feat_len = feat.end - feat.start
+
+                # Check if we have at least 50% coverage of the feature
+                if feat_len > 0 and total_bp / feat_len >= 0.5:
+                    # Use the full merged extent as the feature bounds
+                    merged_start = min(iv[0] for iv in merged)
+                    merged_end = max(iv[1] for iv in merged)
+                    sub_feature_loci.append(RdnaSubFeatureLocus(
+                        name=feat.name,
+                        start=merged_start,
+                        end=merged_end,
+                    ))
+
+        # Sort sub-features by start position
+        sub_feature_loci.sort(key=lambda sf: sf.start)
 
         loci.append({
             "start": start,
@@ -1010,7 +1017,7 @@ def _merge_hits_into_loci(
             "identity": identity,
             "consensus_coverage": consensus_coverage,
             "copy_type": copy_type,
-            "sub_features": present_features,
+            "sub_feature_loci": sub_feature_loci,
         })
 
     return loci
@@ -1195,31 +1202,18 @@ def build_rdna_consensus(
     logger.info(f"Consensus: {len(consensus_seq)} bp, method={method}, "
                 f"{n_copies} copies extracted, {n_clustered} in cluster")
 
-    # Phase 4: Sub-feature annotation
-    logger.phase("rDNA consensus: Phase 4 - Annotate sub-features")
-    sub_features: List[RdnaSubFeature] = []
+    # Phase 4: Sub-feature annotation using Infernal/Rfam
+    logger.phase("rDNA consensus: Phase 4 - Annotate sub-features (Infernal)")
+    sub_features = annotate_sub_features_infernal(
+        consensus_seq=consensus_seq,
+        work_dir=work_dir / "annotation",
+        threads=threads,
+    )
 
-    # Load seed features
-    if rdna_ref_features_path and rdna_ref_features_path.exists():
-        seed_features = _load_features_tsv(rdna_ref_features_path)
-    else:
-        # Try bundled default
-        script_dir = Path(__file__).resolve().parent.parent
-        default_features = _find_default_features_tsv(script_dir)
-        if default_features:
-            seed_features = _load_features_tsv(default_features)
-            logger.info(f"Using default features: {default_features}")
-        else:
-            seed_features = []
-            logger.warning("No sub-feature annotation available")
-
-    if seed_features:
-        sub_features = annotate_sub_features(
-            consensus_seq=consensus_seq,
-            seed_ref_path=seed_ref_path,
-            seed_features=seed_features,
-            work_dir=work_dir / "annotation",
-            threads=threads,
+    if not sub_features:
+        logger.warning(
+            "Sub-feature annotation unavailable (requires Infernal: "
+            "conda install -c bioconda infernal)"
         )
 
     # Build RdnaConsensus object
