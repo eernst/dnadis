@@ -1303,6 +1303,7 @@ def main():
         if depth_stats:
             run_depth_plot(
                 summary_tsv,
+                ref_lengths_tsv,
                 outprefix,
                 plot_suffix,
                 args.plot_html,

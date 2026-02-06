@@ -97,6 +97,7 @@ def run_plot(
 
 def run_depth_plot(
     summary_tsv: Path,
+    ref_lengths_tsv: Path,
     outprefix: Path,
     plot_title_suffix: str,
     plot_html: bool,
@@ -109,6 +110,7 @@ def run_depth_plot(
 
     Args:
         summary_tsv: Path to contig_summary.tsv with depth columns
+        ref_lengths_tsv: Path to ref_lengths.tsv for subgenome colors
         outprefix: Output prefix for generated files
         plot_title_suffix: Suffix for plot titles
         plot_html: Whether to generate interactive HTML version
@@ -142,6 +144,7 @@ def run_depth_plot(
 
     filled = (
         tmpl.replace("__SUMMARY__", _esc(summary_tsv))
+        .replace("__REF__", _esc(ref_lengths_tsv))
         .replace("__OUTPDF__", _esc(plot_pdf))
         .replace("__OUTHTML__", _esc(plot_html_path))
         .replace("__PLOTHTML__", "TRUE" if plot_html else "FALSE")

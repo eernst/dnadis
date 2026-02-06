@@ -33,10 +33,11 @@ for (.fam in c("Helvetica Neue", "Helvetica", "Liberation Sans")) {
 }
 showtext_auto()
 
-summary_file <- "__SUMMARY__"
-out_pdf      <- "__OUTPDF__"
-out_html     <- "__OUTHTML__"
-plot_html    <- as.logical("__PLOTHTML__")
+summary_file  <- "__SUMMARY__"
+ref_file      <- "__REF__"
+out_pdf       <- "__OUTPDF__"
+out_html      <- "__OUTHTML__"
+plot_html     <- as.logical("__PLOTHTML__")
 plot_title_suffix <- "__SUFFIX__"
 base_font_pt <- 8
 axis_title_margin_pt <- 4
@@ -69,8 +70,9 @@ apply_legend_theme <- function(p, text_pt = base_font_pt, key_pt = base_font_pt,
   p + base
 }
 
-# Read summary data
+# Read summary and reference data
 df <- read_tsv(summary_file, show_col_types = FALSE)
+ref_lengths <- read_tsv(ref_file, show_col_types = FALSE)
 
 # Check if depth data is available
 has_depth <- "depth_mean" %in% names(df) && any(!is.na(df$depth_mean))
@@ -79,6 +81,42 @@ if (!has_depth) {
   message("No depth data available in summary file. Skipping depth plot generation.")
   quit(status = 0)
 }
+
+# Subgenome levels from reference (for consistent colors across all plots)
+sg_levels <- ref_lengths %>%
+  distinct(subgenome) %>%
+  pull(subgenome) %>%
+  as.character()
+sg_levels <- sg_levels[grepl("^[A-Z]$", sg_levels)]
+sg_levels <- sort(sg_levels)
+n_sets <- length(sg_levels)
+
+if (n_sets > 8) {
+  warning(paste0("Reference has ", n_sets, " subgenomes; plotting supports up to 8. ",
+                 "Will use first 8: ", paste(sg_levels[1:8], collapse = ",")))
+  sg_levels <- sg_levels[1:8]
+  n_sets <- 8
+}
+
+# Okabe-Ito palette for subgenomes (consistent with chromosome_overview)
+# Sky blue (low contrast) and black (achromatic) are placed last
+oi <- palette_okabe_ito()
+pal_subgenome <- c(
+  oi[1],  # orange
+  oi[3],  # bluish green
+  oi[5],  # blue
+  oi[6],  # vermillion
+  oi[7],  # reddish purple
+  oi[4],  # yellow
+  oi[2],  # sky blue
+  oi[8]   # black
+)
+sg_colors <- if (n_sets > 0) {
+  setNames(pal_subgenome[seq_len(n_sets)], sg_levels)
+} else {
+  c("G" = oi[5])  # Single genome fallback (blue)
+}
+sg_colors <- c(sg_colors, "NA" = oi[9])  # Gray for NA
 
 # Classification order for consistent display
 # Each classification is followed by its corresponding debris category
@@ -194,40 +232,7 @@ if (nrow(df_chrom) > 0) {
     group_by(chrom_label) %>%
     summarise(mid_pos = mean(plot_order), .groups = "drop")
 
-  # Discover unique subgenomes and build dynamic color palette
-  sg_levels <- df_chrom %>%
-    filter(!is.na(assigned_subgenome) & assigned_subgenome != "NA") %>%
-    distinct(assigned_subgenome) %>%
-    pull(assigned_subgenome) %>%
-    sort()
-
-  # Okabe-Ito palette for subgenomes (up to 8, matches chromosome_overview)
-  # Sky blue (low contrast) and black (achromatic) are placed last
-  oi <- palette_okabe_ito()
-  pal_subgenome <- c(
-    oi[1],  # orange
-    oi[3],  # bluish green
-    oi[5],  # blue
-    oi[6],  # vermillion
-    oi[7],  # reddish purple
-    oi[4],  # yellow
-    oi[2],  # sky blue
-    oi[8]   # black
-  )
-
-  sg_colors <- if (length(sg_levels) > 0) {
-    if (length(sg_levels) > 8) {
-      warning(paste0("Reference has ", length(sg_levels), " chromosome sets; plotting supports up to 8. ",
-                     "Will use first 8: ", paste(sg_levels[1:8], collapse=",")))
-      sg_levels <- sg_levels[1:8]
-    }
-    setNames(pal_subgenome[seq_along(sg_levels)], sg_levels)
-  } else {
-    c("G" = oi[5])  # Single genome fallback (blue)
-  }
-  sg_colors <- c(sg_colors, "NA" = oi[9])  # Gray for NA
-
-  # Color by subgenome
+  # Color by subgenome (using global sg_colors from reference)
   df_chrom <- df_chrom %>%
     mutate(
       fill_category = if_else(
