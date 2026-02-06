@@ -171,7 +171,7 @@ df_depth <- df %>%
       classification == "organelle_debris" & assigned_ref_id == "chrM" ~ "chrM_debris",
       TRUE ~ classification
     ),
-    display_class = factor(display_class, levels = classification_order),
+    display_class = factor(display_class, levels = rev(classification_order)),
     length_mb = as.numeric(length) / 1e6,
     # For chrom_assigned, create chrom_order for sorting
     chrom_num = as.integer(str_extract(assigned_chrom_id, "\\d+")),
@@ -247,7 +247,7 @@ if (nrow(df_chrom) > 0) {
   p_chrom_depth <- ggplot(df_chrom, aes(x = depth_mean, y = plot_order)) +
     geom_col(aes(fill = fill_category), width = 0.8, alpha = 0.85, orientation = "y") +
     scale_fill_manual(values = sg_colors, name = "Subgenome") +
-    scale_y_continuous(
+    scale_y_reverse(
       breaks = chrom_breaks$mid_pos,
       labels = str_replace(chrom_breaks$chrom_label, "^chr", ""),
       expand = expansion(mult = c(0.01, 0.01))
@@ -391,7 +391,7 @@ if (plot_html) {
         width = 0.8, alpha = 0.85, orientation = "y"
       ) +
       scale_fill_manual(values = sg_colors, name = "Subgenome") +
-      scale_y_continuous(
+      scale_y_reverse(
         breaks = chrom_breaks$mid_pos,
         labels = str_replace(chrom_breaks$chrom_label, "^chr", ""),
         expand = expansion(mult = c(0.01, 0.01))
