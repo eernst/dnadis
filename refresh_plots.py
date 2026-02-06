@@ -2,11 +2,11 @@
 """Re-render R plot scripts from current templates and optionally re-run them.
 
 Usage:
-    ./refresh_plots.py /path/to/run_folder              # refresh + run all
-    ./refresh_plots.py /path/to/run_folder --dry-run     # show what would change
-    ./refresh_plots.py /path/to/run_folder --no-run      # refresh scripts only
-    ./refresh_plots.py /path/to/run_folder --only bar    # refresh only matching scripts
-    ./refresh_plots.py /path/to/run_folder --only bar contigs  # multiple filters
+    ./refresh_plots.py /path/to/run_folder              # refresh + run changed
+    ./refresh_plots.py /path/to/run_folder --force      # refresh + run all
+    ./refresh_plots.py /path/to/run_folder --dry-run    # show what would change
+    ./refresh_plots.py /path/to/run_folder --no-run     # refresh scripts only
+    ./refresh_plots.py /path/to/run_folder --only bar   # only matching scripts
 """
 from __future__ import annotations
 
@@ -268,6 +268,11 @@ def main():
         help="Only refresh scripts whose suffix contains one of these substrings "
              "(e.g., 'bar' matches classification_summary_bar)",
     )
+    parser.add_argument(
+        "--force", "-f",
+        action="store_true",
+        help="Re-run scripts even if unchanged",
+    )
     args = parser.parse_args()
 
     run_dir = args.run_dir.resolve()
@@ -310,13 +315,20 @@ def main():
         print(f"\nDry run: {len(updated)} script(s) would be updated.")
         return
 
-    if not updated and not args.no_run:
-        print("\nNo scripts changed. Use Rscript directly to re-run existing scripts.")
+    if args.no_run:
         return
 
-    if updated and not args.no_run:
-        print(f"\nRe-running {len(updated)} updated script(s):")
-        for suffix, script_path in updated:
+    # Determine which scripts to run
+    if args.force:
+        to_run = scripts
+    elif updated:
+        to_run = updated
+    else:
+        print("\nNo scripts changed. Use --force to re-run anyway.")
+        return
+
+    print(f"\nRunning {len(to_run)} script(s):")
+    for suffix, script_path in to_run:
             run_script(script_path)
 
 
