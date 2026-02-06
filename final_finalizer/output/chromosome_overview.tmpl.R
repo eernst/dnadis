@@ -182,19 +182,17 @@ if (n_sets > 8) {
 has_subgenomes <- (n_sets >= 2)
 
 # Okabe-Ito colorblind-friendly palette for subgenomes (up to 8)
-# Use first 6 colors for subgenomes 1-6, then light blue (oi[2]) for 7, black (oi[8]) for 8
+# Sky blue and black are placed last as they have lower contrast
 oi <- palette_okabe_ito()
-# Subgenome order: orange, bluish green, blue, vermillion, reddish purple, yellow, sky blue, black
-# Reserve sky blue and black for subgenomes 7-8 as requested
 pal_dark <- c(
-  oi[1],  # 1: orange
-  oi[3],  # 2: bluish green
-  oi[5],  # 3: blue
-  oi[6],  # 4: vermillion
-  oi[7],  # 5: reddish purple
-  oi[4],  # 6: yellow
-  oi[2],  # 7: sky blue (reserved)
-  oi[8]   # 8: black (reserved)
+  oi[1],  # orange
+  oi[3],  # bluish green
+  oi[5],  # blue
+  oi[6],  # vermillion
+  oi[7],  # reddish purple
+  oi[4],  # yellow
+  oi[2],  # sky blue
+  oi[8]   # black
 )
 # Light variants for reference lines and segments
 pal_light <- lighten(pal_dark, amount = 0.5)
