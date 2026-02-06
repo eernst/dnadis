@@ -88,6 +88,8 @@ classification_labels <- c(
 )
 
 # Okabe-Ito colorblind-friendly palette
+# The palette has 8 colors + gray (9 total), which perfectly covers the 9 classification categories
+# If additional categories are added in the future, consider using lighten() to create variants
 oi <- palette_okabe_ito()
 classification_colors <- c(
   "chrom_assigned"     = oi[5],  # blue

@@ -201,14 +201,31 @@ if (nrow(df_chrom) > 0) {
     pull(assigned_subgenome) %>%
     sort()
 
-  # Palette for up to 4 subgenomes (matches chromosome_overview)
-  pal_subgenome <- c("#1F77B4", "#FF7F0E", "#17A589", "#2E7D32")
+  # Okabe-Ito palette for subgenomes (up to 8, matches chromosome_overview)
+  # Use first 6 colors for subgenomes 1-6, then light blue (oi[2]) for 7, black (oi[8]) for 8
+  oi <- palette_okabe_ito()
+  pal_subgenome <- c(
+    oi[1],  # 1: orange
+    oi[3],  # 2: bluish green
+    oi[5],  # 3: blue
+    oi[6],  # 4: vermillion
+    oi[7],  # 5: reddish purple
+    oi[4],  # 6: yellow
+    oi[2],  # 7: sky blue (reserved)
+    oi[8]   # 8: black (reserved)
+  )
+
   sg_colors <- if (length(sg_levels) > 0) {
+    if (length(sg_levels) > 8) {
+      warning(paste0("Reference has ", length(sg_levels), " chromosome sets; plotting supports up to 8. ",
+                     "Will use first 8: ", paste(sg_levels[1:8], collapse=",")))
+      sg_levels <- sg_levels[1:8]
+    }
     setNames(pal_subgenome[seq_along(sg_levels)], sg_levels)
   } else {
-    c("G" = "#1F77B4")  # Single genome fallback
+    c("G" = oi[5])  # Single genome fallback (blue)
   }
-  sg_colors <- c(sg_colors, "NA" = "#7F7F7F")
+  sg_colors <- c(sg_colors, "NA" = oi[9])  # Gray for NA
 
   # Color by subgenome
   df_chrom <- df_chrom %>%
