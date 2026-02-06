@@ -202,8 +202,8 @@ p_class_depth <- ggplot(df_depth, aes(x = depth_mean, y = display_class, fill = 
   ) +
   labs(
     title = paste0("Read depth by classification (", plot_title_suffix, ")"),
-    x = "Mean read depth (x)",
-    y = "Classification"
+    x = "Mean read depth",
+    y = NULL
   )
 
 # ----------------------------
@@ -262,7 +262,7 @@ if (nrow(df_chrom) > 0) {
     ) +
     labs(
       title = "Chromosome contig depth",
-      x = "Mean depth (x)",
+      x = "Mean depth",
       y = "Chromosome"
     )
 
@@ -313,7 +313,7 @@ p_breadth <- ggplot(df_breadth, aes(x = breadth, y = display_class, fill = metri
   labs(
     title = "Coverage breadth by classification",
     x = "Fraction of bases covered",
-    y = "Classification"
+    y = NULL
   )
 
 p_breadth <- apply_legend_theme(p_breadth, text_pt = 6, key_pt = 6, tight = TRUE) +
@@ -369,8 +369,8 @@ if (plot_html) {
     ) +
     labs(
       title = paste0("Read depth by classification (", plot_title_suffix, ")"),
-      x = "Mean read depth (x)",
-      y = "Classification"
+      x = "Mean read depth",
+      y = NULL
     )
 
   # Left chromosome depth plot with tooltips (transposed)
@@ -406,7 +406,7 @@ if (plot_html) {
       ) +
       labs(
         title = "Chromosome contig depth",
-        x = "Mean depth (x)",
+        x = "Mean depth",
         y = "Chromosome"
       )
 
