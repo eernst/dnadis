@@ -1218,7 +1218,7 @@ def main():
                 write_rdna_annotations_gff3(
                     output_path=rdna_annotations_gff3,
                     loci=rdna_loci,
-                    query_lengths=query_lengths,
+                    query_lengths=qry_lengths,
                     classifications=clf_lookup,
                 )
                 logger.done(f"rDNA GFF3:         {rdna_annotations_gff3}")
