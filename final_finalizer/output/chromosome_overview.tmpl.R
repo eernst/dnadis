@@ -225,7 +225,7 @@ if (has_subgenomes) {
 } else {
   # Non-hybrid reference: use chrom_id directly (chr1, chr2, ...)
   ref_sg <- ref_lengths %>%
-    filter(!(ref_id %in% c("chrC","chrM"))) %>%
+    filter(!(ref_id %in% c("chrC","chrM", "ChrC", "ChrM"))) %>%
     mutate(
       chrom_label = chrom_id %>%
         str_replace("^chr", "") %>%
@@ -248,7 +248,7 @@ if (has_subgenomes) {
 }
 
 # Spacing factor between chromosome bins (1.0 = no extra space, 1.2 = 20% more)
-chrom_spacing <- 1.15
+chrom_spacing <- 1.2
 
 # For vertical orientation: chromosomes on y-axis, chr1 at top (highest y)
 y_levels <- rev(chrom_levels)  # chr20, chr19, ..., chr1
@@ -294,6 +294,49 @@ ev <- ev %>%
   filter(subgenome %in% sg_levels)
 
 # ----------------------------
+# Pill sizing (computed before df_slots so we can use a fixed dy)
+# ----------------------------
+# Count contigs per chromosome bin to determine max_n
+n_per_chrom <- df_plot %>%
+  filter(assigned_chrom_id != "Un", chrom_id %in% y_tbl$chrom_id) %>%
+  count(chrom_id, name = "n_contigs")
+max_n <- max(n_per_chrom$n_contigs, na.rm = TRUE)
+if (!is.finite(max_n) || max_n <= 0) max_n <- 1
+
+# Dynamic figure height: target a fixed physical size per chromosome row,
+# then clamp to a sensible range so the PDF/HTML stays usable.
+n_chroms       <- nrow(y_tbl)
+mm_per_chrom   <- 8.0      # target physical mm per chromosome row
+margin_in      <- 0.8      # title + axis labels + margins
+min_height_in  <- 4.0      # floor: right-column panels need space
+max_height_in  <- 12.0     # ceiling: practical PDF/screen limit
+
+fig_height_in  <- (n_chroms * mm_per_chrom / 25.4) + margin_in
+fig_height_in  <- max(min_height_in, min(max_height_in, fig_height_in))
+
+# Derive mm_per_unit from the actual (possibly clamped) figure height
+plot_area_mm <- (fig_height_in - margin_in) * 25.4
+y_range      <- n_chroms * chrom_spacing * 1.02
+mm_per_unit  <- plot_area_mm / y_range
+
+# Pill height: logarithmic downsizing so that small increases in max_n
+# (e.g. 3 → 4) don't shrink pills dramatically, while large max_n still
+# compresses.  Clamp so pills stay between ~0.8 mm and ~1.8 mm on the page.
+pill_yw_fit <- 0.80 / (1 + log(max_n)) * 0.5
+pill_cap <- 1.8 / mm_per_unit
+pill_min <- 0.8 / mm_per_unit
+pill_yw <- max(pill_min, min(pill_cap, pill_yw_fit))
+
+# Band width for alignment segments (narrower than the pill background)
+band_yw <- pill_yw / 2.4
+
+# Telomere indicator circle size: pill_yw converted to mm
+telo_size <- max(0.8, pill_yw * mm_per_unit)
+
+# Fixed inter-pill spacing: pill height + small gap, consistent across all bins.
+pill_dy <- pill_yw * 1.15
+
+# ----------------------------
 # Left: Contig composition from segments (VERTICAL orientation)
 # ----------------------------
 df_slots <- df_plot %>%
@@ -306,31 +349,14 @@ df_slots <- df_plot %>%
   mutate(
     n_in_bin = n(),
     slot = row_number(),
-    total_width = 0.80,
-    dy = if_else(n_in_bin > 1, total_width / n_in_bin, 0),
-    y_offset = if_else(n_in_bin > 1, (slot - (n_in_bin + 1) / 2) * dy, 0),
+    # Center the stack of pills within the bin using a fixed step size
+    y_offset = (slot - (n_in_bin + 1) / 2) * pill_dy,
     y_plot = y_index + y_offset,
     # Use assigned_subgenome from df_plot (already extracted from summary file)
     # Must be a factor with levels matching col_dark for scale_color_manual to work
     ref_subgenome = factor(assigned_subgenome, levels = names(col_dark))
   ) %>%
   ungroup()
-
-n_per_chrom <- df_slots %>% count(chrom_id, name = "n_contigs")
-max_n <- max(n_per_chrom$n_contigs, na.rm = TRUE)
-if (!is.finite(max_n) || max_n <= 0) max_n <- 1
-
-# Calculate band width with maximum cap to prevent oversized bands with few chromosomes
-# Base calculation: 0.80 / max_n * 0.80 (80% of available space, scaled by max contigs)
-# Cap at 0.045 to limit band width to ~50-60% of chromosome spacing (1.15 units)
-# This prevents bands from dominating the plot when there are few contigs per chromosome
-band_yw <- max(0.02, min(0.045, 0.80 / max_n * 0.80))
-
-# Width for pill backgrounds and alignment segments (same width for both)
-pill_yw <- band_yw * 2.4
-
-# Telomere indicator circle size, scaled with band width
-telo_size <- max(2, min(15, 10 + 80 * pill_yw))
 
 # ----------------------------
 # Rearrangement hypothesis labels
@@ -696,7 +722,7 @@ p_comp <- ggplot() +
   ) +
   scale_y_continuous(
     breaks = y_tbl$y_index,
-    labels = str_replace(as.character(y_tbl$chrom_id), "^chr", ""),
+    labels = str_replace(as.character(y_tbl$chrom_id), "^[Cc]hr", ""),
     expand = expansion(mult = c(0.01, 0.01))
   ) +
   theme_classic(base_family = base_family, base_size = base_font_pt) +
@@ -851,7 +877,7 @@ if (plot_html) {
     ) +
     scale_y_continuous(
       breaks = y_tbl$y_index,
-      labels = str_replace(as.character(y_tbl$chrom_id), "^chr", ""),
+      labels = str_replace(as.character(y_tbl$chrom_id), "^[Cc]hr", ""),
       expand = expansion(mult = c(0.01, 0.01))
     ) +
     theme_classic(base_family = base_family, base_size = base_font_pt) +
@@ -1097,25 +1123,46 @@ p_placeholder <- ggplot() +
   ) +
   labs(title = NULL)
 
+# Fixed right-panel heights (inches); the placeholder absorbs remaining space.
+# Identity panel is compact (bar chart); radar panel needs more room for the polar plot.
+id_panel_in    <- 1.3
+radar_panel_in <- 1.7
+
+# Convert fixed panel heights to proportions of usable figure height so the
+# right column fills its entire cell (preventing patchwork from centering it).
+# The spacer at the bottom absorbs remaining space, keeping panels top-aligned.
+usable_in  <- fig_height_in - margin_in
+id_h       <- id_panel_in / usable_in
+gap_in     <- 0.15           # vertical padding between identity and radar panels
+gap_h      <- gap_in / usable_in
+radar_h    <- radar_panel_in / usable_in
+spacer_h   <- max(0.01, 1 - id_h - gap_h - radar_h)
+
 if (has_subgenomes) {
-  right_col <- p_id / p_radar / p_placeholder + plot_layout(heights = c(1, 1, 1))
+  right_col <- p_id / plot_spacer() / p_radar / p_placeholder +
+    plot_layout(heights = c(id_h, gap_h, radar_h, spacer_h))
   full_plot <- (p_comp | right_col) + plot_layout(widths = c(7, 3))
 } else {
-  full_plot <- (p_comp | p_id / p_placeholder) + plot_layout(widths = c(7, 3), heights = c(1, 1))
+  right_col <- p_id / p_placeholder +
+    plot_layout(heights = c(id_h, 1 - id_h))
+  full_plot <- (p_comp | right_col) + plot_layout(widths = c(7, 3))
 }
 
 #message("macro rows: ", nrow(macro_plot), "  seg rows: ", nrow(seg_plot))
-ggsave(out_pdf, plot = full_plot, width = 7.2, height = 7.2, units = "in", dpi = 300, device = cairo_pdf)
+ggsave(out_pdf, plot = full_plot, width = 7.2, height = fig_height_in, units = "in", dpi = 300, device = cairo_pdf)
 
 if (plot_html) {
   if (has_subgenomes) {
-    right_col_html <- p_id / p_radar / p_placeholder + plot_layout(heights = c(1, 1, 1))
+    right_col_html <- p_id / plot_spacer() / p_radar / p_placeholder +
+      plot_layout(heights = c(id_h, gap_h, radar_h, spacer_h))
     full_plot_html <- (p_comp_html | right_col_html) + plot_layout(widths = c(7, 3))
   } else {
-    full_plot_html <- (p_comp_html | p_id / p_placeholder) + plot_layout(widths = c(7, 3), heights = c(1, 1))
+    right_col_html <- p_id / p_placeholder +
+      plot_layout(heights = c(id_h, 1 - id_h))
+    full_plot_html <- (p_comp_html | right_col_html) + plot_layout(widths = c(7, 3))
   }
 
-  girafe_obj <- ggiraph::girafe(ggobj = full_plot_html, width_svg = 7.2, height_svg = 7.2)
+  girafe_obj <- ggiraph::girafe(ggobj = full_plot_html, width_svg = 7.2, height_svg = fig_height_in)
   girafe_obj <- ggiraph::girafe_options(
     girafe_obj,
     opts_tooltip(css = paste0(
