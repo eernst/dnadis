@@ -319,10 +319,18 @@ df_slots <- df_plot %>%
 n_per_chrom <- df_slots %>% count(chrom_id, name = "n_contigs")
 max_n <- max(n_per_chrom$n_contigs, na.rm = TRUE)
 if (!is.finite(max_n) || max_n <= 0) max_n <- 1
-band_yw <- max(0.02, min(0.08, 0.80 / max_n * 0.80))
+
+# Calculate band width with maximum cap to prevent oversized bands with few chromosomes
+# Base calculation: 0.80 / max_n * 0.80 (80% of available space, scaled by max contigs)
+# Cap at 0.045 to limit band width to ~50-60% of chromosome spacing (1.15 units)
+# This prevents bands from dominating the plot when there are few contigs per chromosome
+band_yw <- max(0.02, min(0.045, 0.80 / max_n * 0.80))
 
 # Width for pill backgrounds and alignment segments (same width for both)
 pill_yw <- band_yw * 2.4
+
+# Telomere indicator circle size, scaled with band width
+telo_size <- max(2, min(15, 10 + 80 * pill_yw))
 
 # ----------------------------
 # Rearrangement hypothesis labels
@@ -571,21 +579,19 @@ p_comp <- ggplot() +
   ) +
   scale_color_manual(values = col_light, guide = "none", drop = FALSE) +
   ggnewscale::new_scale_color() +
-  # Telomere indicators - slightly darker circles behind pill background
-  # 5' telomere (left end of contig)
+  # Telomere indicators - circles behind pill background, sized by telo_size
   geom_point(
-    data = df_slots %>% filter(has_5p_telo),
+    data = df_slots[df_slots$has_5p_telo, ],
     aes(x = 0, y = y_plot),
     color = "grey75",
-    size = pill_yw * 7,
+    size = telo_size,
     show.legend = FALSE
   ) +
-  # 3' telomere (right end of contig)
   geom_point(
-    data = df_slots %>% filter(has_3p_telo),
+    data = df_slots[df_slots$has_3p_telo, ],
     aes(x = contig_len_mb, y = y_plot),
     color = "grey75",
-    size = pill_yw * 7,
+    size = telo_size,
     show.legend = FALSE
   ) +
   # Pill backgrounds - all light gray (same height as alignment blocks)
@@ -728,23 +734,21 @@ if (plot_html) {
     ) +
     scale_color_manual(values = col_light, guide = "none", drop = FALSE) +
     ggnewscale::new_scale_color() +
-    # Telomere indicators - slightly darker circles behind pill background
-    # 5' telomere (left end of contig)
+    # Telomere indicators - circles behind pill background, sized by telo_size
     ggiraph::geom_point_interactive(
-      data = df_slots %>% filter(has_5p_telo),
+      data = df_slots[df_slots$has_5p_telo, ],
       aes(x = 0, y = y_plot,
           tooltip = paste0(original_name, "\n5' telomere detected")),
       color = "grey75",
-      size = pill_yw * 5,
+      size = telo_size,
       show.legend = FALSE
     ) +
-    # 3' telomere (right end of contig)
     ggiraph::geom_point_interactive(
-      data = df_slots %>% filter(has_3p_telo),
+      data = df_slots[df_slots$has_3p_telo, ],
       aes(x = contig_len_mb, y = y_plot,
           tooltip = paste0(original_name, "\n3' telomere detected")),
       color = "grey75",
-      size = pill_yw * 5,
+      size = telo_size,
       show.legend = FALSE
     ) +
     # Pill backgrounds - all light gray (same height as alignment blocks)
