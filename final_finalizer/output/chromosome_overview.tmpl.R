@@ -39,6 +39,7 @@ seg_file     <- "__SEGMENTS__"
 ev_file      <- "__EVIDENCE__"
 macro_file   <- "__MACRO__"
 rdna_file    <- "__RDNA_ANNOTATIONS__"
+agp_file     <- "__AGP__"
 out_pdf      <- "__OUTPDF__"
 out_html     <- "__OUTHTML__"
 plot_html    <- as.logical("__PLOTHTML__")
@@ -159,6 +160,24 @@ rdna_annot <- if (nzchar(rdna_file) && file.exists(rdna_file)) {
     filter(copy_type == "full")  # Only full-copy rDNA
 } else {
   tibble()  # Empty tibble if no rDNA annotations
+}
+
+# Load scaffold AGP (optional -- only when --scaffold was used)
+scaffold_brackets <- if (nzchar(agp_file) && file.exists(agp_file)) {
+  agp_raw <- readr::read_tsv(
+    agp_file, comment = "#", col_names = FALSE,
+    show_col_types = FALSE, col_types = cols(.default = col_character())
+  )
+  # Keep only W (component) lines from multi-component scaffolds
+  agp_components <- agp_raw %>%
+    filter(X5 == "W") %>%
+    select(scaffold = X1, component = X6)
+  agp_components %>%
+    group_by(scaffold) %>%
+    filter(n() > 1) %>%
+    ungroup()
+} else {
+  tibble()
 }
 
 # Subgenome suffix labels present in the ref lengths file (single-letter A-Z)
@@ -349,6 +368,63 @@ df_slots <- df_plot %>%
   ungroup()
 
 # ----------------------------
+# Scaffold bracket data (join AGP components with pill positions)
+# ----------------------------
+has_brackets <- nrow(scaffold_brackets) > 0
+
+if (has_brackets) {
+  bracket_data <- scaffold_brackets %>%
+    inner_join(
+      df_slots %>% select(original_name, y_plot),
+      by = c("component" = "original_name")
+    ) %>%
+    group_by(scaffold) %>%
+    summarise(
+      y_min = min(y_plot),
+      y_max = max(y_plot),
+      y_mid = (min(y_plot) + max(y_plot)) / 2,
+      n_components = n(),
+      .groups = "drop"
+    ) %>%
+    filter(n_components > 1)
+
+  has_brackets <- nrow(bracket_data) > 0
+}
+
+if (has_brackets) {
+  max_len <- max(df_slots$contig_len_mb, na.rm = TRUE)
+  bracket_x <- -max_len * 0.035     # vertical bar x position (left of pills)
+  foot_xend <- -max_len * 0.015     # feet stop with gap before pill edge
+
+  bracket_segments <- bind_rows(
+    # Vertical bars
+    bracket_data %>% transmute(
+      x = bracket_x, xend = bracket_x,
+      y = y_min - pill_yw / 6, yend = y_max + pill_yw / 6
+    ),
+    # Top feet
+    bracket_data %>% transmute(
+      x = bracket_x, xend = foot_xend,
+      y = y_max + pill_yw / 6, yend = y_max + pill_yw / 6
+    ),
+    # Bottom feet
+    bracket_data %>% transmute(
+      x = bracket_x, xend = foot_xend,
+      y = y_min - pill_yw / 6, yend = y_min - pill_yw / 6
+    )
+  )
+
+  bracket_labels <- bracket_data %>% transmute(
+    x = bracket_x - max_len * 0.008,
+    y = y_mid,
+    label = "S"
+  )
+}
+
+# Increase left x-axis expansion when brackets are present
+x_expand_left <- if (has_brackets) 0.025 else 0.02
+
+# ----------------------------
 # Rearrangement hypothesis labels
 # ----------------------------
 # Helper to extract short chromosome IDs (e.g., "chr2A,chr5B" -> "2A,5B")
@@ -399,7 +475,7 @@ if (has_rearr_col) {
 
   # Calculate x-axis expansion needed for labels (as fraction of max length)
   # Add ~15% extra space at right for labels
-  x_expand_right <- 0.15
+  x_expand_right <- 0.12
 } else {
   rearr_labels <- tibble()
   rearr_label_xmin <- Inf
@@ -663,6 +739,24 @@ p_comp <- ggplot() +
       )
     }
   } +
+  # Scaffold brackets ([ shape with "S" label, styled to match rearrangement annotations)
+  {
+    if (has_brackets) {
+      list(
+        geom_segment(
+          data = bracket_segments,
+          aes(x = x, xend = xend, y = y, yend = yend),
+          color = "red", linewidth = 0.2
+        ),
+        geom_text(
+          data = bracket_labels,
+          aes(x = x, y = y, label = label),
+          color = "red", size = (base_font_pt + 2) / .pt * 0.5,
+          family = base_family, hjust = 1
+        )
+      )
+    }
+  } +
   # Rearrangement hypothesis labels (colored by type: subgenome color for homeologous, red for non-homeologous)
   {
     if (nrow(rearr_labels) > 0) {
@@ -699,7 +793,7 @@ p_comp <- ggplot() +
     )
   ) +
   scale_x_continuous(
-    expand = expansion(mult = c(0.02, x_expand_right)),
+    expand = expansion(mult = c(x_expand_left, x_expand_right)),
     position = "top"
   ) +
   scale_y_continuous(
@@ -819,6 +913,24 @@ if (plot_html) {
         )
       }
     } +
+    # Scaffold brackets ([ shape with "S" label, styled to match rearrangement annotations)
+    {
+      if (has_brackets) {
+        list(
+          geom_segment(
+            data = bracket_segments,
+            aes(x = x, xend = xend, y = y, yend = yend),
+            color = "red", linewidth = 0.2
+          ),
+          geom_text(
+            data = bracket_labels,
+            aes(x = x, y = y, label = label),
+            color = "red", size = (base_font_pt + 2) / .pt * 0.5,
+            family = base_family, hjust = 1
+          )
+        )
+      }
+    } +
     # Rearrangement hypothesis labels (colored by type: subgenome color for homeologous, red for non-homeologous)
     {
       if (nrow(rearr_labels) > 0) {
@@ -854,7 +966,7 @@ if (plot_html) {
       )
     ) +
     scale_x_continuous(
-      expand = expansion(mult = c(0.02, x_expand_right)),
+      expand = expansion(mult = c(x_expand_left, x_expand_right)),
       position = "top"
     ) +
     scale_y_continuous(

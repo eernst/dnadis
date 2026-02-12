@@ -603,16 +603,22 @@ def infer_query_subgenomes(
             ref_subgenome_thresholds[ref_subgenome] = 0.05
             continue
 
+        # Scale minimum gap with divergence: the gap must be at least half the
+        # total divergence from the reference to call a separate haplotype.
+        # At 95% identity: 2.5% floor; at 77%: 11.5%; at 60%: 20%
+        min_gap = max(0.02, 0.50 * (1.0 - mean_ident))
+
         if std_dev < 0.001:
-            # Very small std_dev - use a minimum threshold
-            ref_subgenome_thresholds[ref_subgenome] = 0.02  # 2% minimum
+            # Very small std_dev - use identity-scaled minimum
+            ref_subgenome_thresholds[ref_subgenome] = min_gap
         else:
-            ref_subgenome_thresholds[ref_subgenome] = subgenome_k * std_dev
+            ref_subgenome_thresholds[ref_subgenome] = max(min_gap, subgenome_k * std_dev)
 
         logger.info(
             f"Subgenome clustering ({ref_subgenome or 'default'}): "
             f"n={len(best_idents)}, mean_ident={mean_ident:.4f}, "
-            f"std_dev={std_dev:.4f}, threshold={ref_subgenome_thresholds[ref_subgenome]:.4f}"
+            f"std_dev={std_dev:.4f}, min_gap={min_gap:.4f}, "
+            f"threshold={ref_subgenome_thresholds[ref_subgenome]:.4f}"
         )
 
     # Cluster contigs per reference chromosome using reference-subgenome-specific thresholds

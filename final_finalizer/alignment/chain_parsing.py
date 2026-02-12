@@ -715,6 +715,11 @@ def _chains_to_evidence_and_segments(
             nseg = len(merged)
             gene_count_chain = len(ch.gene_ids) if ch.gene_ids else 0
 
+            # Reference coordinate range for this chain
+            ch_blocks_for_ref = chain_blocks[chain_idx]
+            ref_start = min(blk.rs for blk in ch_blocks_for_ref)
+            ref_end = max(blk.re for blk in ch_blocks_for_ref)
+
             macro_block_rows.append(
                 (
                     q,
@@ -734,6 +739,8 @@ def _chains_to_evidence_and_segments(
                     f"{w:.3f}",
                     nseg,
                     gene_count_chain,
+                    ref_start,
+                    ref_end,
                 )
             )
 
@@ -772,6 +779,12 @@ def _chains_to_evidence_and_segments(
     for key, ivs in qr_ref_intervals.items():
         _m, total = merge_intervals(ivs)
         qr_ref_span_bp[key] = total
+
+    # finalize per-(q,ref_id) reference coordinate ranges for scaffolding
+    qr_ref_ranges: dict[tuple[str, str], tuple[int, int]] = {}
+    for key, ivs in qr_ref_intervals.items():
+        if ivs:
+            qr_ref_ranges[key] = (min(s for s, _ in ivs), max(e for _, e in ivs))
 
     contig_total = defaultdict(int)
     contig_refs = defaultdict(set)
@@ -874,4 +887,5 @@ def _chains_to_evidence_and_segments(
         chain_summary_rows=chain_summary_rows,
         qr_ref_span_bp=dict(qr_ref_span_bp),
         qr_best_chain_ident=dict(qr_best_chain_ident),
+        qr_ref_ranges=qr_ref_ranges,
     )

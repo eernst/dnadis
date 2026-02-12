@@ -36,6 +36,7 @@ PLACEHOLDER_TSV = {
     "__EVIDENCE__": ".evidence_summary.tsv",
     "__MACRO__": ".macro_blocks.tsv",
     "__RDNA_ANNOTATIONS__": ".rdna_annotations.tsv",
+    "__AGP__": ".scaffolded.agp",
     "__CONTAMINANTS_TSV__": ".contaminants.tsv",
 }
 

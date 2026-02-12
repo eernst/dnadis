@@ -369,30 +369,28 @@ def write_macro_blocks_tsv(
                     "score",
                     "n_segments",
                     "gene_count_chain",
+                    "ref_start",
+                    "ref_end",
                 ]
             )
             + "\n"
         )
         for r in rows:
-            (
-                q,
-                qlen,
-                ref_id,
-                chrom_id,
-                sub,
-                strand,
-                chain_id,
-                qstart,
-                qend,
-                qspan,
-                qbp,
-                msum,
-                alnsum,
-                ident,
-                score,
-                nseg,
-                gene_count_chain,
-            ) = r
+            # Support both old (17-field) and new (19-field) tuples
+            if len(r) >= 19:
+                (
+                    q, qlen, ref_id, chrom_id, sub, strand, chain_id,
+                    qstart, qend, qspan, qbp, msum, alnsum, ident, score,
+                    nseg, gene_count_chain, ref_start, ref_end,
+                ) = r[:19]
+            else:
+                (
+                    q, qlen, ref_id, chrom_id, sub, strand, chain_id,
+                    qstart, qend, qspan, qbp, msum, alnsum, ident, score,
+                    nseg, gene_count_chain,
+                ) = r[:17]
+                ref_start = ""
+                ref_end = ""
             ref_id_out, chrom_id_out, sub_out = _ref_fields_for_output(ref_id, ref_norm_to_orig)
             out.write(
                 "\t".join(
@@ -416,6 +414,8 @@ def write_macro_blocks_tsv(
                             score,
                             nseg,
                             gene_count_chain,
+                            ref_start,
+                            ref_end,
                         ],
                     )
                 )

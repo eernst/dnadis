@@ -86,6 +86,8 @@ class ChainEvidenceResult:
     qr_ref_span_bp: Dict[Tuple[str, str], int] = None  # (contig, ref_id) -> reference span bp
     # Best chain identity per (contig, ref_id) for subgenome inference
     qr_best_chain_ident: Dict[Tuple[str, str], float] = None  # (contig, ref_id) -> identity
+    # Reference coordinate ranges per (contig, ref_id) for scaffolding
+    qr_ref_ranges: Dict[Tuple[str, str], Tuple[int, int]] = None  # (contig, ref_id) -> (ref_min, ref_max)
 
 
 # ----------------------------

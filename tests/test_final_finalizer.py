@@ -595,10 +595,10 @@ def test_compute_largest_cluster_single_ref():
 
     # All chains to same ref, close together - should form one cluster
     # Row format: (contig, contig_len, ref_id, chrom_id, subgenome, strand, chain_id,
-    #              qstart, qend, qspan_bp, union_bp, ...)
+    #              qstart, qend, qspan_bp, union_bp, ..., ref_start, ref_end)
     macro_block_rows = [
-        ("contig1", 1000000, "chr1A", "chr1", "A", "+", 1, 100000, 300000, 200000, 150000, 0, 0, 0, 0, 0, 0),
-        ("contig1", 1000000, "chr1A", "chr1", "A", "+", 2, 500000, 700000, 200000, 180000, 0, 0, 0, 0, 0, 0),
+        ("contig1", 1000000, "chr1A", "chr1", "A", "+", 1, 100000, 300000, 200000, 150000, 0, 0, 0, 0, 0, 0, 100000, 300000),
+        ("contig1", 1000000, "chr1A", "chr1", "A", "+", 2, 500000, 700000, 200000, 180000, 0, 0, 0, 0, 0, 0, 500000, 700000),
     ]
 
     result = compute_largest_cluster_metrics_per_ref(macro_block_rows)
@@ -615,8 +615,8 @@ def test_compute_largest_cluster_gap_splits_clusters():
 
     # chr12A chains with 1 Mb gap between them (> 500kb default max_gap)
     macro_block_rows = [
-        ("contig1", 5000000, "chr12A", "chr12", "A", "-", 1, 100000, 300000, 200000, 150000, 0, 0, 0, 0, 0, 0),
-        ("contig1", 5000000, "chr12A", "chr12", "A", "-", 2, 1500000, 1700000, 200000, 180000, 0, 0, 0, 0, 0, 0),
+        ("contig1", 5000000, "chr12A", "chr12", "A", "-", 1, 100000, 300000, 200000, 150000, 0, 0, 0, 0, 0, 0, 100000, 300000),
+        ("contig1", 5000000, "chr12A", "chr12", "A", "-", 2, 1500000, 1700000, 200000, 180000, 0, 0, 0, 0, 0, 0, 1500000, 1700000),
     ]
 
     result = compute_largest_cluster_metrics_per_ref(macro_block_rows)
@@ -633,9 +633,9 @@ def test_compute_largest_cluster_ignores_intervening_chains():
 
     # chr12A chains with chr1A chain between them, but gap < max_gap
     macro_block_rows = [
-        ("contig1", 1000000, "chr12A", "chr12", "A", "-", 1, 100000, 300000, 200000, 150000, 0, 0, 0, 0, 0, 0),
-        ("contig1", 1000000, "chr1A", "chr1", "A", "+", 1, 400000, 500000, 100000, 80000, 0, 0, 0, 0, 0, 0),
-        ("contig1", 1000000, "chr12A", "chr12", "A", "-", 2, 600000, 800000, 200000, 180000, 0, 0, 0, 0, 0, 0),
+        ("contig1", 1000000, "chr12A", "chr12", "A", "-", 1, 100000, 300000, 200000, 150000, 0, 0, 0, 0, 0, 0, 100000, 300000),
+        ("contig1", 1000000, "chr1A", "chr1", "A", "+", 1, 400000, 500000, 100000, 80000, 0, 0, 0, 0, 0, 0, 400000, 500000),
+        ("contig1", 1000000, "chr12A", "chr12", "A", "-", 2, 600000, 800000, 200000, 180000, 0, 0, 0, 0, 0, 0, 600000, 800000),
     ]
 
     result = compute_largest_cluster_metrics_per_ref(macro_block_rows)
@@ -653,10 +653,10 @@ def test_compute_largest_cluster_selects_largest():
 
     # chr12A has two clusters: small one then large one separated by big gap
     macro_block_rows = [
-        ("contig1", 5000000, "chr12A", "chr12", "A", "-", 1, 50000, 100000, 50000, 40000, 0, 0, 0, 0, 0, 0),
+        ("contig1", 5000000, "chr12A", "chr12", "A", "-", 1, 50000, 100000, 50000, 40000, 0, 0, 0, 0, 0, 0, 50000, 100000),
         # 1.4 Mb gap > 500kb max_gap
-        ("contig1", 5000000, "chr12A", "chr12", "A", "-", 2, 1500000, 1800000, 300000, 250000, 0, 0, 0, 0, 0, 0),
-        ("contig1", 5000000, "chr12A", "chr12", "A", "-", 3, 1850000, 2000000, 150000, 120000, 0, 0, 0, 0, 0, 0),
+        ("contig1", 5000000, "chr12A", "chr12", "A", "-", 2, 1500000, 1800000, 300000, 250000, 0, 0, 0, 0, 0, 0, 1500000, 1800000),
+        ("contig1", 5000000, "chr12A", "chr12", "A", "-", 3, 1850000, 2000000, 150000, 120000, 0, 0, 0, 0, 0, 0, 1850000, 2000000),
     ]
 
     result = compute_largest_cluster_metrics_per_ref(macro_block_rows)
@@ -773,3 +773,232 @@ def test_detect_rearrangement_candidates_no_assignment():
     )
 
     assert result is None
+
+
+# ----------------------------
+# Scaffolding tests
+# ----------------------------
+def test_builtin_scaffold_ordering():
+    """Test that built-in scaffolder orders contigs by reference midpoint."""
+    from final_finalizer.output.scaffolding import _builtin_scaffold
+
+    sequences = {
+        "ctgA": "ACGT" * 25,  # 100 bp
+        "ctgB": "TGCA" * 25,  # 100 bp
+    }
+    # ctgB has earlier ref position than ctgA
+    ref_ranges = {
+        ("ctgA", "chr1"): (500000, 600000),
+        ("ctgB", "chr1"): (100000, 200000),
+    }
+    orientations = {"ctgA": False, "ctgB": False}
+
+    seq, agp = _builtin_scaffold(
+        contig_names=["ctgA", "ctgB"],
+        sequences=sequences,
+        orientations=orientations,
+        ref_ranges=ref_ranges,
+        ref_id="chr1",
+        gap_size=10,
+    )
+
+    # ctgB should come first (earlier ref position)
+    assert seq.startswith("TGCA")
+    assert "N" * 10 in seq
+    assert len(seq) == 100 + 10 + 100
+
+    # AGP should have 3 lines: W, N, W
+    assert len(agp) == 3
+    assert "\tW\t" in agp[0]
+    assert "ctgB" in agp[0]
+    assert "\tN\t" in agp[1]
+    assert "\tW\t" in agp[2]
+    assert "ctgA" in agp[2]
+
+
+def test_builtin_scaffold_reverse_complement():
+    """Test that built-in scaffolder correctly orients reversed contigs."""
+    from final_finalizer.output.scaffolding import _builtin_scaffold
+
+    sequences = {"ctgA": "AAACCC"}
+    ref_ranges = {("ctgA", "chr1"): (100, 200)}
+    orientations = {"ctgA": True}  # Reversed
+
+    seq, agp = _builtin_scaffold(
+        contig_names=["ctgA"],
+        sequences=sequences,
+        orientations=orientations,
+        ref_ranges=ref_ranges,
+        ref_id="chr1",
+        gap_size=100,
+    )
+
+    assert seq == "GGGTTT"  # Reverse complement of AAACCC
+    assert len(agp) == 1
+    assert agp[0].endswith("\t-")
+
+
+def test_scaffold_skip_full_length():
+    """Test that full-length contigs with both telomeres get trivial AGP."""
+    from final_finalizer.output.scaffolding import _group_contigs_by_haplotype
+    from final_finalizer.models import ContigClassification
+
+    clf = ContigClassification(
+        original_name="ctg1",
+        new_name="chr1A",
+        classification="chrom_assigned",
+        reversed=False,
+        contaminant_taxid=None,
+        contaminant_sci=None,
+        assigned_ref_id="chr1A",
+        ref_gene_proportion=0.9,
+        contig_len=30000000,
+        is_full_length=True,
+        has_5p_telomere=True,
+        has_3p_telomere=True,
+        query_subgenome_grp=1,
+    )
+
+    groups = _group_contigs_by_haplotype(
+        classifications=[clf],
+        best_ref={"ctg1": "chr1A"},
+        contig_refs={"ctg1": {"chr1A"}},
+        qr_best_chain_ident={("ctg1", "chr1A"): 0.95},
+    )
+
+    assert ("chr1A", 1) in groups
+    assert groups[("chr1A", 1)] == ["ctg1"]
+
+
+def test_agp_format():
+    """Test AGP 2.0 output format compliance."""
+    from final_finalizer.output.scaffolding import write_agp, _agp_component_line, _agp_gap_line
+
+    agp_lines = [
+        _agp_component_line("chr1", 1, 1000, 1, "ctgA", 1, 1000, "+"),
+        _agp_gap_line("chr1", 1001, 1100, 2, 100),
+        _agp_component_line("chr1", 1101, 2100, 3, "ctgB", 1, 1000, "-"),
+    ]
+
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".agp", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+
+    try:
+        write_agp(agp_lines, tmp_path)
+        content = tmp_path.read_text()
+        lines = content.strip().split("\n")
+
+        # First line should be AGP version header
+        assert lines[0] == "##agp-version\t2.0"
+
+        # Component line
+        fields = lines[1].split("\t")
+        assert fields[0] == "chr1"
+        assert fields[4] == "W"
+        assert fields[5] == "ctgA"
+        assert fields[8] == "+"
+
+        # Gap line
+        fields = lines[2].split("\t")
+        assert fields[4] == "N"
+        assert fields[5] == "100"
+        assert fields[6] == "scaffold"
+        assert fields[7] == "yes"
+        assert fields[8] == "align_genus"
+
+        # Component line (reverse)
+        fields = lines[3].split("\t")
+        assert fields[4] == "W"
+        assert fields[5] == "ctgB"
+        assert fields[8] == "-"
+    finally:
+        tmp_path.unlink()
+
+
+def test_scaffold_contig_grouping():
+    """Test that contigs are correctly grouped by (ref, haplotype)."""
+    from final_finalizer.output.scaffolding import _group_contigs_by_haplotype
+    from final_finalizer.models import ContigClassification
+
+    clfs = [
+        ContigClassification(
+            original_name="ctg1", new_name="chr1A", classification="chrom_assigned",
+            reversed=False, contaminant_taxid=None, contaminant_sci=None,
+            assigned_ref_id="chr1A", ref_gene_proportion=0.5, contig_len=1000000,
+            query_subgenome_grp=1, seq_identity_vs_ref=0.95,
+        ),
+        ContigClassification(
+            original_name="ctg2", new_name="chr1A_f2", classification="chrom_assigned",
+            reversed=False, contaminant_taxid=None, contaminant_sci=None,
+            assigned_ref_id="chr1A", ref_gene_proportion=0.3, contig_len=500000,
+            query_subgenome_grp=1, seq_identity_vs_ref=0.94,
+        ),
+        ContigClassification(
+            original_name="ctg3", new_name="chr2A", classification="chrom_assigned",
+            reversed=False, contaminant_taxid=None, contaminant_sci=None,
+            assigned_ref_id="chr2A", ref_gene_proportion=0.8, contig_len=2000000,
+            query_subgenome_grp=1, seq_identity_vs_ref=0.92,
+        ),
+        # chrom_debris contig with evidence pointing to chr1A (scaffolding candidate)
+        ContigClassification(
+            original_name="ctg4", new_name="debris_1", classification="chrom_debris",
+            reversed=False, contaminant_taxid=None, contaminant_sci=None,
+            assigned_ref_id="chr1A", ref_gene_proportion=None, contig_len=50000,
+        ),
+        # Plain debris contig (should NOT be grouped - only chrom_debris allowed)
+        ContigClassification(
+            original_name="ctg4b", new_name="debris_2", classification="debris",
+            reversed=False, contaminant_taxid=None, contaminant_sci=None,
+            assigned_ref_id="chr1A", ref_gene_proportion=None, contig_len=30000,
+        ),
+        # Unclassified contig with no evidence (should not be grouped)
+        ContigClassification(
+            original_name="ctg5", new_name="unclass_1", classification="unclassified",
+            reversed=False, contaminant_taxid=None, contaminant_sci=None,
+            assigned_ref_id=None, ref_gene_proportion=None, contig_len=10000,
+        ),
+    ]
+
+    groups = _group_contigs_by_haplotype(
+        classifications=clfs,
+        best_ref={"ctg1": "chr1A", "ctg2": "chr1A", "ctg3": "chr2A", "ctg4": "chr1A"},
+        contig_refs={"ctg1": {"chr1A"}, "ctg2": {"chr1A"}, "ctg3": {"chr2A"}, "ctg4": {"chr1A"}},
+        qr_best_chain_ident={
+            ("ctg1", "chr1A"): 0.95, ("ctg2", "chr1A"): 0.94,
+            ("ctg3", "chr2A"): 0.92, ("ctg4", "chr1A"): 0.93,
+        },
+    )
+
+    # (chr1A, 1) should have ctg1, ctg2, and chrom_debris ctg4
+    assert set(groups[("chr1A", 1)]) == {"ctg1", "ctg2", "ctg4"}
+    # (chr2A, 1) should have ctg3
+    assert groups[("chr2A", 1)] == ["ctg3"]
+    # ctg4b (plain debris) and ctg5 should not appear anywhere
+    all_grouped = set()
+    for contigs in groups.values():
+        all_grouped.update(contigs)
+    assert "ctg4b" not in all_grouped
+    assert "ctg5" not in all_grouped
+
+
+def test_macro_block_rows_ref_coords():
+    """Test that macro_block_rows from PAF parsing include ref_start/ref_end."""
+    ev = ff.parse_paf_chain_evidence_and_segments(
+        paf_gz_path=Path("/dev/null"),  # Will produce empty result
+        contig_lengths={},
+        assign_minlen=100,
+        assign_minmapq=0,
+        assign_tp="ALL",
+        chain_q_gap=200000,
+        chain_r_gap=400000,
+        chain_diag_slop=150000,
+        assign_min_ident=0.0,
+        assign_chain_topk=3,
+        assign_chain_score="matches",
+        assign_chain_min_bp=0,
+        assign_ref_score="all",
+    )
+    # Empty PAF: no rows, but qr_ref_ranges should exist
+    assert ev.qr_ref_ranges is not None
+    assert isinstance(ev.qr_ref_ranges, dict)
