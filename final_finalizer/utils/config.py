@@ -141,6 +141,10 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
         "telomere_min_repeats": "telomere_min_repeats",
         "subgenome_k": "subgenome_k",
     },
+    "scaffolding": {
+        "scaffold": "scaffold",
+        "scaffold_gap_size": "scaffold_gap_size",
+    },
 }
 
 

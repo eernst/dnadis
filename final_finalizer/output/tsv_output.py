@@ -75,6 +75,7 @@ def write_contig_summary_tsv(
     assign_min_frac: float,
     assign_min_ratio: float,
     ref_norm_to_orig: Optional[Dict[str, str]] = None,
+    scaffold_confidences: Optional[Dict[str, Tuple[float, float, float]]] = None,
 ) -> None:
     """Write enhanced contig_summary.tsv with classification columns.
 
@@ -154,6 +155,9 @@ def write_contig_summary_tsv(
         "second_aln_len",
         "second_identity",
         "second_distance",
+        "scaffold_grouping_confidence",
+        "scaffold_location_confidence",
+        "scaffold_orientation_confidence",
     ]
 
     def fetch_metrics(q: str, ref_id: str):
@@ -337,6 +341,12 @@ def write_contig_summary_tsv(
                         str(int(al_s)),
                         (f"{ident_s:.6f}" if ident_s is not None else ""),
                         (f"{dist_s:.6f}" if dist_s is not None else ""),
+                        # Scaffold confidence columns
+                        *(lambda sc: (
+                            f"{sc[0]:.3f}", f"{sc[1]:.3f}", f"{sc[2]:.3f}"
+                        ) if sc else ("", "", ""))(
+                            scaffold_confidences.get(q) if scaffold_confidences else None
+                        ),
                     ]
                 )
                 + "\n"
@@ -369,30 +379,28 @@ def write_macro_blocks_tsv(
                     "score",
                     "n_segments",
                     "gene_count_chain",
+                    "ref_start",
+                    "ref_end",
                 ]
             )
             + "\n"
         )
         for r in rows:
-            (
-                q,
-                qlen,
-                ref_id,
-                chrom_id,
-                sub,
-                strand,
-                chain_id,
-                qstart,
-                qend,
-                qspan,
-                qbp,
-                msum,
-                alnsum,
-                ident,
-                score,
-                nseg,
-                gene_count_chain,
-            ) = r
+            # Support both old (17-field) and new (19-field) tuples
+            if len(r) >= 19:
+                (
+                    q, qlen, ref_id, chrom_id, sub, strand, chain_id,
+                    qstart, qend, qspan, qbp, msum, alnsum, ident, score,
+                    nseg, gene_count_chain, ref_start, ref_end,
+                ) = r[:19]
+            else:
+                (
+                    q, qlen, ref_id, chrom_id, sub, strand, chain_id,
+                    qstart, qend, qspan, qbp, msum, alnsum, ident, score,
+                    nseg, gene_count_chain,
+                ) = r[:17]
+                ref_start = ""
+                ref_end = ""
             ref_id_out, chrom_id_out, sub_out = _ref_fields_for_output(ref_id, ref_norm_to_orig)
             out.write(
                 "\t".join(
@@ -416,6 +424,8 @@ def write_macro_blocks_tsv(
                             score,
                             nseg,
                             gene_count_chain,
+                            ref_start,
+                            ref_end,
                         ],
                     )
                 )

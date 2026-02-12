@@ -159,6 +159,7 @@ def main():
             chr_debris_min_cov=0.80,
             chr_debris_min_identity=0.90, contaminant_min_score=1000, contaminant_min_coverage=0.50,
             debris_min_cov=0.50, debris_min_protein_hits=2, preset="asm20", kmer=None, window=None, aln_minlen=10000,
+            scaffold=False, scaffold_gap_size=100,
         )
         print(dump_config_template(defaults))
         sys.exit(0)
@@ -520,6 +521,19 @@ def main():
     fl_grp.add_argument(
         "--rearrangement-threshold", type=float, default=0.10,
         help="Minimum off-target span fraction to flag as rearrangement candidate [0.10]",
+    )
+
+    # =========================================================================
+    # Scaffolding options
+    # =========================================================================
+    scaffold_grp = p.add_argument_group("Scaffolding options")
+    scaffold_grp.add_argument(
+        "--scaffold", action="store_true",
+        help="Produce reference-guided scaffolded chromosome sequences (uses RagTag if available, otherwise built-in scaffolder)",
+    )
+    scaffold_grp.add_argument(
+        "--scaffold-gap-size", type=int, default=100,
+        help="Number of Ns between contigs in scaffolded output [100]",
     )
 
     args = p.parse_args()
@@ -1227,13 +1241,57 @@ def main():
     elif getattr(args, 'build_rdna_consensus', False) and args.skip_rdna:
         logger.info("Phase 11.7: Skipping rDNA consensus (--skip-rdna)")
 
-    # --- Phase 12: Write FASTA outputs ---
-    logger.phase("Phase 12: Writing FASTA outputs")
+    # --- Phase 12: Scaffolding (optional) ---
+    scaffolded_seqs: Dict[str, str] = {}
+    scaffold_confidences: Optional[Dict[str, tuple]] = None
+    if args.scaffold:
+        logger.phase("Phase 12: Reference-guided scaffolding")
+        from final_finalizer.output.scaffolding import scaffold_chromosomes, write_agp, orientations_from_agp
+
+        scaffolded_seqs, agp_lines, scaffold_confidences = scaffold_chromosomes(
+            query_fasta=qry,
+            classifications=classifications,
+            contig_orientations=contig_orientations,
+            qr_ref_ranges=ev.qr_ref_ranges or {},
+            ref_fasta=ref,
+            ref_lengths=ref_lengths,
+            best_ref=best_ref,
+            contig_refs=ev.contig_refs,
+            work_dir=work_dir / "scaffolding",
+            threads=args.threads,
+            gap_size=args.scaffold_gap_size,
+            ref_norm_to_orig=ref_norm_to_orig,
+            qr_best_chain_ident=ev.qr_best_chain_ident or {},
+        )
+
+        if scaffolded_seqs:
+            from final_finalizer.utils.sequence_utils import write_fasta as _write_fasta
+            scaffolded_fasta = Path(str(outprefix) + ".scaffolded.fasta")
+            _write_fasta(scaffolded_seqs, scaffolded_fasta)
+            logger.done(f"Scaffolded FASTA:  {scaffolded_fasta} ({len(scaffolded_seqs)} chromosomes)")
+
+            agp_path = Path(str(outprefix) + ".scaffolded.agp")
+            write_agp(agp_lines, agp_path)
+            logger.done(f"Scaffolded AGP:    {agp_path}")
+
+            # Reconcile contig orientations with scaffold AGP —
+            # the AGP is authoritative for scaffolded contigs.
+            agp_orients = orientations_from_agp(agp_lines)
+            contig_orientations.update(agp_orients)
+            for clf in classifications:
+                if clf.original_name in agp_orients:
+                    clf.reversed = agp_orients[clf.original_name]
+    else:
+        logger.info("Phase 12: Skipping scaffolding (use --scaffold to enable)")
+
+    # --- Phase 12.5: Write FASTA outputs ---
+    logger.phase("Phase 12.5: Writing FASTA outputs")
     write_classified_fastas(
         query_fasta=qry,
         classifications=classifications,
         contig_orientations=contig_orientations,
         output_prefix=outprefix,
+        scaffolded_seqs=scaffolded_seqs if args.scaffold else None,
     )
 
     # --- Phase 13: Write enhanced summary TSV ---
@@ -1264,6 +1322,7 @@ def main():
         assign_min_frac=args.assign_min_frac,
         assign_min_ratio=args.assign_min_ratio,
         ref_norm_to_orig=ref_norm_to_orig,
+        scaffold_confidences=scaffold_confidences if args.scaffold else None,
     )
 
     logger.done(f"Summary:           {summary_tsv}")
@@ -1289,6 +1348,7 @@ def main():
         logger.info(f"       {cat}: {count}")
 
     if args.plot:
+        agp_tsv = Path(str(outprefix) + ".scaffolded.agp") if args.scaffold and scaffolded_seqs else None
         run_plot(
             summary_tsv,
             ref_lengths_tsv,
@@ -1300,6 +1360,7 @@ def main():
             plot_suffix,
             args.plot_html,
             rdna_annotations_tsv=rdna_annotations_tsv,
+            agp_tsv=agp_tsv,
         )
         # Generate classification summary plots
         run_classification_summary_bar(

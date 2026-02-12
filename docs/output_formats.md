@@ -45,6 +45,33 @@ The main output file containing classification results and quality metrics for e
 | `contaminant_taxid` | integer | NCBI taxonomy ID (only for `contaminant` classification) |
 | `contaminant_sci` | string | Scientific name of contaminant organism |
 
+### Full-Length and Telomere Columns
+
+These columns describe whether a contig represents a complete chromosome based on reference coverage and telomere detection.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `ref_coverage` | float | Fraction of the assigned reference chromosome spanned by syntenic blocks (0.0-1.0) |
+| `is_full_length` | yes/no | Whether the contig is classified as full-length (based on telomeres and `ref_coverage ≥ --full-length-ref-coverage`) |
+| `full_length_confidence` | string | Confidence of full-length call: `high` (both telomeres), `medium` (one telomere + high coverage), `low` (coverage-only) |
+| `query_subgenome` | string | Inferred query subgenome cluster label (e.g., `A`, `B`) based on identity-scaled clustering, or empty |
+| `seq_identity_vs_ref` | float | Best-chain alignment identity to the assigned reference chromosome (0.0-1.0) |
+| `has_5p_telomere` | yes/no | Telomere detected at the **start** (first 10kb) of the **raw input** contig |
+| `has_3p_telomere` | yes/no | Telomere detected at the **end** (last 10kb) of the **raw input** contig |
+| `rearrangement_candidates` | string | Comma-separated list of off-target reference chromosomes with significant synteny span (fraction ≥ `--rearrangement-threshold`), indicating potential rearrangements such as homeologous exchanges |
+
+**Important: Telomere reference frame.** The `has_5p_telomere` and `has_3p_telomere` columns report telomere positions relative to the **raw input contig**, not the reoriented output. For contigs where `reversed=yes`, the 5' and 3' ends are swapped in the output FASTA and in the chromosome overview plot. The chromosome overview visualization applies this flip automatically so telomere indicators appear at the correct reference-oriented positions. Downstream consumers of the TSV should apply the same swap when `reversed=yes`: the raw 5' telomere corresponds to the output 3' end, and vice versa.
+
+### Scaffold Confidence Columns
+
+These columns are populated when `--scaffold` is used and RagTag produces confidence scores. They are empty for contigs that were not scaffolded by RagTag (e.g., T2T contigs, single-contig groups, or when the built-in scaffolder was used as fallback).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `scaffold_grouping_confidence` | float | RagTag confidence that this contig belongs to the correct chromosome group (0.0-1.0) |
+| `scaffold_location_confidence` | float | RagTag confidence in the contig's position within the scaffold (0.0-1.0) |
+| `scaffold_orientation_confidence` | float | RagTag confidence in the contig's orientation within the scaffold (0.0-1.0) |
+
 ### Evidence Strength Columns
 
 These columns provide the underlying evidence used to determine classification confidence.
