@@ -41,22 +41,26 @@ def compute_orientation_votes(
     contig: str,
     assigned_ref_id: str,
 ) -> Tuple[int, int]:
-    """Count forward/reverse orientation votes from macro blocks.
+    """Compute forward/reverse orientation votes from macro blocks.
 
-    Each macro block provides one vote based on its strand.
+    Each macro block contributes its aligned bp (union_bp) as a weighted vote.
+    Only blocks matching the assigned reference are counted (off-target blocks
+    to other chromosomes are ignored).
 
-    Returns (fwd_count, rev_count)
+    Returns (fwd_bp, rev_bp) — total aligned bp on each strand.
     """
-    fwd_count = 0
-    rev_count = 0
+    fwd_bp = 0
+    rev_bp = 0
 
     for row in macro_block_rows:
-        # Row format: (contig, contig_len, ref_id, chrom_id, subgenome, strand, ...)
-        if len(row) < 6:
+        # Row format: (contig, contig_len, ref_id, chrom_id, subgenome, strand,
+        #              chain_id, qstart, qend, qspan, union_bp, ...)
+        if len(row) < 11:
             continue
         row_contig = row[0]
         row_ref_id = row[2]
         row_strand = row[5]
+        union_bp = row[10]
 
         if row_contig != contig:
             continue
@@ -64,11 +68,11 @@ def compute_orientation_votes(
             continue
 
         if row_strand == "+":
-            fwd_count += 1
+            fwd_bp += union_bp
         elif row_strand == "-":
-            rev_count += 1
+            rev_bp += union_bp
 
-    return fwd_count, rev_count
+    return fwd_bp, rev_bp
 
 
 def determine_contig_orientations(
@@ -97,15 +101,15 @@ def determine_contig_orientations(
             orientations[contig] = False
             continue
 
-        fwd, rev = compute_orientation_votes(macro_block_rows, contig, assigned_ref)
+        fwd_bp, rev_bp = compute_orientation_votes(macro_block_rows, contig, assigned_ref)
 
-        # Reverse if more reverse votes than forward
-        should_reverse = rev > fwd
+        # Reverse if more aligned bp on reverse strand than forward
+        should_reverse = rev_bp > fwd_bp
         orientations[contig] = should_reverse
 
         if should_reverse:
             contig_len = query_lengths.get(contig, 0) if query_lengths else 0
-            logger.info(f"Contig {contig} ({contig_len:,} bp) will be reverse-complemented (fwd={fwd}, rev={rev})")
+            logger.info(f"Contig {contig} ({contig_len:,} bp) will be reverse-complemented (fwd={fwd_bp:,} bp, rev={rev_bp:,} bp)")
 
     return orientations
 

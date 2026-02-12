@@ -33,6 +33,25 @@ logger = get_logger("scaffolding")
 # AGP output
 # ---------------------------------------------------------------------------
 
+def orientations_from_agp(agp_lines: List[str]) -> Dict[str, bool]:
+    """Extract per-contig orientation from AGP component lines.
+
+    Returns:
+        Dict mapping component_id -> is_reversed (True if AGP orientation is '-').
+    """
+    result: Dict[str, bool] = {}
+    for line in agp_lines:
+        if line.startswith("#"):
+            continue
+        fields = line.split("\t")
+        if len(fields) < 9 or fields[4] != "W":
+            continue
+        component_id = fields[5]
+        orientation = fields[8]
+        result[component_id] = (orientation == "-")
+    return result
+
+
 def write_agp(agp_lines: List[str], output_path: Path) -> None:
     """Write AGP 2.0 file.
 

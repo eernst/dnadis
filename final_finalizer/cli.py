@@ -1246,7 +1246,7 @@ def main():
     scaffold_confidences: Optional[Dict[str, tuple]] = None
     if args.scaffold:
         logger.phase("Phase 12: Reference-guided scaffolding")
-        from final_finalizer.output.scaffolding import scaffold_chromosomes, write_agp
+        from final_finalizer.output.scaffolding import scaffold_chromosomes, write_agp, orientations_from_agp
 
         scaffolded_seqs, agp_lines, scaffold_confidences = scaffold_chromosomes(
             query_fasta=qry,
@@ -1273,6 +1273,14 @@ def main():
             agp_path = Path(str(outprefix) + ".scaffolded.agp")
             write_agp(agp_lines, agp_path)
             logger.done(f"Scaffolded AGP:    {agp_path}")
+
+            # Reconcile contig orientations with scaffold AGP —
+            # the AGP is authoritative for scaffolded contigs.
+            agp_orients = orientations_from_agp(agp_lines)
+            contig_orientations.update(agp_orients)
+            for clf in classifications:
+                if clf.original_name in agp_orients:
+                    clf.reversed = agp_orients[clf.original_name]
     else:
         logger.info("Phase 12: Skipping scaffolding (use --scaffold to enable)")
 
