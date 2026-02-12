@@ -598,6 +598,10 @@ def scaffold_chromosomes(
 
             if ref_seq_key and ref_seq_key in ref_seqs:
                 write_fasta({ref_seq_key: ref_seqs[ref_seq_key]}, ref_chr_fasta)
+                # Remove stale .fai so pysam/samtools re-indexes
+                ref_fai = Path(str(ref_chr_fasta) + ".fai")
+                if ref_fai.exists():
+                    ref_fai.unlink()
 
                 # Extract contigs to temp FASTA
                 contigs_fasta = chr_work / "contigs.fa"
@@ -606,6 +610,10 @@ def scaffold_chromosomes(
                     if cn in query_seqs:
                         contig_seqs_subset[cn] = query_seqs[cn]
                 write_fasta(contig_seqs_subset, contigs_fasta)
+                # Remove stale .fai so pysam/samtools re-indexes
+                contigs_fai = Path(str(contigs_fasta) + ".fai")
+                if contigs_fai.exists():
+                    contigs_fai.unlink()
 
                 # Run RagTag
                 ragtag_dir = chr_work / "ragtag_out"
