@@ -9,6 +9,7 @@ Produces chromosome-scale pseudomolecules by:
 """
 from __future__ import annotations
 
+import shutil
 import statistics
 import subprocess
 from collections import defaultdict
@@ -318,6 +319,11 @@ def _run_ragtag_scaffold(
     Returns:
         Tuple of (agp_path, fasta_path) or (None, None) on failure.
     """
+    # Clean any stale output from previous runs.  RagTag caches intermediate
+    # alignments (*.paf) and skips re-alignment when they exist, which causes
+    # wrong results when the input contig set has changed.
+    if work_dir.exists():
+        shutil.rmtree(work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
     cmd = [
         "ragtag.py", "scaffold",
@@ -549,7 +555,25 @@ def scaffold_chromosomes(
 
             continue  # Skip scaffolding — T2T contigs cover the chromosome
 
-        # Multi-contig or non-full-length: scaffold
+        # Single-contig group: emit trivial AGP without invoking RagTag
+        if len(contig_names) == 1:
+            contig = contig_names[0]
+            seq = query_seqs.get(contig, "")
+            if seq:
+                if contig_orientations.get(contig, False):
+                    seq = reverse_complement(seq)
+                    orientation = "-"
+                else:
+                    orientation = "+"
+                all_scaffolded[scaffold_name] = seq
+                all_agp.append(_agp_component_line(
+                    scaffold_name, 1, len(seq), 1,
+                    contig, 1, len(seq), orientation,
+                ))
+                logger.info(f"{scaffold_name}: single contig {contig}, trivial scaffold")
+            continue
+
+        # Multi-contig group: scaffold
         n_contigs = len(contig_names)
         logger.info(f"{scaffold_name}: scaffolding {n_contigs} contigs")
 
