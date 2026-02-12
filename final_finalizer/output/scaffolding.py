@@ -259,6 +259,7 @@ def _builtin_scaffold(
     orientations: Dict[str, bool],
     ref_ranges: Dict[Tuple[str, str], Tuple[int, int]],
     ref_id: str,
+    scaffold_name: str,
     gap_size: int,
 ) -> Tuple[str, List[str]]:
     """Built-in scaffolder: sort contigs by reference position midpoint.
@@ -268,7 +269,8 @@ def _builtin_scaffold(
         sequences: Dict mapping contig name -> DNA sequence.
         orientations: Dict mapping contig name -> True if reversed.
         ref_ranges: Dict mapping (contig, ref_id) -> (ref_min, ref_max).
-        ref_id: Reference chromosome ID for this scaffold.
+        ref_id: Reference chromosome ID for range lookups.
+        scaffold_name: Scaffold name for AGP output.
         gap_size: Number of Ns between contigs.
 
     Returns:
@@ -305,7 +307,7 @@ def _builtin_scaffold(
             part_number += 1
             gap_end = scaffold_pos + gap_size - 1
             agp_lines.append(_agp_gap_line(
-                ref_id, scaffold_pos, gap_end, part_number, gap_size,
+                scaffold_name, scaffold_pos, gap_end, part_number, gap_size,
             ))
             scaffold_parts.append("N" * gap_size)
             scaffold_pos = gap_end + 1
@@ -314,7 +316,7 @@ def _builtin_scaffold(
         part_number += 1
         comp_end = scaffold_pos + len(seq) - 1
         agp_lines.append(_agp_component_line(
-            ref_id, scaffold_pos, comp_end, part_number,
+            scaffold_name, scaffold_pos, comp_end, part_number,
             contig, 1, len(seq), orientation,
         ))
         scaffold_parts.append(seq)
@@ -702,7 +704,8 @@ def scaffold_chromosomes(
             sequences=query_seqs,
             orientations=contig_orientations,
             ref_ranges=qr_ref_ranges,
-            ref_id=scaffold_name,
+            ref_id=ref_id,
+            scaffold_name=scaffold_name,
             gap_size=gap_size,
         )
         if scaffold_seq:

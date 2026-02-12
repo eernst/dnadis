@@ -799,6 +799,7 @@ def test_builtin_scaffold_ordering():
         orientations=orientations,
         ref_ranges=ref_ranges,
         ref_id="chr1",
+        scaffold_name="chr1",
         gap_size=10,
     )
 
@@ -830,6 +831,7 @@ def test_builtin_scaffold_reverse_complement():
         orientations=orientations,
         ref_ranges=ref_ranges,
         ref_id="chr1",
+        scaffold_name="chr1",
         gap_size=100,
     )
 
