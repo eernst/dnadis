@@ -391,6 +391,40 @@ def _parse_ragtag_agp(
     return agp_lines
 
 
+def _parse_ragtag_confidence(
+    confidence_path: Path,
+) -> Dict[str, Tuple[float, float, float]]:
+    """Parse RagTag confidence.txt -> {contig: (grouping, location, orientation)}.
+
+    Args:
+        confidence_path: Path to ragtag.scaffold.confidence.txt.
+
+    Returns:
+        Dict mapping contig name -> (grouping_conf, location_conf, orientation_conf).
+    """
+    result: Dict[str, Tuple[float, float, float]] = {}
+    if not confidence_path.exists():
+        return result
+    with confidence_path.open() as fh:
+        header = fh.readline()  # skip header
+        for line in fh:
+            line = line.rstrip("\n")
+            if not line:
+                continue
+            fields = line.split("\t")
+            if len(fields) < 4:
+                continue
+            contig = fields[0]
+            try:
+                grouping = float(fields[1])
+                location = float(fields[2])
+                orientation = float(fields[3])
+            except (ValueError, IndexError):
+                continue
+            result[contig] = (grouping, location, orientation)
+    return result
+
+
 def _extract_ragtag_scaffold_seq(
     fasta_path: Path,
 ) -> Optional[str]:
@@ -431,7 +465,7 @@ def scaffold_chromosomes(
     gap_size: int = 100,
     ref_norm_to_orig: Optional[Dict[str, str]] = None,
     qr_best_chain_ident: Optional[Dict[Tuple[str, str], float]] = None,
-) -> Tuple[Dict[str, str], List[str]]:
+) -> Tuple[Dict[str, str], List[str], Dict[str, Tuple[float, float, float]]]:
     """Produce scaffolded chromosome pseudomolecules.
 
     Groups contigs by (reference chromosome, haplotype group), then either:
@@ -456,9 +490,11 @@ def scaffold_chromosomes(
             haplotype-aware debris assignment.
 
     Returns:
-        Tuple of (scaffolded_sequences, agp_lines) where:
+        Tuple of (scaffolded_sequences, agp_lines, scaffold_confidences) where:
         - scaffolded_sequences: Dict mapping scaffold name -> DNA sequence
         - agp_lines: List of AGP lines for all scaffolds
+        - scaffold_confidences: Dict mapping contig original_name ->
+          (grouping, location, orientation) confidence from RagTag
     """
     work_dir.mkdir(parents=True, exist_ok=True)
 
@@ -466,9 +502,11 @@ def scaffold_chromosomes(
     groups = _group_contigs_by_haplotype(
         classifications, best_ref, contig_refs, qr_best_chain_ident or {},
     )
+    all_confidences: Dict[str, Tuple[float, float, float]] = {}
+
     if not groups:
         logger.warning("No contigs to scaffold")
-        return {}, []
+        return {}, [], {}
 
     # Build classification lookup
     clf_lookup = {clf.original_name: clf for clf in classifications}
@@ -627,6 +665,10 @@ def scaffold_chromosomes(
                     if scaffold_seq and agp_lines:
                         all_scaffolded[scaffold_name] = scaffold_seq
                         all_agp.extend(agp_lines)
+                        # Parse RagTag confidence scores
+                        conf_path = ragtag_dir / "ragtag.scaffold.confidence.txt"
+                        conf = _parse_ragtag_confidence(conf_path)
+                        all_confidences.update(conf)
                         continue
                     else:
                         logger.warning(f"{scaffold_name}: RagTag produced empty output, falling back")
@@ -649,4 +691,4 @@ def scaffold_chromosomes(
             all_agp.extend(agp_lines)
 
     logger.done(f"Scaffolded {len(all_scaffolded)} chromosomes")
-    return all_scaffolded, all_agp
+    return all_scaffolded, all_agp, all_confidences

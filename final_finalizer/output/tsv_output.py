@@ -75,6 +75,7 @@ def write_contig_summary_tsv(
     assign_min_frac: float,
     assign_min_ratio: float,
     ref_norm_to_orig: Optional[Dict[str, str]] = None,
+    scaffold_confidences: Optional[Dict[str, Tuple[float, float, float]]] = None,
 ) -> None:
     """Write enhanced contig_summary.tsv with classification columns.
 
@@ -154,6 +155,9 @@ def write_contig_summary_tsv(
         "second_aln_len",
         "second_identity",
         "second_distance",
+        "scaffold_grouping_confidence",
+        "scaffold_location_confidence",
+        "scaffold_orientation_confidence",
     ]
 
     def fetch_metrics(q: str, ref_id: str):
@@ -337,6 +341,12 @@ def write_contig_summary_tsv(
                         str(int(al_s)),
                         (f"{ident_s:.6f}" if ident_s is not None else ""),
                         (f"{dist_s:.6f}" if dist_s is not None else ""),
+                        # Scaffold confidence columns
+                        *(lambda sc: (
+                            f"{sc[0]:.3f}", f"{sc[1]:.3f}", f"{sc[2]:.3f}"
+                        ) if sc else ("", "", ""))(
+                            scaffold_confidences.get(q) if scaffold_confidences else None
+                        ),
                     ]
                 )
                 + "\n"

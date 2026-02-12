@@ -373,17 +373,50 @@ df_slots <- df_plot %>%
 has_brackets <- nrow(scaffold_brackets) > 0
 
 if (has_brackets) {
-  bracket_data <- scaffold_brackets %>%
+  # Check if confidence columns exist in df
+  has_conf_cols <- all(c("scaffold_location_confidence",
+                         "scaffold_orientation_confidence") %in% names(df))
+
+  # Join confidence data from summary TSV onto AGP components
+  bracket_with_conf <- scaffold_brackets %>%
     inner_join(
       df_slots %>% select(original_name, y_plot),
       by = c("component" = "original_name")
-    ) %>%
+    )
+
+  if (has_conf_cols) {
+    bracket_with_conf <- bracket_with_conf %>%
+      left_join(
+        df %>% select(original_name,
+                      scaffold_location_confidence,
+                      scaffold_orientation_confidence),
+        by = c("component" = "original_name")
+      )
+  }
+
+  bracket_data <- bracket_with_conf %>%
     group_by(scaffold) %>%
     summarise(
       y_min = min(y_plot),
       y_max = max(y_plot),
       y_mid = (min(y_plot) + max(y_plot)) / 2,
       n_components = n(),
+      # Build per-contig tooltip lines with confidence scores
+      tooltip = {
+        hdr <- paste0("Scaffold: ", first(scaffold), " (", n(), " contigs)")
+        if (has_conf_cols) {
+          lines <- paste0(
+            component,
+            ": loc=", ifelse(is.na(scaffold_location_confidence), "?",
+                             sprintf("%.3f", scaffold_location_confidence)),
+            ", orient=", ifelse(is.na(scaffold_orientation_confidence), "?",
+                                sprintf("%.3f", scaffold_orientation_confidence))
+          )
+        } else {
+          lines <- component
+        }
+        paste(c(hdr, lines), collapse = "\n")
+      },
       .groups = "drop"
     ) %>%
     filter(n_components > 1)
@@ -400,24 +433,28 @@ if (has_brackets) {
     # Vertical bars
     bracket_data %>% transmute(
       x = bracket_x, xend = bracket_x,
-      y = y_min - pill_yw / 6, yend = y_max + pill_yw / 6
+      y = y_min - pill_yw / 6, yend = y_max + pill_yw / 6,
+      scaffold, tooltip
     ),
     # Top feet
     bracket_data %>% transmute(
       x = bracket_x, xend = foot_xend,
-      y = y_max + pill_yw / 6, yend = y_max + pill_yw / 6
+      y = y_max + pill_yw / 6, yend = y_max + pill_yw / 6,
+      scaffold, tooltip
     ),
     # Bottom feet
     bracket_data %>% transmute(
       x = bracket_x, xend = foot_xend,
-      y = y_min - pill_yw / 6, yend = y_min - pill_yw / 6
+      y = y_min - pill_yw / 6, yend = y_min - pill_yw / 6,
+      scaffold, tooltip
     )
   )
 
   bracket_labels <- bracket_data %>% transmute(
     x = bracket_x - max_len * 0.008,
     y = y_mid,
-    label = "S"
+    label = "S",
+    scaffold, tooltip
   )
 }
 
@@ -913,18 +950,20 @@ if (plot_html) {
         )
       }
     } +
-    # Scaffold brackets ([ shape with "S" label, styled to match rearrangement annotations)
+    # Scaffold brackets ([ shape with "S" label, interactive with confidence tooltips)
     {
       if (has_brackets) {
         list(
-          geom_segment(
+          ggiraph::geom_segment_interactive(
             data = bracket_segments,
-            aes(x = x, xend = xend, y = y, yend = yend),
+            aes(x = x, xend = xend, y = y, yend = yend,
+                tooltip = tooltip, data_id = scaffold),
             color = "red", linewidth = 0.2
           ),
-          geom_text(
+          ggiraph::geom_text_interactive(
             data = bracket_labels,
-            aes(x = x, y = y, label = label),
+            aes(x = x, y = y, label = label,
+                tooltip = tooltip, data_id = scaffold),
             color = "red", size = (base_font_pt + 2) / .pt * 0.5,
             family = base_family, hjust = 1
           )

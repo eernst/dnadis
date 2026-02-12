@@ -1243,11 +1243,12 @@ def main():
 
     # --- Phase 12: Scaffolding (optional) ---
     scaffolded_seqs: Dict[str, str] = {}
+    scaffold_confidences: Optional[Dict[str, tuple]] = None
     if args.scaffold:
         logger.phase("Phase 12: Reference-guided scaffolding")
         from final_finalizer.output.scaffolding import scaffold_chromosomes, write_agp
 
-        scaffolded_seqs, agp_lines = scaffold_chromosomes(
+        scaffolded_seqs, agp_lines, scaffold_confidences = scaffold_chromosomes(
             query_fasta=qry,
             classifications=classifications,
             contig_orientations=contig_orientations,
@@ -1313,6 +1314,7 @@ def main():
         assign_min_frac=args.assign_min_frac,
         assign_min_ratio=args.assign_min_ratio,
         ref_norm_to_orig=ref_norm_to_orig,
+        scaffold_confidences=scaffold_confidences if args.scaffold else None,
     )
 
     logger.done(f"Summary:           {summary_tsv}")
