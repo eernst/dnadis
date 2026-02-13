@@ -176,6 +176,86 @@ def _infer_contig_strand_from_all_blocks(
     return "-" if reverse_votes > forward_votes else "+"
 
 
+def compute_collinearity_score(
+    macro_block_rows: list[tuple],
+    contig: str,
+    ref_id: str,
+) -> float | None:
+    """Compute bp-weighted consecutive concordance for a (contig, ref_id) pair.
+
+    Measures what fraction of aligned bp maintains reference coordinate order
+    when chains are sorted by query midpoint. This provides a confidence signal:
+    highly ordered evidence strengthens confidence, while disordered evidence
+    (possible chimera or misassembly) flags lower confidence.
+
+    Algorithm:
+        1. Collect macro block rows for this (contig, ref_id)
+        2. Sort by query midpoint
+        3. For each consecutive pair, check concordance relative to strand:
+           - Same strand "+": concordant if ref_mid[i+1] > ref_mid[i]
+           - Same strand "-": concordant if ref_mid[i+1] < ref_mid[i]
+           - Different strands: discordant (inversion boundary)
+        4. Weight each pair by min(union_bp_i, union_bp_{i+1})
+        5. Score = sum(concordant_weights) / sum(all_weights)
+
+    Args:
+        macro_block_rows: List of macro block tuples from chain parsing.
+            Indices: 0=contig, 2=ref_id, 5=strand, 7=qstart, 8=qend,
+                     10=union_bp, 17=ref_start, 18=ref_end
+        contig: Query contig name
+        ref_id: Reference chromosome ID
+
+    Returns:
+        Collinearity score in [0.0, 1.0], or None if fewer than 2 chains.
+        Returns 1.0 for exactly 1 chain (trivially collinear).
+    """
+    # Collect rows for this (contig, ref_id) pair
+    rows = []
+    for row in macro_block_rows:
+        if len(row) < 19:
+            continue
+        if row[0] == contig and row[2] == ref_id:
+            q_mid = (int(row[7]) + int(row[8])) / 2.0
+            ref_mid = (int(row[17]) + int(row[18])) / 2.0
+            union_bp = int(row[10])
+            strand = row[5]
+            rows.append((q_mid, ref_mid, union_bp, strand))
+
+    if len(rows) == 0:
+        return None
+    if len(rows) == 1:
+        return 1.0
+
+    # Sort by query midpoint
+    rows.sort(key=lambda x: x[0])
+
+    concordant_weight = 0.0
+    total_weight = 0.0
+
+    for i in range(len(rows) - 1):
+        _, ref_mid_i, bp_i, strand_i = rows[i]
+        _, ref_mid_j, bp_j, strand_j = rows[i + 1]
+
+        w = min(bp_i, bp_j)
+        total_weight += w
+
+        if strand_i != strand_j:
+            # Different strands → inversion boundary → discordant
+            continue
+
+        if strand_i == "+":
+            if ref_mid_j > ref_mid_i:
+                concordant_weight += w
+        else:  # strand == "-"
+            if ref_mid_j < ref_mid_i:
+                concordant_weight += w
+
+    if total_weight <= 0:
+        return 1.0  # No weight to judge (all zero-bp chains)
+
+    return concordant_weight / total_weight
+
+
 def _tp_keep(fields: list[str], assign_tp: str) -> bool:
     if assign_tp == "ALL":
         return True
@@ -786,6 +866,18 @@ def _chains_to_evidence_and_segments(
         if ivs:
             qr_ref_ranges[key] = (min(s for s, _ in ivs), max(e for _, e in ivs))
 
+    # Compute collinearity score per (contig, ref_id)
+    qr_collinearity: dict[tuple[str, str], float] = {}
+    seen_pairs: set[tuple[str, str]] = set()
+    for row in macro_block_rows:
+        if len(row) >= 19:
+            pair = (row[0], row[2])
+            seen_pairs.add(pair)
+    for q_name, rid in seen_pairs:
+        score = compute_collinearity_score(macro_block_rows, q_name, rid)
+        if score is not None:
+            qr_collinearity[(q_name, rid)] = score
+
     contig_total = defaultdict(int)
     contig_refs = defaultdict(set)
     for (q, ref_id), ubp in qr_union_bp.items():
@@ -843,6 +935,7 @@ def _chains_to_evidence_and_segments(
         bw = float(qr_best_chain_weight.get((q, ref_id), 0.0) or 0.0)
 
         chrom_id, sub = split_chrom_subgenome(ref_id)
+        collin = qr_collinearity.get((q, ref_id))
         chain_summary_rows.append(
             (
                 q,
@@ -860,6 +953,7 @@ def _chains_to_evidence_and_segments(
                 bw,
                 bqbp,
                 bident,
+                collin,
             )
         )
 
@@ -888,4 +982,5 @@ def _chains_to_evidence_and_segments(
         qr_ref_span_bp=dict(qr_ref_span_bp),
         qr_best_chain_ident=dict(qr_best_chain_ident),
         qr_ref_ranges=qr_ref_ranges,
+        qr_collinearity=qr_collinearity if qr_collinearity else None,
     )

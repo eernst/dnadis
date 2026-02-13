@@ -126,6 +126,7 @@ def write_contig_summary_tsv(
         "gc_content",
         "gc_deviation",
         "synteny_score",
+        "collinearity_score",
         "contam_score",
         "contam_coverage",
         "depth_mean",
@@ -267,6 +268,7 @@ def write_contig_summary_tsv(
             gc_content = f"{clf.gc_content:.4f}" if clf and clf.gc_content is not None else ""
             gc_deviation = f"{clf.gc_deviation:.2f}" if clf and clf.gc_deviation is not None else ""
             synteny_score = f"{clf.synteny_score:.3f}" if clf and clf.synteny_score is not None else ""
+            collinearity_score = f"{clf.collinearity_score:.3f}" if clf and clf.collinearity_score is not None else ""
             contam_score = f"{clf.contam_score:.3f}" if clf and clf.contam_score is not None else ""
             contam_coverage = f"{clf.contam_coverage:.3f}" if clf and clf.contam_coverage is not None else ""
 
@@ -312,6 +314,7 @@ def write_contig_summary_tsv(
                         gc_content,
                         gc_deviation,
                         synteny_score,
+                        collinearity_score,
                         contam_score,
                         contam_coverage,
                         depth_mean,
@@ -484,28 +487,18 @@ def write_chain_summary_tsv(
                     "best_chain_weight",
                     "best_chain_qbp",
                     "best_chain_identity",
+                    "collinearity",
                 ]
             )
             + "\n"
         )
-        for (
-            q,
-            ref_id,
-            chrom_id,
-            sub,
-            ubp,
-            msum,
-            alnsum,
-            ident,
-            gcount,
-            nch,
-            w_topk,
-            w_all,
-            bw,
-            bqbp,
-            bident,
-        ) in sorted(rows):
+        for row in sorted(rows):
+            # Support both old (15-field) and new (16-field) tuples
+            q, ref_id, chrom_id, sub, ubp, msum, alnsum, ident, gcount, nch, w_topk, w_all, bw, bqbp, bident = row[:15]
+            collin = row[15] if len(row) > 15 else None
+
             ref_id_out, chrom_id_out, sub_out = _ref_fields_for_output(ref_id, ref_norm_to_orig)
+            collin_str = f"{float(collin):.3f}" if collin is not None else ""
             out.write(
                 "\t".join(
                     [
@@ -524,6 +517,7 @@ def write_chain_summary_tsv(
                         f"{float(bw):.3f}",
                         str(int(bqbp)),
                         f"{float(bident):.6f}",
+                        collin_str,
                     ]
                 )
                 + "\n"

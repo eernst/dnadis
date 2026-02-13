@@ -975,6 +975,22 @@ def classify_all_contigs(
         elif gc_dev is not None and gc_dev > 2.0 and confidence == "high":
             confidence = "medium"
 
+        # Collinearity-based confidence adjustment
+        collin_score = None
+        if ev.qr_collinearity:
+            collin_score = ev.qr_collinearity.get((contig, ref_id))
+        n_chains = ev.qr_nchains_kept.get((contig, ref_id), 0)
+        if collin_score is not None and n_chains >= 3:
+            if collin_score >= 0.9 and n_chains >= 5 and confidence == "medium":
+                confidence = "high"
+            elif collin_score < 0.3 and n_chains >= 10:
+                confidence = "low"
+            elif collin_score < 0.5 and n_chains >= 5:
+                if confidence == "high":
+                    confidence = "medium"
+                elif confidence == "medium":
+                    confidence = "low"
+
         # Detect potential rearrangements (largest off-target cluster ≥ threshold)
         rearrangement_candidates = detect_rearrangement_candidates(
             contig=contig,
@@ -1005,6 +1021,8 @@ def classify_all_contigs(
             full_length_confidence=fl_confidence,
             has_5p_telomere=has_5p,
             has_3p_telomere=has_3p,
+            # Collinearity score
+            collinearity_score=collin_score,
             # Rearrangement hypothesis
             rearrangement_candidates=rearrangement_candidates,
         ))

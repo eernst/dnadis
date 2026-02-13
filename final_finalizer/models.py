@@ -88,6 +88,8 @@ class ChainEvidenceResult:
     qr_best_chain_ident: Dict[Tuple[str, str], float] = None  # (contig, ref_id) -> identity
     # Reference coordinate ranges per (contig, ref_id) for scaffolding
     qr_ref_ranges: Dict[Tuple[str, str], Tuple[int, int]] = None  # (contig, ref_id) -> (ref_min, ref_max)
+    # Collinearity score per (contig, ref_id) — fraction of aligned bp in reference order
+    qr_collinearity: Dict[Tuple[str, str], float] = None  # (contig, ref_id) -> score [0.0, 1.0]
 
 
 # ----------------------------
@@ -150,6 +152,8 @@ class ContigClassification:
     query_subgenome: Optional[str] = None  # "B", "C", etc. or None if primary/single
     query_subgenome_grp: Optional[int] = None  # Numeric cluster ID (1, 2, 3...)
     seq_identity_vs_ref: Optional[float] = None  # Sequence identity (0.0-1.0)
+    # Collinearity score for assigned reference (fraction of aligned bp in reference order)
+    collinearity_score: Optional[float] = None  # 0.0-1.0, None if no chains
     # Rearrangement hypothesis detection
     rearrangement_candidates: Optional[str] = None  # Comma-separated off-target chromosomes (e.g., "chr2A,chr5B")
 

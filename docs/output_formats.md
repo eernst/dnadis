@@ -81,6 +81,7 @@ These columns provide the underlying evidence used to determine classification c
 | `gc_content` | float | GC content of contig (0.0-1.0) |
 | `gc_deviation` | float | How many standard deviations the contig GC differs from baseline (reference GC for chrom_assigned, assembly chromosome GC for others) |
 | `synteny_score` | float | Synteny evidence strength (0.0-1.0); based on gene proportion |
+| `collinearity_score` | float | Fraction of aligned bp that maintains reference coordinate order (0.0-1.0). High values (>0.9) indicate well-ordered synteny; low values (<0.5) suggest rearrangements, chimeras, or misassembly. Only populated for `chrom_assigned` contigs with ≥2 chains. |
 | `contam_score` | float | Contaminant evidence strength (0.0-1.0); normalized centrifuger score |
 | `contam_coverage` | float | Fraction of contig covered by contaminant alignments (0.0-1.0) |
 
@@ -243,6 +244,7 @@ Synteny evidence aggregated per contig × reference chromosome pair. Use this to
 | `best_chain_weight` | float | Score of the best individual chain |
 | `best_chain_qbp` | integer | Query base pairs in best chain |
 | `best_chain_identity` | float | Identity of best chain |
+| `collinearity` | float | Fraction of aligned bp in reference coordinate order (0.0-1.0). Measures how well chains maintain collinear order when sorted by query position. |
 
 ---
 

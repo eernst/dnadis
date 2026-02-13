@@ -984,6 +984,98 @@ def test_scaffold_contig_grouping():
     assert "ctg5" not in all_grouped
 
 
+# ----------------------------
+# Collinearity score tests
+# ----------------------------
+def _make_macro_row(contig, ref_id, strand, qstart, qend, union_bp, ref_start, ref_end):
+    """Helper to create a macro block row tuple with correct indices."""
+    return (
+        contig, 1000000, ref_id, "chr1", "A", strand, 1,
+        qstart, qend, qend - qstart, union_bp, 0, 0, "0.95", "100.0",
+        1, 0, ref_start, ref_end,
+    )
+
+
+def test_compute_collinearity_score_perfect():
+    """All concordant chains → 1.0."""
+    from final_finalizer.alignment.chain_parsing import compute_collinearity_score
+
+    rows = [
+        _make_macro_row("ctg1", "chr1A", "+", 0, 100000, 50000, 0, 100000),
+        _make_macro_row("ctg1", "chr1A", "+", 200000, 300000, 60000, 200000, 300000),
+        _make_macro_row("ctg1", "chr1A", "+", 400000, 500000, 70000, 400000, 500000),
+    ]
+    score = compute_collinearity_score(rows, "ctg1", "chr1A")
+    assert score == 1.0
+
+
+def test_compute_collinearity_score_discordant():
+    """All discordant chains → 0.0."""
+    from final_finalizer.alignment.chain_parsing import compute_collinearity_score
+
+    # Query order: 0-100k, 200-300k, 400-500k
+    # Ref order: 500k, 300k, 100k → all decreasing on + strand → all discordant
+    rows = [
+        _make_macro_row("ctg1", "chr1A", "+", 0, 100000, 50000, 500000, 600000),
+        _make_macro_row("ctg1", "chr1A", "+", 200000, 300000, 60000, 300000, 400000),
+        _make_macro_row("ctg1", "chr1A", "+", 400000, 500000, 70000, 100000, 200000),
+    ]
+    score = compute_collinearity_score(rows, "ctg1", "chr1A")
+    assert score == 0.0
+
+
+def test_compute_collinearity_score_single_chain():
+    """Single chain → 1.0 (trivially collinear)."""
+    from final_finalizer.alignment.chain_parsing import compute_collinearity_score
+
+    rows = [
+        _make_macro_row("ctg1", "chr1A", "+", 0, 100000, 50000, 0, 100000),
+    ]
+    score = compute_collinearity_score(rows, "ctg1", "chr1A")
+    assert score == 1.0
+
+
+def test_compute_collinearity_score_no_chains():
+    """No chains → None."""
+    from final_finalizer.alignment.chain_parsing import compute_collinearity_score
+
+    score = compute_collinearity_score([], "ctg1", "chr1A")
+    assert score is None
+
+
+def test_compute_collinearity_score_bp_weighted():
+    """Larger chains contribute more weight."""
+    from final_finalizer.alignment.chain_parsing import compute_collinearity_score
+
+    # First pair: concordant, small chains (10k bp each) → weight = min(10k, 10k) = 10k
+    # Second pair: discordant, large chains (10k, 100k bp) → weight = min(10k, 100k) = 10k
+    # concordant_weight=10k, total_weight=20k → score=0.5
+    rows = [
+        _make_macro_row("ctg1", "chr1A", "+", 0, 50000, 10000, 0, 50000),
+        _make_macro_row("ctg1", "chr1A", "+", 100000, 200000, 10000, 100000, 200000),
+        _make_macro_row("ctg1", "chr1A", "+", 300000, 400000, 100000, 50000, 100000),  # ref goes backward
+    ]
+    score = compute_collinearity_score(rows, "ctg1", "chr1A")
+    assert abs(score - 0.5) < 0.01
+
+
+def test_compute_collinearity_score_mixed_strands():
+    """Inversion boundary (different strands) → discordant."""
+    from final_finalizer.alignment.chain_parsing import compute_collinearity_score
+
+    # Two + strand chains (concordant), then one - strand chain (inversion → discordant)
+    rows = [
+        _make_macro_row("ctg1", "chr1A", "+", 0, 100000, 50000, 0, 100000),
+        _make_macro_row("ctg1", "chr1A", "+", 200000, 300000, 50000, 200000, 300000),
+        _make_macro_row("ctg1", "chr1A", "-", 400000, 500000, 50000, 400000, 500000),
+    ]
+    score = compute_collinearity_score(rows, "ctg1", "chr1A")
+    # Pair 1 (+/+, concordant): weight = 50k → concordant
+    # Pair 2 (+/-, different strands): weight = 50k → discordant
+    # score = 50k / 100k = 0.5
+    assert abs(score - 0.5) < 0.01
+
+
 def test_macro_block_rows_ref_coords():
     """Test that macro_block_rows from PAF parsing include ref_start/ref_end."""
     ev = ff.parse_paf_chain_evidence_and_segments(
