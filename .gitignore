@@ -1,3 +1,15 @@
+# Secrets and credentials
+.env
+*.env.local
+*.env.*.local
+*.pem
+*.key
+*.crt
+
+# Claude Code
+.claude/
+.mcp.json
+
 # Python
 __pycache__/
 *.py[cod]
@@ -18,9 +30,9 @@ test_output/
 
 # Coverage
 .coverage
+.coverage.*
 coverage.xml
 htmlcov/
-.coverage.*
 
 # Large test data (downloaded by integration tests)
 data/Ler.chr.all.v2.0.fasta.gz
