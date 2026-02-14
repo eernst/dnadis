@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 from final_finalizer.utils.logging_config import get_logger
 
@@ -147,3 +147,94 @@ def run_unified_report(
         return False
 
 
+def run_comparison_report(
+    comparison_tsv: Path,
+    completeness_tsv: Path,
+    ref_lengths_tsv: Path,
+    assembly_results: List,
+    outprefix: Path,
+    chr_like_minlen: int,
+    synteny_mode: str,
+    reference_name: str = "",
+) -> bool:
+    """Generate cross-assembly comparison HTML report.
+
+    Follows the same pattern as :func:`run_unified_report`: loads the
+    ``comparison_report.tmpl.Rmd`` template, substitutes placeholders,
+    and calls ``rmarkdown::render()``.
+
+    Args:
+        comparison_tsv: Path to comparison_summary.tsv.
+        completeness_tsv: Path to chromosome_completeness.tsv.
+        ref_lengths_tsv: Path to reference lengths TSV.
+        assembly_results: List of :class:`AssemblyResult` objects.
+        outprefix: Output prefix for the comparison report.
+        chr_like_minlen: Minimum length threshold for chromosome-like contigs.
+        synteny_mode: Synteny mode used ("protein" or "nucleotide").
+        reference_name: Reference name for the report header.
+
+    Returns:
+        True if the report was generated successfully.
+    """
+    if not have_rscript():
+        logger.error(
+            "--plot requires Rscript in PATH. "
+            "Install with: conda install -c conda-forge r-base"
+        )
+        return False
+
+    if not _have_rmarkdown():
+        logger.error(
+            "--plot requires rmarkdown and pandoc. "
+            "Install with: conda install -c conda-forge r-rmarkdown pandoc"
+        )
+        return False
+
+    tmpl_path = Path(__file__).resolve().with_name("comparison_report.tmpl.Rmd")
+    if not tmpl_path.exists():
+        logger.warning(f"Missing Rmd template: {tmpl_path}")
+        return False
+
+    report_rmd = Path(str(outprefix) + ".comparison_report.Rmd").resolve()
+    report_html = Path(str(outprefix) + ".comparison_report.html").resolve()
+
+    tmpl = _read_text(tmpl_path)
+
+    def abs_esc(p: Path) -> str:
+        return _esc(p.resolve())
+
+    # Build semicolon-separated lists of per-assembly TSV paths and names
+    per_asm_tsvs = ";".join(
+        abs_esc(r.summary_tsv) for r in assembly_results
+    )
+    asm_names = ";".join(r.assembly_name for r in assembly_results)
+
+    filled = (
+        tmpl.replace("__COMPARISON_TSV__", abs_esc(comparison_tsv))
+        .replace("__COMPLETENESS_TSV__", abs_esc(completeness_tsv))
+        .replace("__REF_LENGTHS_TSV__", abs_esc(ref_lengths_tsv))
+        .replace("__PER_ASM_TSVS__", per_asm_tsvs)
+        .replace("__ASM_NAMES__", asm_names)
+        .replace("__REFNAME__", str(reference_name).replace('"', '\\"'))
+        .replace("__SYNTENY_MODE__", str(synteny_mode))
+        .replace("__CHRLIKE__", str(int(chr_like_minlen)))
+        .replace("__OUTPREFIX__", abs_esc(outprefix))
+    )
+
+    with report_rmd.open("w", encoding="utf-8") as fh:
+        fh.write(filled)
+
+    logger.info(f"Rendering comparison report: {report_html}")
+    try:
+        subprocess.run(
+            ["Rscript", "-e", f"rmarkdown::render('{_esc(report_rmd)}')"],
+            check=True,
+        )
+    except subprocess.CalledProcessError as e:
+        logger.warning(f"Rscript failed with code {e.returncode}; comparison report not generated.")
+        return False
+    else:
+        if report_html.exists():
+            logger.done(f"Comparison report written to: {report_html}")
+            return True
+        return False

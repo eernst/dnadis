@@ -7,7 +7,7 @@ These have zero dependencies on other modules, making them safe to import anywhe
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -408,3 +408,85 @@ class DepthStats:
     max_depth: float
     breadth_1x: float
     breadth_10x: float
+
+
+# ----------------------------
+# Multi-assembly comparison
+# ----------------------------
+@dataclass
+class ChromRefSummary:
+    """Per-reference-chromosome summary for one assembly."""
+    ref_id: str
+    ref_length: int
+    n_contigs: int
+    total_assigned_bp: int
+    best_ref_coverage: Optional[float]
+    is_full_length: bool
+    has_both_telomeres: bool
+    mean_identity: Optional[float]
+
+
+@dataclass
+class AssemblyResult:
+    """Summary metrics from one assembly's finalization."""
+    # Identity
+    assembly_name: str
+    assembly_path: Path
+    outprefix: Path
+
+    # Contiguity
+    total_contigs: int
+    total_bp: int
+    n50: int
+    l50: int
+    largest_contig: int
+
+    # Classification counts/bp
+    classification_counts: Dict[str, int]
+    classification_bp: Dict[str, int]
+
+    # Chromosome completeness
+    n_chrom_assigned: int
+    n_chrom_unassigned: int
+    n_full_length: int
+    n_with_both_telomeres: int
+    n_with_any_telomere: int
+    mean_ref_coverage: Optional[float]
+    n_chimeric: int
+
+    # Quality (chrom_assigned contigs)
+    mean_identity: Optional[float]
+    mean_collinearity: Optional[float]
+    mean_gc_deviation: Optional[float]
+
+    # Contamination
+    n_contaminants: int
+    total_contaminant_bp: int
+    n_unique_contaminant_species: int
+
+    # rDNA
+    n_rdna_contigs: int
+    total_rdna_bp: int
+    n_rdna_arrays: int
+
+    # Organelles
+    chrC_found: bool
+    chrM_found: bool
+
+    # Read depth (optional)
+    mean_chrom_depth: Optional[float]
+
+    # Per-reference-chromosome detail
+    chrom_ref_coverage: Dict[str, ChromRefSummary]
+
+    # Full classifications list (for per-contig comparisons in Rmd)
+    classifications: List[ContigClassification]
+
+    # Output file paths (for Rmd template)
+    summary_tsv: Path
+    segments_tsv: Path
+    evidence_tsv: Path
+    macro_blocks_tsv: Path
+    contaminants_tsv: Optional[Path] = None
+    rdna_annotations_tsv: Optional[Path] = None
+    rdna_arrays_tsv: Optional[Path] = None

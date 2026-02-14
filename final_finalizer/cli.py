@@ -137,7 +137,7 @@ from final_finalizer.output.tsv_output import (
     write_rdna_arrays_tsv,
 )
 from final_finalizer.output.plotting import run_unified_report
-from final_finalizer.models import ReferenceContext
+from final_finalizer.models import AssemblyResult, ReferenceContext
 
 
 # ---------------------------------------------------------------------------
@@ -296,7 +296,7 @@ def run_assembly(
     assembly_name: str,
     reads: Optional[Path],
     outprefix: Path,
-) -> None:
+) -> AssemblyResult:
     """Run the full analysis pipeline for a single query assembly.
 
     Performs synteny analysis, detection (organelle, rDNA, debris,
@@ -310,6 +310,9 @@ def run_assembly(
         assembly_name: Short name for this assembly (used in logs/plots).
         reads: Path to reads for depth analysis, or ``None``.
         outprefix: Output prefix for this assembly's files.
+
+    Returns:
+        :class:`AssemblyResult` summarizing the assembly's classification.
     """
     from final_finalizer.utils.logging_config import get_logger
     logger = get_logger("cli")
@@ -1054,6 +1057,32 @@ def run_assembly(
     for cat, count in sorted(clf_counts.items()):
         logger.info(f"       {cat}: {count}")
 
+    # Build assembly result for cross-assembly comparison
+    from final_finalizer.output.comparison import build_assembly_result
+    result = build_assembly_result(
+        assembly_name=assembly_name,
+        assembly_path=qry,
+        outprefix=outprefix,
+        classifications=classifications,
+        qry_lengths=qry_lengths,
+        ref_lengths_norm=ref_ctx.ref_lengths_norm,
+        ev=ev,
+        contaminants_filtered=contaminants_filtered,
+        chrC_contig=chrC_contig,
+        chrM_contig=chrM_contig,
+        rdna_arrays=rdna_arrays,
+        depth_stats=depth_stats,
+        chimera_primary_frac=args.chimera_primary_frac,
+        chimera_secondary_frac=args.chimera_secondary_frac,
+        summary_tsv=summary_tsv,
+        segments_tsv=segments_tsv,
+        evidence_tsv=chain_summary_tsv,
+        macro_blocks_tsv=macro_blocks_tsv,
+        contaminants_tsv_path=contaminants_tsv if contaminants_filtered else None,
+        rdna_annotations_tsv=rdna_annotations_tsv,
+        rdna_arrays_tsv=rdna_arrays_tsv_path,
+    )
+
     if args.plot:
         agp_tsv = Path(str(outprefix) + ".scaffolded.agp") if args.scaffold and scaffolded_seqs else None
         contam_tsv_arg = contaminants_tsv if contaminants_filtered else None
@@ -1079,6 +1108,8 @@ def run_assembly(
                 "--plot failed: unified report could not be generated. "
                 "Ensure Rscript, rmarkdown, and pandoc are installed."
             )
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -1555,9 +1586,19 @@ def main():
         sys.exit(f"[error] --contaminant-min-coverage must be between 0.0 and 1.0, got {args.contaminant_min_coverage}")
 
     # Setup logging
+    # Auto-enable log file alongside output if not explicitly set
+    log_file = args.log_file
+    if not log_file:
+        if is_multi:
+            log_file = str(Path(args.output_dir) / "final_finalizer.log")
+        else:
+            log_file = str(Path(args.outprefix).parent / "final_finalizer.log")
+
     from final_finalizer.utils.logging_config import setup_logging, get_logger
-    setup_logging(verbose=args.verbose, quiet=args.quiet, log_file=args.log_file)
+    setup_logging(verbose=args.verbose, quiet=args.quiet, log_file=log_file)
     logger = get_logger("cli")
+    if not args.log_file:
+        logger.info(f"Logging to: {log_file}")
 
     if args.ref_id_pattern:
         set_ref_id_patterns(compile_ref_id_patterns(args.ref_id_pattern))
@@ -1574,16 +1615,45 @@ def main():
         n_total = len(assemblies)
         n_ok = 0
         failures = []
+        results = []
 
         for i, (asm_path, asm_name, asm_reads) in enumerate(assemblies):
             logger.phase(f"=== Assembly: {asm_name} ({i + 1}/{n_total}) ===")
             asm_outprefix = output_dir / asm_name / asm_name
             try:
-                run_assembly(args, ref_ctx, asm_path, asm_name, asm_reads, asm_outprefix)
+                result = run_assembly(args, ref_ctx, asm_path, asm_name, asm_reads, asm_outprefix)
+                results.append(result)
                 n_ok += 1
             except Exception as e:
                 logger.error(f"Assembly '{asm_name}' failed: {e}")
                 failures.append((asm_name, str(e)))
+
+        # Write cross-assembly comparison outputs
+        if results:
+            from final_finalizer.output.comparison import (
+                write_comparison_summary_tsv,
+                write_chromosome_completeness_tsv,
+            )
+            comparison_tsv = output_dir / "comparison_summary.tsv"
+            completeness_tsv = output_dir / "chromosome_completeness.tsv"
+            write_comparison_summary_tsv(comparison_tsv, results)
+            write_chromosome_completeness_tsv(completeness_tsv, results, ref_ctx.ref_lengths_norm)
+            logger.done(f"Comparison summary: {comparison_tsv}")
+            logger.done(f"Chromosome completeness: {completeness_tsv}")
+
+            if args.plot:
+                from final_finalizer.output.plotting import run_comparison_report
+                if not run_comparison_report(
+                    comparison_tsv=comparison_tsv,
+                    completeness_tsv=completeness_tsv,
+                    ref_lengths_tsv=ref_ctx.ref_lengths_tsv,
+                    assembly_results=results,
+                    outprefix=output_dir / "comparison",
+                    chr_like_minlen=ref_ctx.chr_like_minlen,
+                    synteny_mode=args.synteny_mode,
+                    reference_name=args.reference_name,
+                ):
+                    logger.error("Comparison report generation failed.")
 
         logger.phase("=== Multi-assembly summary ===")
         logger.done(f"{n_ok}/{n_total} assemblies completed successfully")

@@ -1,0 +1,616 @@
+---
+title: "Multi-Assembly Comparison Report"
+params:
+  comparison_tsv: "__COMPARISON_TSV__"
+  completeness_tsv: "__COMPLETENESS_TSV__"
+  ref_lengths_tsv: "__REF_LENGTHS_TSV__"
+  per_assembly_summary_tsvs: "__PER_ASM_TSVS__"
+  assembly_names: "__ASM_NAMES__"
+  reference_name: "__REFNAME__"
+  synteny_mode: "__SYNTENY_MODE__"
+  chr_like_minlen: "__CHRLIKE__"
+  out_prefix: "__OUTPREFIX__"
+output:
+  html_document:
+    self_contained: true
+    toc: true
+    toc_float:
+      collapsed: false
+    toc_depth: 2
+    theme: flatly
+---
+
+```{css, echo=FALSE}
+body {
+  font-family: "Helvetica Neue", Helvetica, "Liberation Sans", Arial, sans-serif;
+  font-size: 13px;
+  max-width: 1300px;
+  margin: auto;
+}
+h1.title { font-size: 24px; margin-bottom: 4px; }
+h1 { font-size: 20px; border-bottom: 2px solid #2c3e50; padding-bottom: 4px; }
+h2 { font-size: 16px; }
+.gt_table { font-size: 11px !important; }
+.gt_col_heading { font-size: 10px !important; font-weight: bold !important; }
+.widget-container { margin: 16px 0; }
+.note-box {
+  background: #f8f9fa; border-left: 4px solid #6c757d;
+  padding: 10px 14px; margin: 12px 0; font-size: 12px; color: #495057;
+}
+.section-intro { font-size: 13px; color: #555; margin-bottom: 12px; }
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE,
+                      fig.width = 10, dpi = 150)
+
+if (!requireNamespace("pacman", quietly = TRUE))
+  install.packages("pacman", repos = "https://cloud.r-project.org")
+library(pacman)
+pacman::p_load(readr, dplyr, stringr, tidyr, tibble,
+               ggplot2, ggnewscale, patchwork, grid,
+               ggiraph, htmlwidgets, ggrepel,
+               ggokabeito, colorspace,
+               gt, gtExtras, scales,
+               showtext, sysfonts, knitr)
+
+# ---------------------------------------------------------------------------
+# Font setup (shared across all plots)
+# ---------------------------------------------------------------------------
+.resolve_font <- function(family) {
+  slug <- tolower(gsub(" ", "", family))
+  path <- systemfonts::match_fonts(family)$path
+  if (nzchar(path) && grepl(slug, tolower(gsub("[- ]", "", basename(path)))))
+    return(path)
+  NULL
+}
+base_family <- "sans"
+for (.fam in c("Helvetica Neue", "Helvetica", "Liberation Sans")) {
+  .r <- .resolve_font(.fam)
+  if (!is.null(.r)) {
+    sysfonts::font_add(.fam,
+      regular    = .r,
+      bold       = systemfonts::match_fonts(.fam, weight = "bold")$path,
+      italic     = systemfonts::match_fonts(.fam, italic = TRUE)$path,
+      bolditalic = systemfonts::match_fonts(.fam, italic = TRUE, weight = "bold")$path
+    )
+    base_family <- .fam
+    break
+  }
+}
+showtext_auto()
+
+# ---------------------------------------------------------------------------
+# Shared theming
+# ---------------------------------------------------------------------------
+base_font_pt <- 8
+axis_title_margin_pt <- 4
+axis_text_margin_pt <- 4
+
+axis_theme <- theme(
+  axis.title.x = element_text(size = base_font_pt, family = base_family,
+                               margin = margin(t = axis_title_margin_pt)),
+  axis.title.y = element_text(size = base_font_pt, family = base_family,
+                               margin = margin(r = axis_title_margin_pt)),
+  axis.text.x = element_text(size = base_font_pt, family = base_family,
+                               margin = margin(t = axis_text_margin_pt)),
+  axis.text.y = element_text(size = base_font_pt, family = base_family)
+)
+
+apply_legend_theme <- function(p, text_pt = base_font_pt, key_pt = base_font_pt,
+                               tight = TRUE) {
+  base <- theme(
+    legend.title = element_text(size = text_pt, family = base_family),
+    legend.text  = element_text(size = text_pt, family = base_family),
+    legend.key.height = grid::unit(key_pt, "pt"),
+    legend.key.width  = grid::unit(key_pt, "pt"),
+    legend.direction = "horizontal",
+    legend.box = "horizontal"
+  )
+  if (tight) {
+    base <- base + theme(
+      legend.box.margin = margin(0, 0, 0, 0),
+      legend.margin = margin(0, 0, 0, 0),
+      legend.spacing.y = grid::unit(0, "pt"),
+      legend.spacing.x = grid::unit(2, "pt")
+    )
+  }
+  p + base
+}
+
+# ---------------------------------------------------------------------------
+# Okabe-Ito palette and classification colors
+# ---------------------------------------------------------------------------
+oi <- palette_okabe_ito()
+
+classification_colors <- c(
+  "chrom_assigned"     = oi[5],
+  "chrom_unassigned"   = oi[2],
+  "organelle_complete" = oi[3],
+  "organelle_debris"   = oi[4],
+  "rDNA"               = oi[1],
+  "contaminant"        = oi[7],
+  "chrom_debris"       = lighten(oi[5], amount = 0.5),
+  "debris"             = oi[9],
+  "unclassified"       = oi[8]
+)
+
+classification_labels <- c(
+  "chrom_assigned"     = "Chromosome (assigned)",
+  "chrom_unassigned"   = "Chromosome (unassigned)",
+  "organelle_complete" = "Organelle (complete)",
+  "organelle_debris"   = "Organelle (debris)",
+  "rDNA"               = "rDNA",
+  "contaminant"        = "Contaminant",
+  "chrom_debris"       = "Chromosome debris",
+  "debris"             = "Debris",
+  "unclassified"       = "Unclassified"
+)
+
+classification_levels <- c(
+  "chrom_assigned", "chrom_unassigned", "organelle_complete", "organelle_debris",
+  "rDNA", "contaminant", "chrom_debris", "debris", "unclassified"
+)
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+save_pdf <- function(path, plot, width = 7.2, height = 5, dpi = 300) {
+  dev <- if (capabilities("cairo")) cairo_pdf else "pdf"
+  invisible(ggsave(path, plot, width = width, height = height, dpi = dpi, device = dev))
+}
+
+girafe_styled <- function(ggobj, width_svg = 10, height_svg = 6.9) {
+  g <- ggiraph::girafe(ggobj = ggobj, width_svg = width_svg, height_svg = height_svg)
+  ggiraph::girafe_options(g,
+    ggiraph::opts_tooltip(css = paste0(
+      "font-family: ", base_family, "; font-size: 9pt; ",
+      "background: white; padding: 6px; border: 1px solid #666;"
+    )),
+    ggiraph::opts_hover(css = "opacity: 0.8;"),
+    ggiraph::opts_toolbar(saveaspng = FALSE)
+  )
+}
+
+gt_theme <- function(gt_obj) {
+  gt_obj %>%
+    tab_options(
+      table.font.size = px(11),
+      column_labels.font.weight = "bold",
+      column_labels.border.top.style = "none",
+      column_labels.border.bottom.width = px(2),
+      column_labels.border.bottom.color = "#333",
+      table.border.top.style = "none",
+      table.border.bottom.style = "none",
+      table_body.border.bottom.color = "#999",
+      data_row.padding = px(4),
+      heading.border.bottom.style = "none"
+    ) %>%
+    opt_row_striping(row_striping = FALSE)
+}
+
+fmt_mb <- function(x) sprintf("%.1f", x / 1e6)
+fmt_pct <- function(x) ifelse(is.na(x), "\u2014", sprintf("%.1f%%", x * 100))
+
+# Assembly color palette (one color per assembly)
+asm_pal <- c(oi[5], oi[1], oi[3], oi[6], oi[7], oi[4], oi[2], oi[8], oi[9])
+
+# ---------------------------------------------------------------------------
+# Load data
+# ---------------------------------------------------------------------------
+comp_df <- read_tsv(params$comparison_tsv, show_col_types = FALSE)
+compl_df <- read_tsv(params$completeness_tsv, show_col_types = FALSE)
+ref_lengths <- read_tsv(params$ref_lengths_tsv, show_col_types = FALSE,
+                        col_types = cols(subgenome = col_character()))
+
+n_asm <- nrow(comp_df)
+asm_names <- comp_df$assembly
+asm_colors <- setNames(asm_pal[seq_len(min(n_asm, length(asm_pal)))], asm_names)
+
+# Load per-assembly summary TSVs
+asm_tsv_paths <- strsplit(params$per_assembly_summary_tsvs, ";")[[1]]
+asm_name_list <- strsplit(params$assembly_names, ";")[[1]]
+
+per_asm_summaries <- list()
+for (i in seq_along(asm_tsv_paths)) {
+  p <- asm_tsv_paths[i]
+  if (nzchar(p) && file.exists(p)) {
+    df <- read_tsv(p, show_col_types = FALSE,
+                   col_types = cols(assigned_subgenome = col_character()))
+    df$assembly <- asm_name_list[i]
+    per_asm_summaries[[i]] <- df
+  }
+}
+all_summary_df <- if (length(per_asm_summaries) > 0) bind_rows(per_asm_summaries) else NULL
+has_per_asm <- !is.null(all_summary_df) && nrow(all_summary_df) > 0
+
+has_any_chrom <- any(comp_df$n_chrom_assigned > 0, na.rm = TRUE)
+has_any_contam <- any(comp_df$n_contaminants > 0, na.rm = TRUE)
+has_any_depth <- any(!is.na(comp_df$mean_chrom_depth) & comp_df$mean_chrom_depth > 0)
+
+chr_like_minlen <- as.numeric(params$chr_like_minlen)
+
+# PDF output paths
+pdf_classbar <- paste0(params$out_prefix, ".classification_comparison.pdf")
+pdf_heatmap  <- paste0(params$out_prefix, ".chromosome_completeness.pdf")
+```
+
+---
+
+<p class="section-intro">
+**Reference**: `r if (nchar(params$reference_name) > 0) params$reference_name else "\u2014"` &emsp;
+**Synteny mode**: `r params$synteny_mode` &emsp;
+**Assemblies**: `r n_asm` &emsp;
+**Date**: `r Sys.Date()`
+</p>
+
+# 1. Assembly Overview {.tabset}
+
+## Summary Table
+
+```{r overview_table}
+tbl <- comp_df %>%
+  transmute(
+    Assembly = assembly,
+    Contigs  = total_contigs,
+    `Size (Mb)` = round(total_bp / 1e6, 1),
+    N50 = round(n50 / 1e6, 2),
+    L50 = l50,
+    `Largest (Mb)` = round(largest_contig / 1e6, 1),
+    `Chr assigned` = n_chrom_assigned,
+    `Chr unassigned` = n_chrom_unassigned,
+    `Full-length` = n_full_length,
+    `Both telo` = n_both_telomeres,
+    `Mean ref cov` = ifelse(is.na(mean_ref_coverage), "\u2014",
+                            sprintf("%.1f%%", mean_ref_coverage * 100)),
+    Chimeric = n_chimeric,
+    `Mean identity` = ifelse(is.na(mean_identity), "\u2014",
+                             sprintf("%.2f%%", mean_identity * 100)),
+    Contaminants = n_contaminants,
+    rDNA = n_rdna,
+    chrC = ifelse(chrC_found == "yes", "\u2713", "\u2014"),
+    chrM = ifelse(chrM_found == "yes", "\u2713", "\u2014")
+  )
+
+tbl %>%
+  gt() %>%
+  gt_theme() %>%
+  tab_header(title = "Assembly Comparison Summary") %>%
+  cols_align(align = "right", columns = where(is.numeric)) %>%
+  tab_spanner(label = "Contiguity", columns = c(Contigs, `Size (Mb)`, N50, L50, `Largest (Mb)`)) %>%
+  tab_spanner(label = "Chromosomes", columns = c(`Chr assigned`, `Chr unassigned`, `Full-length`, `Both telo`, `Mean ref cov`, Chimeric, `Mean identity`)) %>%
+  tab_spanner(label = "Other", columns = c(Contaminants, rDNA, chrC, chrM))
+```
+
+## Classification Distribution
+
+```{r classification_bar, fig.width=10, fig.height=max(3, n_asm * 0.8 + 1.5)}
+if (has_per_asm) {
+  clf_data <- all_summary_df %>%
+    group_by(assembly, classification) %>%
+    summarise(total_bp = sum(length, na.rm = TRUE), n_contigs = n(), .groups = "drop") %>%
+    mutate(
+      total_mb = total_bp / 1e6,
+      classification = factor(classification, levels = rev(classification_levels)),
+      assembly = factor(assembly, levels = rev(asm_names))
+    )
+
+  p_clf <- ggplot(clf_data, aes(x = assembly, y = total_mb, fill = classification)) +
+    geom_col_interactive(
+      aes(tooltip = paste0(assembly, "\n",
+                           classification_labels[as.character(classification)], "\n",
+                           sprintf("%.1f Mb (%d contigs)", total_mb, n_contigs))),
+      width = 0.7
+    ) +
+    scale_fill_manual(values = classification_colors, labels = classification_labels,
+                      drop = FALSE, name = NULL) +
+    coord_flip() +
+    labs(x = NULL, y = "Assembly size (Mb)") +
+    theme_minimal(base_size = base_font_pt, base_family = base_family) +
+    axis_theme +
+    theme(legend.position = "bottom",
+          panel.grid.major.y = element_blank())
+  p_clf <- apply_legend_theme(p_clf)
+
+  save_pdf(pdf_classbar, p_clf,
+           width = 7.2, height = max(3, n_asm * 0.8 + 1.5))
+  girafe_styled(ggobj = p_clf,
+                width_svg = 10,
+                height_svg = max(3, n_asm * 0.8 + 1.5))
+} else {
+  cat("Per-assembly contig summary data not available.")
+}
+```
+
+## Size Comparison
+
+```{r size_comparison, fig.width=10, fig.height=max(3, n_asm * 0.6 + 1.5)}
+size_data <- comp_df %>%
+  transmute(
+    assembly = factor(assembly, levels = rev(asm_names)),
+    `Chrom assigned`  = chrom_assigned_bp / 1e6,
+    `Organelle`       = organelle_bp / 1e6,
+    `rDNA`            = rdna_bp / 1e6,
+    `Contaminant`     = contaminant_bp / 1e6,
+    `Debris`          = debris_bp / 1e6,
+    `Unclassified`    = unclassified_bp / 1e6
+  ) %>%
+  pivot_longer(-assembly, names_to = "category", values_to = "mb") %>%
+  mutate(category = factor(category,
+    levels = c("Chrom assigned", "Organelle", "rDNA", "Contaminant", "Debris", "Unclassified")))
+
+cat_colors <- c(
+  "Chrom assigned" = oi[5], "Organelle" = oi[3], "rDNA" = oi[1],
+  "Contaminant" = oi[7], "Debris" = oi[9], "Unclassified" = oi[8]
+)
+
+p_size <- ggplot(size_data, aes(x = assembly, y = mb, fill = category)) +
+  geom_col_interactive(
+    aes(tooltip = paste0(assembly, "\n", category, ": ", sprintf("%.1f Mb", mb))),
+    position = "dodge", width = 0.7
+  ) +
+  scale_fill_manual(values = cat_colors, name = NULL) +
+  coord_flip() +
+  labs(x = NULL, y = "Size (Mb)") +
+  theme_minimal(base_size = base_font_pt, base_family = base_family) +
+  axis_theme +
+  theme(legend.position = "bottom", panel.grid.major.y = element_blank())
+p_size <- apply_legend_theme(p_size)
+
+girafe_styled(ggobj = p_size,
+              width_svg = 10,
+              height_svg = max(3, n_asm * 0.6 + 1.5))
+```
+
+
+# 2. Chromosome Completeness {.tabset}
+
+## Heatmap
+
+```{r completeness_heatmap, fig.width=10, fig.height=max(4, nrow(ref_lengths) * 0.3 + 2)}
+if (has_any_chrom) {
+  # Sort reference chromosomes by length
+  ref_order <- ref_lengths %>%
+    arrange(desc(length)) %>%
+    pull(ref_id)
+
+  hm_data <- compl_df %>%
+    mutate(
+      ref_id = factor(ref_id, levels = rev(ref_order)),
+      assembly = factor(assembly, levels = asm_names),
+      best_ref_coverage = as.numeric(best_ref_coverage),
+      coverage_pct = ifelse(is.na(best_ref_coverage), 0, best_ref_coverage * 100)
+    )
+
+  # Telomere/full-length status for overlay
+  hm_data <- hm_data %>%
+    mutate(
+      status_label = case_when(
+        is_full_length == "yes" & has_both_telomeres == "yes" ~ "\u2605",  # star
+        is_full_length == "yes" ~ "\u25CF",  # filled circle
+        n_contigs > 0 ~ "\u25CB",  # open circle
+        TRUE ~ ""
+      ),
+      tooltip = paste0(
+        ref_id, " \u2014 ", assembly, "\n",
+        "Contigs: ", n_contigs, "\n",
+        "Assigned bp: ", scales::comma(total_assigned_bp), "\n",
+        "Best ref coverage: ", fmt_pct(best_ref_coverage), "\n",
+        "Full-length: ", is_full_length, "\n",
+        "Both telomeres: ", has_both_telomeres
+      )
+    )
+
+  p_hm <- ggplot(hm_data, aes(x = assembly, y = ref_id, fill = coverage_pct)) +
+    geom_tile_interactive(aes(tooltip = tooltip), color = "white", linewidth = 0.5) +
+    geom_text(aes(label = status_label), size = 2.5, color = "white", fontface = "bold") +
+    scale_fill_gradient2(
+      low = "#f0f0f0", mid = "#74add1", high = "#1a9850",
+      midpoint = 50, limits = c(0, 100),
+      name = "Ref coverage (%)",
+      na.value = "#f0f0f0"
+    ) +
+    labs(x = NULL, y = NULL) +
+    theme_minimal(base_size = base_font_pt, base_family = base_family) +
+    axis_theme +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1, size = base_font_pt),
+      legend.position = "bottom",
+      panel.grid = element_blank()
+    )
+  p_hm <- apply_legend_theme(p_hm)
+
+  save_pdf(pdf_heatmap, p_hm,
+           width = max(4, n_asm * 0.8 + 2),
+           height = max(4, length(ref_order) * 0.3 + 2))
+  girafe_styled(ggobj = p_hm,
+                width_svg = max(6, n_asm * 0.8 + 2),
+                height_svg = max(4, length(ref_order) * 0.3 + 2))
+} else {
+  cat("No chromosome-assigned contigs found in any assembly.")
+}
+```
+
+<div class="note-box">
+**Legend**: &#9733; = full-length with both telomeres, &#9679; = full-length, &#9675; = assigned (not full-length), blank = no contigs assigned.
+</div>
+
+## Completeness Table
+
+```{r completeness_table}
+if (has_any_chrom) {
+  tbl_data <- compl_df %>%
+    mutate(best_ref_coverage = as.numeric(best_ref_coverage)) %>%
+    select(ref_id, assembly, n_contigs, total_assigned_bp,
+           best_ref_coverage, is_full_length, has_both_telomeres) %>%
+    mutate(
+      `Assigned (Mb)` = round(total_assigned_bp / 1e6, 1),
+      `Ref cov (%)` = ifelse(is.na(best_ref_coverage), "\u2014",
+                             sprintf("%.1f", best_ref_coverage * 100)),
+      `Full-length` = ifelse(is_full_length == "yes", "\u2713", ""),
+      `Both telo` = ifelse(has_both_telomeres == "yes", "\u2713", "")
+    ) %>%
+    select(ref_id, assembly, n_contigs, `Assigned (Mb)`, `Ref cov (%)`,
+           `Full-length`, `Both telo`)
+
+  tbl_data %>%
+    gt(groupname_col = "ref_id") %>%
+    gt_theme() %>%
+    tab_header(title = "Chromosome Completeness by Reference") %>%
+    cols_label(
+      assembly = "Assembly", n_contigs = "Contigs",
+      `Assigned (Mb)` = "Assigned (Mb)",
+      `Ref cov (%)` = "Ref cov (%)",
+      `Full-length` = "Full-length",
+      `Both telo` = "Both telo"
+    ) %>%
+    cols_align(align = "right", columns = c(n_contigs, `Assigned (Mb)`, `Ref cov (%)`)) %>%
+    cols_align(align = "center", columns = c(`Full-length`, `Both telo`))
+} else {
+  cat("No chromosome-assigned contigs found in any assembly.")
+}
+```
+
+
+`r if (has_any_chrom && has_per_asm) "# 3. Quality Comparison {.tabset}" else ""`
+
+```{r quality_section, eval=(has_any_chrom && has_per_asm)}
+chrom_df <- all_summary_df %>%
+  filter(classification == "chrom_assigned")
+
+has_identity <- "seq_identity_vs_ref" %in% names(chrom_df) &&
+                !all(is.na(chrom_df$seq_identity_vs_ref))
+has_collin   <- "collinearity_score" %in% names(chrom_df) &&
+                !all(is.na(chrom_df$collinearity_score))
+has_gc_dev   <- "gc_deviation" %in% names(chrom_df) &&
+                !all(is.na(chrom_df$gc_deviation))
+```
+
+```{r quality_identity, eval=(has_any_chrom && has_per_asm && exists("has_identity") && has_identity), results='asis'}
+cat("## Sequence Identity\n\n")
+```
+
+```{r quality_identity_plot, eval=(has_any_chrom && has_per_asm && exists("has_identity") && has_identity), fig.width=10, fig.height=max(3, n_asm * 0.8 + 1)}
+p_ident <- ggplot(chrom_df, aes(x = assembly, y = seq_identity_vs_ref * 100,
+                                fill = assembly)) +
+  geom_violin(alpha = 0.6, width = 0.7) +
+  geom_boxplot(width = 0.15, outlier.size = 0.5, fill = "white", alpha = 0.7) +
+  scale_fill_manual(values = asm_colors, guide = "none") +
+  coord_flip() +
+  labs(x = NULL, y = "Sequence identity vs reference (%)") +
+  theme_minimal(base_size = base_font_pt, base_family = base_family) +
+  axis_theme +
+  theme(panel.grid.major.y = element_blank())
+
+girafe_styled(ggobj = p_ident, height_svg = max(3, n_asm * 0.8 + 1))
+```
+
+```{r quality_collinearity, eval=(has_any_chrom && has_per_asm && exists("has_collin") && has_collin), results='asis'}
+cat("## Collinearity\n\n")
+```
+
+```{r quality_collinearity_plot, eval=(has_any_chrom && has_per_asm && exists("has_collin") && has_collin), fig.width=10, fig.height=max(3, n_asm * 0.8 + 1)}
+p_collin <- ggplot(chrom_df, aes(x = assembly, y = collinearity_score * 100,
+                                  fill = assembly)) +
+  geom_violin(alpha = 0.6, width = 0.7) +
+  geom_boxplot(width = 0.15, outlier.size = 0.5, fill = "white", alpha = 0.7) +
+  scale_fill_manual(values = asm_colors, guide = "none") +
+  coord_flip() +
+  labs(x = NULL, y = "Collinearity (%)") +
+  theme_minimal(base_size = base_font_pt, base_family = base_family) +
+  axis_theme +
+  theme(panel.grid.major.y = element_blank())
+
+girafe_styled(ggobj = p_collin, height_svg = max(3, n_asm * 0.8 + 1))
+```
+
+```{r quality_gc, eval=(has_any_chrom && has_per_asm && exists("has_gc_dev") && has_gc_dev), results='asis'}
+cat("## GC Deviation\n\n")
+```
+
+```{r quality_gc_plot, eval=(has_any_chrom && has_per_asm && exists("has_gc_dev") && has_gc_dev), fig.width=10, fig.height=max(3, n_asm * 0.8 + 1)}
+p_gc <- ggplot(chrom_df, aes(x = assembly, y = abs(gc_deviation), fill = assembly)) +
+  geom_violin(alpha = 0.6, width = 0.7) +
+  geom_boxplot(width = 0.15, outlier.size = 0.5, fill = "white", alpha = 0.7) +
+  scale_fill_manual(values = asm_colors, guide = "none") +
+  coord_flip() +
+  labs(x = NULL, y = "|GC deviation| (std devs from reference)") +
+  theme_minimal(base_size = base_font_pt, base_family = base_family) +
+  axis_theme +
+  theme(panel.grid.major.y = element_blank())
+
+girafe_styled(ggobj = p_gc, height_svg = max(3, n_asm * 0.8 + 1))
+```
+
+
+`r if (has_any_contam) "# 4. Contamination Comparison" else ""`
+
+```{r contamination, eval=has_any_contam, fig.width=10, fig.height=max(3, n_asm * 0.6 + 1.5)}
+contam_data <- comp_df %>%
+  filter(n_contaminants > 0) %>%
+  mutate(assembly = factor(assembly, levels = rev(asm_names)))
+
+p_contam <- ggplot(contam_data, aes(x = assembly, fill = assembly)) +
+  geom_col_interactive(
+    aes(y = contaminant_bp / 1e6,
+        tooltip = paste0(assembly, "\n",
+                         n_contaminants, " contaminants\n",
+                         sprintf("%.2f Mb", contaminant_bp / 1e6), "\n",
+                         n_contaminant_species, " species")),
+    width = 0.6
+  ) +
+  scale_fill_manual(values = asm_colors, guide = "none") +
+  coord_flip() +
+  labs(x = NULL, y = "Contaminant sequence (Mb)") +
+  theme_minimal(base_size = base_font_pt, base_family = base_family) +
+  axis_theme +
+  theme(panel.grid.major.y = element_blank())
+
+girafe_styled(ggobj = p_contam,
+              height_svg = max(3, n_asm * 0.6 + 1.5))
+```
+
+```{r contamination_table, eval=has_any_contam}
+comp_df %>%
+  filter(n_contaminants > 0) %>%
+  transmute(
+    Assembly = assembly,
+    `N contaminants` = n_contaminants,
+    `Contam bp (Mb)` = round(contaminant_bp / 1e6, 2),
+    `Unique species` = n_contaminant_species
+  ) %>%
+  gt() %>%
+  gt_theme() %>%
+  tab_header(title = "Contamination Summary") %>%
+  cols_align(align = "right", columns = where(is.numeric))
+```
+
+
+`r if (has_any_depth) "# 5. Depth Comparison" else ""`
+
+```{r depth_section, eval=(has_any_depth && has_per_asm), fig.width=10, fig.height=max(3, n_asm * 0.8 + 1)}
+depth_df <- all_summary_df %>%
+  filter(classification == "chrom_assigned", !is.na(depth_mean))
+
+if (nrow(depth_df) > 0) {
+  p_depth <- ggplot(depth_df, aes(x = assembly, y = depth_mean, fill = assembly)) +
+    geom_violin(alpha = 0.6, width = 0.7) +
+    geom_boxplot(width = 0.15, outlier.size = 0.5, fill = "white", alpha = 0.7) +
+    scale_fill_manual(values = asm_colors, guide = "none") +
+    coord_flip() +
+    labs(x = NULL, y = "Mean read depth (chromosome contigs)") +
+    theme_minimal(base_size = base_font_pt, base_family = base_family) +
+    axis_theme +
+    theme(panel.grid.major.y = element_blank())
+
+  girafe_styled(ggobj = p_depth, height_svg = max(3, n_asm * 0.8 + 1))
+} else {
+  cat("No depth data available for chromosome-assigned contigs.")
+}
+```
+
+---
+
+<div class="note-box">
+Generated by **final_finalizer** multi-assembly comparison &mdash; `r Sys.Date()`
+</div>
