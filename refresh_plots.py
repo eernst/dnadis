@@ -22,6 +22,7 @@ SCRIPT_TO_TEMPLATE = {
     "depth_overview": "depth_overview.tmpl.R",
     "contaminant_table": "contaminant_table.tmpl.R",
     "classification_summary_bar": "classification_summary_bar.tmpl.R",
+    "unified_report": "unified_report.tmpl.Rmd",
 }
 
 # Regex to find all __PLACEHOLDER__ tokens in a template
@@ -46,15 +47,17 @@ SCRIPT_OUTPUT_SUFFIXES = {
     "depth_overview": (".depth_overview.pdf", ".depth_overview.html"),
     "contaminant_table": (None, ".contaminant_table.html"),
     "classification_summary_bar": (".classification_summary_bar.pdf", ".classification_summary_bar.html"),
+    "unified_report": (None, ".unified_report.html"),
 }
 
 
 def find_generated_scripts(run_dir: Path) -> list[tuple[str, Path]]:
-    """Find generated .R scripts in run_dir and return (suffix, path) pairs."""
+    """Find generated .R and .Rmd scripts in run_dir and return (suffix, path) pairs."""
     found = []
-    for r_file in sorted(run_dir.glob("*.R")):
-        for suffix in SCRIPT_TO_TEMPLATE:
-            if r_file.name.endswith(f".{suffix}.R"):
+    for r_file in sorted(list(run_dir.glob("*.R")) + list(run_dir.glob("*.Rmd"))):
+        for suffix, tmpl_name in SCRIPT_TO_TEMPLATE.items():
+            ext = ".Rmd" if tmpl_name.endswith(".Rmd") else ".R"
+            if r_file.name.endswith(f".{suffix}{ext}"):
                 found.append((suffix, r_file))
                 break
     return found
@@ -68,7 +71,9 @@ def detect_prefix(run_dir: Path, scripts: list[tuple[str, Path]]) -> Path:
     """
     for suffix, script_path in scripts:
         stem = script_path.name
-        expected_end = f".{suffix}.R"
+        tmpl_name = SCRIPT_TO_TEMPLATE[suffix]
+        ext = ".Rmd" if tmpl_name.endswith(".Rmd") else ".R"
+        expected_end = f".{suffix}{ext}"
         if stem.endswith(expected_end):
             prefix_name = stem[: -len(expected_end)]
             return run_dir / prefix_name
@@ -129,6 +134,7 @@ def build_placeholder_values(
     prefix: Path,
     template_text: str,
     generated_text: str,
+    template_dir: Path | None = None,
 ) -> dict[str, str]:
     """Build placeholder → value mapping from TSVs in run_dir and the generated script."""
     values: dict[str, str] = {}
@@ -151,14 +157,53 @@ def build_placeholder_values(
     if "__OUTHTML__" in template_text and html_suffix:
         values["__OUTHTML__"] = esc(str(prefix) + html_suffix)
 
+    # Output prefix placeholder (used by unified_report.tmpl.Rmd)
+    if "__OUTPREFIX__" in template_text:
+        values["__OUTPREFIX__"] = esc(prefix)
+
     # Non-path placeholders: extract from generated script (PLOTHTML, CHRLIKE, SUFFIX, TOP_N)
     non_path = extract_non_path_placeholders(template_text, generated_text)
     values.update(non_path)
+
+    # Cross-reference shared placeholders from sibling scripts in the same run
+    # folder.  This is necessary because some scripts (e.g., the unified report)
+    # may have been generated with stale/default values during development, while
+    # the standalone scripts were generated with the correct pipeline values.
+    missing = {f"__{p}__" for p in PLACEHOLDER_RE.findall(template_text)} - set(values.keys())
+    needs_crossref = missing | {
+        p for p in values
+        if values[p].startswith("__") or (p == "__CHRLIKE__" and values.get(p, "") in ("", "50000"))
+    }
+    if needs_crossref:
+        # Try extracting from the chromosome_overview.R script first (most
+        # likely to have authoritative CHRLIKE, SUFFIX values)
+        for sibling_suffix in ("chromosome_overview", "classification_summary_bar", "depth_overview"):
+            if sibling_suffix == suffix:
+                continue
+            tmpl_name = SCRIPT_TO_TEMPLATE.get(sibling_suffix)
+            if not tmpl_name:
+                continue
+            ext = ".Rmd" if tmpl_name.endswith(".Rmd") else ".R"
+            sibling_path = Path(str(prefix) + f".{sibling_suffix}{ext}")
+            if not sibling_path.exists():
+                continue
+            sibling_tmpl = (template_dir / tmpl_name) if template_dir else None
+            if sibling_tmpl and sibling_tmpl.exists():
+                sibling_tmpl_text = sibling_tmpl.read_text(encoding="utf-8")
+                sibling_gen_text = sibling_path.read_text(encoding="utf-8")
+                sibling_vals = extract_non_path_placeholders(sibling_tmpl_text, sibling_gen_text)
+                for p in list(needs_crossref):
+                    if p in sibling_vals and sibling_vals[p] and not sibling_vals[p].startswith("__"):
+                        values[p] = sibling_vals[p]
+                        needs_crossref.discard(p)
+            if not needs_crossref:
+                break
 
     # Defaults for placeholders that couldn't be extracted or were extracted
     # as literal placeholder strings (from a previously broken generated script)
     defaults = {
         "__PLOTHTML__": "TRUE",
+        "__TOP_N__": "10",
     }
     for placeholder, default in defaults.items():
         if placeholder in template_text:
@@ -192,7 +237,8 @@ def refresh_script(
     generated_text = generated_path.read_text(encoding="utf-8")
 
     # Build placeholder values from TSVs in run_dir + generated script
-    values = build_placeholder_values(suffix, prefix, template_text, generated_text)
+    values = build_placeholder_values(suffix, prefix, template_text, generated_text,
+                                       template_dir=template_dir)
 
     # Check we found all placeholders
     all_placeholders = {f"__{p}__" for p in PLACEHOLDER_RE.findall(template_text)}
@@ -220,10 +266,19 @@ def refresh_script(
 
 
 def run_script(script_path: Path) -> bool:
-    """Run a generated R script with Rscript."""
-    print(f"  Running: Rscript {script_path.name} ... ", end="", flush=True)
+    """Run a generated R script with Rscript, or render an Rmd with rmarkdown."""
+    is_rmd = script_path.suffix.lower() == ".rmd"
+    if is_rmd:
+        esc_path = str(script_path).replace("\\", "/")
+        cmd = ["Rscript", "-e", f"rmarkdown::render('{esc_path}')"]
+        label = f"rmarkdown::render({script_path.name})"
+    else:
+        cmd = ["Rscript", str(script_path)]
+        label = f"Rscript {script_path.name}"
+
+    print(f"  Running: {label} ... ", end="", flush=True)
     result = subprocess.run(
-        ["Rscript", str(script_path)],
+        cmd,
         cwd=str(script_path.parent),
         capture_output=True,
         text=True,

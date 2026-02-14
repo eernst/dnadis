@@ -395,11 +395,12 @@ def classify_full_length(
 def compute_largest_cluster_metrics_per_ref(
     macro_block_rows: List[Tuple],
     max_gap: int = 500000,
-) -> Dict[Tuple[str, str], Tuple[int, int]]:
+) -> Dict[Tuple[str, str], Tuple[int, int, int]]:
     """Compute the largest cluster metrics for each (contig, ref_id) pair.
 
     Clusters chains to the same ref_id by proximity (ignoring intervening chains
-    to other refs), then returns the span and aligned_bp of the largest cluster.
+    to other refs), then returns the span, aligned_bp, and gene count of the
+    largest cluster.
 
     This approach:
     - Groups same-target chains that are close together (gap < max_gap)
@@ -410,27 +411,29 @@ def compute_largest_cluster_metrics_per_ref(
     Args:
         macro_block_rows: List of tuples from chain parsing:
             (contig, contig_len, ref_id, chrom_id, subgenome, strand, chain_id,
-             qstart, qend, qspan_bp, union_bp, ...)
+             qstart, qend, qspan_bp, union_bp, ..., gene_count_chain[16], ...)
         max_gap: Maximum gap (bp) between consecutive same-target chains to
             cluster them together. Default 500kb.
 
     Returns:
-        Dict mapping (contig, ref_id) -> (span_bp, aligned_bp) of largest cluster
+        Dict mapping (contig, ref_id) -> (span_bp, aligned_bp, gene_count)
+        of largest cluster
     """
     # Group chains by (contig, ref_id)
-    chains_by_key: Dict[Tuple[str, str], List[Tuple[int, int, int]]] = defaultdict(list)
+    chains_by_key: Dict[Tuple[str, str], List[Tuple[int, int, int, int]]] = defaultdict(list)
 
     for row in macro_block_rows:
-        if len(row) < 11:
+        if len(row) < 17:
             continue
         contig = row[0]
         ref_id = row[2]
         qstart = int(row[7])
         qend = int(row[8])
         union_bp = int(row[10])  # union_bp is index 10
-        chains_by_key[(contig, ref_id)].append((qstart, qend, union_bp))
+        gene_count = int(row[16])  # gene_count_chain is index 16
+        chains_by_key[(contig, ref_id)].append((qstart, qend, union_bp, gene_count))
 
-    results: Dict[Tuple[str, str], Tuple[int, int]] = {}
+    results: Dict[Tuple[str, str], Tuple[int, int, int]] = {}
 
     for key, chains in chains_by_key.items():
         if not chains:
@@ -440,7 +443,7 @@ def compute_largest_cluster_metrics_per_ref(
         chains.sort(key=lambda x: x[0])
 
         # Cluster chains by gap between consecutive same-target chains
-        clusters: List[List[Tuple[int, int, int]]] = []
+        clusters: List[List[Tuple[int, int, int, int]]] = []
         current_cluster = [chains[0]]
 
         for chain in chains[1:]:
@@ -459,48 +462,113 @@ def compute_largest_cluster_metrics_per_ref(
         # Find largest cluster by span
         best_span = 0
         best_aligned = 0
+        best_genes = 0
         for cluster in clusters:
             cluster_start = min(c[0] for c in cluster)
             cluster_end = max(c[1] for c in cluster)
             span = cluster_end - cluster_start
             aligned = sum(c[2] for c in cluster)
+            genes = sum(c[3] for c in cluster)
             if span > best_span:
                 best_span = span
                 best_aligned = aligned
+                best_genes = genes
 
-        results[key] = (best_span, best_aligned)
+        results[key] = (best_span, best_aligned, best_genes)
 
     return results
+
+
+def compute_reference_gene_density(
+    qr_cluster_metrics: Dict[Tuple[str, str], Tuple[int, int, int]],
+    best_ref: Dict[str, str],
+) -> float:
+    """Compute median on-target gene density (genes/Mb) across assigned contigs.
+
+    For each contig with a best reference assignment, computes the gene density
+    of its on-target cluster. Returns the median across all assigned contigs.
+
+    This provides a genome-calibrated reference for evaluating off-target clusters
+    in rearrangement detection.  Gene density varies across genomes (gene-rich vs
+    gene-poor species) and within genomes (euchromatic arms vs pericentromeres),
+    so an auto-calibrated threshold adapts better than a fixed gene count.
+
+    Args:
+        qr_cluster_metrics: Dict mapping (contig, ref_id) ->
+            (span_bp, aligned_bp, gene_count) from compute_largest_cluster_metrics_per_ref
+        best_ref: Dict of contig -> best reference chromosome assignment
+
+    Returns:
+        Median on-target gene density in genes per Mb.
+        Returns 0.0 if no assigned contigs have cluster data.
+    """
+    densities: List[float] = []
+    for contig, ref_id in best_ref.items():
+        metrics = qr_cluster_metrics.get((contig, ref_id))
+        if not metrics:
+            continue
+        span_bp, _, gene_count = metrics
+        if span_bp > 0 and gene_count > 0:
+            densities.append(gene_count / (span_bp / 1_000_000))
+
+    if not densities:
+        return 0.0
+
+    densities.sort()
+    n = len(densities)
+    if n % 2 == 1:
+        return densities[n // 2]
+    return (densities[n // 2 - 1] + densities[n // 2]) / 2
 
 
 def detect_rearrangement_candidates(
     contig: str,
     assigned_ref_id: str,
     contig_len: int,
-    qr_cluster_metrics: Dict[Tuple[str, str], Tuple[int, int]],
+    qr_cluster_metrics: Dict[Tuple[str, str], Tuple[int, int, int]],
     contig_refs: Set[str],
     threshold: float = 0.10,
     min_density: float = 0.15,
+    synteny_mode: str = "protein",
+    ref_gene_density: float = 0.0,
+    density_frac: float = 0.10,
+    min_genes_floor: int = 5,
 ) -> Optional[str]:
     """Detect potential chromosome rearrangements based on off-target alignment clusters.
 
     A contig is flagged for rearrangement if its largest cluster of alignments to an
     off-target chromosome has:
     - Span ≥ threshold fraction of the contig length
-    - Density (aligned_bp / span) ≥ min_density
+    - AND one of:
+      - Nucleotide mode: density (aligned_bp / span) ≥ min_density
+      - Protein mode: gene density ≥ density_frac × median on-target gene density,
+        AND gene count ≥ min_genes_floor
 
-    Clusters are groups of same-target chains that are close together (within max_gap),
-    regardless of what other chains appear between them. This captures rearrangement
-    blocks while ignoring scattered alignments.
+    In protein mode, aligned_bp density is inherently low because it represents
+    individual protein alignment footprints.  Instead, gene density (genes/Mb) is
+    compared to the genome-wide median on-target density, scaled by density_frac.
+    This auto-calibrates to the genome: gene-rich genomes get a higher threshold,
+    gene-poor genomes get a lower one.  A low density_frac (default 10%) ensures
+    that gene-poor regions (pericentromeres) are still detected, since even gene-poor
+    chromosomal content has much higher density than scattered paralogous noise.
 
     Args:
         contig: Contig name
         assigned_ref_id: The reference chromosome this contig is assigned to
         contig_len: Length of the contig in bp
-        qr_cluster_metrics: Dict mapping (contig, ref_id) -> (span_bp, aligned_bp)
+        qr_cluster_metrics: Dict mapping (contig, ref_id) ->
+            (span_bp, aligned_bp, gene_count)
         contig_refs: Set of reference chromosomes this contig has alignments to
         threshold: Minimum span fraction to flag as rearrangement (default 0.10)
-        min_density: Minimum alignment density within span (default 0.15)
+        min_density: Minimum alignment density within span for nucleotide mode
+            (default 0.15)
+        synteny_mode: "protein" or "nucleotide"
+        ref_gene_density: Median on-target gene density in genes/Mb, from
+            compute_reference_gene_density().  Used in protein mode.
+        density_frac: Minimum fraction of ref_gene_density required for
+            off-target clusters in protein mode (default 0.10 = 10%).
+        min_genes_floor: Absolute minimum gene count to prevent single-hit
+            artifacts in protein mode (default 5).
 
     Returns:
         Comma-separated list of off-target chromosomes meeting criteria,
@@ -517,15 +585,26 @@ def detect_rearrangement_candidates(
         metrics = qr_cluster_metrics.get((contig, ref_id))
         if not metrics:
             continue
-        span_bp, aligned_bp = metrics
+        span_bp, aligned_bp, gene_count = metrics
         if span_bp <= 0:
             continue
 
         span_fraction = span_bp / contig_len
-        density = aligned_bp / span_bp
 
-        if span_fraction >= threshold and density >= min_density:
-            candidates.append((span_fraction, ref_id))
+        if span_fraction < threshold:
+            continue
+
+        if synteny_mode == "protein":
+            # Auto-calibrated gene density threshold
+            cluster_density = gene_count / (span_bp / 1_000_000)
+            min_gene_density = ref_gene_density * density_frac
+            if cluster_density >= min_gene_density and gene_count >= min_genes_floor:
+                candidates.append((span_fraction, ref_id))
+        else:
+            # Nucleotide mode: use alignment density (blocks are dense)
+            density = aligned_bp / span_bp
+            if density >= min_density:
+                candidates.append((span_fraction, ref_id))
 
     if not candidates:
         return None
@@ -788,6 +867,7 @@ def classify_all_contigs(
     full_length_threshold: float = 0.70,
     subgenome_k: float = 1.0,
     rearrangement_threshold: float = 0.10,
+    rearrangement_density_frac: float = 0.10,
     synteny_mode: str = "protein",
 ) -> List[ContigClassification]:
     """Classify all contigs and assign confidence levels.
@@ -860,6 +940,10 @@ def classify_all_contigs(
 
     # Compute cluster metrics per (contig, ref_id) for rearrangement detection
     qr_cluster_metrics = compute_largest_cluster_metrics_per_ref(ev.macro_block_rows)
+
+    # Compute genome-wide reference gene density for auto-calibrated
+    # rearrangement detection in protein mode
+    ref_gene_density = compute_reference_gene_density(qr_cluster_metrics, best_ref)
 
     # Helper to compute GC deviation vs REFERENCE (for chrom_assigned validation)
     def _gc_deviation_vs_ref(contig: str) -> Optional[float]:
@@ -999,6 +1083,9 @@ def classify_all_contigs(
             qr_cluster_metrics=qr_cluster_metrics,
             contig_refs=ev.contig_refs.get(contig, set()),
             threshold=rearrangement_threshold,
+            synteny_mode=synteny_mode,
+            ref_gene_density=ref_gene_density,
+            density_frac=rearrangement_density_frac,
         )
 
         classifications.append(ContigClassification(

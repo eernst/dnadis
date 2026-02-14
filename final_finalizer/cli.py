@@ -126,6 +126,7 @@ from final_finalizer.output.plotting import (
     run_depth_plot,
     run_contaminant_table,
     run_classification_summary_bar,
+    run_unified_report,
 )
 
 
@@ -521,6 +522,13 @@ def main():
     fl_grp.add_argument(
         "--rearrangement-threshold", type=float, default=0.10,
         help="Minimum off-target span fraction to flag as rearrangement candidate [0.10]",
+    )
+    fl_grp.add_argument(
+        "--rearrangement-density-frac", type=float, default=0.10,
+        help="Protein mode: minimum fraction of median on-target gene density "
+             "required for off-target clusters.  Lower values detect gene-poor "
+             "rearrangements (e.g. pericentromeric); higher values are more "
+             "conservative.  Ignored in nucleotide mode. [0.10]",
     )
 
     # =========================================================================
@@ -1107,6 +1115,7 @@ def main():
         full_length_threshold=args.full_length_ref_coverage,
         subgenome_k=args.subgenome_k,
         rearrangement_threshold=args.rearrangement_threshold,
+        rearrangement_density_frac=args.rearrangement_density_frac,
         synteny_mode=args.synteny_mode,
     )
 
@@ -1349,7 +1358,11 @@ def main():
 
     if args.plot:
         agp_tsv = Path(str(outprefix) + ".scaffolded.agp") if args.scaffold and scaffolded_seqs else None
-        run_plot(
+        contam_tsv_arg = contaminants_tsv if contaminants_filtered else None
+
+        # Unified HTML report builds all plots inline (interactive + PDF export).
+        # Falls back to standalone R scripts if rmarkdown/pandoc unavailable.
+        unified_ok = run_unified_report(
             summary_tsv,
             ref_lengths_tsv,
             segments_tsv,
@@ -1358,36 +1371,51 @@ def main():
             outprefix,
             chr_like_minlen,
             plot_suffix,
-            args.plot_html,
-            rdna_annotations_tsv=rdna_annotations_tsv,
-            agp_tsv=agp_tsv,
-        )
-        # Generate classification summary plots
-        run_classification_summary_bar(
-            summary_tsv,
-            outprefix,
-            plot_suffix,
-            args.plot_html,
+            args.synteny_mode,
             assembly_name=args.assembly_name,
             reference_name=args.reference_name,
+            rdna_annotations_tsv=rdna_annotations_tsv,
+            contaminants_tsv=contam_tsv_arg,
+            agp_tsv=agp_tsv,
         )
-        # Generate depth overview plot if depth data was computed
-        if depth_stats:
-            run_depth_plot(
+
+        if not unified_ok:
+            # Fallback: generate individual plots via standalone R scripts
+            run_plot(
                 summary_tsv,
                 ref_lengths_tsv,
+                segments_tsv,
+                chain_summary_tsv,
+                macro_blocks_tsv,
+                outprefix,
+                chr_like_minlen,
+                plot_suffix,
+                args.plot_html,
+                rdna_annotations_tsv=rdna_annotations_tsv,
+                agp_tsv=agp_tsv,
+            )
+            run_classification_summary_bar(
+                summary_tsv,
                 outprefix,
                 plot_suffix,
                 args.plot_html,
+                assembly_name=args.assembly_name,
+                reference_name=args.reference_name,
             )
-        # Generate contaminant table if contaminants were detected
-        # Note: Coverage filtering already applied when writing contaminants_tsv
-        if contaminants_filtered and contaminants_tsv.exists():
-            run_contaminant_table(
-                contaminants_tsv,
-                outprefix,
-                plot_suffix,
-            )
+            if depth_stats:
+                run_depth_plot(
+                    summary_tsv,
+                    ref_lengths_tsv,
+                    outprefix,
+                    plot_suffix,
+                    args.plot_html,
+                )
+            if contaminants_filtered and contaminants_tsv.exists():
+                run_contaminant_table(
+                    contaminants_tsv,
+                    outprefix,
+                    plot_suffix,
+                )
 
 
 if __name__ == "__main__":

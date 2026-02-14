@@ -604,9 +604,10 @@ def test_compute_largest_cluster_single_ref():
     result = compute_largest_cluster_metrics_per_ref(macro_block_rows)
 
     # chr1A: one cluster spanning 100000 to 700000 = 600000, with 330000 aligned bp
-    span, aligned = result[("contig1", "chr1A")]
+    span, aligned, genes = result[("contig1", "chr1A")]
     assert span == 600000
     assert aligned == 330000
+    assert genes == 0  # gene_count fields are 0 in test data
 
 
 def test_compute_largest_cluster_gap_splits_clusters():
@@ -623,7 +624,7 @@ def test_compute_largest_cluster_gap_splits_clusters():
 
     # chr12A: two separate clusters, each with span 200000
     # Largest cluster has span 200000
-    span, aligned = result[("contig1", "chr12A")]
+    span, aligned, genes = result[("contig1", "chr12A")]
     assert span == 200000
 
 
@@ -642,7 +643,7 @@ def test_compute_largest_cluster_ignores_intervening_chains():
 
     # chr12A: gap between chains is 600000-300000=300000 < 500kb, so one cluster
     # spanning 100000 to 800000 = 700000
-    span, aligned = result[("contig1", "chr12A")]
+    span, aligned, genes = result[("contig1", "chr12A")]
     assert span == 700000
     assert aligned == 330000  # 150000 + 180000
 
@@ -662,19 +663,19 @@ def test_compute_largest_cluster_selects_largest():
     result = compute_largest_cluster_metrics_per_ref(macro_block_rows)
 
     # chr12A: first cluster = 50000, second cluster spans 1500000-2000000 = 500000
-    span, aligned = result[("contig1", "chr12A")]
+    span, aligned, genes = result[("contig1", "chr12A")]
     assert span == 500000
     assert aligned == 370000  # 250000 + 120000
 
 
 def test_detect_rearrangement_candidates_no_offtarget():
-    """Test that no rearrangement is detected when off-target is below threshold."""
+    """Test that no rearrangement is detected when off-target is below span threshold."""
     from final_finalizer.classification.classifier import detect_rearrangement_candidates
 
-    # (span, aligned_bp) tuples - need good density to pass
+    # (span, aligned_bp, gene_count) tuples
     qr_cluster_metrics = {
-        ("contig1", "chr1A"): (900000, 700000),  # 90% span, 78% density
-        ("contig1", "chr2A"): (50000, 40000),    # 5% span (below 10% threshold)
+        ("contig1", "chr1A"): (900000, 700000, 200),  # 90% span
+        ("contig1", "chr2A"): (50000, 40000, 20),      # 5% span (below 10% threshold)
     }
     contig_refs = {"chr1A", "chr2A"}
 
@@ -685,18 +686,21 @@ def test_detect_rearrangement_candidates_no_offtarget():
         qr_cluster_metrics=qr_cluster_metrics,
         contig_refs=contig_refs,
         threshold=0.10,
+        ref_gene_density=30.0,
     )
 
     assert result is None  # No off-target >= 10%
 
 
 def test_detect_rearrangement_candidates_single_offtarget():
-    """Test detection of single off-target chromosome with sufficient density."""
+    """Test detection of single off-target with gene density above calibrated threshold."""
     from final_finalizer.classification.classifier import detect_rearrangement_candidates
 
+    # chr5B: 200kb span, 50 genes = 250 genes/Mb
+    # ref_gene_density=30, density_frac=0.10 → threshold=3 genes/Mb → passes
     qr_cluster_metrics = {
-        ("contig1", "chr1A"): (700000, 500000),  # 70% span
-        ("contig1", "chr5B"): (200000, 100000),  # 20% span, 50% density (passes both)
+        ("contig1", "chr1A"): (700000, 500000, 150),  # 70% span
+        ("contig1", "chr5B"): (200000, 100000, 50),    # 20% span, 250 genes/Mb
     }
     contig_refs = {"chr1A", "chr5B"}
 
@@ -707,18 +711,19 @@ def test_detect_rearrangement_candidates_single_offtarget():
         qr_cluster_metrics=qr_cluster_metrics,
         contig_refs=contig_refs,
         threshold=0.10,
+        ref_gene_density=30.0,
     )
 
     assert result == "chr5B"
 
 
-def test_detect_rearrangement_candidates_low_density_rejected():
-    """Test that off-target with large span but low density is rejected."""
+def test_detect_rearrangement_candidates_low_density_rejected_nucleotide():
+    """Test that off-target with large span but low density is rejected in nucleotide mode."""
     from final_finalizer.classification.classifier import detect_rearrangement_candidates
 
     qr_cluster_metrics = {
-        ("contig1", "chr1A"): (700000, 500000),  # 70% span
-        ("contig1", "chr5B"): (200000, 20000),   # 20% span but only 10% density (< 15% min)
+        ("contig1", "chr1A"): (700000, 500000, 0),  # 70% span
+        ("contig1", "chr5B"): (200000, 20000, 0),   # 20% span but only 10% density (< 15% min)
     }
     contig_refs = {"chr1A", "chr5B"}
 
@@ -730,9 +735,61 @@ def test_detect_rearrangement_candidates_low_density_rejected():
         contig_refs=contig_refs,
         threshold=0.10,
         min_density=0.15,
+        synteny_mode="nucleotide",
     )
 
     assert result is None  # Density too low
+
+
+def test_detect_rearrangement_candidates_low_gene_density_rejected_protein():
+    """Test that off-target with low gene density is rejected in protein mode."""
+    from final_finalizer.classification.classifier import detect_rearrangement_candidates
+
+    # chr5B: 5 Mb span, 4 genes = 0.8 genes/Mb (paralogous noise)
+    # ref_gene_density=30, density_frac=0.10 → threshold=3 genes/Mb → rejected
+    qr_cluster_metrics = {
+        ("contig1", "chr1A"): (7000000, 5000000, 150),  # 70% span
+        ("contig1", "chr5B"): (5000000, 20000, 4),       # 50% span but 0.8 genes/Mb
+    }
+    contig_refs = {"chr1A", "chr5B"}
+
+    result = detect_rearrangement_candidates(
+        contig="contig1",
+        assigned_ref_id="chr1A",
+        contig_len=10000000,
+        qr_cluster_metrics=qr_cluster_metrics,
+        contig_refs=contig_refs,
+        threshold=0.10,
+        synteny_mode="protein",
+        ref_gene_density=30.0,
+    )
+
+    assert result is None  # Gene density too low
+
+
+def test_detect_rearrangement_candidates_below_gene_floor_rejected():
+    """Test that off-target with < min_genes_floor is rejected even with OK density."""
+    from final_finalizer.classification.classifier import detect_rearrangement_candidates
+
+    # chr5B: 200kb span, 4 genes = 20 genes/Mb (passes density but fails floor of 5)
+    qr_cluster_metrics = {
+        ("contig1", "chr1A"): (700000, 500000, 150),
+        ("contig1", "chr5B"): (200000, 20000, 4),
+    }
+    contig_refs = {"chr1A", "chr5B"}
+
+    result = detect_rearrangement_candidates(
+        contig="contig1",
+        assigned_ref_id="chr1A",
+        contig_len=1000000,
+        qr_cluster_metrics=qr_cluster_metrics,
+        contig_refs=contig_refs,
+        threshold=0.10,
+        synteny_mode="protein",
+        ref_gene_density=30.0,
+    )
+
+    assert result is None  # Below min_genes_floor=5
 
 
 def test_detect_rearrangement_candidates_multiple_offtarget():
@@ -740,9 +797,9 @@ def test_detect_rearrangement_candidates_multiple_offtarget():
     from final_finalizer.classification.classifier import detect_rearrangement_candidates
 
     qr_cluster_metrics = {
-        ("contig1", "chr1A"): (500000, 400000),  # 50% span
-        ("contig1", "chr2A"): (150000, 50000),   # 15% span, 33% density
-        ("contig1", "chr5B"): (250000, 100000),  # 25% span, 40% density (highest span)
+        ("contig1", "chr1A"): (500000, 400000, 100),  # 50% span
+        ("contig1", "chr2A"): (150000, 50000, 30),     # 15% span, 200 genes/Mb
+        ("contig1", "chr5B"): (250000, 100000, 50),    # 25% span, 200 genes/Mb
     }
     contig_refs = {"chr1A", "chr2A", "chr5B"}
 
@@ -753,6 +810,7 @@ def test_detect_rearrangement_candidates_multiple_offtarget():
         qr_cluster_metrics=qr_cluster_metrics,
         contig_refs=contig_refs,
         threshold=0.10,
+        ref_gene_density=30.0,
     )
 
     # Should be ordered by span fraction (highest first)
@@ -773,6 +831,29 @@ def test_detect_rearrangement_candidates_no_assignment():
     )
 
     assert result is None
+
+
+def test_compute_reference_gene_density():
+    """Test median on-target gene density computation."""
+    from final_finalizer.classification.classifier import compute_reference_gene_density
+
+    # 3 contigs: densities of 20, 30, 40 genes/Mb → median = 30
+    qr_cluster_metrics = {
+        ("contig1", "chr1"): (1_000_000, 500000, 20),   # 20 genes/Mb
+        ("contig2", "chr2"): (2_000_000, 1000000, 60),   # 30 genes/Mb
+        ("contig3", "chr3"): (500_000, 250000, 20),       # 40 genes/Mb
+    }
+    best_ref = {"contig1": "chr1", "contig2": "chr2", "contig3": "chr3"}
+
+    density = compute_reference_gene_density(qr_cluster_metrics, best_ref)
+    assert density == 30.0
+
+
+def test_compute_reference_gene_density_empty():
+    """Test that empty input returns 0.0."""
+    from final_finalizer.classification.classifier import compute_reference_gene_density
+
+    assert compute_reference_gene_density({}, {}) == 0.0
 
 
 # ----------------------------
