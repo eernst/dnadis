@@ -30,7 +30,7 @@ output:
 body {
   font-family: "Helvetica Neue", Helvetica, "Liberation Sans", Arial, sans-serif;
   font-size: 13px;
-  max-width: 1100px;
+  max-width: 1300px;
   margin: auto;
 }
 h1.title { font-size: 24px; margin-bottom: 4px; }
@@ -48,7 +48,7 @@ h2 { font-size: 16px; }
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE,
-                      fig.width = 7.2, dpi = 150)
+                      fig.width = 10, dpi = 150)
 
 if (!requireNamespace("pacman", quietly = TRUE))
   install.packages("pacman", repos = "https://cloud.r-project.org")
@@ -57,7 +57,7 @@ pacman::p_load(readr, dplyr, stringr, tidyr, tibble,
                ggplot2, ggnewscale, patchwork, grid,
                ggiraph, htmlwidgets, ggrepel,
                ggokabeito, colorspace,
-               gt, scales,
+               gt, gtExtras, scales,
                showtext, sysfonts, knitr)
 
 # ---------------------------------------------------------------------------
@@ -191,12 +191,12 @@ plot_levels  <- if (has_subgenomes) sg_levels else c("G")
 
 sg_cols_dark  <- setNames(pal_sg_dark[seq_along(plot_levels)],  plot_levels)
 sg_cols_light <- setNames(pal_sg_light[seq_along(plot_levels)], plot_levels)
-col_dark  <- c(sg_cols_dark,  "NA" = "grey45")
-col_light <- c(sg_cols_light, "NA" = "grey82")
+col_dark  <- c(sg_cols_dark,  "NA" = pal_sg_dark[1])
+col_light <- c(sg_cols_light, "NA" = pal_sg_light[1])
 
 # For depth overview
 sg_colors <- if (n_sets > 0) setNames(pal_sg_dark[seq_len(n_sets)], sg_levels) else c("G" = oi[5])
-sg_colors <- c(sg_colors, "NA" = oi[9])
+sg_colors <- c(sg_colors, "NA" = pal_sg_dark[1])
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -206,7 +206,7 @@ save_pdf <- function(path, plot, width = 7.2, height = 5, dpi = 300) {
   invisible(ggsave(path, plot, width = width, height = height, dpi = dpi, device = dev))
 }
 
-girafe_styled <- function(ggobj, width_svg = 7.2, height_svg = 5) {
+girafe_styled <- function(ggobj, width_svg = 10, height_svg = 6.9) {
   g <- ggiraph::girafe(ggobj = ggobj, width_svg = width_svg, height_svg = height_svg)
   ggiraph::girafe_options(g,
     ggiraph::opts_tooltip(css = paste0(
@@ -228,10 +228,19 @@ gt_inline_bar <- function(value, max_val, color = "#3498db", height = "14px") {
 
 gt_theme <- function(gt_obj) {
   gt_obj %>%
-    tab_options(table.font.size = px(11), column_labels.font.weight = "bold",
-                column_labels.background.color = "#2c3e50") %>%
-    tab_style(style = cell_text(color = "white"), locations = cells_column_labels()) %>%
-    opt_row_striping()
+    tab_options(
+      table.font.size = px(11),
+      column_labels.font.weight = "bold",
+      column_labels.border.top.style = "none",
+      column_labels.border.bottom.width = px(2),
+      column_labels.border.bottom.color = "#333",
+      table.border.top.style = "none",
+      table.border.bottom.style = "none",
+      table_body.border.bottom.color = "#999",
+      data_row.padding = px(4),
+      heading.border.bottom.style = "none"
+    ) %>%
+    opt_row_striping(row_striping = FALSE)
 }
 
 conf_badge <- function(level) {
@@ -242,6 +251,12 @@ conf_badge <- function(level) {
 }
 
 fmt_mb <- function(x) sprintf("%.1f", x / 1e6)
+
+version_sort_key <- function(x) {
+  num <- as.integer(str_extract(x, "\\d+"))
+  num[is.na(num)] <- 99999L
+  num
+}
 
 # ---------------------------------------------------------------------------
 # Load main data
@@ -301,36 +316,6 @@ clf_agg <- summary_df %>%
 total_mb <- sum(clf_agg$total_mb)
 total_contigs <- sum(clf_agg$n_contigs)
 ```
-
-## Classification Breakdown
-
-```{r classification_table}
-max_mb <- max(clf_agg$total_mb, na.rm = TRUE)
-
-clf_agg %>%
-  mutate(
-    bar = mapply(function(v) gt_inline_bar(v, max_mb), total_mb),
-    color_swatch = mapply(function(c) {
-      col <- classification_colors[c]; if (is.na(col)) col <- "#999"
-      paste0('<span style="display:inline-block;width:10px;height:10px;background:', col,
-             ';border-radius:2px;margin-right:4px;"></span>')
-    }, classification),
-    label = paste0(color_swatch, label)
-  ) %>%
-  select(label, n_contigs, total_mb, pct_assembly, bar) %>%
-  gt() %>%
-  cols_label(label = "Category", n_contigs = "Contigs", total_mb = "Total Mb",
-             pct_assembly = "% Assembly", bar = "") %>%
-  fmt_number(columns = total_mb, decimals = 1) %>%
-  fmt_number(columns = pct_assembly, decimals = 1) %>%
-  fmt(columns = label, fns = function(x) x) %>%
-  fmt(columns = bar, fns = function(x) x) %>%
-  tab_header(title = md("**Classification Breakdown**"),
-             subtitle = md(paste0(total_contigs, " contigs | ", sprintf("%.1f", total_mb), " Mb total"))) %>%
-  gt_theme()
-```
-
-## Classification Bar
 
 ```{r classbar_build, include=FALSE}
 # ---------------------------------------------------------------------------
@@ -493,97 +478,69 @@ save_pdf(pdf_classbar, p_classbar, width = 7.2, height = 3.0)
 ```
 
 ```{r classbar_widget}
-girafe_styled(p_classbar, width_svg = 7.2, height_svg = 3.0)
+girafe_styled(p_classbar, width_svg = 10, height_svg = 4.2)
 ```
 
-# 2. Chromosome Assignments
+## Assembly Contiguity
+
+```{r contiguity_stats}
+lengths_sorted <- sort(summary_df$length, decreasing = TRUE)
+total_bp <- sum(lengths_sorted)
+cumsum_bp <- cumsum(lengths_sorted)
+n50_idx <- which(cumsum_bp >= total_bp / 2)[1]
+n50 <- lengths_sorted[n50_idx]; l50 <- n50_idx
+
+tibble(
+  Metric = c("Total assembled", "N50", "L50", "Largest contig", "Total contigs"),
+  Value = c(paste0(sprintf("%.1f", total_bp / 1e6), " Mb"),
+            paste0(sprintf("%.1f", n50 / 1e6), " Mb"),
+            as.character(l50),
+            paste0(sprintf("%.1f", max(lengths_sorted) / 1e6), " Mb"),
+            as.character(length(lengths_sorted)))
+) %>% gt() %>% tab_header(title = md("**Assembly Contiguity**")) %>% gt_theme()
+```
+
+## Classification Breakdown
+
+```{r classification_table}
+max_mb <- max(clf_agg$total_mb, na.rm = TRUE)
+
+clf_agg %>%
+  mutate(
+    bar = mapply(function(v) gt_inline_bar(v, max_mb), total_mb),
+    color_swatch = mapply(function(c) {
+      col <- classification_colors[c]; if (is.na(col)) col <- "#999"
+      paste0('<span style="display:inline-block;width:10px;height:10px;background:', col,
+             ';border-radius:2px;margin-right:4px;"></span>')
+    }, classification),
+    label = paste0(color_swatch, label)
+  ) %>%
+  select(label, n_contigs, total_mb, pct_assembly, bar) %>%
+  gt() %>%
+  cols_label(label = "Category", n_contigs = "Contigs", total_mb = "Total Mb",
+             pct_assembly = "% Assembly", bar = "") %>%
+  fmt_number(columns = total_mb, decimals = 1) %>%
+  fmt_number(columns = pct_assembly, decimals = 1) %>%
+  fmt(columns = label, fns = function(x) x) %>%
+  fmt(columns = bar, fns = function(x) x) %>%
+  tab_header(title = md("**Classification Breakdown**"),
+             subtitle = md(paste0(total_contigs, " contigs | ", sprintf("%.1f", total_mb), " Mb total"))) %>%
+  gt_theme()
+```
+
+# 2. Chromosome Assignments {.tabset}
 
 ```{r chr_data}
 chr_df <- summary_df %>%
   filter(classification == "chrom_assigned") %>%
-  arrange(assigned_ref_id)
+  arrange(version_sort_key(assigned_ref_id), assigned_ref_id)
 
 has_telomeres  <- "has_5p_telomere" %in% names(chr_df)
 has_full_length <- "is_full_length" %in% names(chr_df)
 ```
 
-```{r chr_assignment_table, eval=nrow(chr_df)>0}
-chr_tbl <- chr_df %>%
-  mutate(
-    length_mb = length / 1e6,
-    ref_cov_pct = if ("ref_coverage" %in% names(.)) ref_coverage * 100 else NA_real_,
-    identity_pct = if ("seq_identity_vs_ref" %in% names(.)) seq_identity_vs_ref * 100
-                   else if ("best_identity" %in% names(.)) best_identity * 100 else NA_real_,
-    gene_count = if ("ref_gene_proportion" %in% names(.)) round(ref_gene_proportion * 100, 1) else NA_real_,
-    conf_html = sapply(classification_confidence, conf_badge),
-    collinearity = if (has_collinearity) collinearity_score else NA_real_,
-    tel_5p = if (has_telomeres) has_5p_telomere else NA_character_,
-    tel_3p = if (has_telomeres) has_3p_telomere else NA_character_,
-    full_len = if (has_full_length) is_full_length else NA_character_,
-    subgenome_col = if (has_subgenomes) assigned_subgenome else NA_character_
-  )
-
-sel_cols <- c("contig", "assigned_ref_id", "length_mb")
-col_labels <- list(contig = "Contig", assigned_ref_id = "Ref Chromosome", length_mb = "Length (Mb)")
-
-if (has_subgenomes) { sel_cols <- c(sel_cols, "subgenome_col"); col_labels$subgenome_col <- "Subgenome" }
-sel_cols <- c(sel_cols, "ref_cov_pct"); col_labels$ref_cov_pct <- "Ref Cov %"
-if (has_full_length) { sel_cols <- c(sel_cols, "full_len"); col_labels$full_len <- "Full-length" }
-if (has_telomeres) {
-  sel_cols <- c(sel_cols, "tel_5p", "tel_3p")
-  col_labels$tel_5p <- "Tel 5'"; col_labels$tel_3p <- "Tel 3'"
-}
-sel_cols <- c(sel_cols, "gene_count"); col_labels$gene_count <- "Gene %"
-sel_cols <- c(sel_cols, "identity_pct"); col_labels$identity_pct <- "Identity %"
-if (has_collinearity) { sel_cols <- c(sel_cols, "collinearity"); col_labels$collinearity <- "Collinearity" }
-sel_cols <- c(sel_cols, "conf_html"); col_labels$conf_html <- "Confidence"
-
-chr_tbl %>%
-  select(all_of(sel_cols)) %>% gt() %>%
-  cols_label(.list = col_labels) %>%
-  fmt_number(columns = any_of("length_mb"), decimals = 1) %>%
-  fmt_number(columns = any_of(c("ref_cov_pct", "identity_pct", "gene_count")), decimals = 1) %>%
-  fmt_number(columns = any_of("collinearity"), decimals = 2) %>%
-  fmt(columns = any_of("conf_html"), fns = function(x) x) %>%
-  tab_header(title = md("**Per-Chromosome Summary**"),
-             subtitle = md(paste0(nrow(chr_df), " contigs assigned to ",
-                                  n_distinct(chr_df$assigned_ref_id), " reference chromosomes"))) %>%
-  gt_theme()
-```
-
-```{r ref_coverage_table, eval=nrow(chr_df)>0}
-ref_cov <- chr_df %>%
-  group_by(assigned_ref_id) %>%
-  summarise(n_contigs = n(), total_query_mb = sum(length / 1e6, na.rm = TRUE), .groups = "drop") %>%
-  left_join(
-    ref_lengths %>%
-      filter(!str_detect(ref_id, "^chr[CM]$|_random$")) %>%
-      mutate(ref_length_mb = ref_len / 1e6) %>%
-      select(ref_id, ref_length_mb),
-    by = c("assigned_ref_id" = "ref_id")
-  ) %>%
-  mutate(coverage_pct = if_else(!is.na(ref_length_mb) & ref_length_mb > 0,
-                                 total_query_mb / ref_length_mb * 100, NA_real_)) %>%
-  arrange(assigned_ref_id)
-
-max_cov <- max(ref_cov$coverage_pct, na.rm = TRUE)
-ref_cov %>%
-  mutate(bar = mapply(function(v) gt_inline_bar(v, max(max_cov, 100), color = "#2980b9"), coverage_pct)) %>%
-  select(assigned_ref_id, ref_length_mb, total_query_mb, coverage_pct, bar, n_contigs) %>%
-  gt() %>%
-  cols_label(assigned_ref_id = "Ref Chromosome", ref_length_mb = "Ref (Mb)",
-             total_query_mb = "Query (Mb)", coverage_pct = "Coverage %", bar = "", n_contigs = "Contigs") %>%
-  fmt_number(columns = c(ref_length_mb, total_query_mb), decimals = 1) %>%
-  fmt_number(columns = coverage_pct, decimals = 1) %>%
-  fmt(columns = bar, fns = function(x) x) %>%
-  tab_header(title = md("**Reference Coverage Summary**")) %>%
-  gt_theme()
-```
-
-# 3. Synteny Overview
-
-```{r chrom_overview_placeholder, eval=!has_chrom_assigned || !has_segments, results='asis'}
-cat('<div class="note-box">No chromosome-assigned contigs or segment data available for synteny overview.</div>')
+```{r chrom_assign_stub, eval=!has_chrom_assigned, results='asis'}
+cat('<div class="note-box">No contigs were assigned to reference chromosomes. This may occur when the query assembly is too divergent from the reference, or when synteny gate thresholds are too strict.</div>')
 ```
 
 ```{r chrom_overview_build, include=FALSE, eval=has_chrom_assigned && has_segments}
@@ -1082,7 +1039,7 @@ if (has_subgenomes) {
 # Patchwork layout
 p_placeholder <- ggplot() +
   theme_void(base_family = base_family, base_size = base_font_pt) +
-  theme(plot.background = element_rect(fill = "grey95", color = NA),
+  theme(plot.background = element_rect(fill = "white", color = NA),
         plot.margin = margin(5.5, 5.5, 5.5, 5.5))
 
 usable_in <- fig_height_in - 0.8
@@ -1101,7 +1058,94 @@ save_pdf(pdf_chrom_overview, full_plot_chrom, width = 7.2, height = fig_height_i
 ```
 
 ```{r chrom_overview_widget, eval=has_chrom_assigned && has_segments}
-girafe_styled(full_plot_chrom, width_svg = 7.2, height_svg = fig_height_in)
+girafe_styled(full_plot_chrom, width_svg = 10, height_svg = fig_height_in * 10 / 7.2)
+```
+
+```{r chr_tab_heading, eval=has_chrom_assigned, results='asis'}
+cat('\n## Per-Chromosome Summary\n')
+```
+
+```{r chr_assignment_table, eval=nrow(chr_df)>0}
+chr_tbl <- chr_df %>%
+  mutate(
+    length_mb = length / 1e6,
+    ref_cov_pct = if ("ref_coverage" %in% names(.)) ref_coverage * 100 else NA_real_,
+    identity_pct = if ("seq_identity_vs_ref" %in% names(.)) seq_identity_vs_ref * 100
+                   else if ("best_identity" %in% names(.)) best_identity * 100 else NA_real_,
+    gene_count = if ("ref_gene_proportion" %in% names(.)) round(ref_gene_proportion * 100, 1) else NA_real_,
+    conf_html = sapply(classification_confidence, conf_badge),
+    collinearity = if (has_collinearity) collinearity_score else NA_real_,
+    tel_5p = if (has_telomeres) has_5p_telomere else NA_character_,
+    tel_3p = if (has_telomeres) has_3p_telomere else NA_character_,
+    full_len = if (has_full_length) is_full_length else NA_character_,
+    subgenome_col = if (has_subgenomes) assigned_subgenome else NA_character_
+  )
+
+sel_cols <- c("contig", "original_name", "assigned_ref_id", "length_mb")
+col_labels <- list(contig = "contig", original_name = "original_name", assigned_ref_id = "Ref Chromosome", length_mb = "Length (Mb)")
+
+if (has_subgenomes) { sel_cols <- c(sel_cols, "subgenome_col"); col_labels$subgenome_col <- "Subgenome" }
+sel_cols <- c(sel_cols, "ref_cov_pct"); col_labels$ref_cov_pct <- "Ref Cov %"
+if (has_full_length) { sel_cols <- c(sel_cols, "full_len"); col_labels$full_len <- "Full-length" }
+if (has_telomeres) {
+  sel_cols <- c(sel_cols, "tel_5p", "tel_3p")
+  col_labels$tel_5p <- "Tel 5'"; col_labels$tel_3p <- "Tel 3'"
+}
+sel_cols <- c(sel_cols, "gene_count"); col_labels$gene_count <- "Gene %"
+sel_cols <- c(sel_cols, "identity_pct"); col_labels$identity_pct <- "Identity %"
+if (has_collinearity) { sel_cols <- c(sel_cols, "collinearity"); col_labels$collinearity <- "Collinearity" }
+sel_cols <- c(sel_cols, "conf_html"); col_labels$conf_html <- "Confidence"
+
+chr_tbl %>%
+  select(all_of(sel_cols)) %>% gt() %>%
+  cols_label(.list = col_labels) %>%
+  fmt_number(columns = any_of("length_mb"), decimals = 1) %>%
+  fmt_number(columns = any_of(c("ref_cov_pct", "identity_pct", "gene_count")), decimals = 1) %>%
+  fmt_number(columns = any_of("collinearity"), decimals = 2) %>%
+  fmt(columns = any_of("conf_html"), fns = function(x) x) %>%
+  tab_header(title = md("**Per-Chromosome Summary**"),
+             subtitle = md(paste0(nrow(chr_df), " contigs assigned to ",
+                                  n_distinct(chr_df$assigned_ref_id), " reference chromosomes"))) %>%
+  gt_theme()
+```
+
+
+```{r ref_cov_tab_heading, eval=has_chrom_assigned, results='asis'}
+cat('\n## Reference Coverage\n')
+```
+
+```{r ref_coverage_table, eval=nrow(chr_df)>0}
+ref_cov <- chr_df %>%
+  group_by(assigned_ref_id) %>%
+  summarise(n_contigs = n(), total_query_mb = sum(length / 1e6, na.rm = TRUE), .groups = "drop") %>%
+  left_join(
+    ref_lengths %>%
+      filter(!str_detect(ref_id, "^chr[CM]$|_random$")) %>%
+      mutate(ref_length_mb = ref_len / 1e6) %>%
+      select(ref_id, ref_length_mb),
+    by = c("assigned_ref_id" = "ref_id")
+  ) %>%
+  mutate(coverage_pct = if_else(!is.na(ref_length_mb) & ref_length_mb > 0,
+                                 total_query_mb / ref_length_mb * 100, NA_real_)) %>%
+  arrange(version_sort_key(assigned_ref_id), assigned_ref_id)
+
+max_cov <- max(ref_cov$coverage_pct, na.rm = TRUE)
+ref_cov %>%
+  mutate(bar = mapply(function(v) gt_inline_bar(v, max(max_cov, 100), color = "#2980b9"), coverage_pct)) %>%
+  select(assigned_ref_id, ref_length_mb, total_query_mb, coverage_pct, bar, n_contigs) %>%
+  gt() %>%
+  cols_label(assigned_ref_id = "Ref Chromosome", ref_length_mb = "Ref (Mb)",
+             total_query_mb = "Query (Mb)", coverage_pct = "Coverage %", bar = "", n_contigs = "Contigs") %>%
+  fmt_number(columns = c(ref_length_mb, total_query_mb), decimals = 1) %>%
+  fmt_number(columns = coverage_pct, decimals = 1) %>%
+  fmt(columns = bar, fns = function(x) x) %>%
+  tab_header(title = md("**Reference Coverage Summary**")) %>%
+  gt_theme()
+```
+
+
+```{r subgenome_tab_heading, eval=has_subgenomes && has_evidence && !is.null(evidence_df), results='asis'}
+cat('\n## Subgenome Composition\n')
 ```
 
 ```{r subgenome_table, eval=has_subgenomes && has_evidence && !is.null(evidence_df)}
@@ -1126,8 +1170,14 @@ if (nrow(subg_df) > 1) {
     fmt_number(columns = any_of("mean_collinearity"), decimals = 2) %>%
     tab_header(title = md("**Subgenome Composition**")) %>% gt_theme()
 }
+```
 
-# 4. Evidence Quality
+
+# 3. Evidence Quality
+
+```{r evidence_placeholder, eval=!has_evidence || is.null(evidence_df), results='asis'}
+cat('<div class="note-box">No synteny evidence data available.</div>')
+```
 
 ```{r evidence_table, eval=has_evidence && !is.null(evidence_df)}
 ev_df <- summary_df %>%
@@ -1142,10 +1192,10 @@ ev_df <- summary_df %>%
     gc_dev = if ("gc_deviation" %in% names(.)) gc_deviation else NA_real_,
     s_ratio = if ("score_ratio" %in% names(.)) score_ratio else NA_real_
   ) %>%
-  arrange(factor(classification_confidence, levels = c("low", "medium", "high")), desc(length_mb))
+  arrange(version_sort_key(assigned_ref_id), assigned_ref_id, desc(length_mb))
 
-sel <- c("contig", "length_mb", "assigned_ref_id", "syn_score", "span_frac", "gene_pct")
-labels <- list(contig = "Contig", length_mb = "Length (Mb)", assigned_ref_id = "Best Ref",
+sel <- c("contig", "original_name", "length_mb", "assigned_ref_id", "syn_score", "span_frac", "gene_pct")
+labels <- list(contig = "contig", original_name = "original_name", length_mb = "Length (Mb)", assigned_ref_id = "Best Ref",
                syn_score = "Synteny Score", span_frac = "Span Frac", gene_pct = "Gene %")
 if (has_collinearity) { sel <- c(sel, "collin"); labels$collin <- "Collinearity" }
 sel <- c(sel, "s_ratio", "gc_dev", "conf_html")
@@ -1159,28 +1209,16 @@ ev_df %>%
   fmt_number(columns = any_of("s_ratio"), decimals = 1) %>%
   fmt(columns = any_of("conf_html"), fns = function(x) x) %>%
   tab_header(title = md("**Per-Contig Evidence Summary**"),
-             subtitle = md("Sorted by confidence (low first) to highlight potential issues")) %>%
+             subtitle = md("Sorted by chromosome assignment")) %>%
   gt_theme()
 ```
 
-```{r contiguity_stats}
-lengths_sorted <- sort(summary_df$length, decreasing = TRUE)
-total_bp <- sum(lengths_sorted)
-cumsum_bp <- cumsum(lengths_sorted)
-n50_idx <- which(cumsum_bp >= total_bp / 2)[1]
-n50 <- lengths_sorted[n50_idx]; l50 <- n50_idx
 
-tibble(
-  Metric = c("Total assembled", "N50", "L50", "Largest contig", "Total contigs"),
-  Value = c(paste0(sprintf("%.1f", total_bp / 1e6), " Mb"),
-            paste0(sprintf("%.1f", n50 / 1e6), " Mb"),
-            as.character(l50),
-            paste0(sprintf("%.1f", max(lengths_sorted) / 1e6), " Mb"),
-            as.character(length(lengths_sorted)))
-) %>% gt() %>% tab_header(title = md("**Assembly Contiguity**")) %>% gt_theme()
+# 4. Read Depth Analysis {.tabset}
+
+```{r depth_placeholder, eval=!has_depth, results='asis'}
+cat('<div class="note-box">Read depth data is not available. Provide sequencing reads with <code>--reads</code> to enable depth analysis.</div>')
 ```
-
-# 5. Read Depth Analysis {.tabset}
 
 ```{r depth_build, include=FALSE, eval=has_depth}
 # ---------------------------------------------------------------------------
@@ -1330,7 +1368,11 @@ save_pdf(pdf_depth, full_plot_depth, width = 7.2, height = 5)
 ```
 
 ```{r depth_widget, eval=has_depth}
-girafe_styled(full_plot_depth, width_svg = 7.2, height_svg = 5)
+girafe_styled(full_plot_depth, width_svg = 10, height_svg = 6.9)
+```
+
+```{r depth_tab_heading, eval=has_depth, results='asis'}
+cat('\n## Depth Summary by Category\n')
 ```
 
 ```{r depth_table, eval=has_depth}
@@ -1364,62 +1406,168 @@ depth_by_cat %>% select(all_of(sel)) %>% gt() %>% cols_label(.list = labels) %>%
   tab_header(title = md("**Depth Summary by Category**")) %>% gt_theme()
 ```
 
-```{r depth_placeholder, eval=!has_depth, results='asis'}
-cat('<div class="note-box">No read depth data available. Provide reads with <code>--reads</code> to enable depth analysis.</div>')
 
-# 6. Organelles & rDNA
-
-```{r organelle_data}
+```{r organelle_rdna_data}
 org_df <- summary_df %>% filter(classification %in% c("organelle_complete", "organelle_debris"))
 rdna_df <- summary_df %>% filter(classification == "rdna")
 has_organelles <- nrow(org_df) > 0
 has_rdna <- nrow(rdna_df) > 0
 ```
 
-```{r organelle_table, eval=has_organelles}
-org_df %>%
-  mutate(
-    length_kb = length / 1e3,
-    type = case_when(str_detect(contig, "chrC|chloroplast|plastid") ~ "chrC",
-                     str_detect(contig, "chrM|mito") ~ "chrM", TRUE ~ "organelle"),
-    cov_pct = if ("best_ref_union_frac" %in% names(.)) best_ref_union_frac * 100 else NA_real_,
-    depth_val = if (has_depth) depth_mean else NA_real_
-  ) %>% {
-    sel <- c("contig", "type", "length_kb", "cov_pct")
-    labels <- list(contig = "Contig", type = "Type", length_kb = "Length (kb)", cov_pct = "Coverage %")
-    if (has_depth) { sel <- c(sel, "depth_val"); labels$depth_val <- "Depth" }
-    select(., all_of(sel)) %>% gt() %>% cols_label(.list = labels) %>%
-      fmt_number(columns = length_kb, decimals = 1) %>%
-      fmt_number(columns = any_of("cov_pct"), decimals = 1) %>%
-      fmt_number(columns = any_of("depth_val"), decimals = 1) %>%
-      tab_header(title = md("**Organelle Summary**")) %>% gt_theme()
-  }
+# 5. rDNA {.tabset}
+
+```{r rdna_stub, eval=!has_rdna, results='asis'}
+cat('<div class="note-box">No rDNA contigs were detected in this assembly.</div>')
+```
+
+```{r rdna_ann_prep, include=FALSE, eval=has_rdna_ann}
+# Map original contig names to new names
+name_map <- summary_df %>% select(original_name, contig) %>% distinct()
+rdna_ann_show <- rdna_ann_df %>%
+  rename(original_name = contig) %>%
+  left_join(name_map, by = "original_name") %>%
+  mutate(contig = if_else(!is.na(contig), contig, original_name)) %>%
+  relocate(contig, original_name)
+
+.render_rdna_ann_gt <- function(df, title, subtitle) {
+  df %>%
+    select(-is_nor_candidate) %>%
+    rename_with(~ case_when(. == "contig" ~ "contig", . == "original_name" ~ "original_name", TRUE ~ .)) %>%
+    gt() %>%
+    cols_label(contig = "contig", original_name = "original_name") %>%
+    tab_header(title = md(paste0("**", title, "**")), subtitle = md(subtitle)) %>%
+    tab_options(table.font.size = px(10)) %>% gt_theme()
+}
+
+nor_df  <- rdna_ann_show %>% filter(is_nor_candidate == TRUE | is_nor_candidate == "TRUE")
+other_df <- rdna_ann_show %>% filter(!(is_nor_candidate == TRUE | is_nor_candidate == "TRUE"))
+has_nor <- nrow(nor_df) > 0
+has_other_rdna_ann <- nrow(other_df) > 0
+```
+
+```{r rdna_summary_tab, eval=has_rdna, results='asis'}
+cat('\n## rDNA Summary\n')
 ```
 
 ```{r rdna_table, eval=has_rdna}
-rdna_df %>%
+rdna_show <- rdna_df %>%
   mutate(length_kb = length / 1e3,
          identity_pct = if ("best_identity" %in% names(.)) best_identity * 100 else NA_real_,
-         conf_html = sapply(classification_confidence, conf_badge)) %>%
-  select(contig, length_kb, identity_pct, conf_html) %>%
+         conf_html = sapply(classification_confidence, conf_badge))
+
+sel <- c("contig", "original_name", "length_kb", "identity_pct", "conf_html")
+labels <- list(contig = "contig", original_name = "original_name", length_kb = "Length (kb)",
+               identity_pct = "Identity %", conf_html = "Confidence")
+
+rdna_show %>%
+  select(all_of(sel)) %>%
   gt() %>%
-  cols_label(contig = "Contig", length_kb = "Length (kb)",
-             identity_pct = "Identity %", conf_html = "Confidence") %>%
+  cols_label(.list = labels) %>%
   fmt_number(columns = length_kb, decimals = 1) %>%
   fmt_number(columns = any_of("identity_pct"), decimals = 1) %>%
   fmt(columns = conf_html, fns = function(x) x) %>%
   tab_header(title = md("**rDNA Summary**")) %>% gt_theme()
 ```
 
-```{r rdna_annotations_table, eval=has_rdna_ann}
-rdna_ann_df %>% head(50) %>% gt() %>%
-  tab_header(title = md("**rDNA Annotations**"),
-             subtitle = md(paste0("Showing up to 50 of ", nrow(rdna_ann_df), " annotations"))) %>%
-  tab_options(table.font.size = px(10)) %>% gt_theme()
+```{r rdna_nor_tab, eval=has_rdna_ann && has_nor, results='asis'}
+cat('\n## NOR Candidates\n')
 ```
 
-```{r no_organelle_placeholder, eval=!has_organelles && !has_rdna, results='asis'}
-cat('<div class="note-box">No organelle or rDNA contigs detected.</div>')
+```{r rdna_nor_table, eval=has_rdna_ann && has_nor}
+.render_rdna_ann_gt(nor_df %>% head(50), "NOR Candidates",
+  paste0("Showing up to 50 of ", nrow(nor_df), " NOR candidate annotations"))
+```
+
+```{r rdna_other_tab, eval=has_rdna_ann && has_other_rdna_ann, results='asis'}
+cat('\n## Other Annotations\n')
+```
+
+```{r rdna_other_table, eval=has_rdna_ann && has_other_rdna_ann}
+.render_rdna_ann_gt(other_df %>% head(50), "Other rDNA Annotations",
+  paste0("Showing up to 50 of ", nrow(other_df), " non-NOR annotations"))
+```
+
+# 6. Organelles
+
+```{r organelle_stub, eval=!has_organelles, results='asis'}
+cat('<div class="note-box">No organelle contigs were detected in this assembly.</div>')
+```
+
+```{r organelle_prep, include=FALSE, eval=has_organelles}
+org_show <- org_df %>%
+  mutate(
+    length_kb = length / 1e3,
+    type = case_when(str_detect(assigned_ref_id, "chrC|chloroplast|plastid") ~ "chrC",
+                     str_detect(assigned_ref_id, "chrM|mito") ~ "chrM", TRUE ~ "organelle"),
+    cov_pct = if ("best_ref_union_frac" %in% names(.)) best_ref_union_frac * 100 else NA_real_,
+    depth_val = if (has_depth) depth_mean else NA_real_
+  )
+
+org_complete <- org_show %>% filter(classification == "organelle_complete")
+org_debris   <- org_show %>% filter(classification == "organelle_debris")
+if (has_depth) {
+  org_debris <- org_debris %>% arrange(desc(depth_val))
+}
+has_org_complete <- nrow(org_complete) > 0
+has_org_debris <- nrow(org_debris) > 0
+
+.render_org_gt <- function(df, title) {
+  sel <- c("contig", "original_name", "type", "length_kb")
+  labels <- list(contig = "contig", original_name = "original_name", type = "Type", length_kb = "Length (kb)")
+  if (has_depth) { sel <- c(sel, "depth_val"); labels$depth_val <- "Depth" }
+  df %>% select(all_of(sel)) %>% gt() %>% cols_label(.list = labels) %>%
+    fmt_number(columns = length_kb, decimals = 1) %>%
+    fmt_number(columns = any_of("depth_val"), decimals = 1) %>%
+    tab_header(title = md(paste0("**", title, "**"))) %>% gt_theme()
+}
+```
+
+```{r organelle_table, eval=has_organelles && has_org_complete}
+.render_org_gt(org_complete, "Complete Organelles")
+```
+
+```{r organelle_debris_table, eval=has_organelles && has_org_debris}
+.med_range <- function(vals) {
+  if (length(vals) == 0 || all(is.na(vals))) return("\u2014")
+  vals <- vals[!is.na(vals)]
+  if (length(vals) == 1) return(sprintf("%.1f", vals))
+  sprintf("%.1f (%.1f\u2013%.1f)", median(vals), min(vals), max(vals))
+}
+
+debris_summary <- org_debris %>%
+  group_by(type) %>%
+  summarise(
+    n = n(),
+    total_kb = sum(length_kb),
+    length_dist = list(length_kb),
+    length_text = .med_range(length_kb),
+    depth_dist = if (has_depth) list(depth_val[!is.na(depth_val)]) else list(numeric(0)),
+    depth_text = if (has_depth) .med_range(depth_val[!is.na(depth_val)]) else "\u2014",
+    .groups = "drop"
+  )
+
+gt_tbl <- debris_summary %>%
+  gt() %>%
+  cols_label(type = "Type", n = "Contigs", total_kb = "Total (kb)",
+             length_dist = "", length_text = "Length (kb)",
+             depth_dist = "", depth_text = "Depth") %>%
+  fmt_number(columns = total_kb, decimals = 1) %>%
+  gt_plt_dist(length_dist, type = "boxplot", line_color = "steelblue",
+              fill_color = "lightsteelblue") %>%
+  cols_move(columns = length_text, after = length_dist) %>%
+  tab_header(title = md("**Organelle Debris**"),
+             subtitle = md(paste0(nrow(org_debris), " debris contigs summarized by type"))) %>%
+  gt_theme()
+
+if (has_depth) {
+  gt_tbl <- gt_tbl %>%
+    gt_plt_dist(depth_dist, type = "boxplot", line_color = "steelblue",
+                fill_color = "lightsteelblue") %>%
+    cols_move(columns = depth_text, after = depth_dist)
+} else {
+  gt_tbl <- gt_tbl %>% cols_hide(c(depth_dist, depth_text))
+}
+gt_tbl
 ```
 
 # 7. Contaminants
@@ -1525,9 +1673,7 @@ if (nrow(ct_df) > 0) {
       }) %>%
       cols_align(align = "center", columns = c(rank, n_contigs, circ_indicator, mean_coverage)) %>%
       cols_align(align = "left", columns = total_text) %>%
-      tab_style(style = cell_text(size = px(11)), locations = cells_body()) %>%
-      tab_style(style = cell_text(size = px(11), weight = "bold"), locations = cells_column_labels()) %>%
-      tab_options(data_row.padding = px(4), column_labels.padding = px(6), table.font.size = px(11)) %>%
+      gt_theme() %>%
       tab_footnote(footnote = "\u25CF = all circularized, \u25D0 = mixed, \u25CB = all linear",
                    locations = cells_column_labels(columns = circ_indicator)) %>%
       tab_source_note(source_note = md(paste0("**Families:** ",
@@ -1548,9 +1694,7 @@ if (nrow(ct_df) > 0) {
                  "%); padding: 2px 4px; border-radius: 2px; white-space: nowrap;'>", x, "</div>")
         }) %>%
         cols_align(align = "left", columns = depth_text) %>%
-        cols_width(rank ~ px(30), domain_abbr ~ px(50), family ~ px(120), binomial ~ px(180),
-                   n_contigs ~ px(30), total_text ~ px(150), depth_text ~ px(130),
-                   mean_coverage ~ px(45), circ_indicator ~ px(35)) %>%
+        tab_options(table.width = pct(100)) %>%
         tab_header(title = md(paste0("**Top ", nrow(tbl_data), " Contaminants**")),
                    subtitle = md(paste0("Ranked by abundance (depth \u00D7 length) \u2014 ", params$plot_suffix)))
     } else {
@@ -1559,9 +1703,7 @@ if (nrow(ct_df) > 0) {
                    n_contigs = "n", total_text = "Total Mb",
                    mean_coverage = "Cov%", circ_indicator = "Circ") %>%
         cols_hide(c(domain_color, family_color, total_pct)) %>%
-        cols_width(rank ~ px(30), domain_abbr ~ px(50), family ~ px(120), binomial ~ px(180),
-                   n_contigs ~ px(30), total_text ~ px(150),
-                   mean_coverage ~ px(45), circ_indicator ~ px(35)) %>%
+        tab_options(table.width = pct(100)) %>%
         tab_header(title = md(paste0("**Top ", nrow(tbl_data), " Contaminants**")),
                    subtitle = md(paste0("Ranked by total length \u2014 ", params$plot_suffix)))
     }
@@ -1571,14 +1713,15 @@ if (nrow(ct_df) > 0) {
 ```
 
 ```{r no_contam_placeholder, eval=!has_contaminants, results='asis'}
-cat('<div class="note-box">No contaminants detected.</div>')
+cat('<div class="note-box">No contaminant sequences were detected. If contamination screening was not performed, provide a Centrifuger index with <code>--centrifuger-idx</code>.</div>')
+```
 
 # 8. Unclassified & Debris
 
 ```{r debris_table}
 debris_df <- summary_df %>%
   filter(classification %in% c("unclassified", "debris", "chrom_debris",
-                                "chrom_unassigned", "organelle_debris")) %>%
+                                "chrom_unassigned")) %>%
   mutate(
     length_mb = length / 1e6,
     best_ref = if ("assigned_ref_id" %in% names(.)) assigned_ref_id else NA_character_,
@@ -1586,16 +1729,15 @@ debris_df <- summary_df %>%
     reason = case_when(
       classification == "chrom_unassigned" ~ "Below synteny gates",
       classification == "chrom_debris" ~ "Duplicate of assembled chromosome",
-      classification == "organelle_debris" ~ "Partial organelle",
       TRUE ~ classification
     )
   ) %>% arrange(desc(length_mb))
 
 if (nrow(debris_df) > 0) {
   debris_df %>% head(50) %>%
-    select(contig, length_mb, classification, best_ref, aligned_bp, reason) %>%
+    select(contig, original_name, length_mb, classification, best_ref, aligned_bp, reason) %>%
     gt() %>%
-    cols_label(contig = "Contig", length_mb = "Length (Mb)", classification = "Category",
+    cols_label(contig = "contig", original_name = "original_name", length_mb = "Length (Mb)", classification = "Category",
                best_ref = "Best Ref Hit", aligned_bp = "Aligned Bp", reason = "Reason") %>%
     fmt_number(columns = length_mb, decimals = 2) %>%
     fmt_number(columns = any_of("aligned_bp"), decimals = 0) %>%
