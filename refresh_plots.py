@@ -18,10 +18,6 @@ from pathlib import Path
 
 # Map generated R script suffix → template filename
 SCRIPT_TO_TEMPLATE = {
-    "chromosome_overview": "chromosome_overview.tmpl.R",
-    "depth_overview": "depth_overview.tmpl.R",
-    "contaminant_table": "contaminant_table.tmpl.R",
-    "classification_summary_bar": "classification_summary_bar.tmpl.R",
     "unified_report": "unified_report.tmpl.Rmd",
 }
 
@@ -43,10 +39,6 @@ PLACEHOLDER_TSV = {
 
 # Output file suffixes per script type
 SCRIPT_OUTPUT_SUFFIXES = {
-    "chromosome_overview": (".chromosome_overview.pdf", ".chromosome_overview.html"),
-    "depth_overview": (".depth_overview.pdf", ".depth_overview.html"),
-    "contaminant_table": (None, ".contaminant_table.html"),
-    "classification_summary_bar": (".classification_summary_bar.pdf", ".classification_summary_bar.html"),
     "unified_report": (None, ".unified_report.html"),
 }
 

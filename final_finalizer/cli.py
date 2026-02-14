@@ -122,13 +122,7 @@ from final_finalizer.output.tsv_output import (
     write_rdna_annotations_tsv,
     write_rdna_arrays_tsv,
 )
-from final_finalizer.output.plotting import (
-    run_plot,
-    run_depth_plot,
-    run_contaminant_table,
-    run_classification_summary_bar,
-    run_unified_report,
-)
+from final_finalizer.output.plotting import run_unified_report
 
 
 def main():
@@ -139,7 +133,7 @@ def main():
         # Create a minimal namespace with defaults
         defaults = argparse.Namespace(
             ref=None, query=None, outprefix=None, ref_gff3=None,
-            threads=8, plot=False, plot_html=False, assembly_name="", reference_name="",
+            threads=8, plot=False, assembly_name="", reference_name="",
             verbose=False, quiet=False,
             log_file=None, config=None, dump_config=True, chr_like_minlen=None,
             add_subgenome_suffix=None, ref_id_pattern=None, reads=None,
@@ -192,8 +186,7 @@ def main():
     # =========================================================================
     common = p.add_argument_group("Common options")
     common.add_argument("-t", "--threads", type=_positive_int, default=8, help="Threads for minimap2/miniprot [8]")
-    common.add_argument("--plot", action="store_true", help="Generate overview plots with R/ggplot2")
-    common.add_argument("--plot-html", action="store_true", help="Also generate interactive HTML plot (ggiraph)")
+    common.add_argument("--plot", action="store_true", help="Generate unified HTML report (requires rmarkdown + pandoc)")
     common.add_argument("--assembly-name", type=str, default="", metavar="NAME", help="Assembly name for plot subtitles (default: omitted)")
     common.add_argument("--reference-name", type=str, default="", metavar="NAME", help="Reference name for plot subtitles (default: omitted)")
     common.add_argument("-v", "--verbose", action="store_true", help="Enable verbose (DEBUG level) logging")
@@ -1374,9 +1367,7 @@ def main():
         agp_tsv = Path(str(outprefix) + ".scaffolded.agp") if args.scaffold and scaffolded_seqs else None
         contam_tsv_arg = contaminants_tsv if contaminants_filtered else None
 
-        # Unified HTML report builds all plots inline (interactive + PDF export).
-        # Falls back to standalone R scripts if rmarkdown/pandoc unavailable.
-        unified_ok = run_unified_report(
+        if not run_unified_report(
             summary_tsv,
             ref_lengths_tsv,
             segments_tsv,
@@ -1392,46 +1383,11 @@ def main():
             rdna_arrays_tsv=rdna_arrays_tsv_path,
             contaminants_tsv=contam_tsv_arg,
             agp_tsv=agp_tsv,
-        )
-
-        if not unified_ok:
-            # Fallback: generate individual plots via standalone R scripts
-            run_plot(
-                summary_tsv,
-                ref_lengths_tsv,
-                segments_tsv,
-                chain_summary_tsv,
-                macro_blocks_tsv,
-                outprefix,
-                chr_like_minlen,
-                plot_suffix,
-                args.plot_html,
-                rdna_annotations_tsv=rdna_annotations_tsv,
-                rdna_arrays_tsv=rdna_arrays_tsv_path,
-                agp_tsv=agp_tsv,
+        ):
+            logger.error(
+                "--plot failed: unified report could not be generated. "
+                "Ensure Rscript, rmarkdown, and pandoc are installed."
             )
-            run_classification_summary_bar(
-                summary_tsv,
-                outprefix,
-                plot_suffix,
-                args.plot_html,
-                assembly_name=args.assembly_name,
-                reference_name=args.reference_name,
-            )
-            if depth_stats:
-                run_depth_plot(
-                    summary_tsv,
-                    ref_lengths_tsv,
-                    outprefix,
-                    plot_suffix,
-                    args.plot_html,
-                )
-            if contaminants_filtered and contaminants_tsv.exists():
-                run_contaminant_table(
-                    contaminants_tsv,
-                    outprefix,
-                    plot_suffix,
-                )
 
 
 if __name__ == "__main__":

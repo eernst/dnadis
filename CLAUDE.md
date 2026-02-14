@@ -54,7 +54,7 @@ pytest -m "not integration"
     --ref-gff3 ref.gff3 \
     --reads hifi.fastq.gz \
     --centrifuger-idx /path/to/index \
-    --plot --plot-html \
+    --plot \
     -v --log-file analysis.log
 
 # Dump config template
@@ -150,10 +150,8 @@ final_finalizer/
 6. **Output Generation** (`output/`)
    - Classified FASTA files (chromosomes, organelles, rDNA, etc.)
    - TSV summary tables (contig_summary, evidence_summary, segments, macro_blocks, contaminants with taxonomic lineage)
-   - PDF/HTML visualizations (if R/ggplot2 available):
-     - Chromosome overview plot
-     - Read depth overview (if --reads provided)
-     - Contaminant summary table (if contaminants detected)
+   - Unified HTML report with embedded plots (if `--plot`; requires rmarkdown + pandoc):
+     - Chromosome overview, classification bar, read depth overview, contaminant table
 
 ### Key Design Patterns
 
@@ -256,10 +254,9 @@ All external tools are called via subprocess with proper error handling. Use `ut
 **GFF3 outputs**:
 - `*.rdna_annotations.gff3` - Hierarchical rRNA gene annotations with 18S, 5.8S, 25S, ITS1, ITS2 sub-features (if `--build-rdna-consensus` used)
 
-**Visualization**:
-- `*.chromosome_overview.pdf` - Main synteny visualization
-- `*.depth_overview.pdf`, `*.depth_overview.html` - Read depth plots (if `--reads` provided and `--plot-html`)
-- `*.contaminant_table.html` - Interactive HTML table of top contaminants ranked by abundance with inline gradient bars (if contaminants detected)
+**Visualization** (requires rmarkdown + pandoc; `--plot`):
+- `*.unified_report.html` - Self-contained HTML report with all plots (chromosome overview, classification bar, depth overview, contaminant table)
+- Individual PDFs (`*.chromosome_overview.pdf`, etc.) are also exported from within the report
 
 See `docs/output_formats.md` for complete column documentation.
 
