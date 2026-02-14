@@ -1486,17 +1486,49 @@ arrays_show <- rdna_arrays_df %>%
   mutate(contig = if_else(!is.na(contig), contig, original_name)) %>%
   relocate(array_id, contig)
 
-arrays_show %>%
-  select(array_id, contig, span_kb, n_total, n_full, n_partial, n_fragment,
-         strand, identity_median, identity_min, identity_max) %>%
+# Collect per-array identity values from the per-locus annotations
+# for gt_plt_dist boxplots
+if (has_rdna_ann) {
+  id_by_array <- rdna_ann_df %>%
+    filter(!is.na(array_id) & nzchar(array_id)) %>%
+    group_by(array_id) %>%
+    summarise(id_dist = list(identity), .groups = "drop")
+} else {
+  id_by_array <- tibble(array_id = character(), id_dist = list())
+}
+
+max_span <- max(arrays_show$span_kb, na.rm = TRUE)
+
+arrays_tbl <- arrays_show %>%
+  left_join(id_by_array, by = "array_id") %>%
+  mutate(
+    span_bar = mapply(function(v) gt_inline_bar(v, max_span, color = "#2980b9", height = "14px"), span_kb),
+    span_text = sprintf("%.0f kb", span_kb),
+    id_text = sprintf("%.2f%% (%.2f\u2013%.2f%%)",
+                       identity_median * 100, identity_min * 100, identity_max * 100),
+    id_dist = if (nrow(id_by_array) > 0) id_dist else lapply(seq_len(n()), function(i) {
+      c(identity_min[i], identity_median[i], identity_max[i])
+    }),
+    start_mb = sprintf("%.2f", start / 1e6),
+    end_mb = sprintf("%.2f", end / 1e6),
+    copies_text = paste0(n_total, " (", n_full, "F / ", n_partial, "P / ", n_fragment, "Fr)")
+  )
+
+arrays_tbl %>%
+  select(array_id, contig, start_mb, end_mb, span_bar, span_text,
+         strand, copies_text, id_dist, id_text) %>%
   gt() %>%
   cols_label(
-    array_id = "Array", contig = "Contig", span_kb = "Span (kb)",
-    n_total = "Copies", n_full = "Full", n_partial = "Partial", n_fragment = "Fragment",
-    strand = "Strand", identity_median = "Median ID", identity_min = "Min ID", identity_max = "Max ID"
+    array_id = "Array", contig = "Contig",
+    start_mb = "Start (Mb)", end_mb = "End (Mb)",
+    span_bar = "", span_text = "Span",
+    strand = "Strand", copies_text = "Copies (F/P/Fr)",
+    id_dist = "", id_text = "Identity"
   ) %>%
-  fmt_number(columns = span_kb, decimals = 1) %>%
-  fmt_number(columns = c(identity_median, identity_min, identity_max), decimals = 4) %>%
+  fmt(columns = span_bar, fns = function(x) x) %>%
+  gt_plt_dist(id_dist, type = "boxplot", line_color = "steelblue",
+              fill_color = "lightsteelblue") %>%
+  cols_move(columns = id_text, after = id_dist) %>%
   tab_header(title = md("**45S rDNA Arrays**"),
     subtitle = md(paste0(nrow(arrays_show), " tandem repeat arrays detected"))) %>%
   gt_theme()
