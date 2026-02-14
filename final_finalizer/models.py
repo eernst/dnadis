@@ -290,7 +290,7 @@ class RdnaLocus:
         consensus_coverage: Fraction of consensus covered (0.0-1.0)
         copy_type: "full", "partial", or "fragment"
         sub_feature_loci: List of sub-features with mapped contig coordinates
-        is_nor_candidate: True if part of a tandem cluster of >= min_tandem copies
+        array_id: ID of the 45S rDNA array this locus belongs to, or None
     """
     contig: str
     start: int
@@ -300,12 +300,59 @@ class RdnaLocus:
     consensus_coverage: float
     copy_type: str
     sub_feature_loci: List[RdnaSubFeatureLocus]
-    is_nor_candidate: bool
+    array_id: Optional[str] = None
+
+    @property
+    def is_nor_candidate(self) -> bool:
+        """Backward-compatible property: True if part of an rDNA array."""
+        return self.array_id is not None
 
     @property
     def sub_features(self) -> List[str]:
         """Return list of sub-feature names for backward compatibility."""
         return [sf.name for sf in self.sub_feature_loci]
+
+
+@dataclass
+class RdnaArray:
+    """A tandem 45S rDNA repeat array on a contig.
+
+    Represents a cluster of tandem rDNA loci detected by proximity-based
+    clustering. Arrays are first-class objects used for GFF3 annotation
+    (as repeat_region parent features) and summary reporting.
+
+    Attributes:
+        array_id: Unique identifier (e.g., "array_1", "array_2")
+        contig: Contig name
+        start: Start position on contig (0-based, first locus start)
+        end: End position on contig (0-based exclusive, last locus end)
+        strand: Majority strand of constituent loci
+        loci: Constituent loci, sorted by start position
+        n_total: Total number of loci in array
+        n_full: Number of full-length copies (copy_type == "full")
+        n_partial: Number of partial copies
+        n_fragment: Number of fragment copies
+        identity_median: Median identity of constituent loci
+        identity_min: Minimum identity
+        identity_max: Maximum identity
+    """
+    array_id: str
+    contig: str
+    start: int
+    end: int
+    strand: str
+    loci: List[RdnaLocus]
+    n_total: int
+    n_full: int
+    n_partial: int
+    n_fragment: int
+    identity_median: float
+    identity_min: float
+    identity_max: float
+
+    @property
+    def span(self) -> int:
+        return self.end - self.start
 
 
 @dataclass

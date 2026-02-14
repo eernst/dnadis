@@ -7,7 +7,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
-from final_finalizer.models import ContigClassification, ContaminantHitExtended, DepthStats, RdnaLocus
+from final_finalizer.models import ContigClassification, ContaminantHitExtended, DepthStats, RdnaArray, RdnaLocus
 from final_finalizer.utils.reference_utils import split_chrom_subgenome
 
 # Use a large but finite value instead of infinity to avoid parsing issues
@@ -812,7 +812,7 @@ def write_rdna_annotations_tsv(
         "consensus_coverage",
         "copy_type",
         "sub_features",
-        "is_nor_candidate",
+        "array_id",
         "contig_classification",
     ]
 
@@ -830,7 +830,60 @@ def write_rdna_annotations_tsv(
                 f"{locus.consensus_coverage:.4f}",
                 locus.copy_type,
                 ",".join(locus.sub_features) if locus.sub_features else "",
-                "TRUE" if locus.is_nor_candidate else "FALSE",
+                locus.array_id if locus.array_id else "",
+                clf,
+            ]
+            fh.write("\t".join(row) + "\n")
+
+
+def write_rdna_arrays_tsv(
+    output_path: Path,
+    arrays: List[RdnaArray],
+    classifications: Optional[Dict[str, str]] = None,
+) -> None:
+    """Write rDNA array summary TSV.
+
+    Args:
+        output_path: Path to output TSV file
+        arrays: List of RdnaArray objects
+        classifications: Optional dict mapping contig name -> classification string
+    """
+    columns = [
+        "array_id",
+        "contig",
+        "start",
+        "end",
+        "span_kb",
+        "strand",
+        "n_total",
+        "n_full",
+        "n_partial",
+        "n_fragment",
+        "identity_median",
+        "identity_min",
+        "identity_max",
+        "contig_classification",
+    ]
+
+    with output_path.open("w") as fh:
+        fh.write("\t".join(columns) + "\n")
+
+        for arr in arrays:
+            clf = classifications.get(arr.contig, "") if classifications else ""
+            row = [
+                arr.array_id,
+                arr.contig,
+                str(arr.start),
+                str(arr.end),
+                f"{arr.span / 1000:.1f}",
+                arr.strand,
+                str(arr.n_total),
+                str(arr.n_full),
+                str(arr.n_partial),
+                str(arr.n_fragment),
+                f"{arr.identity_median:.4f}",
+                f"{arr.identity_min:.4f}",
+                f"{arr.identity_max:.4f}",
                 clf,
             ]
             fh.write("\t".join(row) + "\n")
@@ -873,10 +926,12 @@ def write_rdna_annotations_gff3(
     loci: List[RdnaLocus],
     query_lengths: Dict[str, int],
     classifications: Optional[Dict[str, str]] = None,
+    arrays: Optional[List[RdnaArray]] = None,
 ) -> None:
     """Write rDNA annotation GFF3 with hierarchical feature structure.
 
     Produces a properly formatted GFF3 file with:
+    - repeat_region features (SO:0000657) as parent features for rDNA arrays
     - rRNA_gene features (SO:0001637) as parent features for each locus
     - rRNA sub-features (18S, 5.8S, 28S) and ITS regions as children
 
@@ -887,7 +942,14 @@ def write_rdna_annotations_gff3(
         loci: List of RdnaLocus annotations
         query_lengths: Dict mapping contig name -> length (for ##sequence-region)
         classifications: Optional dict mapping contig name -> classification string
+        arrays: Optional list of RdnaArray objects for repeat_region parent features
     """
+    # Build array lookup for loci that belong to arrays
+    array_lookup: Dict[str, RdnaArray] = {}
+    if arrays:
+        for arr in arrays:
+            array_lookup[arr.array_id] = arr
+
     # Get unique contigs from loci, sorted
     contigs_with_loci = sorted(set(l.contig for l in loci))
 
@@ -901,6 +963,36 @@ def write_rdna_annotations_gff3(
             if length > 0:
                 fh.write(f"##sequence-region {contig} 1 {length}\n")
 
+        # Write array-level repeat_region features first
+        written_arrays: Set[str] = set()
+        if arrays:
+            for arr in arrays:
+                arr_gff_start = arr.start + 1
+                arr_gff_end = arr.end
+                arr_feature_id = f"rdna_{arr.array_id}"
+
+                arr_attrs = [
+                    f"ID={_escape_gff3_value(arr_feature_id)}",
+                    f"Name=45S_rDNA_array",
+                    f"repeat_type=rDNA_45S",
+                    f"n_copies={arr.n_total}",
+                    f"n_full={arr.n_full}",
+                    f"identity_median={arr.identity_median:.4f}",
+                ]
+
+                fh.write("\t".join([
+                    arr.contig,
+                    "final_finalizer",
+                    "repeat_region",  # SO:0000657
+                    str(arr_gff_start),
+                    str(arr_gff_end),
+                    ".",
+                    arr.strand,
+                    ".",
+                    ";".join(arr_attrs),
+                ]) + "\n")
+                written_arrays.add(arr.array_id)
+
         # Write features sorted by contig and position
         for locus in sorted(loci, key=lambda l: (l.contig, l.start)):
             # Convert to 1-based GFF3 coordinates
@@ -912,9 +1004,16 @@ def write_rdna_annotations_gff3(
 
             # Build attributes for the parent rRNA_gene feature
             attrs = [f"ID={_escape_gff3_value(parent_id)}"]
+
+            # Add Parent attribute if locus belongs to an array
+            if locus.array_id and locus.array_id in written_arrays:
+                attrs.append(f"Parent=rdna_{locus.array_id}")
+
             attrs.append(f"copy_type={locus.copy_type}")
             attrs.append(f"identity={locus.identity:.4f}")
-            attrs.append(f"is_nor_candidate={'true' if locus.is_nor_candidate else 'false'}")
+
+            if locus.array_id:
+                attrs.append(f"array_id={locus.array_id}")
 
             if classifications:
                 clf = classifications.get(locus.contig, "")

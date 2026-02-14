@@ -1177,3 +1177,125 @@ def test_macro_block_rows_ref_coords():
     # Empty PAF: no rows, but qr_ref_ranges should exist
     assert ev.qr_ref_ranges is not None
     assert isinstance(ev.qr_ref_ranges, dict)
+
+
+# ----------------------------
+# 45S rDNA array detection tests
+# ----------------------------
+
+def _make_rdna_locus(contig, start, end, strand="+", identity=0.95,
+                     consensus_coverage=0.90, copy_type="full"):
+    """Helper to create RdnaLocus for testing."""
+    from final_finalizer.models import RdnaLocus
+    return RdnaLocus(
+        contig=contig,
+        start=start,
+        end=end,
+        strand=strand,
+        identity=identity,
+        consensus_coverage=consensus_coverage,
+        copy_type=copy_type,
+        sub_feature_loci=[],
+    )
+
+
+def test_detect_arrays_basic():
+    """5 loci on same contig within gap -> 1 array, correct metrics."""
+    from final_finalizer.detection.rdna_consensus import _detect_arrays
+
+    loci = [
+        _make_rdna_locus("ctg1", 1000, 11000, identity=0.95, copy_type="full"),
+        _make_rdna_locus("ctg1", 12000, 22000, identity=0.96, copy_type="full"),
+        _make_rdna_locus("ctg1", 23000, 33000, identity=0.94, copy_type="partial"),
+        _make_rdna_locus("ctg1", 34000, 44000, identity=0.97, copy_type="full"),
+        _make_rdna_locus("ctg1", 45000, 55000, identity=0.93, copy_type="fragment"),
+    ]
+    arrays = _detect_arrays(loci, min_tandem_copies=3, max_tandem_gap=50000)
+    assert len(arrays) == 1
+
+    arr = arrays[0]
+    assert arr.array_id == "array_1"
+    assert arr.contig == "ctg1"
+    assert arr.start == 1000
+    assert arr.end == 55000
+    assert arr.n_total == 5
+    assert arr.n_full == 3
+    assert arr.n_partial == 1
+    assert arr.n_fragment == 1
+    assert arr.identity_min == 0.93
+    assert arr.identity_max == 0.97
+    assert arr.span == 54000
+
+
+def test_detect_arrays_multiple_on_contig():
+    """2 clusters separated by large gap -> 2 arrays."""
+    from final_finalizer.detection.rdna_consensus import _detect_arrays
+
+    loci = [
+        # Cluster 1: positions 0-30k
+        _make_rdna_locus("ctg1", 0, 10000),
+        _make_rdna_locus("ctg1", 11000, 21000),
+        _make_rdna_locus("ctg1", 22000, 32000),
+        # Cluster 2: positions 500k-530k (gap > 50k)
+        _make_rdna_locus("ctg1", 500000, 510000),
+        _make_rdna_locus("ctg1", 511000, 521000),
+        _make_rdna_locus("ctg1", 522000, 532000),
+    ]
+    arrays = _detect_arrays(loci, min_tandem_copies=3, max_tandem_gap=50000)
+    assert len(arrays) == 2
+    assert arrays[0].array_id == "array_1"
+    assert arrays[1].array_id == "array_2"
+    assert arrays[0].n_total == 3
+    assert arrays[1].n_total == 3
+
+
+def test_detect_arrays_below_min_copies():
+    """2 loci -> no arrays, array_id stays None."""
+    from final_finalizer.detection.rdna_consensus import _detect_arrays
+
+    loci = [
+        _make_rdna_locus("ctg1", 0, 10000),
+        _make_rdna_locus("ctg1", 11000, 21000),
+    ]
+    arrays = _detect_arrays(loci, min_tandem_copies=3, max_tandem_gap=50000)
+    assert len(arrays) == 0
+    assert all(l.array_id is None for l in loci)
+
+
+def test_detect_arrays_sets_array_id():
+    """Verify constituent loci get array_id set."""
+    from final_finalizer.detection.rdna_consensus import _detect_arrays
+
+    loci = [
+        _make_rdna_locus("ctg1", 0, 10000),
+        _make_rdna_locus("ctg1", 11000, 21000),
+        _make_rdna_locus("ctg1", 22000, 32000),
+    ]
+    arrays = _detect_arrays(loci, min_tandem_copies=3, max_tandem_gap=50000)
+    assert len(arrays) == 1
+    for locus in loci:
+        assert locus.array_id == "array_1"
+
+
+def test_rdna_locus_is_nor_candidate_compat():
+    """Property returns True when array_id set, False when None."""
+    locus_with = _make_rdna_locus("ctg1", 0, 10000)
+    locus_with.array_id = "array_1"
+    assert locus_with.is_nor_candidate is True
+
+    locus_without = _make_rdna_locus("ctg1", 0, 10000)
+    assert locus_without.is_nor_candidate is False
+
+
+def test_detect_arrays_strand_majority():
+    """Mixed strands -> array strand is majority."""
+    from final_finalizer.detection.rdna_consensus import _detect_arrays
+
+    loci = [
+        _make_rdna_locus("ctg1", 0, 10000, strand="+"),
+        _make_rdna_locus("ctg1", 11000, 21000, strand="+"),
+        _make_rdna_locus("ctg1", 22000, 32000, strand="-"),
+    ]
+    arrays = _detect_arrays(loci, min_tandem_copies=3, max_tandem_gap=50000)
+    assert len(arrays) == 1
+    assert arrays[0].strand == "+"

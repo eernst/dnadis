@@ -153,7 +153,7 @@ rdna_annot <- if (nzchar(rdna_file) && file.exists(rdna_file)) {
       consensus_coverage = col_double(),
       copy_type = col_character(),
       sub_features = col_character(),
-      is_nor_candidate = col_character(),
+      array_id = col_character(),
       contig_classification = col_character()
     )
   ) %>%
