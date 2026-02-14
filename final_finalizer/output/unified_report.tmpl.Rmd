@@ -1324,7 +1324,8 @@ if (nrow(df_chrom_depth) > 0) {
     ggiraph::geom_col_interactive(
       aes(fill = fill_category, tooltip = tooltip),
       width = 0.8, alpha = 0.85, orientation = "y") +
-    scale_fill_manual(values = sg_colors, name = "Subgenome") +
+    scale_fill_manual(values = sg_colors, name = "Subgenome",
+                      guide = if (has_subgenomes) "legend" else "none") +
     scale_y_reverse(breaks = chrom_breaks$mid_pos,
                     labels = str_replace(chrom_breaks$chrom_label, "^chr", ""),
                     expand = expansion(mult = c(0.01, 0.01))) +
