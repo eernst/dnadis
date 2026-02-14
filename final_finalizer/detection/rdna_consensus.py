@@ -33,7 +33,7 @@ from final_finalizer.detection.blast import (
     run_blastn_megablast,
     run_makeblastdb,
 )
-from final_finalizer.models import RdnaConsensus, RdnaLocus, RdnaSubFeature, RdnaSubFeatureLocus
+from final_finalizer.models import RdnaArray, RdnaConsensus, RdnaLocus, RdnaSubFeature, RdnaSubFeatureLocus
 from final_finalizer.utils.io_utils import file_exists_and_valid, have_exe, merge_intervals
 from final_finalizer.utils.logging_config import get_logger
 from final_finalizer.utils.sequence_utils import (
@@ -760,7 +760,7 @@ def annotate_contigs_with_consensus(
     classifications: Optional[Dict[str, str]] = None,
     min_tandem_copies: int = 3,
     max_tandem_gap: int = 50000,
-) -> List[RdnaLocus]:
+) -> Tuple[List[RdnaLocus], List[RdnaArray]]:
     """BLAST the consensus 45S against all contigs to annotate rDNA loci.
 
     Args:
@@ -770,11 +770,11 @@ def annotate_contigs_with_consensus(
         work_dir: Working directory
         threads: Number of threads
         classifications: Optional dict of contig_name -> classification string
-        min_tandem_copies: Minimum tandem copies for NOR candidate [3]
+        min_tandem_copies: Minimum tandem copies for array detection [3]
         max_tandem_gap: Maximum gap between tandem copies [50000]
 
     Returns:
-        List of RdnaLocus annotations
+        Tuple of (list of RdnaLocus annotations, list of RdnaArray objects)
     """
     work_dir.mkdir(parents=True, exist_ok=True)
 
@@ -800,7 +800,7 @@ def annotate_contigs_with_consensus(
 
     if not file_exists_and_valid(blast_out):
         logger.warning("BLAST of consensus vs contigs failed")
-        return []
+        return [], []
 
     # Parse BLAST hits
     # Fields: qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore
@@ -864,19 +864,17 @@ def annotate_contigs_with_consensus(
                 consensus_coverage=locus_dict["consensus_coverage"],
                 copy_type=locus_dict["copy_type"],
                 sub_feature_loci=locus_dict["sub_feature_loci"],
-                is_nor_candidate=False,  # Set below
             ))
 
-    # Detect NOR candidates: contigs with >= min_tandem_copies in a cluster
-    _mark_nor_candidates(loci, min_tandem_copies, max_tandem_gap)
+    # Detect tandem 45S rDNA arrays
+    arrays = _detect_arrays(loci, min_tandem_copies, max_tandem_gap)
 
     logger.info(f"Annotated {len(loci)} rDNA loci across {len(hits_per_contig)} contigs")
-    nor_count = sum(1 for l in loci if l.is_nor_candidate)
-    if nor_count:
-        nor_contigs = set(l.contig for l in loci if l.is_nor_candidate)
-        logger.info(f"NOR candidates: {len(nor_contigs)} contigs with {nor_count} loci")
+    if arrays:
+        array_loci = sum(a.n_total for a in arrays)
+        logger.info(f"45S rDNA arrays: {len(arrays)} arrays with {array_loci} loci")
 
-    return loci
+    return loci, arrays
 
 
 def _merge_hits_into_loci(
@@ -1023,22 +1021,79 @@ def _merge_hits_into_loci(
     return loci
 
 
-def _mark_nor_candidates(
+def _build_array(
+    array_id: str,
+    contig: str,
+    cluster: List[RdnaLocus],
+) -> RdnaArray:
+    """Construct an RdnaArray from a cluster of loci.
+
+    Computes copy type counts, identity statistics, and strand majority vote.
+    Sets array_id on each constituent locus.
+    """
+    for locus in cluster:
+        locus.array_id = array_id
+
+    n_full = sum(1 for l in cluster if l.copy_type == "full")
+    n_partial = sum(1 for l in cluster if l.copy_type == "partial")
+    n_fragment = sum(1 for l in cluster if l.copy_type == "fragment")
+
+    identities = [l.identity for l in cluster]
+    identity_median = statistics.median(identities)
+    identity_min = min(identities)
+    identity_max = max(identities)
+
+    # Strand majority vote
+    strand_votes = Counter(l.strand for l in cluster)
+    strand = strand_votes.most_common(1)[0][0]
+
+    return RdnaArray(
+        array_id=array_id,
+        contig=contig,
+        start=cluster[0].start,
+        end=cluster[-1].end,
+        strand=strand,
+        loci=list(cluster),
+        n_total=len(cluster),
+        n_full=n_full,
+        n_partial=n_partial,
+        n_fragment=n_fragment,
+        identity_median=identity_median,
+        identity_min=identity_min,
+        identity_max=identity_max,
+    )
+
+
+def _detect_arrays(
     loci: List[RdnaLocus],
     min_tandem_copies: int,
     max_tandem_gap: int,
-) -> None:
-    """Mark loci that are part of tandem clusters as NOR candidates.
+) -> List[RdnaArray]:
+    """Detect tandem 45S rDNA repeat arrays from loci.
 
-    Modifies loci in place.
+    Groups loci by contig, sorts by start position, clusters by gap,
+    and builds RdnaArray objects for clusters with enough copies.
+    Sets array_id on constituent loci.
+
+    Args:
+        loci: List of RdnaLocus annotations
+        min_tandem_copies: Minimum copies for an array
+        max_tandem_gap: Maximum gap between adjacent loci in an array
+
+    Returns:
+        List of RdnaArray objects, numbered sequentially.
     """
+    arrays: List[RdnaArray] = []
+    array_counter = 0
+
     # Group by contig
     by_contig: Dict[str, List[RdnaLocus]] = defaultdict(list)
     for locus in loci:
         by_contig[locus.contig].append(locus)
 
-    for contig, contig_loci in by_contig.items():
-        # Sort by start position
+    # Process contigs in sorted order for deterministic array numbering
+    for contig in sorted(by_contig.keys()):
+        contig_loci = by_contig[contig]
         contig_loci.sort(key=lambda l: l.start)
 
         # Find tandem clusters
@@ -1048,13 +1103,19 @@ def _mark_nor_candidates(
                 cluster.append(locus)
             else:
                 if len(cluster) >= min_tandem_copies:
-                    for l in cluster:
-                        l.is_nor_candidate = True
+                    array_counter += 1
+                    arrays.append(_build_array(
+                        f"array_{array_counter}", contig, cluster,
+                    ))
                 cluster = [locus]
         # Check last cluster
         if len(cluster) >= min_tandem_copies:
-            for l in cluster:
-                l.is_nor_candidate = True
+            array_counter += 1
+            arrays.append(_build_array(
+                f"array_{array_counter}", contig, cluster,
+            ))
+
+    return arrays
 
 
 # ---------------------------------------------------------------------------
@@ -1124,7 +1185,7 @@ def build_rdna_consensus(
     rdna_ref_features_path: Optional[Path] = None,
     classifications: Optional[Dict[str, str]] = None,
     min_tandem_copies: int = 3,
-) -> Tuple[Optional[RdnaConsensus], List[RdnaLocus]]:
+) -> Tuple[Optional[RdnaConsensus], List[RdnaLocus], List[RdnaArray]]:
     """Build consensus 45S rDNA and annotate all contigs.
 
     This is the main entry point that orchestrates Phases 2-5.
@@ -1138,17 +1199,17 @@ def build_rdna_consensus(
         threads: Number of threads
         rdna_ref_features_path: Optional path to sub-feature TSV for seed reference
         classifications: Optional dict of contig_name -> classification
-        min_tandem_copies: Minimum tandem copies for NOR candidate [3]
+        min_tandem_copies: Minimum tandem copies for array detection [3]
 
     Returns:
-        Tuple of (RdnaConsensus or None, list of RdnaLocus annotations)
+        Tuple of (RdnaConsensus or None, list of RdnaLocus annotations, list of RdnaArray objects)
     """
     work_dir.mkdir(parents=True, exist_ok=True)
     logger.phase("rDNA consensus: Phase 2 - Extract rDNA regions and copies")
 
     if not rdna_hit_intervals:
         logger.warning("No rDNA hit intervals available; skipping consensus building")
-        return None, []
+        return None, [], []
 
     # Phase 2a: Extract rDNA-containing regions
     regions_fasta = work_dir / "rdna_regions.fa"
@@ -1161,7 +1222,7 @@ def build_rdna_consensus(
 
     if not region_map:
         logger.warning("No rDNA regions extracted; skipping consensus building")
-        return None, []
+        return None, [], []
 
     # Phase 2b: Detect repeat period via self-alignment
     repeat_period = _detect_repeat_period(
@@ -1172,7 +1233,7 @@ def build_rdna_consensus(
 
     if not repeat_period:
         logger.warning("Could not determine repeat period; skipping consensus building")
-        return None, []
+        return None, [], []
 
     # Phase 2c: Extract individual copies
     copies_fasta = work_dir / "rdna_copies.fa"
@@ -1185,7 +1246,7 @@ def build_rdna_consensus(
 
     if n_copies == 0:
         logger.warning("No rDNA copies extracted; skipping consensus building")
-        return None, []
+        return None, [], []
 
     # Phase 3: Cluster and select exemplar/consensus
     logger.phase("rDNA consensus: Phase 3 - Cluster copies and build consensus")
@@ -1197,7 +1258,7 @@ def build_rdna_consensus(
 
     if not consensus_seq:
         logger.warning("Failed to build consensus; skipping rDNA annotation")
-        return None, []
+        return None, [], []
 
     logger.info(f"Consensus: {len(consensus_seq)} bp, method={method}, "
                 f"{n_copies} copies extracted, {n_clustered} in cluster")
@@ -1232,7 +1293,7 @@ def build_rdna_consensus(
 
     # Phase 5: Re-annotate all contigs
     logger.phase("rDNA consensus: Phase 5 - Annotate all contigs")
-    loci = annotate_contigs_with_consensus(
+    loci, arrays = annotate_contigs_with_consensus(
         query_fasta=query_fasta,
         query_lengths=query_lengths,
         consensus=consensus,
@@ -1242,4 +1303,4 @@ def build_rdna_consensus(
         min_tandem_copies=min_tandem_copies,
     )
 
-    return consensus, loci
+    return consensus, loci, arrays

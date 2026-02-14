@@ -120,6 +120,7 @@ from final_finalizer.output.tsv_output import (
     write_macro_blocks_tsv,
     write_rdna_annotations_gff3,
     write_rdna_annotations_tsv,
+    write_rdna_arrays_tsv,
 )
 from final_finalizer.output.plotting import (
     run_plot,
@@ -1160,7 +1161,9 @@ def main():
     # --- Phase 11.7: rDNA consensus building (optional) ---
     rdna_consensus_obj = None
     rdna_loci = []
+    rdna_arrays = []
     rdna_annotations_tsv = None
+    rdna_arrays_tsv_path = None
     if getattr(args, 'build_rdna_consensus', False) and not args.skip_rdna and rdna_hit_intervals:
         logger.phase("Phase 11.7: Building rDNA consensus from query assembly")
         from final_finalizer.detection.rdna_consensus import build_rdna_consensus
@@ -1172,7 +1175,7 @@ def main():
         if getattr(args, 'rdna_ref_features', None):
             rdna_ref_features = Path(args.rdna_ref_features)
 
-        rdna_consensus_obj, rdna_loci = build_rdna_consensus(
+        rdna_consensus_obj, rdna_loci, rdna_arrays = build_rdna_consensus(
             query_fasta=qry,
             query_lengths=qry_lengths,
             rdna_hit_intervals=rdna_hit_intervals,
@@ -1236,13 +1239,24 @@ def main():
                 )
                 logger.done(f"rDNA annotations:  {rdna_annotations_tsv} ({len(rdna_loci)} loci)")
 
-                # Write GFF3 annotations (with sub-feature coordinates)
+                # Write rDNA arrays summary TSV
+                if rdna_arrays:
+                    rdna_arrays_tsv_path = Path(str(outprefix) + ".rdna_arrays.tsv")
+                    write_rdna_arrays_tsv(
+                        output_path=rdna_arrays_tsv_path,
+                        arrays=rdna_arrays,
+                        classifications=clf_lookup,
+                    )
+                    logger.done(f"rDNA arrays:       {rdna_arrays_tsv_path} ({len(rdna_arrays)} arrays)")
+
+                # Write GFF3 annotations (with sub-feature coordinates and array parents)
                 rdna_annotations_gff3 = Path(str(outprefix) + ".rdna_annotations.gff3")
                 write_rdna_annotations_gff3(
                     output_path=rdna_annotations_gff3,
                     loci=rdna_loci,
                     query_lengths=qry_lengths,
                     classifications=clf_lookup,
+                    arrays=rdna_arrays,
                 )
                 logger.done(f"rDNA GFF3:         {rdna_annotations_gff3}")
         else:
@@ -1375,6 +1389,7 @@ def main():
             assembly_name=args.assembly_name,
             reference_name=args.reference_name,
             rdna_annotations_tsv=rdna_annotations_tsv,
+            rdna_arrays_tsv=rdna_arrays_tsv_path,
             contaminants_tsv=contam_tsv_arg,
             agp_tsv=agp_tsv,
         )
@@ -1392,6 +1407,7 @@ def main():
                 plot_suffix,
                 args.plot_html,
                 rdna_annotations_tsv=rdna_annotations_tsv,
+                rdna_arrays_tsv=rdna_arrays_tsv_path,
                 agp_tsv=agp_tsv,
             )
             run_classification_summary_bar(

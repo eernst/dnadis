@@ -40,6 +40,7 @@ def run_plot(
     plot_title_suffix: str,
     plot_html: bool,
     rdna_annotations_tsv: Optional[Path] = None,
+    rdna_arrays_tsv: Optional[Path] = None,
     agp_tsv: Optional[Path] = None,
 ):
     if not have_rscript():
@@ -339,6 +340,7 @@ def run_unified_report(
     assembly_name: str = "",
     reference_name: str = "",
     rdna_annotations_tsv: Optional[Path] = None,
+    rdna_arrays_tsv: Optional[Path] = None,
     contaminants_tsv: Optional[Path] = None,
     agp_tsv: Optional[Path] = None,
     top_n_contaminants: int = 10,
@@ -380,6 +382,7 @@ def run_unified_report(
 
     # Optional TSV paths (absolute, empty string if missing)
     rdna_str = abs_esc(rdna_annotations_tsv) if rdna_annotations_tsv and rdna_annotations_tsv.exists() else ""
+    rdna_arrays_str = abs_esc(rdna_arrays_tsv) if rdna_arrays_tsv and rdna_arrays_tsv.exists() else ""
     contam_str = abs_esc(contaminants_tsv) if contaminants_tsv and contaminants_tsv.exists() else ""
     agp_str = abs_esc(agp_tsv) if agp_tsv and agp_tsv.exists() else ""
 
@@ -390,6 +393,7 @@ def run_unified_report(
         .replace("__EVIDENCE__", abs_esc(chain_summary_tsv))
         .replace("__MACRO__", abs_esc(macro_blocks_tsv))
         .replace("__RDNA_ANNOTATIONS__", rdna_str)
+        .replace("__RDNA_ARRAYS__", rdna_arrays_str)
         .replace("__CONTAMINANTS_TSV__", contam_str)
         .replace("__AGP__", agp_str)
         .replace("__ASMNAME__", str(assembly_name).replace('"', '\\"'))

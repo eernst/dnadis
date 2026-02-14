@@ -7,6 +7,7 @@ params:
   evidence_tsv: "__EVIDENCE__"
   macro_blocks_tsv: "__MACRO__"
   rdna_annotations_tsv: "__RDNA_ANNOTATIONS__"
+  rdna_arrays_tsv: "__RDNA_ARRAYS__"
   contaminants_tsv: "__CONTAMINANTS_TSV__"
   agp_tsv: "__AGP__"
   assembly_name: "__ASMNAME__"
@@ -272,6 +273,10 @@ has_macro    <- nchar(params$macro_blocks_tsv) > 0 && file.exists(params$macro_b
 
 has_rdna_ann <- nchar(params$rdna_annotations_tsv) > 0 && file.exists(params$rdna_annotations_tsv)
 rdna_ann_df  <- if (has_rdna_ann) read_tsv(params$rdna_annotations_tsv, show_col_types = FALSE) else NULL
+
+has_rdna_arrays <- nchar(params$rdna_arrays_tsv) > 0 && file.exists(params$rdna_arrays_tsv)
+rdna_arrays_df  <- if (has_rdna_arrays) read_tsv(params$rdna_arrays_tsv, show_col_types = FALSE) else NULL
+has_rdna_arrays <- !is.null(rdna_arrays_df) && nrow(rdna_arrays_df) > 0
 
 has_contaminants <- nchar(params$contaminants_tsv) > 0 && file.exists(params$contaminants_tsv)
 contam_df <- if (has_contaminants) {
@@ -577,7 +582,7 @@ rdna_annot <- if (nzchar(params$rdna_annotations_tsv) && file.exists(params$rdna
     col_types = cols(contig = col_character(), start = col_double(), end = col_double(),
       strand = col_character(), identity = col_double(),
       consensus_coverage = col_double(), copy_type = col_character(),
-      sub_features = col_character(), is_nor_candidate = col_character(),
+      sub_features = col_character(), array_id = col_character(),
       contig_classification = col_character())) %>%
     filter(copy_type == "full")
 } else tibble()
@@ -1431,7 +1436,7 @@ rdna_ann_show <- rdna_ann_df %>%
 
 .render_rdna_ann_gt <- function(df, title, subtitle) {
   df %>%
-    select(-is_nor_candidate) %>%
+    select(-array_id) %>%
     rename_with(~ case_when(. == "contig" ~ "contig", . == "original_name" ~ "original_name", TRUE ~ .)) %>%
     gt() %>%
     cols_label(contig = "contig", original_name = "original_name") %>%
@@ -1439,9 +1444,9 @@ rdna_ann_show <- rdna_ann_df %>%
     tab_options(table.font.size = px(10)) %>% gt_theme()
 }
 
-nor_df  <- rdna_ann_show %>% filter(is_nor_candidate == TRUE | is_nor_candidate == "TRUE")
-other_df <- rdna_ann_show %>% filter(!(is_nor_candidate == TRUE | is_nor_candidate == "TRUE"))
-has_nor <- nrow(nor_df) > 0
+array_df <- rdna_ann_show %>% filter(!is.na(array_id) & nzchar(array_id))
+other_df <- rdna_ann_show %>% filter(is.na(array_id) | !nzchar(array_id))
+has_array_loci <- nrow(array_df) > 0
 has_other_rdna_ann <- nrow(other_df) > 0
 ```
 
@@ -1469,13 +1474,32 @@ rdna_show %>%
   tab_header(title = md("**rDNA Summary**")) %>% gt_theme()
 ```
 
-```{r rdna_nor_tab, eval=has_rdna_ann && has_nor, results='asis'}
-cat('\n## NOR Candidates\n')
+```{r rdna_arrays_tab, eval=has_rdna_arrays, results='asis'}
+cat('\n## 45S rDNA Arrays\n')
 ```
 
-```{r rdna_nor_table, eval=has_rdna_ann && has_nor}
-.render_rdna_ann_gt(nor_df %>% head(50), "NOR Candidates",
-  paste0("Showing up to 50 of ", nrow(nor_df), " NOR candidate annotations"))
+```{r rdna_arrays_table, eval=has_rdna_arrays}
+# Map original contig names to new names for arrays
+arrays_show <- rdna_arrays_df %>%
+  rename(original_name = contig) %>%
+  left_join(name_map, by = "original_name") %>%
+  mutate(contig = if_else(!is.na(contig), contig, original_name)) %>%
+  relocate(array_id, contig)
+
+arrays_show %>%
+  select(array_id, contig, span_kb, n_total, n_full, n_partial, n_fragment,
+         strand, identity_median, identity_min, identity_max) %>%
+  gt() %>%
+  cols_label(
+    array_id = "Array", contig = "Contig", span_kb = "Span (kb)",
+    n_total = "Copies", n_full = "Full", n_partial = "Partial", n_fragment = "Fragment",
+    strand = "Strand", identity_median = "Median ID", identity_min = "Min ID", identity_max = "Max ID"
+  ) %>%
+  fmt_number(columns = span_kb, decimals = 1) %>%
+  fmt_number(columns = c(identity_median, identity_min, identity_max), decimals = 4) %>%
+  tab_header(title = md("**45S rDNA Arrays**"),
+    subtitle = md(paste0(nrow(arrays_show), " tandem repeat arrays detected"))) %>%
+  gt_theme()
 ```
 
 ```{r rdna_other_tab, eval=has_rdna_ann && has_other_rdna_ann, results='asis'}
@@ -1484,7 +1508,7 @@ cat('\n## Other Annotations\n')
 
 ```{r rdna_other_table, eval=has_rdna_ann && has_other_rdna_ann}
 .render_rdna_ann_gt(other_df %>% head(50), "Other rDNA Annotations",
-  paste0("Showing up to 50 of ", nrow(other_df), " non-NOR annotations"))
+  paste0("Showing up to 50 of ", nrow(other_df), " non-array annotations"))
 ```
 
 # 6. Organelles
