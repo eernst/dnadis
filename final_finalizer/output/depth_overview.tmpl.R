@@ -429,6 +429,8 @@ if (plot_html) {
     )),
     opts_hover(css = paste0("font-family: ", base_family, ";"))
   )
+  # Save widget for unified report embedding
+  saveRDS(girafe_obj, sub("\\.html$", ".rds", out_html))
   htmlwidgets::saveWidget(girafe_obj, out_html, selfcontained = TRUE)
   message("Interactive depth plot saved to: ", out_html)
 }

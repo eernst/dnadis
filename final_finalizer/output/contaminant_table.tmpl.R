@@ -293,4 +293,8 @@ if (has_depth) {
 
 # Save as HTML
 gtsave(gt_tbl, out_html)
+# Save rendered HTML for unified report embedding (gt objects with
+# text_transform closures don't survive saveRDS/readRDS reliably)
+rds_path <- sub("\\.html$", ".rds", out_html)
+saveRDS(as_raw_html(gt_tbl), rds_path)
 message("Contaminant table saved to: ", out_html)

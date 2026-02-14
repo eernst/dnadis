@@ -26,6 +26,7 @@ For information on log files, see the `--log-file` option in the main [README](.
 | `*.depth_overview.pdf` | Read depth visualization by classification and chromosome (if `--reads` provided) |
 | `*.depth_overview.html` | Interactive depth visualization with tooltips (if `--plot-html` and `--reads` provided) |
 | `*.contaminant_table.html` | Interactive table of top contaminants ranked by abundance (if contaminants detected) |
+| `*.unified_report.html` | Comprehensive self-contained report aggregating all plots and summary tables (if `--plot` enabled) |
 
 ---
 
@@ -566,6 +567,47 @@ chr5A	final_finalizer	rRNA	127401	133500	.	+	.	ID=rRNA_25S_chr5A_1_1;Parent=rRNA
 - Contig names in the GFF3 match the renamed contigs in output FASTA files (e.g., chromosome-assigned contigs use new names like `chr5A`)
 - Multiple rDNA loci on the same contig are numbered sequentially (e.g., `rRNA_gene_chr5A_1`, `rRNA_gene_chr5A_2`)
 - The bundled Rfam database is a minimal subset containing only eukaryotic rRNA models relevant for 45S annotation
+
+---
+
+## Unified HTML Report
+
+**File:** `*.unified_report.html`
+
+A comprehensive, self-contained HTML report that aggregates all analysis results into a single document. Generated automatically when `--plot` is specified (requires `rmarkdown` and `pandoc`).
+
+### Report Sections
+
+| Section | Contents |
+|---------|----------|
+| **Assembly Overview** | Classification breakdown table (category, contigs, total Mb, % assembly) with inline bars; interactive classification summary bar (if `--plot-html`) |
+| **Chromosome Assignments** | Per-chromosome summary (contig, ref chromosome, length, ref coverage, full-length, telomeres, gene %, identity, collinearity, confidence); reference coverage summary |
+| **Synteny Overview** | Interactive chromosome overview plot (if `--plot-html`); subgenome composition table for polyploids |
+| **Evidence Quality** | Per-contig evidence summary sorted by confidence (low first); assembly contiguity statistics (N50, L50, etc.) |
+| **Read Depth Analysis** | Interactive depth overview (if `--plot-html` and `--reads`); depth summary by category (mean, median, CV, breadth) |
+| **Organelles & rDNA** | Organelle and rDNA summary tables (conditional on detected contigs); rDNA annotations if `--build-rdna-consensus` used |
+| **Contaminants** | Interactive contaminant table (conditional on detected contaminants) |
+| **Unclassified & Debris** | Table of unclassified and debris contigs with reasons |
+
+### Interactive Widgets
+
+When `--plot-html` is used, existing interactive plots (ggiraph widgets) are embedded directly into the report with full hover tooltip interactivity. Without `--plot-html`, the report still contains all summary tables but displays a note in place of interactive plots.
+
+### Dependencies
+
+- **R packages**: `rmarkdown`, `knitr`, `gt`, `readr`, `dplyr`, `stringr`, `tidyr`, `ggplot2`, `ggokabeito`, `colorspace`, `scales`
+- **System**: `pandoc` (for HTML rendering)
+
+Install with: `conda install -c conda-forge r-rmarkdown pandoc`
+
+If `rmarkdown` or `pandoc` is not available, report generation is skipped with a warning.
+
+### Technical Notes
+
+- The HTML file is fully self-contained (`self_contained: true`) — all CSS, JavaScript, and widget assets are embedded
+- Summary tables use the `gt` package with consistent styling (dark headers, row striping, inline gradient bars)
+- The report can be opened in any web browser and shared as a single file
+- Refreshable via `refresh_plots.py` alongside other plot scripts
 
 ---
 

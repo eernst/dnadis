@@ -513,6 +513,8 @@ if (plot_html) {
     )),
     opts_hover(css = "opacity: 0.8; stroke: black; stroke-width: 1;")
   )
+  # Save widget for unified report embedding
+  saveRDS(girafe_obj, sub("\\.html$", ".rds", out_html))
   htmlwidgets::saveWidget(girafe_obj, out_html, selfcontained = TRUE)
   message("Interactive HTML saved to: ", out_html)
 }
