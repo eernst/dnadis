@@ -19,6 +19,7 @@ from pathlib import Path
 # Map generated R script suffix → template filename
 SCRIPT_TO_TEMPLATE = {
     "unified_report": "unified_report.tmpl.Rmd",
+    "comparison_report": "comparison_report.tmpl.Rmd",
 }
 
 # Regex to find all __PLACEHOLDER__ tokens in a template
@@ -40,6 +41,7 @@ PLACEHOLDER_TSV = {
 # Output file suffixes per script type
 SCRIPT_OUTPUT_SUFFIXES = {
     "unified_report": (None, ".unified_report.html"),
+    "comparison_report": (None, ".comparison_report.html"),
 }
 
 
