@@ -8,7 +8,38 @@ These have zero dependencies on other modules, making them safe to import anywhe
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
+
+
+# ----------------------------
+# Shared reference context for multi-assembly support
+# ----------------------------
+@dataclass
+class ReferenceContext:
+    """Shared reference state prepared once and reused across assemblies.
+
+    Holds everything derived from the reference genome: chromosome lengths,
+    ID normalization maps, GC baseline, GFF3 annotations, extracted proteins,
+    organelle/rDNA reference sequences, and computed thresholds.
+    """
+    ref: Path
+    ref_lengths_norm: Dict[str, int]
+    ref_orig_to_norm: Dict[str, str]
+    ref_norm_to_orig: Dict[str, str]
+    ref_ids_raw: Set[str]
+    ref_gc_all: Dict[str, float]
+    ref_gc_mean: Optional[float]
+    ref_gc_std: Optional[float]
+    ref_gff3: Optional[Path]          # filtered GFF3 (or None)
+    tx2loc: Dict                       # transcript → (chrom, start, end, strand)
+    tx2gene: Dict                      # transcript → gene_id
+    proteins_faa: Optional[Path]       # extracted proteins (protein mode only)
+    chrC_ref: Optional[Path]
+    chrM_ref: Optional[Path]
+    rdna_ref: Optional[Path]
+    chr_like_minlen: int
+    ref_lengths_tsv: Path
 
 
 # ----------------------------

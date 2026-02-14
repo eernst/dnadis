@@ -57,6 +57,15 @@ pytest -m "not integration"
     --plot \
     -v --log-file analysis.log
 
+# Multi-assembly mode: analyze multiple assemblies against a common reference
+# Using a file-of-filenames (TSV with columns: path, name, reads)
+./final_finalizer.py -r ref.fasta --ref-gff3 ref.gff3 \
+    --fofn assemblies.tsv --output-dir multi_output/
+
+# Multi-assembly mode: scan a directory of FASTA files
+./final_finalizer.py -r ref.fasta --ref-gff3 ref.gff3 \
+    --assembly-dir /path/to/assemblies/ --output-dir multi_output/
+
 # Dump config template
 ./final_finalizer.py --dump-config > config.toml
 
@@ -76,8 +85,8 @@ pytest -m "not integration"
 
 ```
 final_finalizer/
-├── models.py              # Data models (Block, Chain, ContigClassification, etc.)
-├── cli.py                 # Main entry point and argument parsing
+├── models.py              # Data models (ReferenceContext, Block, Chain, ContigClassification, etc.)
+├── cli.py                 # Main entry point: prepare_reference(), run_assembly(), main()
 ├── data/                  # Bundled reference data
 │   └── rfam/              # Rfam 15.0 subset: eukaryotic rRNA covariance models (auto-pressed on first use)
 ├── alignment/             # Alignment and synteny block building
@@ -103,15 +112,20 @@ final_finalizer/
     ├── sequence_utils.py  # FASTA reading/writing, reverse complement
     ├── reference_utils.py # Reference chromosome ID normalization
     ├── logging_config.py  # Custom logging with [info]/[warn]/[error] format
-    └── config.py          # TOML configuration file support
+    ├── config.py          # TOML configuration file support
+    └── multi_assembly.py  # FOFN/directory parsing for multi-assembly mode
 ```
 
 ### Data Flow
 
-1. **Reference Preparation** (`cli.py:main`)
+1. **Reference Preparation** (`cli.py:prepare_reference()` → `ReferenceContext`)
    - Build reference ID maps (handles polyploid naming like chr1A/chr1B)
+   - Compute reference GC baseline
    - Prepare organelle references (chrC/chrM)
+   - Prepare rDNA reference
+   - Compute `chr_like_minlen`
    - **Protein mode only**: Extract proteins from GFF3 using gffread
+   - Returns `ReferenceContext` dataclass shared across all assemblies
 
 2. **Synteny Analysis** (`alignment/`) - **Mode-dependent**
    - **Protein mode** (`--synteny-mode protein`, default):
@@ -154,6 +168,8 @@ final_finalizer/
      - Chromosome overview, classification bar, read depth overview, contaminant table
 
 ### Key Design Patterns
+
+**Multi-assembly architecture**: `cli.py` is structured as three functions: `prepare_reference()` computes shared reference state once (returns `ReferenceContext`), `run_assembly()` runs the full per-assembly pipeline, and `main()` is a thin dispatcher. In single-assembly mode (`-q`/`-o`), `ref_outprefix == outprefix` for backward compatibility. In multi-assembly mode (`--fofn`/`--assembly-dir` + `--output-dir`), reference files go under `{output_dir}/reference/` and each assembly gets its own `{output_dir}/{name}/` subfolder. If one assembly fails in multi-assembly mode, others continue; a summary is logged at the end.
 
 **Gate-based assignment**: Contigs must satisfy ALL criteria for chromosome assignment (AND logic). This prevents spurious assignments from single conserved genes or repetitive sequences. Gate requirements differ by mode:
 - **Protein mode**: Requires ≥5 segments, ≥3 genes, ≥50kb span, ≥20% span fraction (configurable via `--miniprot-min-*` flags)
@@ -257,6 +273,21 @@ All external tools are called via subprocess with proper error handling. Use `ut
 **Visualization** (requires rmarkdown + pandoc; `--plot`):
 - `*.unified_report.html` - Self-contained HTML report with all plots (chromosome overview, classification bar, depth overview, contaminant table)
 - Individual PDFs (`*.chromosome_overview.pdf`, etc.) are also exported from within the report
+
+**Multi-assembly output structure** (`--fofn`/`--assembly-dir` + `--output-dir`):
+```
+{output_dir}/
+  reference/
+    reference.ref_lengths.tsv
+    reference.ref_proteins.fa           # protein mode
+    reference.ref_gff3.filtered.gff3    # if GFF3 provided
+  {assembly_name_1}/
+    {assembly_name_1}.contig_summary.tsv
+    {assembly_name_1}.chrs.fasta
+    ...
+  {assembly_name_2}/
+    ...
+```
 
 See `docs/output_formats.md` for complete column documentation.
 

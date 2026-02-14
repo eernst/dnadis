@@ -48,6 +48,19 @@ def _validate_input_path(path_str: str) -> Path:
     return path
 
 
+def _validate_input_dir(path_str: str) -> Path:
+    """Validate that an input directory path exists.
+
+    Used as argparse type for directory arguments.
+    """
+    path = Path(path_str).resolve()
+    if not path.exists():
+        raise argparse.ArgumentTypeError(f"Directory not found: {path}")
+    if not path.is_dir():
+        raise argparse.ArgumentTypeError(f"Not a directory: {path}")
+    return path
+
+
 def _positive_int(value: str) -> int:
     """Validate that a value is a positive integer.
 
@@ -75,6 +88,7 @@ from final_finalizer.utils.reference_utils import (
     compile_ref_id_patterns,
     filter_gff3_by_ref,
     get_min_nuclear_chrom_length,
+    is_nuclear_chromosome,
     parse_gff3_transcript_coords,
     read_fasta_lengths_with_map,
     set_ref_id_patterns,
@@ -123,8 +137,953 @@ from final_finalizer.output.tsv_output import (
     write_rdna_arrays_tsv,
 )
 from final_finalizer.output.plotting import run_unified_report
+from final_finalizer.models import ReferenceContext
 
 
+# ---------------------------------------------------------------------------
+# prepare_reference: compute shared reference state once
+# ---------------------------------------------------------------------------
+def prepare_reference(args, ref_outprefix: Path) -> ReferenceContext:
+    """Prepare shared reference data used by all assemblies.
+
+    Reads the reference FASTA, builds ID normalization maps, computes GC
+    baseline, processes GFF3 / extracts proteins, prepares organelle and
+    rDNA references, and computes ``chr_like_minlen``.
+
+    Args:
+        args: Parsed command-line arguments.
+        ref_outprefix: Output prefix for reference-only files.
+
+    Returns:
+        :class:`ReferenceContext` with all shared reference state.
+    """
+    from final_finalizer.utils.logging_config import get_logger
+    logger = get_logger("cli")
+
+    logger.phase("Preparing reference")
+
+    ref = args.ref
+
+    # Create output directory
+    out_dir = ref_outprefix.parent
+    if out_dir and not out_dir.exists():
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Created output directory: {out_dir}")
+        except PermissionError as e:
+            sys.exit(f"[error] Cannot create output directory {out_dir}: {e}")
+        except OSError as e:
+            sys.exit(f"[error] Failed to create output directory {out_dir}: {e}")
+
+    # Read reference FASTA
+    ref_lengths_norm, ref_orig_to_norm, ref_norm_to_orig = read_fasta_lengths_with_map(ref)
+    ref_ids_raw = set(read_fasta_lengths(ref).keys())
+
+    # Compute reference GC content (always computed eagerly — it's fast)
+    ref_gc_all = calculate_gc_content_fasta(ref)
+    ref_gc_nuclear = {
+        ref_norm_to_orig.get(k, k): v
+        for k, v in ref_gc_all.items()
+        if is_nuclear_chromosome(k)
+    }
+    if ref_gc_nuclear:
+        ref_gc_mean, ref_gc_std = calculate_gc_stats(ref_gc_nuclear)
+        logger.info(f"Reference nuclear GC: mean={ref_gc_mean:.3f}, std={ref_gc_std:.3f}")
+    else:
+        ref_gc_mean, ref_gc_std = None, None
+        logger.warning("Could not compute reference GC baseline (no nuclear chromosomes found)")
+
+    # Write reference lengths TSV
+    ref_lengths_tsv = Path(str(ref_outprefix) + ".ref_lengths.tsv")
+    if not file_exists_and_valid(ref_lengths_tsv):
+        logger.info(f"Writing reference lengths: {ref_lengths_tsv}")
+        write_ref_lengths_tsv(ref_lengths_tsv, ref)
+    else:
+        logger.info(f"Reference lengths TSV exists, reusing: {ref_lengths_tsv}")
+
+    # --- GFF3 processing and protein extraction ---
+    ref_gff3 = None
+    tx2loc = {}
+    tx2gene = {}
+    proteins_faa = None
+
+    if args.ref_gff3:
+        filtered_ref_gff3 = Path(str(ref_outprefix) + ".ref_gff3.filtered.gff3")
+        ref_gff3 = filter_gff3_by_ref(
+            args.ref_gff3,
+            ref_ids_raw,
+            filtered_ref_gff3,
+            ref_norm_to_orig=ref_norm_to_orig,
+        )
+        if args.synteny_mode == "protein":
+            logger.info(f"Protein-anchor mode: parsing GFF3 for protein extraction (ref GFF3: {ref_gff3})")
+        else:
+            logger.info(f"GFF3 provided in nucleotide mode: will use for gene count statistics (ref GFF3: {ref_gff3})")
+
+        tx2loc, tx2gene = parse_gff3_transcript_coords(ref_gff3, ref_id_map=ref_orig_to_norm)
+        if not (tx2loc and tx2gene):
+            if args.synteny_mode == "protein":
+                raise RuntimeError(f"No transcript features found in GFF3 (mRNA/transcript with ID=...). File: {ref_gff3}")
+            else:
+                logger.warning("No transcript features found in GFF3 - gene count statistics will not be available")
+                ref_gff3 = None
+
+    if args.synteny_mode == "protein":
+        if not ref_gff3:
+            raise RuntimeError("--ref-gff3 is required for protein mode but GFF3 processing failed")
+        proteins_faa = Path(str(ref_outprefix) + ".ref_proteins.fa")
+        gffread_err = Path(str(ref_outprefix) + ".gffread.err")
+        run_gffread_extract_proteins(args.gffread, ref, ref_gff3, proteins_faa, gffread_err)
+
+    # --- Compute chr_like_minlen ---
+    if args.chr_like_minlen is None:
+        min_nuclear = get_min_nuclear_chrom_length(ref_lengths_norm)
+        chr_like_minlen = int(min_nuclear * 0.25) if min_nuclear > 0 else 100_000
+        logger.info(f"chr_like_minlen not specified, using 25% of smallest nuclear chrom: {chr_like_minlen}")
+    else:
+        chr_like_minlen = args.chr_like_minlen
+
+    # --- Prepare organelle references ---
+    chrC_ref_path: Optional[Path] = None
+    chrM_ref_path: Optional[Path] = None
+    if not args.skip_organelles:
+        ref_work_dir = ref_outprefix.parent / f"{ref_outprefix.name}_classification"
+        ref_work_dir.mkdir(parents=True, exist_ok=True)
+        chrC_ref_path, chrM_ref_path = prepare_organelle_references(
+            ref_fasta=ref,
+            chrC_ref_arg=getattr(args, 'chrC_ref', None),
+            chrM_ref_arg=getattr(args, 'chrM_ref', None),
+            work_dir=ref_work_dir / "organelles",
+            ref_norm_to_orig=ref_norm_to_orig,
+        )
+
+    # --- Prepare rDNA reference ---
+    rdna_ref_path: Optional[Path] = None
+    if not args.skip_rdna:
+        script_dir = Path(__file__).resolve().parent
+        rdna_ref_path = prepare_rdna_reference(args.rdna_ref, script_dir)
+
+    logger.done("Reference preparation complete")
+
+    return ReferenceContext(
+        ref=ref,
+        ref_lengths_norm=ref_lengths_norm,
+        ref_orig_to_norm=ref_orig_to_norm,
+        ref_norm_to_orig=ref_norm_to_orig,
+        ref_ids_raw=ref_ids_raw,
+        ref_gc_all=ref_gc_all,
+        ref_gc_mean=ref_gc_mean,
+        ref_gc_std=ref_gc_std,
+        ref_gff3=ref_gff3,
+        tx2loc=tx2loc,
+        tx2gene=tx2gene,
+        proteins_faa=proteins_faa,
+        chrC_ref=chrC_ref_path,
+        chrM_ref=chrM_ref_path,
+        rdna_ref=rdna_ref_path,
+        chr_like_minlen=chr_like_minlen,
+        ref_lengths_tsv=ref_lengths_tsv,
+    )
+
+
+# ---------------------------------------------------------------------------
+# run_assembly: per-assembly analysis pipeline
+# ---------------------------------------------------------------------------
+def run_assembly(
+    args,
+    ref_ctx: ReferenceContext,
+    qry: Path,
+    assembly_name: str,
+    reads: Optional[Path],
+    outprefix: Path,
+) -> None:
+    """Run the full analysis pipeline for a single query assembly.
+
+    Performs synteny analysis, detection (organelle, rDNA, debris,
+    contaminant), classification, optional read depth and rDNA consensus,
+    scaffolding, and output generation.
+
+    Args:
+        args: Parsed command-line arguments (thresholds, tool paths, flags).
+        ref_ctx: Shared reference context from :func:`prepare_reference`.
+        qry: Path to the query assembly FASTA.
+        assembly_name: Short name for this assembly (used in logs/plots).
+        reads: Path to reads for depth analysis, or ``None``.
+        outprefix: Output prefix for this assembly's files.
+    """
+    from final_finalizer.utils.logging_config import get_logger
+    logger = get_logger("cli")
+
+    # --- Unpack reference context into local variables ---
+    # This keeps the rest of the function identical to the original main().
+    ref = ref_ctx.ref
+    ref_lengths_norm = ref_ctx.ref_lengths_norm
+    ref_orig_to_norm = ref_ctx.ref_orig_to_norm
+    ref_norm_to_orig = ref_ctx.ref_norm_to_orig
+    ref_ids_raw = ref_ctx.ref_ids_raw
+    ref_gc_all = ref_ctx.ref_gc_all
+    ref_gc_mean = ref_ctx.ref_gc_mean
+    ref_gc_std = ref_ctx.ref_gc_std
+    ref_gff3 = ref_ctx.ref_gff3
+    tx2loc = ref_ctx.tx2loc
+    tx2gene = ref_ctx.tx2gene
+    proteins_faa = ref_ctx.proteins_faa
+    chr_like_minlen = ref_ctx.chr_like_minlen
+    ref_lengths_tsv = ref_ctx.ref_lengths_tsv
+    ref_lengths = ref_lengths_norm
+
+    # --- Phase 1: Reading query FASTA ---
+    logger.phase("Phase 1: Reading query FASTA")
+
+    # Create output directory if it doesn't exist
+    out_dir = outprefix.parent
+    if out_dir and not out_dir.exists():
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Created output directory: {out_dir}")
+        except PermissionError as e:
+            sys.exit(f"[error] Cannot create output directory {out_dir}: {e}")
+        except OSError as e:
+            sys.exit(f"[error] Failed to create output directory {out_dir}: {e}")
+
+    qry_lengths = read_fasta_lengths(qry)
+    logger.info(f"Query contigs: {len(qry_lengths)}")
+
+    # GC content cache paths (per-assembly)
+    gc_content_tsv = Path(str(outprefix) + ".gc_content.tsv")
+    gc_content_metadata = Path(str(outprefix) + ".gc_content.metadata.json")
+
+    # Compute or load cached GC content for reference and query
+    if check_gc_cache(gc_content_tsv, gc_content_metadata, ref, qry):
+        logger.info(f"Reusing cached GC content: {gc_content_tsv}")
+        _ref_gc_cached, qry_gc = read_gc_content_tsv(gc_content_tsv)
+    else:
+        logger.info("Computing GC content for query sequences")
+        qry_gc = calculate_gc_content_fasta(qry)
+        write_gc_content_tsv(gc_content_tsv, gc_content_metadata, ref_gc_all, qry_gc, ref, qry)
+        logger.info(f"Cached GC content: {gc_content_tsv}")
+
+    # --- Per-assembly output paths ---
+    segments_tsv = Path(str(outprefix) + ".segments.tsv")
+    chain_summary_tsv = Path(str(outprefix) + ".evidence_summary.tsv")
+    macro_blocks_tsv = Path(str(outprefix) + ".macro_blocks.tsv")
+
+    # minimap2 QA outputs
+    paf_gz = Path(str(outprefix) + ".all_vs_ref.paf.gz")
+    err_log = Path(str(outprefix) + ".alignment.err")
+
+    # miniprot outputs
+    miniprot_paf_gz = Path(str(outprefix) + ".miniprot.paf.gz")
+    miniprot_err = Path(str(outprefix) + ".miniprot.err")
+
+    # --- Phase 2: Synteny analysis (protein or nucleotide) ---
+    if args.synteny_mode == "protein":
+        logger.phase("Phase 2: Protein-anchor synteny analysis")
+
+        run_miniprot(args.miniprot, qry, proteins_faa, miniprot_paf_gz, args.threads, args.miniprot_args, miniprot_err)
+
+        ev = parse_miniprot_synteny_evidence_and_segments(
+            miniprot_paf_gz=miniprot_paf_gz,
+            contig_lengths=qry_lengths,
+            tx2loc=tx2loc,
+            tx2gene=tx2gene,
+            assign_minlen=args.assign_minlen_protein,
+            assign_minmapq=args.assign_minmapq,
+            chain_q_gap=args.chain_q_gap,
+            chain_r_gap=args.chain_r_gap,
+            chain_diag_slop=args.chain_diag_slop,
+            assign_min_ident=args.assign_min_ident,
+            assign_chain_topk=args.assign_chain_topk,
+            assign_chain_score=args.assign_chain_score,
+            assign_chain_min_bp=args.assign_chain_min_bp,
+            assign_ref_score=args.assign_ref_score,
+        )
+    else:  # nucleotide mode
+        logger.phase("Phase 2: Nucleotide synteny analysis (whole-genome alignment)")
+        logger.info("Running minimap2 with permissive chaining for chromosome-scale structural analysis")
+        logger.info("Note: Nucleotide mode is optimized for within-species or closely related genomes. "
+                    "For highly divergent species, protein mode may provide more reliable assignments.")
+        run_minimap2_synteny(
+            ref, qry, paf_gz, args.threads, args.preset, args.kmer, args.window, err_log,
+            permissive=True  # Always use permissive chaining in nucleotide mode
+        )
+
+        ev = parse_paf_chain_evidence_and_segments(
+            paf_gz_path=paf_gz,
+            contig_lengths=qry_lengths,
+            assign_minlen=args.assign_minlen,
+            assign_minmapq=args.assign_minmapq,
+            assign_tp=args.assign_tp,
+            chain_q_gap=args.chain_q_gap,
+            chain_r_gap=args.chain_r_gap,
+            chain_diag_slop=args.chain_diag_slop,
+            assign_min_ident=args.assign_min_ident,
+            assign_chain_topk=args.assign_chain_topk,
+            assign_chain_score=args.assign_chain_score,
+            assign_chain_min_bp=args.assign_chain_min_bp,
+            assign_ref_score=args.assign_ref_score,
+            ref_id_map=ref_orig_to_norm,
+        )
+
+    # --- Synteny gates: filter weak assignments ---
+    seg_count, span_bp = build_segment_support_from_rows(ev.chain_segments_rows)
+
+    # Set min_segments based on synteny mode:
+    # - Protein mode: use configurable --miniprot-min-segments (default 5)
+    # - Nucleotide mode: always 1 (perfect alignments often produce single continuous matches)
+    if args.synteny_mode == "protein":
+        min_segments = args.miniprot_min_segments
+        min_genes = args.miniprot_min_genes
+    else:  # nucleotide mode
+        min_segments = 1
+        min_genes = 0  # Gene count not required in nucleotide mode
+
+    def _passes_gate(
+        q: str,
+        ref_id: str,
+        clen: int,
+        min_seg: int,
+        min_span_bp: int,
+        min_span_frac: float,
+        min_gen: int,
+    ) -> tuple[bool, int, int, float, int]:
+        key = (q, ref_id)
+        nseg = int(seg_count.get(key, 0) or 0)
+        spbp = int(span_bp.get(key, 0) or 0)
+        spfrac = (spbp / clen) if clen > 0 else 0.0
+        ngen = int(ev.qr_gene_count.get(key, 0) or 0)
+
+        # Gate: contig must meet all thresholds to be assigned
+        ok = (nseg >= min_seg) and (spbp >= min_span_bp) and (spfrac >= min_span_frac) and (ngen >= min_gen)
+        return ok, nseg, spbp, spfrac, ngen
+
+    # Gate-aware reranking over candidate refs
+    # Make mutable copies for reranking
+    best_ref = dict(ev.best_ref)
+    best_score = dict(ev.best_score)
+    best_bp = dict(ev.best_bp)
+    second_ref = dict(ev.second_ref)
+    second_score = dict(ev.second_score)
+    second_bp = dict(ev.second_bp)
+
+    n_demoted = 0
+    n_switched = 0
+    n_no_candidates = 0  # Contigs with no alignment candidates
+    qr_ref_score = ev.qr_weight_all if args.assign_ref_score == "all" else ev.qr_score_topk
+
+    candidates_by_contig = defaultdict(list)
+    for (q, ref_id), sc in qr_ref_score.items():
+        if sc > 0:
+            candidates_by_contig[q].append((float(sc), ref_id))
+
+    logger.info(f"Assignment score per ref: {args.assign_ref_score}")
+
+    for q in qry_lengths.keys():
+        clen = int(qry_lengths.get(q, 0) or ev.qlens_from_paf.get(q, 0) or 0)
+        if clen <= 0:
+            continue
+
+        cands = candidates_by_contig.get(q, [])
+        if not cands:
+            best_ref[q] = ""
+            best_score[q] = 0.0
+            best_bp[q] = 0
+            second_ref[q] = ""
+            second_score[q] = 0.0
+            second_bp[q] = 0
+            n_no_candidates += 1
+            continue
+
+        cands.sort(key=lambda x: (x[0], int(ev.qr_union_bp.get((q, x[1]), 0) or 0)), reverse=True)
+        orig_best = cands[0][1]
+
+        passing = []
+        for sc, ref_id in cands:
+            ok, _nseg, _spbp, _spfrac, _ngen = _passes_gate(
+                q,
+                ref_id,
+                clen,
+                min_segments,
+                args.min_span_bp,
+                args.min_span_frac,
+                min_genes,
+            )
+            if ok:
+                passing.append((sc, ref_id))
+            if len(passing) >= 2:
+                break
+
+        if not passing:
+            best_ref[q] = ""
+            best_score[q] = 0.0
+            best_bp[q] = 0
+            second_ref[q] = ""
+            second_score[q] = 0.0
+            second_bp[q] = 0
+            n_demoted += 1
+            continue
+
+        chosen_score, chosen_ref_id = passing[0]
+        best_ref[q] = chosen_ref_id
+        best_score[q] = float(chosen_score)
+        best_bp[q] = int(ev.qr_union_bp.get((q, chosen_ref_id), 0) or 0)
+
+        if len(passing) > 1:
+            second_score_val, second_ref_id = passing[1]
+            second_ref[q] = second_ref_id
+            second_score[q] = float(second_score_val)
+            second_bp[q] = int(ev.qr_union_bp.get((q, second_ref_id), 0) or 0)
+        else:
+            second_ref[q] = ""
+            second_score[q] = 0.0
+            second_bp[q] = 0
+
+        if chosen_ref_id != orig_best:
+            n_switched += 1
+
+    # Log gate filtering statistics
+    n_total = len(qry_lengths)
+    n_with_candidates = n_total - n_no_candidates
+    n_passing = n_with_candidates - n_demoted
+    logger.info(f"Gate filtering: {n_total} contigs, {n_with_candidates} with candidates, "
+                f"{n_passing} passing gates, {n_demoted} demoted, {n_switched} switched")
+    logger.info(f"Gate thresholds: min_segments={min_segments}, min_span_bp={args.min_span_bp}, "
+                f"min_span_frac={args.min_span_frac}, min_genes={min_genes}")
+
+    if args.synteny_mode == "protein":
+        plot_suffix = "protein-anchor synteny"
+        logger.done(f"Proteins:         {proteins_faa}")
+        logger.done(f"miniprot PAF.gz:  {miniprot_paf_gz}")
+        logger.done(f"miniprot err:     {miniprot_err}")
+    else:  # nucleotide mode
+        plot_suffix = "nucleotide synteny"
+        logger.done(f"minimap2 PAF.gz:  {paf_gz}")
+        logger.done(f"minimap2 err:     {err_log}")
+
+    # Write segments + evidence summary TSVs
+    write_chain_segments_tsv(segments_tsv, ev.chain_segments_rows, ref_norm_to_orig=ref_norm_to_orig)
+    write_chain_summary_tsv(chain_summary_tsv, ev.chain_summary_rows, ref_norm_to_orig=ref_norm_to_orig)
+    logger.done(f"Segments TSV:      {segments_tsv}")
+    logger.done(f"Evidence TSV:      {chain_summary_tsv}")
+
+    # Write macro blocks TSV
+    write_macro_blocks_tsv(macro_blocks_tsv, ev.macro_block_rows, ref_norm_to_orig=ref_norm_to_orig)
+    logger.done(f"Macro blocks TSV:  {macro_blocks_tsv}")
+
+    # --- Identify chromosome contigs early (before BLAST phases) ---
+    # This allows creating a filtered FASTA for faster organelle/rDNA/contaminant detection
+    chromosome_contigs: Set[str] = set()
+    for contig, ref_id in best_ref.items():
+        if ref_id and qry_lengths.get(contig, 0) >= chr_like_minlen:
+            chromosome_contigs.add(contig)
+
+    # Compute assembly chromosome GC baseline (for non-chrom classification confidence)
+    # This is more appropriate than reference GC for divergent genomes
+    asm_gc_nuclear = {k: v for k, v in qry_gc.items() if k in chromosome_contigs}
+    if asm_gc_nuclear:
+        asm_gc_mean, asm_gc_std = calculate_gc_stats(asm_gc_nuclear)
+        logger.info(f"Assembly chromosome GC: mean={asm_gc_mean:.3f}, std={asm_gc_std:.3f} (n={len(asm_gc_nuclear)})")
+    else:
+        # Fall back to reference GC if no chromosome contigs identified
+        asm_gc_mean, asm_gc_std = ref_gc_mean, ref_gc_std
+        logger.warning("No chromosome contigs for assembly GC baseline, using reference GC")
+
+    # Create work directory for classification outputs
+    work_dir = outprefix.parent / f"{outprefix.name}_classification"
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create filtered FASTA with only non-chromosome contigs for BLAST-based detection
+    # This significantly speeds up organelle/rDNA/contaminant BLAST searches
+    non_chrom_contigs = set(qry_lengths.keys()) - chromosome_contigs
+    non_chrom_fasta = work_dir / "non_chromosome_contigs.fa"
+    if non_chrom_contigs:
+        logger.info(f"Creating filtered FASTA for BLAST ({len(non_chrom_contigs)} non-chromosome contigs)")
+        write_filtered_fasta(qry, non_chrom_fasta, non_chrom_contigs)
+        blast_query_fasta = non_chrom_fasta
+        blast_query_lengths = {k: v for k, v in qry_lengths.items() if k in non_chrom_contigs}
+    else:
+        # Edge case: all contigs are chromosomes
+        blast_query_fasta = qry
+        blast_query_lengths = qry_lengths
+
+    # --- Phase 4: Organelle detection ---
+    chrC_contig: Optional[str] = None
+    chrM_contig: Optional[str] = None
+    organelle_debris: Set[str] = set()
+    organelle_hits: Dict = {}
+
+    if not args.skip_organelles:
+        logger.phase("Phase 4: Organelle detection")
+        if ref_ctx.chrC_ref or ref_ctx.chrM_ref:
+            chrC_contig, chrM_contig, organelle_debris, organelle_hits = detect_organelles(
+                query_fasta=blast_query_fasta,
+                query_lengths=blast_query_lengths,
+                chrC_ref=ref_ctx.chrC_ref,
+                chrM_ref=ref_ctx.chrM_ref,
+                work_dir=work_dir / "organelles",
+                threads=args.threads,
+                min_coverage=args.organelle_min_cov,
+                chrC_len_tol=getattr(args, 'chrC_len_tolerance', 0.05),
+                chrM_len_tol=getattr(args, 'chrM_len_tolerance', 0.20),
+            )
+    else:
+        logger.info("Phase 4: Skipping organelle detection (--skip-organelles)")
+
+    # --- Phase 5: rDNA detection ---
+    rdna_contigs: Set[str] = set()
+    rdna_hits: Dict = {}
+    rdna_hit_intervals: Dict[str, list] = {}  # Raw BLAST intervals for consensus building
+    already_classified = {chrC_contig, chrM_contig} | organelle_debris
+    already_classified.discard(None)
+
+    if not args.skip_rdna:
+        logger.phase("Phase 5: rDNA detection")
+        rdna_ref = ref_ctx.rdna_ref
+
+        if rdna_ref:
+            rdna_contigs, rdna_hits, rdna_hit_intervals = detect_rdna_contigs(
+                query_fasta=blast_query_fasta,
+                query_lengths=blast_query_lengths,
+                rdna_ref=rdna_ref,
+                work_dir=work_dir / "rdna",
+                threads=args.threads,
+                min_coverage=args.rdna_min_cov,
+                exclude_contigs=already_classified,
+            )
+    else:
+        logger.info("Phase 5: Skipping rDNA detection (--skip-rdna)")
+
+    # --- Phase 6: Chromosome debris detection ---
+    logger.phase("Phase 6: Chromosome debris detection")
+    already_classified = already_classified | rdna_contigs
+
+    chromosome_debris: Set[str] = set()
+    chrom_debris_hits: Dict = {}
+    if chromosome_contigs:
+        chromosome_debris, chrom_debris_hits = detect_chromosome_debris(
+            query_fasta=qry,
+            query_lengths=qry_lengths,
+            chromosome_contigs=chromosome_contigs,
+            work_dir=work_dir / "chr_debris",
+            threads=args.threads,
+            min_coverage=args.chr_debris_min_cov,
+            min_identity=args.chr_debris_min_identity,
+            exclude_contigs=already_classified,
+        )
+        already_classified = already_classified | chromosome_debris
+
+    # --- Phase 7: Contaminant detection ---
+    contaminants: Dict[str, Tuple[int, str]] = {}
+
+    if not args.skip_contaminants and args.centrifuger_idx:
+        logger.phase("Phase 7: Contaminant detection")
+        residual_contigs = set(qry_lengths.keys()) - already_classified - chromosome_contigs
+        if residual_contigs:
+            residual_fasta = work_dir / "residual_for_contaminant_screen.fa"
+            write_filtered_fasta(qry, residual_fasta, residual_contigs)
+            residual_lengths = {k: v for k, v in qry_lengths.items() if k in residual_contigs}
+
+            contaminants = detect_contaminants(
+                query_fasta=residual_fasta,
+                query_lengths=residual_lengths,
+                centrifuger_idx=args.centrifuger_idx,
+                work_dir=work_dir / "contaminants",
+                threads=args.threads,
+                min_score=args.contaminant_min_score,
+                exclude_contigs=set(),
+            )
+    else:
+        logger.info("Phase 7: Skipping contaminant detection")
+
+    # --- Phase 8: Debris/unclassified classification ---
+    logger.phase("Phase 8: Debris/unclassified classification")
+
+    already_classified = already_classified | set(contaminants.keys()) | chromosome_contigs
+    remaining_contigs = set(qry_lengths.keys()) - already_classified
+
+    additional_debris, _unclassified, other_debris_hits = classify_debris_and_unclassified(
+        remaining_contigs=remaining_contigs,
+        query_fasta=qry,
+        query_lengths=qry_lengths,
+        ref_fasta=ref,
+        chrs_fasta=None,
+        qr_gene_count=ev.qr_gene_count,
+        work_dir=work_dir / "debris",
+        threads=args.threads,
+        min_coverage=args.debris_min_cov,
+        min_protein_hits=args.debris_min_protein_hits,
+    )
+    other_debris = additional_debris
+
+    # --- Phase 9: Gene count statistics ---
+    logger.phase("Phase 9: Gene count statistics")
+    if ref_gff3:
+        ref_gene_counts = count_genes_per_ref_chrom(ref_gff3, ref_id_map=ref_orig_to_norm)
+        compute_mean_gene_proportion(
+            qr_gene_count=ev.qr_gene_count,
+            chromosome_contigs=chromosome_contigs,
+            best_ref=best_ref,
+            ref_gene_counts=ref_gene_counts,
+        )
+    else:
+        logger.info("No GFF3 available - skipping gene count statistics")
+        ref_gene_counts = {}
+
+    # --- Phase 10: Orientation determination ---
+    logger.phase("Phase 10: Orientation determination")
+    contig_orientations = determine_contig_orientations(
+        macro_block_rows=ev.macro_block_rows,
+        best_ref=best_ref,
+        chromosome_contigs=chromosome_contigs,
+        query_lengths=qry_lengths,
+    )
+
+    # --- Phase 10.5: Telomere detection (optional) ---
+    telomere_results = None
+    if not args.disable_telomere_detection:
+        logger.phase("Phase 10.5: Telomere detection")
+        from final_finalizer.detection.telomere import detect_telomeres
+        telomere_results = detect_telomeres(
+            query_fasta=qry,
+            contig_names=chromosome_contigs,  # Only analyze chromosome-assigned contigs
+            motif=args.telomere_motif,
+            window_size=args.telomere_window,
+            min_repeats=args.telomere_min_repeats,
+        )
+    else:
+        logger.info("Phase 10.5: Skipping telomere detection (--disable-telomere-detection)")
+
+    # --- Phase 11: Classify all contigs ---
+    logger.phase("Phase 11: Classifying all contigs")
+
+    # Filter contaminants by coverage threshold (low coverage hits may be false positives)
+    contaminants_filtered = {
+        contig: hit for contig, hit in contaminants.items()
+        if hit.coverage >= args.contaminant_min_coverage
+    }
+    if len(contaminants_filtered) < len(contaminants):
+        n_filtered = len(contaminants) - len(contaminants_filtered)
+        logger.info(
+            f"Filtered {n_filtered} low-coverage contaminant hits "
+            f"(coverage < {args.contaminant_min_coverage:.0%})"
+        )
+
+    classifications = classify_all_contigs(
+        query_fasta=qry,
+        query_lengths=qry_lengths,
+        best_ref=best_ref,
+        chr_like_minlen=chr_like_minlen,
+        ev=ev,
+        ref_gene_counts=ref_gene_counts,
+        chrC_contig=chrC_contig,
+        chrM_contig=chrM_contig,
+        organelle_debris=organelle_debris,
+        rdna_contigs=rdna_contigs,
+        contaminants=contaminants_filtered,
+        chromosome_debris=chromosome_debris,
+        other_debris=other_debris,
+        add_subgenome_suffix=args.add_subgenome_suffix,
+        ref_norm_to_orig=ref_norm_to_orig,
+        query_gc=qry_gc,
+        ref_gc_mean=ref_gc_mean,
+        ref_gc_std=ref_gc_std,
+        asm_gc_mean=asm_gc_mean,
+        asm_gc_std=asm_gc_std,
+        organelle_hits=organelle_hits,
+        rdna_hits=rdna_hits,
+        chrom_debris_hits=chrom_debris_hits,
+        other_debris_hits=other_debris_hits,
+        # Full-length and subgenome inference parameters
+        ref_lengths=ref_lengths,
+        telomere_results=telomere_results,
+        full_length_threshold=args.full_length_ref_coverage,
+        subgenome_k=args.subgenome_k,
+        rearrangement_threshold=args.rearrangement_threshold,
+        rearrangement_density_frac=args.rearrangement_density_frac,
+        synteny_mode=args.synteny_mode,
+    )
+
+    for clf in classifications:
+        clf.reversed = contig_orientations.get(clf.original_name, False)
+
+    # --- Phase 11.5: Read depth analysis (optional) ---
+    depth_stats: Dict[str, 'DepthStats'] = {}
+    if reads and not args.skip_depth:
+        logger.phase("Phase 11.5: Read depth analysis")
+        from final_finalizer.analysis.read_depth import calculate_depth_metrics
+        from final_finalizer.models import DepthStats
+
+        depth_work_dir = work_dir / "read_depth"
+        depth_stats = calculate_depth_metrics(
+            reads=reads,
+            assembly=qry,
+            contig_lengths=qry_lengths,
+            work_dir=depth_work_dir,
+            threads=args.threads,
+            reads_type=args.reads_type,
+            window_size=args.depth_window_size,
+            target_coverage=args.depth_target_coverage if args.depth_target_coverage > 0 else None,
+            keep_bam=args.keep_depth_bam,
+        )
+
+        # Attach depth stats to classifications
+        for clf in classifications:
+            ds = depth_stats.get(clf.original_name)
+            if ds:
+                clf.depth_mean = ds.mean_depth
+                clf.depth_median = ds.median_depth
+                clf.depth_std = ds.std_depth
+                clf.depth_breadth_1x = ds.breadth_1x
+                clf.depth_breadth_10x = ds.breadth_10x
+
+        if depth_stats:
+            logger.done(f"Depth analysis complete for {len(depth_stats)} contigs")
+    elif reads and args.skip_depth:
+        logger.info("Phase 11.5: Skipping depth analysis (--skip-depth)")
+
+    # --- Phase 11.7: rDNA consensus building (optional) ---
+    rdna_consensus_obj = None
+    rdna_loci = []
+    rdna_arrays = []
+    rdna_annotations_tsv = None
+    rdna_arrays_tsv_path = None
+    rdna_ref = ref_ctx.rdna_ref
+    if getattr(args, 'build_rdna_consensus', False) and not args.skip_rdna and rdna_hit_intervals:
+        logger.phase("Phase 11.7: Building rDNA consensus from query assembly")
+        from final_finalizer.detection.rdna_consensus import build_rdna_consensus
+
+        # Build classification lookup for annotation
+        clf_lookup = {clf.original_name: clf.classification for clf in classifications}
+
+        rdna_ref_features = None
+        if getattr(args, 'rdna_ref_features', None):
+            rdna_ref_features = Path(args.rdna_ref_features)
+
+        rdna_consensus_obj, rdna_loci, rdna_arrays = build_rdna_consensus(
+            query_fasta=qry,
+            query_lengths=qry_lengths,
+            rdna_hit_intervals=rdna_hit_intervals,
+            seed_ref_path=rdna_ref,
+            work_dir=work_dir / "rdna_consensus",
+            threads=args.threads,
+            rdna_ref_features_path=rdna_ref_features,
+            classifications=clf_lookup,
+        )
+
+        if rdna_consensus_obj:
+            # Write consensus FASTA
+            consensus_fasta_out = Path(str(outprefix) + ".rdna_consensus.fasta")
+            from final_finalizer.utils.sequence_utils import write_fasta
+            write_fasta({"rdna_consensus": rdna_consensus_obj.sequence}, consensus_fasta_out)
+            logger.done(f"rDNA consensus:    {consensus_fasta_out} ({rdna_consensus_obj.length:,} bp, method={rdna_consensus_obj.method})")
+
+            # Reclassify contigs using consensus-based rDNA coverage
+            # Only reclassify contigs that are not already chromosomes or organelles
+            if rdna_loci:
+                from final_finalizer.detection.rdna_consensus import identify_rdna_contigs_from_loci
+                exclude_from_reclass = chromosome_contigs | {chrC_contig, chrM_contig} | organelle_debris
+                exclude_from_reclass.discard(None)
+
+                new_rdna_contigs, rdna_coverage_map = identify_rdna_contigs_from_loci(
+                    loci=rdna_loci,
+                    query_lengths=qry_lengths,
+                    min_coverage=args.rdna_min_cov,
+                    exclude_contigs=exclude_from_reclass,
+                )
+
+                # Update classifications for newly identified rDNA contigs
+                n_reclassified = 0
+                for clf in classifications:
+                    if clf.original_name in new_rdna_contigs and clf.classification not in (
+                        "chrom_assigned", "organelle_complete", "organelle_debris", "rDNA",
+                    ):
+                        old_class = clf.classification
+                        clf.classification = "rDNA"
+                        clf.classification_confidence = "medium"
+                        cov = rdna_coverage_map.get(clf.original_name, 0.0)
+                        logger.info(
+                            f"Reclassified {clf.original_name} from {old_class} -> rDNA "
+                            f"(consensus coverage={cov:.2f})"
+                        )
+                        n_reclassified += 1
+                        rdna_contigs.add(clf.original_name)
+
+                if n_reclassified:
+                    logger.done(f"Reclassified {n_reclassified} contigs as rDNA using consensus probe")
+
+                # Update clf_lookup after reclassification
+                clf_lookup = {clf.original_name: clf.classification for clf in classifications}
+
+                # Write annotations TSV (with updated classifications)
+                rdna_annotations_tsv = Path(str(outprefix) + ".rdna_annotations.tsv")
+                write_rdna_annotations_tsv(
+                    output_path=rdna_annotations_tsv,
+                    loci=rdna_loci,
+                    classifications=clf_lookup,
+                )
+                logger.done(f"rDNA annotations:  {rdna_annotations_tsv} ({len(rdna_loci)} loci)")
+
+                # Write rDNA arrays summary TSV
+                if rdna_arrays:
+                    rdna_arrays_tsv_path = Path(str(outprefix) + ".rdna_arrays.tsv")
+                    write_rdna_arrays_tsv(
+                        output_path=rdna_arrays_tsv_path,
+                        arrays=rdna_arrays,
+                        classifications=clf_lookup,
+                    )
+                    logger.done(f"rDNA arrays:       {rdna_arrays_tsv_path} ({len(rdna_arrays)} arrays)")
+
+                # Write GFF3 annotations (with sub-feature coordinates and array parents)
+                rdna_annotations_gff3 = Path(str(outprefix) + ".rdna_annotations.gff3")
+                write_rdna_annotations_gff3(
+                    output_path=rdna_annotations_gff3,
+                    loci=rdna_loci,
+                    query_lengths=qry_lengths,
+                    classifications=clf_lookup,
+                    arrays=rdna_arrays,
+                )
+                logger.done(f"rDNA GFF3:         {rdna_annotations_gff3}")
+        else:
+            logger.warning("rDNA consensus building did not produce a result")
+    elif getattr(args, 'build_rdna_consensus', False) and args.skip_rdna:
+        logger.info("Phase 11.7: Skipping rDNA consensus (--skip-rdna)")
+
+    # --- Phase 12: Scaffolding (optional) ---
+    scaffolded_seqs: Dict[str, str] = {}
+    scaffold_confidences: Optional[Dict[str, tuple]] = None
+    if args.scaffold:
+        logger.phase("Phase 12: Reference-guided scaffolding")
+        from final_finalizer.output.scaffolding import scaffold_chromosomes, write_agp, orientations_from_agp
+
+        scaffolded_seqs, agp_lines, scaffold_confidences = scaffold_chromosomes(
+            query_fasta=qry,
+            classifications=classifications,
+            contig_orientations=contig_orientations,
+            qr_ref_ranges=ev.qr_ref_ranges or {},
+            ref_fasta=ref,
+            ref_lengths=ref_lengths,
+            best_ref=best_ref,
+            contig_refs=ev.contig_refs,
+            work_dir=work_dir / "scaffolding",
+            threads=args.threads,
+            gap_size=args.scaffold_gap_size,
+            ref_norm_to_orig=ref_norm_to_orig,
+            qr_best_chain_ident=ev.qr_best_chain_ident or {},
+        )
+
+        if scaffolded_seqs:
+            from final_finalizer.utils.sequence_utils import write_fasta as _write_fasta
+            scaffolded_fasta = Path(str(outprefix) + ".scaffolded.fasta")
+            _write_fasta(scaffolded_seqs, scaffolded_fasta)
+            logger.done(f"Scaffolded FASTA:  {scaffolded_fasta} ({len(scaffolded_seqs)} chromosomes)")
+
+            agp_path = Path(str(outprefix) + ".scaffolded.agp")
+            write_agp(agp_lines, agp_path)
+            logger.done(f"Scaffolded AGP:    {agp_path}")
+
+            # Reconcile contig orientations with scaffold AGP —
+            # the AGP is authoritative for scaffolded contigs.
+            agp_orients = orientations_from_agp(agp_lines)
+            contig_orientations.update(agp_orients)
+            for clf in classifications:
+                if clf.original_name in agp_orients:
+                    clf.reversed = agp_orients[clf.original_name]
+    else:
+        logger.info("Phase 12: Skipping scaffolding (use --scaffold to enable)")
+
+    # --- Phase 12.5: Write FASTA outputs ---
+    logger.phase("Phase 12.5: Writing FASTA outputs")
+    write_classified_fastas(
+        query_fasta=qry,
+        classifications=classifications,
+        contig_orientations=contig_orientations,
+        output_prefix=outprefix,
+        scaffolded_seqs=scaffolded_seqs if args.scaffold else None,
+    )
+
+    # --- Phase 13: Write enhanced summary TSV ---
+    logger.phase("Phase 13: Writing enhanced summary TSV")
+    summary_tsv = Path(str(outprefix) + ".contig_summary.tsv")
+
+    write_contig_summary_tsv(
+        output_path=summary_tsv,
+        classifications=classifications,
+        contig_orientations=contig_orientations,
+        all_contig_lengths=qry_lengths,
+        contig_total=ev.contig_total,
+        contig_refs=ev.contig_refs,
+        qlens_from_paf=ev.qlens_from_paf,
+        qr_union_bp=ev.qr_union_bp,
+        qr_matches=ev.qr_matches,
+        qr_alnlen=ev.qr_alnlen,
+        qr_gene_count=ev.qr_gene_count,
+        best_ref=best_ref,
+        best_score=best_score,
+        best_bp=best_bp,
+        second_ref=second_ref,
+        second_score=second_score,
+        second_bp=second_bp,
+        chr_like_minlen=chr_like_minlen,
+        chimera_primary_frac=args.chimera_primary_frac,
+        chimera_secondary_frac=args.chimera_secondary_frac,
+        assign_min_frac=args.assign_min_frac,
+        assign_min_ratio=args.assign_min_ratio,
+        ref_norm_to_orig=ref_norm_to_orig,
+        scaffold_confidences=scaffold_confidences if args.scaffold else None,
+    )
+
+    logger.done(f"Summary:           {summary_tsv}")
+    logger.done(f"Ref lengths:       {ref_lengths_tsv}")
+
+    # Write contaminant summary TSV with taxonomic lineage (for alluvial plot)
+    # Use filtered contaminants (coverage >= threshold) for consistency with classification
+    contaminants_tsv = Path(str(outprefix) + ".contaminants.tsv")
+    if contaminants_filtered:
+        write_contaminant_summary_tsv(
+            output_path=contaminants_tsv,
+            contaminants=contaminants_filtered,
+            query_lengths=qry_lengths,
+            depth_stats=depth_stats if depth_stats else None,
+        )
+        logger.done(f"Contaminants:      {contaminants_tsv}")
+
+    clf_counts: Dict[str, int] = defaultdict(int)
+    for clf in classifications:
+        clf_counts[clf.classification] += 1
+    logger.done("Classification summary:")
+    for cat, count in sorted(clf_counts.items()):
+        logger.info(f"       {cat}: {count}")
+
+    if args.plot:
+        agp_tsv = Path(str(outprefix) + ".scaffolded.agp") if args.scaffold and scaffolded_seqs else None
+        contam_tsv_arg = contaminants_tsv if contaminants_filtered else None
+
+        if not run_unified_report(
+            summary_tsv,
+            ref_lengths_tsv,
+            segments_tsv,
+            chain_summary_tsv,
+            macro_blocks_tsv,
+            outprefix,
+            chr_like_minlen,
+            plot_suffix,
+            args.synteny_mode,
+            assembly_name=assembly_name,
+            reference_name=args.reference_name,
+            rdna_annotations_tsv=rdna_annotations_tsv,
+            rdna_arrays_tsv=rdna_arrays_tsv_path,
+            contaminants_tsv=contam_tsv_arg,
+            agp_tsv=agp_tsv,
+        ):
+            logger.error(
+                "--plot failed: unified report could not be generated. "
+                "Ensure Rscript, rmarkdown, and pandoc are installed."
+            )
+
+
+# ---------------------------------------------------------------------------
+# main: argument parsing, validation, dispatch
+# ---------------------------------------------------------------------------
 def main():
     # Handle --dump-config early, before argument parsing
     # This allows generating config template without providing required args
@@ -156,6 +1115,7 @@ def main():
             chr_debris_min_identity=0.90, contaminant_min_score=1000, contaminant_min_coverage=0.50,
             debris_min_cov=0.50, debris_min_protein_hits=2, preset="asm20", kmer=None, window=None, aln_minlen=10000,
             scaffold=False, scaffold_gap_size=100,
+            fofn=None, assembly_dir=None, output_dir=None,
         )
         print(dump_config_template(defaults))
         sys.exit(0)
@@ -166,12 +1126,12 @@ def main():
     )
 
     # =========================================================================
-    # Required arguments
+    # Required arguments (single-assembly mode)
     # =========================================================================
-    req = p.add_argument_group("Required arguments")
+    req = p.add_argument_group("Required arguments (single-assembly mode)")
     req.add_argument("-r", "--ref", type=_validate_input_path, required=True, help="Reference assembly FASTA (plain or gzipped; chrNA/chrNP/etc.)")
-    req.add_argument("-q", "--query", type=_validate_input_path, required=True, help="Query assembly FASTA (plain or gzipped; contigs/scaffolds)")
-    req.add_argument("-o", "--outprefix", required=True, help="Output prefix (no extension)")
+    req.add_argument("-q", "--query", type=_validate_input_path, default=None, help="Query assembly FASTA (plain or gzipped; contigs/scaffolds)")
+    req.add_argument("-o", "--outprefix", default=None, help="Output prefix (no extension)")
     req.add_argument(
         "--ref-gff3",
         type=_validate_input_path,
@@ -179,6 +1139,23 @@ def main():
         help="Reference GFF3 with protein-coding gene annotations. "
         "Required for --synteny-mode protein. "
         "Used to extract proteins (gffread) and run protein-anchor synteny blocks (miniprot).",
+    )
+
+    # =========================================================================
+    # Multi-assembly mode
+    # =========================================================================
+    multi = p.add_argument_group("Multi-assembly mode")
+    multi.add_argument(
+        "--fofn", type=_validate_input_path, default=None,
+        help="File-of-filenames: TSV with columns [path] and optional [name], [reads]",
+    )
+    multi.add_argument(
+        "--assembly-dir", type=_validate_input_dir, default=None,
+        help="Directory of FASTA files to process as multiple assemblies",
+    )
+    multi.add_argument(
+        "--output-dir", type=str, default=None,
+        help="Output directory for multi-assembly mode (required with --fofn/--assembly-dir)",
     )
 
     # =========================================================================
@@ -549,6 +1526,26 @@ def main():
         except Exception as e:
             sys.exit(f"[error] Failed to load config file: {e}")
 
+    # --- Mode detection and validation ---
+    is_multi = bool(getattr(args, 'fofn', None) or getattr(args, 'assembly_dir', None))
+
+    if is_multi:
+        # Multi-assembly mode validation
+        if args.fofn and args.assembly_dir:
+            sys.exit("[error] --fofn and --assembly-dir are mutually exclusive")
+        if not args.output_dir:
+            sys.exit("[error] --output-dir is required with --fofn/--assembly-dir")
+        if args.query:
+            sys.exit("[error] -q/--query cannot be used with --fofn/--assembly-dir")
+        if args.outprefix:
+            sys.exit("[error] -o/--outprefix cannot be used with --fofn/--assembly-dir")
+    else:
+        # Single-assembly mode validation
+        if not args.query:
+            sys.exit("[error] -q/--query is required in single-assembly mode")
+        if not args.outprefix:
+            sys.exit("[error] -o/--outprefix is required in single-assembly mode")
+
     # Validate synteny mode requirements
     if args.synteny_mode == "protein" and not args.ref_gff3:
         sys.exit("[error] --ref-gff3 is required when using --synteny-mode protein")
@@ -565,829 +1562,38 @@ def main():
     if args.ref_id_pattern:
         set_ref_id_patterns(compile_ref_id_patterns(args.ref_id_pattern))
 
-    # --- Phase 1: Reading reference and query FASTA ---
-    logger.phase("Phase 1: Reading reference and query FASTA")
-    ref = args.ref  # Already a Path from _validate_input_path
-    qry = args.query  # Already a Path from _validate_input_path
-    outprefix = Path(args.outprefix)
+    # --- Dispatch ---
+    if is_multi:
+        from final_finalizer.utils.multi_assembly import resolve_assemblies
 
-    # Create output directory if it doesn't exist
-    out_dir = outprefix.parent
-    if out_dir and not out_dir.exists():
-        try:
-            out_dir.mkdir(parents=True, exist_ok=True)
-            logger.info(f"Created output directory: {out_dir}")
-        except PermissionError as e:
-            sys.exit(f"[error] Cannot create output directory {out_dir}: {e}")
-        except OSError as e:
-            sys.exit(f"[error] Failed to create output directory {out_dir}: {e}")
+        assemblies = resolve_assemblies(args)
+        output_dir = Path(args.output_dir)
+        ref_outprefix = output_dir / "reference" / "reference"
+        ref_ctx = prepare_reference(args, ref_outprefix)
 
-    ref_lengths_norm, ref_orig_to_norm, ref_norm_to_orig = read_fasta_lengths_with_map(ref)
-    ref_ids_raw = set(read_fasta_lengths(ref).keys())
-    qry_lengths = read_fasta_lengths(qry)
-    logger.info(f"Query contigs: {len(qry_lengths)}")
+        n_total = len(assemblies)
+        n_ok = 0
+        failures = []
 
-    # GC content cache paths
-    gc_content_tsv = Path(str(outprefix) + ".gc_content.tsv")
-    gc_content_metadata = Path(str(outprefix) + ".gc_content.metadata.json")
+        for i, (asm_path, asm_name, asm_reads) in enumerate(assemblies):
+            logger.phase(f"=== Assembly: {asm_name} ({i + 1}/{n_total}) ===")
+            asm_outprefix = output_dir / asm_name / asm_name
+            try:
+                run_assembly(args, ref_ctx, asm_path, asm_name, asm_reads, asm_outprefix)
+                n_ok += 1
+            except Exception as e:
+                logger.error(f"Assembly '{asm_name}' failed: {e}")
+                failures.append((asm_name, str(e)))
 
-    # Compute or load cached GC content for reference and query
-    if check_gc_cache(gc_content_tsv, gc_content_metadata, ref, qry):
-        logger.info(f"Reusing cached GC content: {gc_content_tsv}")
-        ref_gc_all, qry_gc = read_gc_content_tsv(gc_content_tsv)
+        logger.phase("=== Multi-assembly summary ===")
+        logger.done(f"{n_ok}/{n_total} assemblies completed successfully")
+        if failures:
+            for name, err in failures:
+                logger.error(f"  FAILED: {name} — {err}")
     else:
-        logger.info("Computing GC content for reference and query sequences")
-        ref_gc_all = calculate_gc_content_fasta(ref)
-        qry_gc = calculate_gc_content_fasta(qry)
-        write_gc_content_tsv(gc_content_tsv, gc_content_metadata, ref_gc_all, qry_gc, ref, qry)
-        logger.info(f"Cached GC content: {gc_content_tsv}")
-
-    # Compute reference GC baseline (nuclear chromosomes only, exclude organelles)
-    # Filter to only include sequences matching chromosome patterns
-    from final_finalizer.utils.reference_utils import is_nuclear_chromosome
-    ref_gc_nuclear = {
-        ref_norm_to_orig.get(k, k): v
-        for k, v in ref_gc_all.items()
-        if is_nuclear_chromosome(k)
-    }
-    if ref_gc_nuclear:
-        ref_gc_mean, ref_gc_std = calculate_gc_stats(ref_gc_nuclear)
-        logger.info(f"Reference nuclear GC: mean={ref_gc_mean:.3f}, std={ref_gc_std:.3f}")
-    else:
-        ref_gc_mean, ref_gc_std = None, None
-        logger.warning("Could not compute reference GC baseline (no nuclear chromosomes found)")
-
-    # Outputs (shared)
-    ref_lengths_tsv = Path(str(outprefix) + ".ref_lengths.tsv")
-    segments_tsv = Path(str(outprefix) + ".segments.tsv")
-    chain_summary_tsv = Path(str(outprefix) + ".evidence_summary.tsv")
-    macro_blocks_tsv = Path(str(outprefix) + ".macro_blocks.tsv")
-
-    # minimap2 QA outputs
-    paf_gz = Path(str(outprefix) + ".all_vs_ref.paf.gz")
-    err_log = Path(str(outprefix) + ".alignment.err")
-    stats_tsv = Path(str(outprefix) + ".contig_ref.stats.tsv")
-
-    # miniprot outputs
-    proteins_faa = Path(str(outprefix) + ".ref_proteins.fa")
-    gffread_err = Path(str(outprefix) + ".gffread.err")
-    miniprot_paf_gz = Path(str(outprefix) + ".miniprot.paf.gz")
-    miniprot_err = Path(str(outprefix) + ".miniprot.err")
-
-    if not file_exists_and_valid(ref_lengths_tsv):
-        logger.info(f"Writing reference lengths: {ref_lengths_tsv}")
-        write_ref_lengths_tsv(ref_lengths_tsv, ref)
-    else:
-        logger.info(f"Reference lengths TSV exists, reusing: {ref_lengths_tsv}")
-
-    # --- Phase 2: Synteny analysis (protein or nucleotide) ---
-    # Process GFF3 if provided (optional in nucleotide mode, required in protein mode)
-    ref_gff3 = None
-    tx2loc = {}
-    tx2gene = {}
-    if args.ref_gff3:
-        filtered_ref_gff3 = Path(str(outprefix) + ".ref_gff3.filtered.gff3")
-        ref_gff3 = filter_gff3_by_ref(
-            args.ref_gff3,
-            ref_ids_raw,
-            filtered_ref_gff3,
-            ref_norm_to_orig=ref_norm_to_orig,
-        )
-        if args.synteny_mode == "protein":
-            logger.info(f"Protein-anchor mode: parsing GFF3 for protein extraction (ref GFF3: {ref_gff3})")
-        else:
-            logger.info(f"GFF3 provided in nucleotide mode: will use for gene count statistics (ref GFF3: {ref_gff3})")
-
-        tx2loc, tx2gene = parse_gff3_transcript_coords(ref_gff3, ref_id_map=ref_orig_to_norm)
-        if not (tx2loc and tx2gene):
-            if args.synteny_mode == "protein":
-                raise RuntimeError(f"No transcript features found in GFF3 (mRNA/transcript with ID=...). File: {ref_gff3}")
-            else:
-                logger.warning(f"No transcript features found in GFF3 - gene count statistics will not be available")
-                ref_gff3 = None
-
-    if args.synteny_mode == "protein":
-        logger.phase("Phase 2: Protein-anchor synteny analysis")
-        if not ref_gff3:
-            raise RuntimeError("--ref-gff3 is required for protein mode but GFF3 processing failed")
-
-        run_gffread_extract_proteins(args.gffread, ref, ref_gff3, proteins_faa, gffread_err)
-        run_miniprot(args.miniprot, qry, proteins_faa, miniprot_paf_gz, args.threads, args.miniprot_args, miniprot_err)
-
-        ev = parse_miniprot_synteny_evidence_and_segments(
-            miniprot_paf_gz=miniprot_paf_gz,
-            contig_lengths=qry_lengths,
-            tx2loc=tx2loc,
-            tx2gene=tx2gene,
-            assign_minlen=args.assign_minlen_protein,
-            assign_minmapq=args.assign_minmapq,
-            chain_q_gap=args.chain_q_gap,
-            chain_r_gap=args.chain_r_gap,
-            chain_diag_slop=args.chain_diag_slop,
-            assign_min_ident=args.assign_min_ident,
-            assign_chain_topk=args.assign_chain_topk,
-            assign_chain_score=args.assign_chain_score,
-            assign_chain_min_bp=args.assign_chain_min_bp,
-            assign_ref_score=args.assign_ref_score,
-        )
-    else:  # nucleotide mode
-        logger.phase("Phase 2: Nucleotide synteny analysis (whole-genome alignment)")
-        logger.info("Running minimap2 with permissive chaining for chromosome-scale structural analysis")
-        logger.info("Note: Nucleotide mode is optimized for within-species or closely related genomes. "
-                    "For highly divergent species, protein mode may provide more reliable assignments.")
-        run_minimap2_synteny(
-            ref, qry, paf_gz, args.threads, args.preset, args.kmer, args.window, err_log,
-            permissive=True  # Always use permissive chaining in nucleotide mode
-        )
-
-        ev = parse_paf_chain_evidence_and_segments(
-            paf_gz_path=paf_gz,
-            contig_lengths=qry_lengths,
-            assign_minlen=args.assign_minlen,
-            assign_minmapq=args.assign_minmapq,
-            assign_tp=args.assign_tp,
-            chain_q_gap=args.chain_q_gap,
-            chain_r_gap=args.chain_r_gap,
-            chain_diag_slop=args.chain_diag_slop,
-            assign_min_ident=args.assign_min_ident,
-            assign_chain_topk=args.assign_chain_topk,
-            assign_chain_score=args.assign_chain_score,
-            assign_chain_min_bp=args.assign_chain_min_bp,
-            assign_ref_score=args.assign_ref_score,
-            ref_id_map=ref_orig_to_norm,
-        )
-
-    # --- Synteny gates: filter weak assignments ---
-    seg_count, span_bp = build_segment_support_from_rows(ev.chain_segments_rows)
-
-    # Set min_segments based on synteny mode:
-    # - Protein mode: use configurable --miniprot-min-segments (default 5)
-    # - Nucleotide mode: always 1 (perfect alignments often produce single continuous matches)
-    if args.synteny_mode == "protein":
-        min_segments = args.miniprot_min_segments
-        min_genes = args.miniprot_min_genes
-    else:  # nucleotide mode
-        min_segments = 1
-        min_genes = 0  # Gene count not required in nucleotide mode
-
-    def _passes_gate(
-        q: str,
-        ref_id: str,
-        clen: int,
-        min_seg: int,
-        min_span_bp: int,
-        min_span_frac: float,
-        min_gen: int,
-    ) -> tuple[bool, int, int, float, int]:
-        key = (q, ref_id)
-        nseg = int(seg_count.get(key, 0) or 0)
-        spbp = int(span_bp.get(key, 0) or 0)
-        spfrac = (spbp / clen) if clen > 0 else 0.0
-        ngen = int(ev.qr_gene_count.get(key, 0) or 0)
-
-        # Gate: contig must meet all thresholds to be assigned
-        ok = (nseg >= min_seg) and (spbp >= min_span_bp) and (spfrac >= min_span_frac) and (ngen >= min_gen)
-        return ok, nseg, spbp, spfrac, ngen
-
-    # Gate-aware reranking over candidate refs
-    # Make mutable copies for reranking
-    best_ref = dict(ev.best_ref)
-    best_score = dict(ev.best_score)
-    best_bp = dict(ev.best_bp)
-    second_ref = dict(ev.second_ref)
-    second_score = dict(ev.second_score)
-    second_bp = dict(ev.second_bp)
-
-    n_demoted = 0
-    n_switched = 0
-    n_no_candidates = 0  # Contigs with no alignment candidates
-    qr_ref_score = ev.qr_weight_all if args.assign_ref_score == "all" else ev.qr_score_topk
-
-    candidates_by_contig = defaultdict(list)
-    for (q, ref_id), sc in qr_ref_score.items():
-        if sc > 0:
-            candidates_by_contig[q].append((float(sc), ref_id))
-
-    logger.info(f"Assignment score per ref: {args.assign_ref_score}")
-
-    for q in qry_lengths.keys():
-        clen = int(qry_lengths.get(q, 0) or ev.qlens_from_paf.get(q, 0) or 0)
-        if clen <= 0:
-            continue
-
-        cands = candidates_by_contig.get(q, [])
-        if not cands:
-            best_ref[q] = ""
-            best_score[q] = 0.0
-            best_bp[q] = 0
-            second_ref[q] = ""
-            second_score[q] = 0.0
-            second_bp[q] = 0
-            n_no_candidates += 1
-            continue
-
-        cands.sort(key=lambda x: (x[0], int(ev.qr_union_bp.get((q, x[1]), 0) or 0)), reverse=True)
-        orig_best = cands[0][1]
-
-        passing = []
-        for sc, ref_id in cands:
-            ok, _nseg, _spbp, _spfrac, _ngen = _passes_gate(
-                q,
-                ref_id,
-                clen,
-                min_segments,
-                args.min_span_bp,
-                args.min_span_frac,
-                min_genes,
-            )
-            if ok:
-                passing.append((sc, ref_id))
-            if len(passing) >= 2:
-                break
-
-        if not passing:
-            best_ref[q] = ""
-            best_score[q] = 0.0
-            best_bp[q] = 0
-            second_ref[q] = ""
-            second_score[q] = 0.0
-            second_bp[q] = 0
-            n_demoted += 1
-            continue
-
-        chosen_score, chosen_ref_id = passing[0]
-        best_ref[q] = chosen_ref_id
-        best_score[q] = float(chosen_score)
-        best_bp[q] = int(ev.qr_union_bp.get((q, chosen_ref_id), 0) or 0)
-
-        if len(passing) > 1:
-            second_score_val, second_ref_id = passing[1]
-            second_ref[q] = second_ref_id
-            second_score[q] = float(second_score_val)
-            second_bp[q] = int(ev.qr_union_bp.get((q, second_ref_id), 0) or 0)
-        else:
-            second_ref[q] = ""
-            second_score[q] = 0.0
-            second_bp[q] = 0
-
-        if chosen_ref_id != orig_best:
-            n_switched += 1
-
-    # Log gate filtering statistics
-    n_total = len(qry_lengths)
-    n_with_candidates = n_total - n_no_candidates
-    n_passing = n_with_candidates - n_demoted
-    logger.info(f"Gate filtering: {n_total} contigs, {n_with_candidates} with candidates, "
-                f"{n_passing} passing gates, {n_demoted} demoted, {n_switched} switched")
-    logger.info(f"Gate thresholds: min_segments={min_segments}, min_span_bp={args.min_span_bp}, "
-                f"min_span_frac={args.min_span_frac}, min_genes={min_genes}")
-
-    if args.synteny_mode == "protein":
-        plot_suffix = "protein-anchor synteny"
-        logger.done(f"Proteins:         {proteins_faa}")
-        logger.done(f"miniprot PAF.gz:  {miniprot_paf_gz}")
-        logger.done(f"miniprot err:     {miniprot_err}")
-    else:  # nucleotide mode
-        plot_suffix = "nucleotide synteny"
-        logger.done(f"minimap2 PAF.gz:  {paf_gz}")
-        logger.done(f"minimap2 err:     {err_log}")
-
-    # Write segments + evidence summary TSVs
-    write_chain_segments_tsv(segments_tsv, ev.chain_segments_rows, ref_norm_to_orig=ref_norm_to_orig)
-    write_chain_summary_tsv(chain_summary_tsv, ev.chain_summary_rows, ref_norm_to_orig=ref_norm_to_orig)
-    logger.done(f"Segments TSV:      {segments_tsv}")
-    logger.done(f"Evidence TSV:      {chain_summary_tsv}")
-
-    # Write macro blocks TSV
-    write_macro_blocks_tsv(macro_blocks_tsv, ev.macro_block_rows, ref_norm_to_orig=ref_norm_to_orig)
-    logger.done(f"Macro blocks TSV:  {macro_blocks_tsv}")
-
-    # --- Compute chr_like_minlen if not provided ---
-    ref_lengths = ref_lengths_norm
-    if args.chr_like_minlen is None:
-        min_nuclear = get_min_nuclear_chrom_length(ref_lengths)
-        chr_like_minlen = int(min_nuclear * 0.25) if min_nuclear > 0 else 100_000
-        logger.info(f"chr_like_minlen not specified, using 25% of smallest nuclear chrom: {chr_like_minlen}")
-    else:
-        chr_like_minlen = args.chr_like_minlen
-
-    # --- Identify chromosome contigs early (before BLAST phases) ---
-    # This allows creating a filtered FASTA for faster organelle/rDNA/contaminant detection
-    chromosome_contigs: Set[str] = set()
-    for contig, ref_id in best_ref.items():
-        if ref_id and qry_lengths.get(contig, 0) >= chr_like_minlen:
-            chromosome_contigs.add(contig)
-
-    # Compute assembly chromosome GC baseline (for non-chrom classification confidence)
-    # This is more appropriate than reference GC for divergent genomes
-    asm_gc_nuclear = {k: v for k, v in qry_gc.items() if k in chromosome_contigs}
-    if asm_gc_nuclear:
-        asm_gc_mean, asm_gc_std = calculate_gc_stats(asm_gc_nuclear)
-        logger.info(f"Assembly chromosome GC: mean={asm_gc_mean:.3f}, std={asm_gc_std:.3f} (n={len(asm_gc_nuclear)})")
-    else:
-        # Fall back to reference GC if no chromosome contigs identified
-        asm_gc_mean, asm_gc_std = ref_gc_mean, ref_gc_std
-        logger.warning("No chromosome contigs for assembly GC baseline, using reference GC")
-
-    # Create work directory for classification outputs
-    work_dir = outprefix.parent / f"{outprefix.name}_classification"
-    work_dir.mkdir(parents=True, exist_ok=True)
-
-    # Create filtered FASTA with only non-chromosome contigs for BLAST-based detection
-    # This significantly speeds up organelle/rDNA/contaminant BLAST searches
-    non_chrom_contigs = set(qry_lengths.keys()) - chromosome_contigs
-    non_chrom_fasta = work_dir / "non_chromosome_contigs.fa"
-    if non_chrom_contigs:
-        logger.info(f"Creating filtered FASTA for BLAST ({len(non_chrom_contigs)} non-chromosome contigs)")
-        write_filtered_fasta(qry, non_chrom_fasta, non_chrom_contigs)
-        blast_query_fasta = non_chrom_fasta
-        blast_query_lengths = {k: v for k, v in qry_lengths.items() if k in non_chrom_contigs}
-    else:
-        # Edge case: all contigs are chromosomes
-        blast_query_fasta = qry
-        blast_query_lengths = qry_lengths
-
-    # --- Phase 4: Organelle detection ---
-    chrC_contig: Optional[str] = None
-    chrM_contig: Optional[str] = None
-    organelle_debris: Set[str] = set()
-    organelle_hits: Dict = {}
-
-    if not args.skip_organelles:
-        logger.phase("Phase 4: Organelle detection")
-        chrC_ref, chrM_ref = prepare_organelle_references(
-            ref_fasta=ref,
-            chrC_ref_arg=getattr(args, 'chrC_ref', None),
-            chrM_ref_arg=getattr(args, 'chrM_ref', None),
-            work_dir=work_dir / "organelles",
-            ref_norm_to_orig=ref_norm_to_orig,
-        )
-
-        if chrC_ref or chrM_ref:
-            chrC_contig, chrM_contig, organelle_debris, organelle_hits = detect_organelles(
-                query_fasta=blast_query_fasta,
-                query_lengths=blast_query_lengths,
-                chrC_ref=chrC_ref,
-                chrM_ref=chrM_ref,
-                work_dir=work_dir / "organelles",
-                threads=args.threads,
-                min_coverage=args.organelle_min_cov,
-                chrC_len_tol=getattr(args, 'chrC_len_tolerance', 0.05),
-                chrM_len_tol=getattr(args, 'chrM_len_tolerance', 0.20),
-            )
-    else:
-        logger.info("Phase 4: Skipping organelle detection (--skip-organelles)")
-
-    # --- Phase 5: rDNA detection ---
-    rdna_contigs: Set[str] = set()
-    rdna_hits: Dict = {}
-    rdna_hit_intervals: Dict[str, list] = {}  # Raw BLAST intervals for consensus building
-    already_classified = {chrC_contig, chrM_contig} | organelle_debris
-    already_classified.discard(None)
-
-    if not args.skip_rdna:
-        logger.phase("Phase 5: rDNA detection")
-        script_dir = Path(__file__).resolve().parent
-        rdna_ref = prepare_rdna_reference(args.rdna_ref, script_dir)
-
-        if rdna_ref:
-            rdna_contigs, rdna_hits, rdna_hit_intervals = detect_rdna_contigs(
-                query_fasta=blast_query_fasta,
-                query_lengths=blast_query_lengths,
-                rdna_ref=rdna_ref,
-                work_dir=work_dir / "rdna",
-                threads=args.threads,
-                min_coverage=args.rdna_min_cov,
-                exclude_contigs=already_classified,
-            )
-    else:
-        logger.info("Phase 5: Skipping rDNA detection (--skip-rdna)")
-
-    # --- Phase 6: Chromosome debris detection ---
-    logger.phase("Phase 6: Chromosome debris detection")
-    already_classified = already_classified | rdna_contigs
-
-    chromosome_debris: Set[str] = set()
-    chrom_debris_hits: Dict = {}
-    if chromosome_contigs:
-        chromosome_debris, chrom_debris_hits = detect_chromosome_debris(
-            query_fasta=qry,
-            query_lengths=qry_lengths,
-            chromosome_contigs=chromosome_contigs,
-            work_dir=work_dir / "chr_debris",
-            threads=args.threads,
-            min_coverage=args.chr_debris_min_cov,
-            min_identity=args.chr_debris_min_identity,
-            exclude_contigs=already_classified,
-        )
-        already_classified = already_classified | chromosome_debris
-
-    # --- Phase 7: Contaminant detection ---
-    contaminants: Dict[str, Tuple[int, str]] = {}
-
-    if not args.skip_contaminants and args.centrifuger_idx:
-        logger.phase("Phase 7: Contaminant detection")
-        residual_contigs = set(qry_lengths.keys()) - already_classified - chromosome_contigs
-        if residual_contigs:
-            residual_fasta = work_dir / "residual_for_contaminant_screen.fa"
-            write_filtered_fasta(qry, residual_fasta, residual_contigs)
-            residual_lengths = {k: v for k, v in qry_lengths.items() if k in residual_contigs}
-
-            contaminants = detect_contaminants(
-                query_fasta=residual_fasta,
-                query_lengths=residual_lengths,
-                centrifuger_idx=args.centrifuger_idx,
-                work_dir=work_dir / "contaminants",
-                threads=args.threads,
-                min_score=args.contaminant_min_score,
-                exclude_contigs=set(),
-            )
-    else:
-        logger.info("Phase 7: Skipping contaminant detection")
-
-    # --- Phase 8: Debris/unclassified classification ---
-    logger.phase("Phase 8: Debris/unclassified classification")
-
-    already_classified = already_classified | set(contaminants.keys()) | chromosome_contigs
-    remaining_contigs = set(qry_lengths.keys()) - already_classified
-
-    additional_debris, _unclassified, other_debris_hits = classify_debris_and_unclassified(
-        remaining_contigs=remaining_contigs,
-        query_fasta=qry,
-        query_lengths=qry_lengths,
-        ref_fasta=ref,
-        chrs_fasta=None,
-        qr_gene_count=ev.qr_gene_count,
-        work_dir=work_dir / "debris",
-        threads=args.threads,
-        min_coverage=args.debris_min_cov,
-        min_protein_hits=args.debris_min_protein_hits,
-    )
-    other_debris = additional_debris
-
-    # --- Phase 9: Gene count statistics ---
-    logger.phase("Phase 9: Gene count statistics")
-    if ref_gff3:
-        ref_gene_counts = count_genes_per_ref_chrom(ref_gff3, ref_id_map=ref_orig_to_norm)
-        compute_mean_gene_proportion(
-            qr_gene_count=ev.qr_gene_count,
-            chromosome_contigs=chromosome_contigs,
-            best_ref=best_ref,
-            ref_gene_counts=ref_gene_counts,
-        )
-    else:
-        logger.info("No GFF3 available - skipping gene count statistics")
-        ref_gene_counts = {}
-
-    # --- Phase 10: Orientation determination ---
-    logger.phase("Phase 10: Orientation determination")
-    contig_orientations = determine_contig_orientations(
-        macro_block_rows=ev.macro_block_rows,
-        best_ref=best_ref,
-        chromosome_contigs=chromosome_contigs,
-        query_lengths=qry_lengths,
-    )
-
-    # --- Phase 10.5: Telomere detection (optional) ---
-    telomere_results = None
-    if not args.disable_telomere_detection:
-        logger.phase("Phase 10.5: Telomere detection")
-        from final_finalizer.detection.telomere import detect_telomeres
-        telomere_results = detect_telomeres(
-            query_fasta=qry,
-            contig_names=chromosome_contigs,  # Only analyze chromosome-assigned contigs
-            motif=args.telomere_motif,
-            window_size=args.telomere_window,
-            min_repeats=args.telomere_min_repeats,
-        )
-    else:
-        logger.info("Phase 10.5: Skipping telomere detection (--disable-telomere-detection)")
-
-    # --- Phase 11: Classify all contigs ---
-    logger.phase("Phase 11: Classifying all contigs")
-
-    # Filter contaminants by coverage threshold (low coverage hits may be false positives)
-    contaminants_filtered = {
-        contig: hit for contig, hit in contaminants.items()
-        if hit.coverage >= args.contaminant_min_coverage
-    }
-    if len(contaminants_filtered) < len(contaminants):
-        n_filtered = len(contaminants) - len(contaminants_filtered)
-        logger.info(
-            f"Filtered {n_filtered} low-coverage contaminant hits "
-            f"(coverage < {args.contaminant_min_coverage:.0%})"
-        )
-
-    classifications = classify_all_contigs(
-        query_fasta=qry,
-        query_lengths=qry_lengths,
-        best_ref=best_ref,
-        chr_like_minlen=chr_like_minlen,
-        ev=ev,
-        ref_gene_counts=ref_gene_counts,
-        chrC_contig=chrC_contig,
-        chrM_contig=chrM_contig,
-        organelle_debris=organelle_debris,
-        rdna_contigs=rdna_contigs,
-        contaminants=contaminants_filtered,
-        chromosome_debris=chromosome_debris,
-        other_debris=other_debris,
-        add_subgenome_suffix=args.add_subgenome_suffix,
-        ref_norm_to_orig=ref_norm_to_orig,
-        query_gc=qry_gc,
-        ref_gc_mean=ref_gc_mean,
-        ref_gc_std=ref_gc_std,
-        asm_gc_mean=asm_gc_mean,
-        asm_gc_std=asm_gc_std,
-        organelle_hits=organelle_hits,
-        rdna_hits=rdna_hits,
-        chrom_debris_hits=chrom_debris_hits,
-        other_debris_hits=other_debris_hits,
-        # Full-length and subgenome inference parameters
-        ref_lengths=ref_lengths,
-        telomere_results=telomere_results,
-        full_length_threshold=args.full_length_ref_coverage,
-        subgenome_k=args.subgenome_k,
-        rearrangement_threshold=args.rearrangement_threshold,
-        rearrangement_density_frac=args.rearrangement_density_frac,
-        synteny_mode=args.synteny_mode,
-    )
-
-    for clf in classifications:
-        clf.reversed = contig_orientations.get(clf.original_name, False)
-
-    # --- Phase 11.5: Read depth analysis (optional) ---
-    depth_stats: Dict[str, 'DepthStats'] = {}
-    if args.reads and not args.skip_depth:
-        logger.phase("Phase 11.5: Read depth analysis")
-        from final_finalizer.analysis.read_depth import calculate_depth_metrics
-        from final_finalizer.models import DepthStats
-
-        depth_work_dir = work_dir / "read_depth"
-        depth_stats = calculate_depth_metrics(
-            reads=args.reads,
-            assembly=qry,
-            contig_lengths=qry_lengths,
-            work_dir=depth_work_dir,
-            threads=args.threads,
-            reads_type=args.reads_type,
-            window_size=args.depth_window_size,
-            target_coverage=args.depth_target_coverage if args.depth_target_coverage > 0 else None,
-            keep_bam=args.keep_depth_bam,
-        )
-
-        # Attach depth stats to classifications
-        for clf in classifications:
-            ds = depth_stats.get(clf.original_name)
-            if ds:
-                clf.depth_mean = ds.mean_depth
-                clf.depth_median = ds.median_depth
-                clf.depth_std = ds.std_depth
-                clf.depth_breadth_1x = ds.breadth_1x
-                clf.depth_breadth_10x = ds.breadth_10x
-
-        if depth_stats:
-            logger.done(f"Depth analysis complete for {len(depth_stats)} contigs")
-    elif args.reads and args.skip_depth:
-        logger.info("Phase 11.5: Skipping depth analysis (--skip-depth)")
-
-    # --- Phase 11.7: rDNA consensus building (optional) ---
-    rdna_consensus_obj = None
-    rdna_loci = []
-    rdna_arrays = []
-    rdna_annotations_tsv = None
-    rdna_arrays_tsv_path = None
-    if getattr(args, 'build_rdna_consensus', False) and not args.skip_rdna and rdna_hit_intervals:
-        logger.phase("Phase 11.7: Building rDNA consensus from query assembly")
-        from final_finalizer.detection.rdna_consensus import build_rdna_consensus
-
-        # Build classification lookup for annotation
-        clf_lookup = {clf.original_name: clf.classification for clf in classifications}
-
-        rdna_ref_features = None
-        if getattr(args, 'rdna_ref_features', None):
-            rdna_ref_features = Path(args.rdna_ref_features)
-
-        rdna_consensus_obj, rdna_loci, rdna_arrays = build_rdna_consensus(
-            query_fasta=qry,
-            query_lengths=qry_lengths,
-            rdna_hit_intervals=rdna_hit_intervals,
-            seed_ref_path=rdna_ref,
-            work_dir=work_dir / "rdna_consensus",
-            threads=args.threads,
-            rdna_ref_features_path=rdna_ref_features,
-            classifications=clf_lookup,
-        )
-
-        if rdna_consensus_obj:
-            # Write consensus FASTA
-            consensus_fasta_out = Path(str(outprefix) + ".rdna_consensus.fasta")
-            from final_finalizer.utils.sequence_utils import write_fasta
-            write_fasta({"rdna_consensus": rdna_consensus_obj.sequence}, consensus_fasta_out)
-            logger.done(f"rDNA consensus:    {consensus_fasta_out} ({rdna_consensus_obj.length:,} bp, method={rdna_consensus_obj.method})")
-
-            # Reclassify contigs using consensus-based rDNA coverage
-            # Only reclassify contigs that are not already chromosomes or organelles
-            if rdna_loci:
-                from final_finalizer.detection.rdna_consensus import identify_rdna_contigs_from_loci
-                exclude_from_reclass = chromosome_contigs | {chrC_contig, chrM_contig} | organelle_debris
-                exclude_from_reclass.discard(None)
-
-                new_rdna_contigs, rdna_coverage_map = identify_rdna_contigs_from_loci(
-                    loci=rdna_loci,
-                    query_lengths=qry_lengths,
-                    min_coverage=args.rdna_min_cov,
-                    exclude_contigs=exclude_from_reclass,
-                )
-
-                # Update classifications for newly identified rDNA contigs
-                n_reclassified = 0
-                for clf in classifications:
-                    if clf.original_name in new_rdna_contigs and clf.classification not in (
-                        "chrom_assigned", "organelle_complete", "organelle_debris", "rDNA",
-                    ):
-                        old_class = clf.classification
-                        clf.classification = "rDNA"
-                        clf.classification_confidence = "medium"
-                        cov = rdna_coverage_map.get(clf.original_name, 0.0)
-                        logger.info(
-                            f"Reclassified {clf.original_name} from {old_class} -> rDNA "
-                            f"(consensus coverage={cov:.2f})"
-                        )
-                        n_reclassified += 1
-                        rdna_contigs.add(clf.original_name)
-
-                if n_reclassified:
-                    logger.done(f"Reclassified {n_reclassified} contigs as rDNA using consensus probe")
-
-                # Update clf_lookup after reclassification
-                clf_lookup = {clf.original_name: clf.classification for clf in classifications}
-
-                # Write annotations TSV (with updated classifications)
-                rdna_annotations_tsv = Path(str(outprefix) + ".rdna_annotations.tsv")
-                write_rdna_annotations_tsv(
-                    output_path=rdna_annotations_tsv,
-                    loci=rdna_loci,
-                    classifications=clf_lookup,
-                )
-                logger.done(f"rDNA annotations:  {rdna_annotations_tsv} ({len(rdna_loci)} loci)")
-
-                # Write rDNA arrays summary TSV
-                if rdna_arrays:
-                    rdna_arrays_tsv_path = Path(str(outprefix) + ".rdna_arrays.tsv")
-                    write_rdna_arrays_tsv(
-                        output_path=rdna_arrays_tsv_path,
-                        arrays=rdna_arrays,
-                        classifications=clf_lookup,
-                    )
-                    logger.done(f"rDNA arrays:       {rdna_arrays_tsv_path} ({len(rdna_arrays)} arrays)")
-
-                # Write GFF3 annotations (with sub-feature coordinates and array parents)
-                rdna_annotations_gff3 = Path(str(outprefix) + ".rdna_annotations.gff3")
-                write_rdna_annotations_gff3(
-                    output_path=rdna_annotations_gff3,
-                    loci=rdna_loci,
-                    query_lengths=qry_lengths,
-                    classifications=clf_lookup,
-                    arrays=rdna_arrays,
-                )
-                logger.done(f"rDNA GFF3:         {rdna_annotations_gff3}")
-        else:
-            logger.warning("rDNA consensus building did not produce a result")
-    elif getattr(args, 'build_rdna_consensus', False) and args.skip_rdna:
-        logger.info("Phase 11.7: Skipping rDNA consensus (--skip-rdna)")
-
-    # --- Phase 12: Scaffolding (optional) ---
-    scaffolded_seqs: Dict[str, str] = {}
-    scaffold_confidences: Optional[Dict[str, tuple]] = None
-    if args.scaffold:
-        logger.phase("Phase 12: Reference-guided scaffolding")
-        from final_finalizer.output.scaffolding import scaffold_chromosomes, write_agp, orientations_from_agp
-
-        scaffolded_seqs, agp_lines, scaffold_confidences = scaffold_chromosomes(
-            query_fasta=qry,
-            classifications=classifications,
-            contig_orientations=contig_orientations,
-            qr_ref_ranges=ev.qr_ref_ranges or {},
-            ref_fasta=ref,
-            ref_lengths=ref_lengths,
-            best_ref=best_ref,
-            contig_refs=ev.contig_refs,
-            work_dir=work_dir / "scaffolding",
-            threads=args.threads,
-            gap_size=args.scaffold_gap_size,
-            ref_norm_to_orig=ref_norm_to_orig,
-            qr_best_chain_ident=ev.qr_best_chain_ident or {},
-        )
-
-        if scaffolded_seqs:
-            from final_finalizer.utils.sequence_utils import write_fasta as _write_fasta
-            scaffolded_fasta = Path(str(outprefix) + ".scaffolded.fasta")
-            _write_fasta(scaffolded_seqs, scaffolded_fasta)
-            logger.done(f"Scaffolded FASTA:  {scaffolded_fasta} ({len(scaffolded_seqs)} chromosomes)")
-
-            agp_path = Path(str(outprefix) + ".scaffolded.agp")
-            write_agp(agp_lines, agp_path)
-            logger.done(f"Scaffolded AGP:    {agp_path}")
-
-            # Reconcile contig orientations with scaffold AGP —
-            # the AGP is authoritative for scaffolded contigs.
-            agp_orients = orientations_from_agp(agp_lines)
-            contig_orientations.update(agp_orients)
-            for clf in classifications:
-                if clf.original_name in agp_orients:
-                    clf.reversed = agp_orients[clf.original_name]
-    else:
-        logger.info("Phase 12: Skipping scaffolding (use --scaffold to enable)")
-
-    # --- Phase 12.5: Write FASTA outputs ---
-    logger.phase("Phase 12.5: Writing FASTA outputs")
-    write_classified_fastas(
-        query_fasta=qry,
-        classifications=classifications,
-        contig_orientations=contig_orientations,
-        output_prefix=outprefix,
-        scaffolded_seqs=scaffolded_seqs if args.scaffold else None,
-    )
-
-    # --- Phase 13: Write enhanced summary TSV ---
-    logger.phase("Phase 13: Writing enhanced summary TSV")
-    summary_tsv = Path(str(outprefix) + ".contig_summary.tsv")
-
-    write_contig_summary_tsv(
-        output_path=summary_tsv,
-        classifications=classifications,
-        contig_orientations=contig_orientations,
-        all_contig_lengths=qry_lengths,
-        contig_total=ev.contig_total,
-        contig_refs=ev.contig_refs,
-        qlens_from_paf=ev.qlens_from_paf,
-        qr_union_bp=ev.qr_union_bp,
-        qr_matches=ev.qr_matches,
-        qr_alnlen=ev.qr_alnlen,
-        qr_gene_count=ev.qr_gene_count,
-        best_ref=best_ref,
-        best_score=best_score,
-        best_bp=best_bp,
-        second_ref=second_ref,
-        second_score=second_score,
-        second_bp=second_bp,
-        chr_like_minlen=chr_like_minlen,
-        chimera_primary_frac=args.chimera_primary_frac,
-        chimera_secondary_frac=args.chimera_secondary_frac,
-        assign_min_frac=args.assign_min_frac,
-        assign_min_ratio=args.assign_min_ratio,
-        ref_norm_to_orig=ref_norm_to_orig,
-        scaffold_confidences=scaffold_confidences if args.scaffold else None,
-    )
-
-    logger.done(f"Summary:           {summary_tsv}")
-    logger.done(f"Ref lengths:       {ref_lengths_tsv}")
-
-    # Write contaminant summary TSV with taxonomic lineage (for alluvial plot)
-    # Use filtered contaminants (coverage >= threshold) for consistency with classification
-    contaminants_tsv = Path(str(outprefix) + ".contaminants.tsv")
-    if contaminants_filtered:
-        write_contaminant_summary_tsv(
-            output_path=contaminants_tsv,
-            contaminants=contaminants_filtered,
-            query_lengths=qry_lengths,
-            depth_stats=depth_stats if depth_stats else None,
-        )
-        logger.done(f"Contaminants:      {contaminants_tsv}")
-
-    clf_counts: Dict[str, int] = defaultdict(int)
-    for clf in classifications:
-        clf_counts[clf.classification] += 1
-    logger.done("Classification summary:")
-    for cat, count in sorted(clf_counts.items()):
-        logger.info(f"       {cat}: {count}")
-
-    if args.plot:
-        agp_tsv = Path(str(outprefix) + ".scaffolded.agp") if args.scaffold and scaffolded_seqs else None
-        contam_tsv_arg = contaminants_tsv if contaminants_filtered else None
-
-        if not run_unified_report(
-            summary_tsv,
-            ref_lengths_tsv,
-            segments_tsv,
-            chain_summary_tsv,
-            macro_blocks_tsv,
-            outprefix,
-            chr_like_minlen,
-            plot_suffix,
-            args.synteny_mode,
-            assembly_name=args.assembly_name,
-            reference_name=args.reference_name,
-            rdna_annotations_tsv=rdna_annotations_tsv,
-            rdna_arrays_tsv=rdna_arrays_tsv_path,
-            contaminants_tsv=contam_tsv_arg,
-            agp_tsv=agp_tsv,
-        ):
-            logger.error(
-                "--plot failed: unified report could not be generated. "
-                "Ensure Rscript, rmarkdown, and pandoc are installed."
-            )
+        outprefix = Path(args.outprefix)
+        ref_ctx = prepare_reference(args, outprefix)
+        run_assembly(args, ref_ctx, args.query, args.assembly_name, args.reads, outprefix)
 
 
 if __name__ == "__main__":

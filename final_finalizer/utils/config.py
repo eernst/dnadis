@@ -144,6 +144,11 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
         "scaffold": "scaffold",
         "scaffold_gap_size": "scaffold_gap_size",
     },
+    "multi_assembly": {
+        "fofn": "fofn",
+        "assembly_dir": "assembly_dir",
+        "output_dir": "output_dir",
+    },
 }
 
 
@@ -184,7 +189,7 @@ def load_config(path: Path) -> Dict[str, Any]:
             if toml_key in section_data:
                 value = section_data[toml_key]
                 # Convert paths to Path objects for path-like arguments
-                if argparse_dest in ("ref", "query", "ref_gff3", "reads", "chrC_ref", "chrM_ref", "rdna_ref"):
+                if argparse_dest in ("ref", "query", "ref_gff3", "reads", "chrC_ref", "chrM_ref", "rdna_ref", "fofn", "assembly_dir"):
                     if value is not None:
                         value = Path(value)
                 flat_config[argparse_dest] = value
