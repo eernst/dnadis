@@ -1641,6 +1641,29 @@ def main():
             logger.done(f"Comparison summary: {comparison_tsv}")
             logger.done(f"Chromosome completeness: {completeness_tsv}")
 
+            # Pairwise assembly-vs-assembly synteny (nucleotide mode only)
+            # Stores (pair_name, tsv_path) tuples to keep names and paths synchronized
+            pairwise_pairs = []
+            if args.synteny_mode == "nucleotide" and len(results) >= 2:
+                from final_finalizer.alignment.pairwise import compute_pairwise_synteny
+
+                logger.phase("Pairwise assembly synteny (nucleotide mode)")
+                pairwise_dir = output_dir / "pairwise"
+                pairwise_dir.mkdir(exist_ok=True)
+                for i in range(len(results) - 1):
+                    left, right = results[i], results[i + 1]
+                    pair_name = f"{left.assembly_name}_vs_{right.assembly_name}"
+                    pair_prefix = pairwise_dir / pair_name
+                    macro_tsv = compute_pairwise_synteny(
+                        left_result=left,
+                        right_result=right,
+                        outprefix=pair_prefix,
+                        threads=args.threads,
+                        args=args,
+                    )
+                    if macro_tsv:
+                        pairwise_pairs.append((pair_name, macro_tsv))
+
             if args.plot:
                 from final_finalizer.output.plotting import run_comparison_report
                 if not run_comparison_report(
@@ -1652,6 +1675,7 @@ def main():
                     chr_like_minlen=ref_ctx.chr_like_minlen,
                     synteny_mode=args.synteny_mode,
                     reference_name=args.reference_name,
+                    pairwise_pairs=pairwise_pairs,
                 ):
                     logger.error("Comparison report generation failed.")
 

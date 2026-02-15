@@ -6,6 +6,9 @@ params:
   ref_lengths_tsv: "__REF_LENGTHS_TSV__"
   per_assembly_summary_tsvs: "__PER_ASM_TSVS__"
   assembly_names: "__ASM_NAMES__"
+  per_assembly_macro_blocks_tsvs: "__PER_ASM_MACRO_TSVS__"
+  pairwise_macro_blocks_tsvs: "__PAIRWISE_MACRO_TSVS__"
+  pairwise_names: "__PAIRWISE_NAMES__"
   reference_name: "__REFNAME__"
   synteny_mode: "__SYNTENY_MODE__"
   chr_like_minlen: "__CHRLIKE__"
@@ -233,6 +236,61 @@ chr_like_minlen <- as.numeric(params$chr_like_minlen)
 # PDF output paths
 pdf_classbar <- paste0(params$out_prefix, ".classification_comparison.pdf")
 pdf_heatmap  <- paste0(params$out_prefix, ".chromosome_completeness.pdf")
+pdf_synteny  <- paste0(params$out_prefix, ".chromosome_synteny.pdf")
+
+# ---------------------------------------------------------------------------
+# Load per-assembly macro_blocks and pairwise macro_blocks for synteny plot
+# ---------------------------------------------------------------------------
+per_asm_macro_paths <- if (nzchar(params$per_assembly_macro_blocks_tsvs))
+  strsplit(params$per_assembly_macro_blocks_tsvs, ";")[[1]] else character(0)
+pairwise_macro_paths <- if (nzchar(params$pairwise_macro_blocks_tsvs))
+  strsplit(params$pairwise_macro_blocks_tsvs, ";")[[1]] else character(0)
+pairwise_pair_names <- if (nzchar(params$pairwise_names))
+  strsplit(params$pairwise_names, ";")[[1]] else character(0)
+
+# Load per-assembly macro_blocks (ref→asm) and tag with assembly name
+per_asm_macro_list <- list()
+for (i in seq_along(per_asm_macro_paths)) {
+  p <- per_asm_macro_paths[i]
+  if (nzchar(p) && file.exists(p)) {
+    df <- read_tsv(p, show_col_types = FALSE,
+                   col_types = cols(subgenome = col_character()))
+    if (nrow(df) > 0) {
+      df$assembly <- asm_name_list[i]
+      per_asm_macro_list[[i]] <- df
+    }
+  }
+}
+per_asm_macro_df <- if (length(per_asm_macro_list) > 0) bind_rows(per_asm_macro_list) else NULL
+
+# Load pairwise macro_blocks (asm→asm)
+pairwise_macro_list <- list()
+for (i in seq_along(pairwise_macro_paths)) {
+  p <- pairwise_macro_paths[i]
+  if (nzchar(p) && file.exists(p)) {
+    df <- read_tsv(p, show_col_types = FALSE,
+                   col_types = cols(subgenome = col_character()))
+    if (nrow(df) > 0 && i <= length(pairwise_pair_names)) {
+      df$pair_name <- pairwise_pair_names[i]
+      # Extract left and right assembly names from pair name
+      # Split only on first occurrence of "_vs_" to handle assembly names
+      # that might contain "_vs_" (unlikely but defensive)
+      parts <- strsplit(pairwise_pair_names[i], "_vs_", fixed = TRUE)[[1]]
+      if (length(parts) >= 2) {
+        df$left_assembly <- parts[1]
+        df$right_assembly <- paste(parts[-1], collapse = "_vs_")
+      } else {
+        warning(sprintf("Cannot parse pairwise pair name: %s", pairwise_pair_names[i]))
+        next
+      }
+      pairwise_macro_list[[i]] <- df
+    }
+  }
+}
+pairwise_macro_df <- if (length(pairwise_macro_list) > 0) bind_rows(pairwise_macro_list) else NULL
+
+has_synteny_data <- !is.null(per_asm_macro_df) && nrow(per_asm_macro_df) > 0 &&
+                    params$synteny_mode == "nucleotide"
 ```
 
 ---
@@ -607,6 +665,429 @@ if (nrow(depth_df) > 0) {
 } else {
   cat("No depth data available for chromosome-assigned contigs.")
 }
+```
+
+`r if (has_synteny_data) "# 6. Chromosome Synteny {.tabset}" else ""`
+
+```{r synteny_setup, eval=has_synteny_data, include=FALSE}
+# =========================================================================
+# Section 6: Chromosome Synteny Riparian Plot
+#
+# Horizontal-bar layout: one row per reference chromosome.
+# Columns: Reference, Asm1, Asm2, ... with S-curve ribbons between
+# adjacent columns showing syntenic blocks.
+# =========================================================================
+
+# --- Build assembly contig → assigned_ref_id lookup from contig_summary ---
+asm_contig_lookup <- list()
+for (i in seq_along(asm_name_list)) {
+  nm <- asm_name_list[i]
+  df <- per_asm_summaries[[i]]
+  if (!is.null(df)) {
+    lookup <- df %>%
+      filter(classification == "chrom_assigned") %>%
+      select(contig, assigned_ref_id, reversed, length) %>%
+      mutate(assembly = nm)
+    asm_contig_lookup[[nm]] <- lookup
+  }
+}
+asm_lookup_df <- bind_rows(asm_contig_lookup)
+
+# --- Reference chromosome order (by length descending) ---
+ref_chr_order <- ref_lengths %>%
+  arrange(desc(length)) %>%
+  pull(ref_id)
+
+# Column order: Reference, then assemblies in order
+col_order <- c("Reference", asm_name_list)
+n_cols <- length(col_order)
+
+# --- Build contig records per column per chromosome ---
+# For reference: one bar per ref_id with ref length
+# For assemblies: join with contig_summary to get assigned contigs
+
+# Compute bar data: for each column and each chromosome row,
+# what contig(s) and lengths are present?
+bar_data <- list()
+
+# Reference bars
+for (rid in ref_chr_order) {
+  rlen <- ref_lengths$length[ref_lengths$ref_id == rid]
+  if (length(rlen) > 0) {
+    bar_data[[length(bar_data) + 1]] <- tibble(
+      column = "Reference", ref_id = rid,
+      contig = rid, contig_len = rlen[1], reversed = FALSE
+    )
+  }
+}
+
+# Assembly bars
+for (nm in asm_name_list) {
+  lk <- asm_lookup_df %>% filter(assembly == nm)
+  for (rid in ref_chr_order) {
+    contigs_for_ref <- lk %>% filter(assigned_ref_id == rid)
+    if (nrow(contigs_for_ref) > 0) {
+      # Use the longest contig assigned to this ref chromosome
+      best <- contigs_for_ref %>% arrange(desc(length)) %>% slice(1)
+      bar_data[[length(bar_data) + 1]] <- tibble(
+        column = nm, ref_id = rid,
+        contig = best$contig, contig_len = best$length,
+        reversed = as.logical(best$reversed)
+      )
+    }
+  }
+}
+bar_df <- bind_rows(bar_data)
+bar_df$column <- factor(bar_df$column, levels = col_order)
+
+# --- Layout geometry ---
+# Each column has an x-center; bars extend left/right proportional to Mb
+# Gap zones between columns hold the ribbons
+
+# Compute maximum chromosome length across all columns for shared scale
+max_bar_len <- max(bar_df$contig_len, na.rm = TRUE)
+
+# Column widths (proportional to max chromosome length in that column)
+col_max_lens <- bar_df %>%
+  group_by(column) %>%
+  summarise(max_len = max(contig_len, na.rm = TRUE), .groups = "drop") %>%
+  arrange(factor(column, levels = col_order))
+
+# Use shared Mb scale: bar width in x-units = contig_len / scale_factor
+# Set total plot width budget (arbitrary units)
+total_bar_width <- 80  # total x-units for all bars
+gap_width <- 8         # x-units per gap
+
+# Scale: longest bar maps to proportional share of total_bar_width
+scale_factor <- max_bar_len / (total_bar_width / n_cols)
+
+# Compute column x-centers
+col_x <- numeric(n_cols)
+col_x[1] <- col_max_lens$max_len[1] / scale_factor / 2
+for (i in 2:n_cols) {
+  prev_half <- col_max_lens$max_len[i - 1] / scale_factor / 2
+  curr_half <- col_max_lens$max_len[i] / scale_factor / 2
+  col_x[i] <- col_x[i - 1] + prev_half + gap_width + curr_half
+}
+col_centers <- setNames(col_x, col_order)
+
+# Gap zones (for ribbon S-curves)
+gap_zones <- list()
+for (i in 1:(n_cols - 1)) {
+  left_col <- col_order[i]
+  right_col <- col_order[i + 1]
+  left_right_edge <- col_centers[left_col] + col_max_lens$max_len[i] / scale_factor / 2
+  right_left_edge <- col_centers[right_col] - col_max_lens$max_len[i + 1] / scale_factor / 2
+  gap_zones[[i]] <- c(left_right_edge, right_left_edge)
+}
+
+# Row heights proportional to reference chromosome length
+# y from 0 (top, chr1) downward
+row_gap <- 0.3
+row_heights <- ref_lengths$length[match(ref_chr_order, ref_lengths$ref_id)] / max_bar_len * 10
+names(row_heights) <- ref_chr_order
+
+row_y_top <- numeric(length(ref_chr_order))
+names(row_y_top) <- ref_chr_order
+cum_y <- 0
+for (i in seq_along(ref_chr_order)) {
+  row_y_top[i] <- cum_y
+  cum_y <- cum_y + row_heights[i] + row_gap
+}
+total_y <- cum_y - row_gap
+
+# --- Build chromosome bar rectangles ---
+bar_rects <- bar_df %>%
+  mutate(
+    x_center = col_centers[as.character(column)],
+    half_w = contig_len / scale_factor / 2,
+    xmin = x_center - half_w,
+    xmax = x_center + half_w,
+    ymin = row_y_top[ref_id],
+    ymax = row_y_top[ref_id] + row_heights[ref_id]
+  )
+
+# --- Chromosome color palette ---
+n_chroms <- length(ref_chr_order)
+if (n_chroms <= 9) {
+  chrom_pal <- setNames(oi[seq_len(n_chroms)], ref_chr_order)
+} else {
+  chrom_pal <- setNames(
+    colorRampPalette(c(oi[1:9]))(n_chroms),
+    ref_chr_order
+  )
+}
+
+# --- Build ribbon polygons ---
+# Helper: map genomic position to y within a chromosome row
+pos_to_y <- function(pos, seq_len, y_top, height) {
+  y_top + (pos / seq_len) * height
+}
+
+# Helper: make S-curve polygon between two vertical extents across a gap
+make_ribbon <- function(gap_left, gap_right,
+                         left_y_top, left_y_bot,
+                         right_y_top, right_y_bot,
+                         fill_col, alpha_val, tooltip_text,
+                         n_pts = 20) {
+  t <- seq(0, 1, length.out = n_pts)
+  s <- 0.5 - 0.5 * cos(pi * t)
+  x_fwd <- gap_left + t * (gap_right - gap_left)
+  top_fwd <- left_y_top + s * (right_y_top - left_y_top)
+  bot_fwd <- left_y_bot + s * (right_y_bot - left_y_bot)
+  tibble(
+    x = c(x_fwd, rev(x_fwd)),
+    y = c(top_fwd, rev(bot_fwd)),
+    fill = fill_col,
+    alpha = alpha_val,
+    tooltip = tooltip_text
+  )
+}
+
+# Build ref→asm ribbons (gap index 1: Reference → Asm1)
+ribbon_polys <- list()
+ribbon_idx <- 0
+
+for (gap_i in seq_len(n_cols - 1)) {
+  left_col_name <- col_order[gap_i]
+  right_col_name <- col_order[gap_i + 1]
+  gz <- gap_zones[[gap_i]]
+
+  if (gap_i == 1) {
+    # Reference → first assembly: use per-assembly macro_blocks
+    macro_src <- per_asm_macro_df %>%
+      filter(assembly == right_col_name)
+  } else {
+    # Assembly → Assembly: use pairwise macro_blocks
+    if (!is.null(pairwise_macro_df)) {
+      macro_src <- pairwise_macro_df %>%
+        filter(left_assembly == left_col_name, right_assembly == right_col_name)
+    } else {
+      macro_src <- NULL
+    }
+  }
+
+  if (is.null(macro_src) || nrow(macro_src) == 0) next
+
+  # For ref→asm: ref_id is the reference chromosome, contig is the assembly contig
+  # For asm→asm: ref_id is left assembly contig name, contig is right assembly contig name
+  # We need to map both to chromosome rows via assigned_ref_id
+
+  for (row_i in seq_along(ref_chr_order)) {
+    rid <- ref_chr_order[row_i]
+    rh <- row_heights[rid]
+    ry <- row_y_top[rid]
+
+    # Get left column bar for this chromosome
+    left_bar <- bar_rects %>%
+      filter(column == left_col_name, ref_id == rid)
+    right_bar <- bar_rects %>%
+      filter(column == right_col_name, ref_id == rid)
+
+    if (nrow(left_bar) == 0 || nrow(right_bar) == 0) next
+
+    left_len <- left_bar$contig_len[1]
+    left_contig <- left_bar$contig[1]
+    left_reversed <- left_bar$reversed[1]
+    right_len <- right_bar$contig_len[1]
+    right_contig <- right_bar$contig[1]
+    right_reversed <- right_bar$reversed[1]
+
+    if (gap_i == 1) {
+      # ref→asm: ref_id in macro_blocks = reference chromosome ID
+      blocks <- macro_src %>%
+        filter(ref_id == rid, contig == right_contig)
+    } else {
+      # asm→asm: ref_id in pairwise = left assembly contig name
+      blocks <- macro_src %>%
+        filter(ref_id == left_contig, contig == right_contig)
+    }
+
+    if (nrow(blocks) == 0) next
+
+    # Filter small blocks
+    min_span <- max(50000, max_bar_len * 0.001)  # at least 50kb or 0.1% of max
+    blocks <- blocks %>% filter(qspan_bp >= min_span)
+    if (nrow(blocks) == 0) next
+
+    for (b in seq_len(nrow(blocks))) {
+      blk <- blocks[b, ]
+
+      # Left side coordinates (ref_start/ref_end on left column)
+      if (gap_i == 1) {
+        # ref→asm: ref_start/ref_end are reference coordinates
+        l_start <- as.numeric(blk$ref_start)
+        l_end   <- as.numeric(blk$ref_end)
+      } else {
+        # asm→asm: ref_start/ref_end are left assembly coordinates
+        l_start <- as.numeric(blk$ref_start)
+        l_end   <- as.numeric(blk$ref_end)
+        # If left contig is reversed relative to reference, flip coordinates
+        if (left_reversed) {
+          l_start_new <- left_len - l_end
+          l_end_new   <- left_len - l_start
+          l_start <- l_start_new
+          l_end   <- l_end_new
+        }
+      }
+
+      # Right side coordinates (qstart/qend on right column)
+      r_start <- as.numeric(blk$qstart)
+      r_end   <- as.numeric(blk$qend)
+      # If right contig is reversed relative to reference, flip
+      if (right_reversed) {
+        r_start_new <- right_len - r_end
+        r_end_new   <- right_len - r_start
+        r_start <- r_start_new
+        r_end   <- r_end_new
+      }
+
+      # Handle negative coordinates from flipping
+      l_start <- max(0, l_start)
+      l_end   <- min(left_len, l_end)
+      r_start <- max(0, r_start)
+      r_end   <- min(right_len, r_end)
+
+      if (l_end <= l_start || r_end <= r_start) next
+
+      # Map to y coordinates within the row
+      ly_top <- pos_to_y(l_start, left_len, ry, rh)
+      ly_bot <- pos_to_y(l_end, left_len, ry, rh)
+      ry_top <- pos_to_y(r_start, right_len, ry, rh)
+      ry_bot <- pos_to_y(r_end, right_len, ry, rh)
+
+      # Color by reference chromosome; alpha by identity
+      ident_val <- as.numeric(blk$identity)
+      alpha_ribbon <- 0.2 + 0.5 * min(1, ident_val)
+
+      # Determine if this block indicates an inversion (strand = "-")
+      strand_val <- blk$strand
+      if (strand_val == "-") {
+        # Swap top/bottom on right side to show crossing
+        tmp <- ry_top
+        ry_top <- ry_bot
+        ry_bot <- tmp
+      }
+
+      # Check if this is a cross-chromosome block
+      # (ref_id for pairwise may map to a different chromosome)
+      fill_chr <- rid
+      tooltip <- sprintf(
+        "%s → %s\n%s: %.2f Mb\nIdentity: %.1f%%\nStrand: %s",
+        left_col_name, right_col_name, rid,
+        as.numeric(blk$union_bp) / 1e6,
+        ident_val * 100, strand_val
+      )
+
+      ribbon_idx <- ribbon_idx + 1
+      ribbon_polys[[ribbon_idx]] <- make_ribbon(
+        gz[1], gz[2], ly_top, ly_bot, ry_top, ry_bot,
+        fill_col = fill_chr, alpha_val = alpha_ribbon,
+        tooltip_text = tooltip
+      ) %>% mutate(group_id = ribbon_idx)
+    }
+  }
+}
+
+has_ribbons <- length(ribbon_polys) > 0
+if (has_ribbons) {
+  all_ribbons <- bind_rows(ribbon_polys)
+} else {
+  all_ribbons <- NULL
+}
+```
+
+```{r synteny_description, eval=has_synteny_data, results='asis'}
+cat('<p class="section-intro">\n')
+cat("Chromosome synteny between the reference and each assembly (nucleotide mode). ")
+cat("Ribbons connect syntenic macro-blocks between adjacent columns. ")
+cat("Color indicates the reference chromosome; opacity reflects alignment identity. ")
+cat("Crossed ribbons indicate inversions.\n")
+cat("</p>\n")
+```
+
+## Riparian Plot
+
+```{r synteny_riparian, eval=(has_synteny_data && exists("has_ribbons") && has_ribbons), fig.width=10, fig.height=max(5, total_y * 0.45 + 2)}
+# --- Compose the plot ---
+
+# Base plot with coordinate system
+p_syn <- ggplot() +
+  coord_cartesian(
+    xlim = c(-1, max(col_x) + col_max_lens$max_len[n_cols] / scale_factor / 2 + 1),
+    ylim = c(total_y + 0.5, -0.5),  # reversed y: chr1 at top
+    expand = FALSE
+  )
+
+# Draw ribbons first (behind bars)
+p_syn <- p_syn +
+  geom_polygon_interactive(
+    data = all_ribbons,
+    aes(x = x, y = y, group = group_id, fill = fill,
+        alpha = alpha, tooltip = tooltip),
+    show.legend = FALSE
+  ) +
+  scale_fill_manual(values = chrom_pal, guide = "none") +
+  scale_alpha_identity()
+
+# Draw chromosome bars
+bar_rects_plot <- bar_rects %>%
+  mutate(
+    fill_col = ifelse(column == "Reference", "grey70", "grey85"),
+    tooltip = paste0(column, "\n", contig, "\n",
+                     sprintf("%.2f Mb", contig_len / 1e6))
+  )
+
+p_syn <- p_syn +
+  ggnewscale::new_scale_fill() +
+  geom_rect_interactive(
+    data = bar_rects_plot,
+    aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax,
+        fill = fill_col, tooltip = tooltip),
+    color = "grey40", linewidth = 0.3
+  ) +
+  scale_fill_identity()
+
+# Column labels at top
+col_label_df <- tibble(
+  x = col_x,
+  label = col_order
+)
+p_syn <- p_syn +
+  geom_text(data = col_label_df,
+            aes(x = x, y = -0.3, label = label),
+            size = 2.5, fontface = "bold", family = base_family, vjust = 1)
+
+# Chromosome labels on the left
+chr_label_df <- tibble(
+  ref_id = ref_chr_order,
+  y_mid = row_y_top[ref_chr_order] + row_heights[ref_chr_order] / 2
+)
+p_syn <- p_syn +
+  geom_text(data = chr_label_df,
+            aes(x = -0.5, y = y_mid, label = ref_id),
+            size = 2, hjust = 1, family = base_family)
+
+# Theme
+p_syn <- p_syn +
+  theme_void(base_size = base_font_pt, base_family = base_family) +
+  theme(plot.margin = margin(5, 5, 5, 40))
+
+# Dynamic sizing
+plot_h <- max(5, total_y * 0.45 + 2)
+plot_w <- min(10, max(7.2, n_cols * 2.5 + 2))
+
+save_pdf(pdf_synteny, p_syn, width = 7.2, height = min(10, plot_h))
+girafe_styled(ggobj = p_syn, width_svg = plot_w, height_svg = plot_h)
+```
+
+```{r synteny_empty, eval=(has_synteny_data && !(exists("has_ribbons") && has_ribbons))}
+cat("Synteny data available but no ribbon connections could be built. ",
+    "This may indicate that assemblies have very different chromosome structures.")
+```
+
+```{r synteny_not_nucleotide, eval=(!has_synteny_data && params$synteny_mode != "nucleotide"), results='asis'}
+# Don't show section header if not nucleotide mode — it's hidden by the conditional above
 ```
 
 ---

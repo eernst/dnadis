@@ -156,6 +156,7 @@ def run_comparison_report(
     chr_like_minlen: int,
     synteny_mode: str,
     reference_name: str = "",
+    pairwise_pairs: Optional[List[tuple]] = None,
 ) -> bool:
     """Generate cross-assembly comparison HTML report.
 
@@ -172,6 +173,9 @@ def run_comparison_report(
         chr_like_minlen: Minimum length threshold for chromosome-like contigs.
         synteny_mode: Synteny mode used ("protein" or "nucleotide").
         reference_name: Reference name for the report header.
+        pairwise_pairs: List of (pair_name, tsv_path) tuples for pairwise
+            macro_blocks (nucleotide mode only). Each pair_name is
+            "{left_asm}_vs_{right_asm}".
 
     Returns:
         True if the report was generated successfully.
@@ -209,12 +213,29 @@ def run_comparison_report(
     )
     asm_names = ";".join(r.assembly_name for r in assembly_results)
 
+    # Per-assembly macro_blocks TSVs (for ref→asm ribbons in synteny plot)
+    per_asm_macro_tsvs = ";".join(
+        abs_esc(r.macro_blocks_tsv) for r in assembly_results
+    )
+
+    # Pairwise macro_blocks TSVs and pair labels (for asm→asm ribbons)
+    # Names and paths are kept synchronized as (pair_name, tsv_path) tuples
+    if pairwise_pairs:
+        pw_macro_str = ";".join(abs_esc(tsv) for _name, tsv in pairwise_pairs)
+        pw_names_str = ";".join(name for name, _tsv in pairwise_pairs)
+    else:
+        pw_macro_str = ""
+        pw_names_str = ""
+
     filled = (
         tmpl.replace("__COMPARISON_TSV__", abs_esc(comparison_tsv))
         .replace("__COMPLETENESS_TSV__", abs_esc(completeness_tsv))
         .replace("__REF_LENGTHS_TSV__", abs_esc(ref_lengths_tsv))
         .replace("__PER_ASM_TSVS__", per_asm_tsvs)
         .replace("__ASM_NAMES__", asm_names)
+        .replace("__PER_ASM_MACRO_TSVS__", per_asm_macro_tsvs)
+        .replace("__PAIRWISE_MACRO_TSVS__", pw_macro_str)
+        .replace("__PAIRWISE_NAMES__", pw_names_str)
         .replace("__REFNAME__", str(reference_name).replace('"', '\\"'))
         .replace("__SYNTENY_MODE__", str(synteny_mode))
         .replace("__CHRLIKE__", str(int(chr_like_minlen)))
