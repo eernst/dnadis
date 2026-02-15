@@ -104,13 +104,13 @@ def extract_non_path_placeholders(
         context_after = template_text[end:line_end]
 
         # Build regex: literal context before + capture group + literal context after
-        pattern = re.escape(context_before) + r"(.+?)" + re.escape(context_after)
+        pattern = re.escape(context_before) + r"(.*?)" + re.escape(context_after)
         m = re.search(pattern, generated_text)
         if m:
             values[placeholder] = m.group(1)
         else:
             # Fallback: try without trailing context
-            pattern_no_trail = re.escape(context_before) + r"(.+)"
+            pattern_no_trail = re.escape(context_before) + r"(.*)"
             m2 = re.search(pattern_no_trail, generated_text)
             if m2:
                 values[placeholder] = m2.group(1).rstrip()

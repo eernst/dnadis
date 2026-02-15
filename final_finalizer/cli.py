@@ -124,7 +124,7 @@ from final_finalizer.classification.classifier import (
     count_genes_per_ref_chrom,
     determine_contig_orientations,
 )
-from final_finalizer.output.fasta_output import write_classified_fastas
+from final_finalizer.output.fasta_output import write_classified_fastas, write_per_subgenome_chrs_fastas
 from final_finalizer.output.tsv_output import (
     build_segment_support_from_rows,
     write_chain_segments_tsv,
@@ -1004,6 +1004,10 @@ def run_assembly(
         scaffolded_seqs=scaffolded_seqs if args.scaffold else None,
     )
 
+    # Split chrs.fasta into per-subgenome files (for polyploid pairwise synteny)
+    chrs_fasta = Path(str(outprefix) + ".chrs.fasta")
+    per_sg_chrs = write_per_subgenome_chrs_fastas(chrs_fasta, outprefix)
+
     # --- Phase 13: Write enhanced summary TSV ---
     logger.phase("Phase 13: Writing enhanced summary TSV")
     summary_tsv = Path(str(outprefix) + ".contig_summary.tsv")
@@ -1081,6 +1085,7 @@ def run_assembly(
         contaminants_tsv_path=contaminants_tsv if contaminants_filtered else None,
         rdna_annotations_tsv=rdna_annotations_tsv,
         rdna_arrays_tsv=rdna_arrays_tsv_path,
+        per_subgenome_chrs=per_sg_chrs,
     )
 
     if args.plot:
@@ -1645,24 +1650,64 @@ def main():
             # Stores (pair_name, tsv_path) tuples to keep names and paths synchronized
             pairwise_pairs = []
             if args.synteny_mode == "nucleotide" and len(results) >= 2:
-                from final_finalizer.alignment.pairwise import compute_pairwise_synteny
+                # Check if any assembly has per-subgenome chrs files (polyploid)
+                any_has_sg = any(r.per_subgenome_chrs for r in results)
 
-                logger.phase("Pairwise assembly synteny (nucleotide mode)")
-                pairwise_dir = output_dir / "pairwise"
-                pairwise_dir.mkdir(exist_ok=True)
-                for i in range(len(results) - 1):
-                    left, right = results[i], results[i + 1]
-                    pair_name = f"{left.assembly_name}_vs_{right.assembly_name}"
-                    pair_prefix = pairwise_dir / pair_name
-                    macro_tsv = compute_pairwise_synteny(
-                        left_result=left,
-                        right_result=right,
-                        outprefix=pair_prefix,
-                        threads=args.threads,
-                        args=args,
-                    )
-                    if macro_tsv:
-                        pairwise_pairs.append((pair_name, macro_tsv))
+                if any_has_sg:
+                    # Per-subgenome pairwise: group assemblies by subgenome
+                    from final_finalizer.alignment.pairwise import compute_subgenome_pairwise
+                    from collections import defaultdict as _defaultdict
+
+                    logger.phase("Per-subgenome pairwise synteny (nucleotide mode)")
+                    pairwise_dir = output_dir / "pairwise"
+                    pairwise_dir.mkdir(exist_ok=True)
+
+                    sg_assemblies = _defaultdict(list)
+                    for result in results:
+                        for sg in result.per_subgenome_chrs:
+                            sg_assemblies[sg].append(result)
+
+                    for sg in sorted(sg_assemblies):
+                        sg_results = sg_assemblies[sg]
+                        if len(sg_results) < 2:
+                            continue
+                        sg_dir = pairwise_dir / sg
+                        sg_dir.mkdir(exist_ok=True)
+                        for i in range(len(sg_results) - 1):
+                            left, right = sg_results[i], sg_results[i + 1]
+                            pair_name = f"{left.assembly_name}_vs_{right.assembly_name}"
+                            pair_prefix = sg_dir / pair_name
+                            macro_tsv = compute_subgenome_pairwise(
+                                left_fasta=left.per_subgenome_chrs[sg],
+                                right_fasta=right.per_subgenome_chrs[sg],
+                                left_name=left.assembly_name,
+                                right_name=right.assembly_name,
+                                outprefix=pair_prefix,
+                                threads=args.threads,
+                                args=args,
+                            )
+                            if macro_tsv:
+                                pairwise_pairs.append((pair_name, macro_tsv))
+                else:
+                    # Non-polyploid fallback: adjacent full-assembly pairwise
+                    from final_finalizer.alignment.pairwise import compute_pairwise_synteny
+
+                    logger.phase("Pairwise assembly synteny (nucleotide mode)")
+                    pairwise_dir = output_dir / "pairwise"
+                    pairwise_dir.mkdir(exist_ok=True)
+                    for i in range(len(results) - 1):
+                        left, right = results[i], results[i + 1]
+                        pair_name = f"{left.assembly_name}_vs_{right.assembly_name}"
+                        pair_prefix = pairwise_dir / pair_name
+                        macro_tsv = compute_pairwise_synteny(
+                            left_result=left,
+                            right_result=right,
+                            outprefix=pair_prefix,
+                            threads=args.threads,
+                            args=args,
+                        )
+                        if macro_tsv:
+                            pairwise_pairs.append((pair_name, macro_tsv))
 
             if args.plot:
                 from final_finalizer.output.plotting import run_comparison_report

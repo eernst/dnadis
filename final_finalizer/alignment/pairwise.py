@@ -128,3 +128,99 @@ def compute_pairwise_synteny(
     )
 
     return macro_blocks_tsv
+
+
+def compute_subgenome_pairwise(
+    left_fasta: Path,
+    right_fasta: Path,
+    left_name: str,
+    right_name: str,
+    outprefix: Path,
+    threads: int,
+    args,
+) -> Optional[Path]:
+    """Run minimap2 + chain parsing between per-subgenome chrs.fasta files.
+
+    Same core logic as compute_pairwise_synteny but takes explicit FASTA paths
+    instead of deriving them from AssemblyResult objects.
+
+    Args:
+        left_fasta: Path to left assembly's per-subgenome chrs.fasta.
+        right_fasta: Path to right assembly's per-subgenome chrs.fasta.
+        left_name: Short name for left assembly.
+        right_name: Short name for right assembly.
+        outprefix: Output prefix for pairwise files.
+        threads: Number of threads for minimap2.
+        args: Parsed CLI arguments (for chain parsing parameters).
+
+    Returns:
+        Path to the pairwise macro_blocks TSV, or None on failure.
+    """
+    if not file_exists_and_valid(left_fasta):
+        logger.warning(
+            f"Skipping pairwise {left_name} vs {right_name}: "
+            f"left FASTA not found or empty: {left_fasta}"
+        )
+        return None
+    if not file_exists_and_valid(right_fasta):
+        logger.warning(
+            f"Skipping pairwise {left_name} vs {right_name}: "
+            f"right FASTA not found or empty: {right_fasta}"
+        )
+        return None
+
+    logger.info(f"Pairwise synteny: {left_name} vs {right_name}")
+
+    outprefix.parent.mkdir(parents=True, exist_ok=True)
+    paf_gz = Path(str(outprefix) + ".paf.gz")
+    err_log = Path(str(outprefix) + ".alignment.err")
+    macro_blocks_tsv = Path(str(outprefix) + ".macro_blocks.tsv")
+
+    if file_exists_and_valid(macro_blocks_tsv):
+        logger.info(f"Pairwise macro_blocks exists, reusing: {macro_blocks_tsv}")
+        return macro_blocks_tsv
+
+    run_minimap2_synteny(
+        ref=left_fasta,
+        qry=right_fasta,
+        paf_gz_out=paf_gz,
+        threads=threads,
+        preset=args.preset,
+        k=args.kmer,
+        w=args.window,
+        err_path=err_log,
+        permissive=True,
+    )
+
+    right_lengths = read_fasta_lengths(right_fasta)
+    if not right_lengths:
+        logger.warning(
+            f"Skipping pairwise {left_name} vs {right_name}: "
+            f"no sequences in right FASTA"
+        )
+        return None
+
+    ev = parse_paf_chain_evidence_and_segments(
+        paf_gz_path=paf_gz,
+        contig_lengths=right_lengths,
+        assign_minlen=args.assign_minlen,
+        assign_minmapq=args.assign_minmapq,
+        assign_tp=args.assign_tp,
+        chain_q_gap=args.chain_q_gap,
+        chain_r_gap=args.chain_r_gap,
+        chain_diag_slop=args.chain_diag_slop,
+        assign_min_ident=args.assign_min_ident,
+        assign_chain_topk=args.assign_chain_topk,
+        assign_chain_score=args.assign_chain_score,
+        assign_chain_min_bp=args.assign_chain_min_bp,
+        assign_ref_score=args.assign_ref_score,
+        ref_id_map=None,
+    )
+
+    write_macro_blocks_tsv(macro_blocks_tsv, ev.macro_block_rows, ref_norm_to_orig=None)
+    logger.info(
+        f"Pairwise macro_blocks: {macro_blocks_tsv} "
+        f"({len(ev.macro_block_rows)} blocks)"
+    )
+
+    return macro_blocks_tsv

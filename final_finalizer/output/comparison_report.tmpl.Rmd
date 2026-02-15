@@ -429,7 +429,7 @@ girafe_styled(ggobj = p_size,
 if (has_any_chrom) {
   # Sort reference chromosomes by length
   ref_order <- ref_lengths %>%
-    arrange(desc(length)) %>%
+    arrange(desc(ref_len)) %>%
     pull(ref_id)
 
   hm_data <- compl_df %>%
@@ -673,12 +673,14 @@ if (nrow(depth_df) > 0) {
 # =========================================================================
 # Section 6: Chromosome Synteny Riparian Plot
 #
-# Horizontal-bar layout: one row per reference chromosome.
-# Columns: Reference, Asm1, Asm2, ... with S-curve ribbons between
-# adjacent columns showing syntenic blocks.
+# Per-subgenome grouped x-axis layout (no faceting).
+# Each subgenome gets its own horizontal group:
+#   [Ref.A | asm1 | asm2]  ||  [Ref.P | asm3]  ||  [Ref.T | asm4]
+# Within each group: ribbons connect adjacent columns.
+# Chromosome rows (chr1..chr_n) are shared across all groups.
 # =========================================================================
 
-# --- Build assembly contig → assigned_ref_id lookup from contig_summary ---
+# --- Assembly contig lookup (incl. original_name for name mapping) ---
 asm_contig_lookup <- list()
 for (i in seq_along(asm_name_list)) {
   nm <- asm_name_list[i]
@@ -686,150 +688,242 @@ for (i in seq_along(asm_name_list)) {
   if (!is.null(df)) {
     lookup <- df %>%
       filter(classification == "chrom_assigned") %>%
-      select(contig, assigned_ref_id, reversed, length) %>%
-      mutate(assembly = nm)
+      select(contig, original_name, assigned_ref_id, reversed, length) %>%
+      mutate(assembly = nm, reversed = (reversed == "yes"))
     asm_contig_lookup[[nm]] <- lookup
   }
 }
 asm_lookup_df <- bind_rows(asm_contig_lookup)
 
-# --- Reference chromosome order (by length descending) ---
-ref_chr_order <- ref_lengths %>%
-  arrange(desc(length)) %>%
-  pull(ref_id)
+# --- Fix per-assembly macro_blocks: map original_name -> new_name ---
+if (!is.null(per_asm_macro_df) && nrow(asm_lookup_df) > 0) {
+  name_map <- asm_lookup_df %>%
+    distinct(assembly, original_name, .keep_all = TRUE) %>%
+    select(assembly, original_name, new_name = contig)
+  per_asm_macro_df <- per_asm_macro_df %>%
+    left_join(name_map, by = c("assembly", "contig" = "original_name")) %>%
+    mutate(contig_new = coalesce(new_name, contig))
+} else if (!is.null(per_asm_macro_df)) {
+  per_asm_macro_df <- per_asm_macro_df %>% mutate(contig_new = contig)
+}
 
-# Column order: Reference, then assemblies in order
-col_order <- c("Reference", asm_name_list)
-n_cols <- length(col_order)
+# --- Nuclear chromosomes sorted by (subgenome, chrom_num) ---
+has_named_subgenomes <- any(
+  !is.na(ref_lengths$subgenome) & ref_lengths$subgenome != "NA"
+)
 
-# --- Build contig records per column per chromosome ---
-# For reference: one bar per ref_id with ref length
-# For assemblies: join with contig_summary to get assigned contigs
+if (has_named_subgenomes) {
+  nuc_ref <- ref_lengths %>%
+    filter(!is.na(subgenome) & subgenome != "NA") %>%
+    mutate(chrom_num = as.numeric(str_extract(chrom_id, "\\d+"))) %>%
+    arrange(subgenome, chrom_num)
+} else {
+  macro_rids <- unique(per_asm_macro_df$ref_id)
+  nuc_ref <- ref_lengths %>%
+    filter(ref_id %in% macro_rids) %>%
+    mutate(
+      subgenome = "all",
+      chrom_num = as.numeric(str_extract(ref_id, "\\d+"))
+    ) %>%
+    arrange(chrom_num)
+}
 
-# Compute bar data: for each column and each chromosome row,
-# what contig(s) and lengths are present?
-bar_data <- list()
+subgenome_order <- unique(nuc_ref$subgenome)
+n_subgenomes <- length(subgenome_order)
+ref_chr_order <- nuc_ref$ref_id
 
-# Reference bars
-for (rid in ref_chr_order) {
-  rlen <- ref_lengths$length[ref_lengths$ref_id == rid]
-  if (length(rlen) > 0) {
-    bar_data[[length(bar_data) + 1]] <- tibble(
-      column = "Reference", ref_id = rid,
-      contig = rid, contig_len = rlen[1], reversed = FALSE
+# --- Determine assemblies per subgenome ---
+# For each subgenome, find which assemblies have chromosomes assigned to it
+sg_assemblies <- list()
+for (sg in subgenome_order) {
+  sg_ref_ids <- nuc_ref %>% filter(subgenome == sg) %>% pull(ref_id)
+  asms_with_sg <- asm_lookup_df %>%
+    filter(assigned_ref_id %in% sg_ref_ids) %>%
+    pull(assembly) %>% unique()
+  # Maintain original assembly order
+  sg_assemblies[[sg]] <- asm_name_list[asm_name_list %in% asms_with_sg]
+}
+
+# --- X-axis layout: per-subgenome groups with wider inter-group gaps ---
+col_spacing <- 2    # within group
+group_gap   <- 4    # between groups
+
+# Build column positions and metadata
+col_info <- tibble(
+  column = character(), x_center = numeric(),
+  subgenome = character(), is_ref = logical()
+)
+all_col_centers <- numeric()   # named vector for x-axis breaks
+all_col_labels  <- character() # for x-axis labels
+gap_zones <- list()            # gap zone per adjacent-column pair within groups
+gap_meta  <- list()            # metadata: left_col, right_col, subgenome
+
+x_cursor <- 1
+for (sg_i in seq_along(subgenome_order)) {
+  sg <- subgenome_order[sg_i]
+  sg_asms <- sg_assemblies[[sg]]
+
+  # Reference column for this subgenome
+  ref_col_name <- if (n_subgenomes > 1) paste0("Ref.", sg) else "Reference"
+  ref_x <- x_cursor
+  col_info <- bind_rows(col_info, tibble(
+    column = ref_col_name, x_center = ref_x, subgenome = sg, is_ref = TRUE
+  ))
+  all_col_centers <- c(all_col_centers, setNames(ref_x, ref_col_name))
+  all_col_labels  <- c(all_col_labels, ref_col_name)
+
+  prev_x <- ref_x
+  prev_col <- ref_col_name
+
+  # Assembly columns for this subgenome
+  for (asm in sg_asms) {
+    asm_x <- prev_x + col_spacing
+    # Column label: use assembly name (may appear in multiple groups)
+    asm_col_name <- if (n_subgenomes > 1) paste0(asm, ".", sg) else asm
+    col_info <- bind_rows(col_info, tibble(
+      column = asm_col_name, x_center = asm_x, subgenome = sg, is_ref = FALSE
+    ))
+    all_col_centers <- c(all_col_centers, setNames(asm_x, asm_col_name))
+    all_col_labels  <- c(all_col_labels, asm)
+
+    # Gap zone between prev_col and this column
+    gap_zones[[length(gap_zones) + 1]] <- c(prev_x + 0.2, asm_x - 0.2)
+    gap_meta[[length(gap_meta) + 1]] <- list(
+      left_col = prev_col, right_col = asm_col_name,
+      left_is_ref = (prev_col == ref_col_name), subgenome = sg,
+      left_asm = if (prev_col == ref_col_name) NA_character_ else {
+        # Extract assembly name from compound col name
+        sub(paste0("\\.", sg, "$"), "", prev_col)
+      },
+      right_asm = asm
     )
+    prev_x <- asm_x
+    prev_col <- asm_col_name
+  }
+
+  # Advance cursor for next group
+  if (sg_i < n_subgenomes) {
+    x_cursor <- prev_x + group_gap
   }
 }
 
-# Assembly bars
-for (nm in asm_name_list) {
-  lk <- asm_lookup_df %>% filter(assembly == nm)
-  for (rid in ref_chr_order) {
-    contigs_for_ref <- lk %>% filter(assigned_ref_id == rid)
-    if (nrow(contigs_for_ref) > 0) {
-      # Use the longest contig assigned to this ref chromosome
-      best <- contigs_for_ref %>% arrange(desc(length)) %>% slice(1)
-      bar_data[[length(bar_data) + 1]] <- tibble(
-        column = nm, ref_id = rid,
-        contig = best$contig, contig_len = best$length,
-        reversed = as.logical(best$reversed)
-      )
-    }
-  }
-}
-bar_df <- bind_rows(bar_data)
-bar_df$column <- factor(bar_df$column, levels = col_order)
+n_total_cols <- nrow(col_info)
 
-# --- Layout geometry ---
-# Each column has an x-center; bars extend left/right proportional to Mb
-# Gap zones between columns hold the ribbons
+# --- Y-axis layout: shared chromosome rows across all groups ---
+# Row heights based on max ref chromosome length per chrom_num
+chrom_nums <- sort(unique(nuc_ref$chrom_num))
+max_len_per_row <- nuc_ref %>%
+  group_by(chrom_num) %>%
+  summarise(max_len = max(ref_len), .groups = "drop") %>%
+  arrange(chrom_num)
 
-# Compute maximum chromosome length across all columns for shared scale
-max_bar_len <- max(bar_df$contig_len, na.rm = TRUE)
-
-# Column widths (proportional to max chromosome length in that column)
-col_max_lens <- bar_df %>%
-  group_by(column) %>%
-  summarise(max_len = max(contig_len, na.rm = TRUE), .groups = "drop") %>%
-  arrange(factor(column, levels = col_order))
-
-# Use shared Mb scale: bar width in x-units = contig_len / scale_factor
-# Set total plot width budget (arbitrary units)
-total_bar_width <- 80  # total x-units for all bars
-gap_width <- 8         # x-units per gap
-
-# Scale: longest bar maps to proportional share of total_bar_width
-scale_factor <- max_bar_len / (total_bar_width / n_cols)
-
-# Compute column x-centers
-col_x <- numeric(n_cols)
-col_x[1] <- col_max_lens$max_len[1] / scale_factor / 2
-for (i in 2:n_cols) {
-  prev_half <- col_max_lens$max_len[i - 1] / scale_factor / 2
-  curr_half <- col_max_lens$max_len[i] / scale_factor / 2
-  col_x[i] <- col_x[i - 1] + prev_half + gap_width + curr_half
-}
-col_centers <- setNames(col_x, col_order)
-
-# Gap zones (for ribbon S-curves)
-gap_zones <- list()
-for (i in 1:(n_cols - 1)) {
-  left_col <- col_order[i]
-  right_col <- col_order[i + 1]
-  left_right_edge <- col_centers[left_col] + col_max_lens$max_len[i] / scale_factor / 2
-  right_left_edge <- col_centers[right_col] - col_max_lens$max_len[i + 1] / scale_factor / 2
-  gap_zones[[i]] <- c(left_right_edge, right_left_edge)
-}
-
-# Row heights proportional to reference chromosome length
-# y from 0 (top, chr1) downward
+total_max_len <- sum(max_len_per_row$max_len)
+y_scale <- total_max_len / 15  # total maps to ~15 y-units
 row_gap <- 0.3
-row_heights <- ref_lengths$length[match(ref_chr_order, ref_lengths$ref_id)] / max_bar_len * 10
-names(row_heights) <- ref_chr_order
 
-row_y_top <- numeric(length(ref_chr_order))
-names(row_y_top) <- ref_chr_order
-cum_y <- 0
-for (i in seq_along(ref_chr_order)) {
-  row_y_top[i] <- cum_y
-  cum_y <- cum_y + row_heights[i] + row_gap
-}
-total_y <- cum_y - row_gap
-
-# --- Build chromosome bar rectangles ---
-bar_rects <- bar_df %>%
+# Compute y_top for each chrom_num row
+row_layout <- max_len_per_row %>%
   mutate(
-    x_center = col_centers[as.character(column)],
-    half_w = contig_len / scale_factor / 2,
-    xmin = x_center - half_w,
-    xmax = x_center + half_w,
-    ymin = row_y_top[ref_id],
-    ymax = row_y_top[ref_id] + row_heights[ref_id]
+    row_height = max_len / y_scale,
+    cum_height = cumsum(row_height) - row_height,
+    gap_above = (row_number() - 1) * row_gap,
+    y_top = cum_height + gap_above
   )
 
-# --- Chromosome color palette ---
-n_chroms <- length(ref_chr_order)
-if (n_chroms <= 9) {
-  chrom_pal <- setNames(oi[seq_len(n_chroms)], ref_chr_order)
+# Join row y_top back to chr_layout
+chr_layout <- nuc_ref %>%
+  left_join(row_layout %>% select(chrom_num, y_top_row = y_top),
+            by = "chrom_num") %>%
+  mutate(
+    pill_height = ref_len / y_scale,
+    y_top = y_top_row
+  )
+
+# Pill linewidth
+pill_lw <- 3.5
+
+# --- Build pill data for all columns ---
+pills_list <- list()
+
+for (sg in subgenome_order) {
+  sg_chr <- chr_layout %>% filter(subgenome == sg)
+  sg_asms <- sg_assemblies[[sg]]
+  ref_col_name <- if (n_subgenomes > 1) paste0("Ref.", sg) else "Reference"
+  ref_x <- col_info %>% filter(column == ref_col_name) %>% pull(x_center)
+
+  # Reference pills for this subgenome
+  pills_list[[ref_col_name]] <- sg_chr %>%
+    transmute(
+      column = ref_col_name,
+      ref_id, chrom_id, subgenome,
+      contig = ref_id, contig_len = ref_len, reversed = FALSE,
+      x_center = ref_x,
+      y_top, y_bot = y_top + pill_height,
+      pill_height,
+      tooltip = sprintf("Reference\n%s\n%.2f Mb", ref_id, ref_len / 1e6)
+    )
+
+  # Assembly pills for this subgenome
+  for (asm in sg_asms) {
+    asm_col_name <- if (n_subgenomes > 1) paste0(asm, ".", sg) else asm
+    asm_x <- col_info %>% filter(column == asm_col_name) %>% pull(x_center)
+
+    lk <- asm_lookup_df %>%
+      filter(assembly == asm, assigned_ref_id %in% sg_chr$ref_id) %>%
+      group_by(assigned_ref_id) %>%
+      arrange(desc(length)) %>%
+      slice(1) %>%
+      ungroup()
+
+    if (nrow(lk) == 0) next
+
+    asm_pills <- sg_chr %>%
+      inner_join(
+        lk %>% select(assigned_ref_id, asm_contig = contig,
+                       asm_len = length, asm_reversed = reversed),
+        by = c("ref_id" = "assigned_ref_id")
+      ) %>%
+      transmute(
+        column = asm_col_name,
+        ref_id, chrom_id, subgenome,
+        contig = asm_contig, contig_len = asm_len,
+        reversed = asm_reversed,
+        x_center = asm_x,
+        y_top,
+        pill_height = asm_len / y_scale,
+        y_bot = y_top + asm_len / y_scale,
+        tooltip = sprintf("%s\n%s\n%.2f Mb", asm, asm_contig, asm_len / 1e6)
+      )
+    pills_list[[asm_col_name]] <- asm_pills
+  }
+}
+
+all_pills <- bind_rows(pills_list)
+all_pills$column <- factor(all_pills$column, levels = col_info$column)
+
+# --- Chromosome color palette (by chrom_id, shared across subgenomes) ---
+unique_chroms <- unique(nuc_ref$chrom_id)
+unique_chroms <- unique_chroms[order(as.numeric(str_extract(unique_chroms, "\\d+")))]
+n_unique_chroms <- length(unique_chroms)
+if (n_unique_chroms <= 9) {
+  chrom_pal <- setNames(oi[seq_len(n_unique_chroms)], unique_chroms)
 } else {
   chrom_pal <- setNames(
-    colorRampPalette(c(oi[1:9]))(n_chroms),
-    ref_chr_order
+    colorRampPalette(oi[1:9])(n_unique_chroms),
+    unique_chroms
   )
 }
 
-# --- Build ribbon polygons ---
-# Helper: map genomic position to y within a chromosome row
-pos_to_y <- function(pos, seq_len, y_top, height) {
-  y_top + (pos / seq_len) * height
+# --- Helpers ---
+pos_to_y <- function(pos, seq_len, pill_y_top, pill_h) {
+  pill_y_top + (pos / seq_len) * pill_h
 }
 
-# Helper: make S-curve polygon between two vertical extents across a gap
 make_ribbon <- function(gap_left, gap_right,
-                         left_y_top, left_y_bot,
-                         right_y_top, right_y_bot,
-                         fill_col, alpha_val, tooltip_text,
-                         n_pts = 20) {
+                        left_y_top, left_y_bot,
+                        right_y_top, right_y_bot,
+                        chrom_id_val, alpha_val, tooltip_text,
+                        subgenome_val, n_pts = 20) {
   t <- seq(0, 1, length.out = n_pts)
   s <- 0.5 - 0.5 * cos(pi * t)
   x_fwd <- gap_left + t * (gap_right - gap_left)
@@ -838,30 +932,51 @@ make_ribbon <- function(gap_left, gap_right,
   tibble(
     x = c(x_fwd, rev(x_fwd)),
     y = c(top_fwd, rev(bot_fwd)),
-    fill = fill_col,
+    chrom_id = chrom_id_val,
     alpha = alpha_val,
-    tooltip = tooltip_text
+    tooltip = tooltip_text,
+    subgenome = subgenome_val
   )
 }
 
-# Build ref→asm ribbons (gap index 1: Reference → Asm1)
+# --- Build ribbon polygons ---
 ribbon_polys <- list()
 ribbon_idx <- 0
 
-for (gap_i in seq_len(n_cols - 1)) {
-  left_col_name <- col_order[gap_i]
-  right_col_name <- col_order[gap_i + 1]
-  gz <- gap_zones[[gap_i]]
+pill_lookup <- all_pills %>%
+  select(column, ref_id, chrom_id, contig, contig_len, reversed,
+         x_center, y_top, y_bot, pill_height, subgenome)
 
-  if (gap_i == 1) {
-    # Reference → first assembly: use per-assembly macro_blocks
-    macro_src <- per_asm_macro_df %>%
-      filter(assembly == right_col_name)
+max_ref_len <- max(nuc_ref$ref_len)
+min_span <- max(50000, max_ref_len * 0.001)
+
+for (gap_i in seq_along(gap_zones)) {
+  gz <- gap_zones[[gap_i]]
+  gm <- gap_meta[[gap_i]]
+  left_col_name  <- gm$left_col
+  right_col_name <- gm$right_col
+  sg <- gm$subgenome
+
+  sg_ref_ids <- nuc_ref %>% filter(subgenome == sg) %>% pull(ref_id)
+
+  # --- Gather blocks for this gap ---
+  if (gm$left_is_ref) {
+    right_asm <- gm$right_asm
+    if (!is.null(per_asm_macro_df)) {
+      macro_src <- per_asm_macro_df %>%
+        filter(assembly == right_asm, ref_id %in% sg_ref_ids)
+    } else {
+      macro_src <- NULL
+    }
   } else {
-    # Assembly → Assembly: use pairwise macro_blocks
+    left_asm  <- gm$left_asm
+    right_asm <- gm$right_asm
     if (!is.null(pairwise_macro_df)) {
       macro_src <- pairwise_macro_df %>%
-        filter(left_assembly == left_col_name, right_assembly == right_col_name)
+        filter(left_assembly == left_asm, right_assembly == right_asm)
+      if (n_subgenomes > 1) {
+        macro_src <- macro_src %>% filter(subgenome == sg)
+      }
     } else {
       macro_src <- NULL
     }
@@ -869,123 +984,93 @@ for (gap_i in seq_len(n_cols - 1)) {
 
   if (is.null(macro_src) || nrow(macro_src) == 0) next
 
-  # For ref→asm: ref_id is the reference chromosome, contig is the assembly contig
-  # For asm→asm: ref_id is left assembly contig name, contig is right assembly contig name
-  # We need to map both to chromosome rows via assigned_ref_id
+  # Filter small blocks once for all blocks in this gap
+  macro_src <- macro_src %>% filter(qspan_bp >= min_span)
+  if (nrow(macro_src) == 0) next
 
-  for (row_i in seq_along(ref_chr_order)) {
-    rid <- ref_chr_order[row_i]
-    rh <- row_heights[rid]
-    ry <- row_y_top[rid]
+  # --- Iterate per block (supports off-target blocks) ---
+  for (b in seq_len(nrow(macro_src))) {
+    blk <- macro_src[b, ]
 
-    # Get left column bar for this chromosome
-    left_bar <- bar_rects %>%
-      filter(column == left_col_name, ref_id == rid)
-    right_bar <- bar_rects %>%
-      filter(column == right_col_name, ref_id == rid)
-
-    if (nrow(left_bar) == 0 || nrow(right_bar) == 0) next
-
-    left_len <- left_bar$contig_len[1]
-    left_contig <- left_bar$contig[1]
-    left_reversed <- left_bar$reversed[1]
-    right_len <- right_bar$contig_len[1]
-    right_contig <- right_bar$contig[1]
-    right_reversed <- right_bar$reversed[1]
-
-    if (gap_i == 1) {
-      # ref→asm: ref_id in macro_blocks = reference chromosome ID
-      blocks <- macro_src %>%
-        filter(ref_id == rid, contig == right_contig)
+    # Look up left and right pills by contig name
+    if (gm$left_is_ref) {
+      lp <- pill_lookup %>% filter(column == left_col_name, contig == blk$ref_id)
+      rp <- pill_lookup %>% filter(column == right_col_name, contig == blk$contig_new)
     } else {
-      # asm→asm: ref_id in pairwise = left assembly contig name
-      blocks <- macro_src %>%
-        filter(ref_id == left_contig, contig == right_contig)
+      lp <- pill_lookup %>% filter(column == left_col_name, contig == blk$ref_id)
+      rp <- pill_lookup %>% filter(column == right_col_name, contig == blk$contig)
+    }
+    if (nrow(lp) == 0 || nrow(rp) == 0) next
+
+    left_len  <- lp$contig_len[1]
+    left_y    <- lp$y_top[1]
+    left_h    <- lp$pill_height[1]
+    right_len <- rp$contig_len[1]
+    right_y   <- rp$y_top[1]
+    right_h   <- rp$pill_height[1]
+
+    # Color by left pill's chrom_id (source chromosome)
+    cid <- as.character(lp$chrom_id[1])
+
+    # Left side coordinates — never reversed
+    # (ref coords are in reference frame; asm→asm coords are already oriented)
+    l_start <- as.numeric(blk$ref_start)
+    l_end   <- as.numeric(blk$ref_end)
+
+    # Right side coordinates
+    r_start <- as.numeric(blk$qstart)
+    r_end   <- as.numeric(blk$qend)
+    if (gm$left_is_ref && isTRUE(rp$reversed[1])) {
+      # ref→asm: right assembly contig may be reversed relative to reference
+      r_start_new <- right_len - r_end
+      r_end_new   <- right_len - r_start
+      r_start <- r_start_new
+      r_end   <- r_end_new
+    }
+    # asm→asm: no reversal — pairwise alignment used already-oriented FASTAs
+
+    # Clamp to valid ranges
+    l_start <- max(0, l_start); l_end <- min(left_len, l_end)
+    r_start <- max(0, r_start); r_end <- min(right_len, r_end)
+    if (l_end <= l_start || r_end <= r_start) next
+
+    # Map to y coordinates within each pill
+    ly_top <- pos_to_y(l_start, left_len, left_y, left_h)
+    ly_bot <- pos_to_y(l_end, left_len, left_y, left_h)
+    ry_top <- pos_to_y(r_start, right_len, right_y, right_h)
+    ry_bot <- pos_to_y(r_end, right_len, right_y, right_h)
+
+    # Determine effective strand in the oriented frame
+    strand_val <- blk$strand
+    if (gm$left_is_ref && isTRUE(rp$reversed[1])) {
+      # ref→asm: alignment was on unoriented query, but the pill shows the
+      # oriented contig.  Reversing the contig flips the strand.
+      strand_val <- if (strand_val == "+") "-" else "+"
+    }
+    # Inversions: strand = "-" -> swap top/bottom on right side
+    if (strand_val == "-") {
+      tmp <- ry_top; ry_top <- ry_bot; ry_bot <- tmp
     }
 
-    if (nrow(blocks) == 0) next
+    ident_val <- as.numeric(blk$identity)
+    alpha_ribbon <- 0.2 + 0.5 * min(1, ident_val)
 
-    # Filter small blocks
-    min_span <- max(50000, max_bar_len * 0.001)  # at least 50kb or 0.1% of max
-    blocks <- blocks %>% filter(qspan_bp >= min_span)
-    if (nrow(blocks) == 0) next
+    # Tooltip: show left → right contig/chromosome names
+    left_key  <- lp$contig[1]
+    right_key <- rp$contig[1]
+    tooltip <- sprintf(
+      "%s \u2192 %s\n%.2f Mb\nIdentity: %.1f%%\nStrand: %s",
+      left_key, right_key,
+      as.numeric(blk$union_bp) / 1e6,
+      ident_val * 100, strand_val
+    )
 
-    for (b in seq_len(nrow(blocks))) {
-      blk <- blocks[b, ]
-
-      # Left side coordinates (ref_start/ref_end on left column)
-      if (gap_i == 1) {
-        # ref→asm: ref_start/ref_end are reference coordinates
-        l_start <- as.numeric(blk$ref_start)
-        l_end   <- as.numeric(blk$ref_end)
-      } else {
-        # asm→asm: ref_start/ref_end are left assembly coordinates
-        l_start <- as.numeric(blk$ref_start)
-        l_end   <- as.numeric(blk$ref_end)
-        # If left contig is reversed relative to reference, flip coordinates
-        if (left_reversed) {
-          l_start_new <- left_len - l_end
-          l_end_new   <- left_len - l_start
-          l_start <- l_start_new
-          l_end   <- l_end_new
-        }
-      }
-
-      # Right side coordinates (qstart/qend on right column)
-      r_start <- as.numeric(blk$qstart)
-      r_end   <- as.numeric(blk$qend)
-      # If right contig is reversed relative to reference, flip
-      if (right_reversed) {
-        r_start_new <- right_len - r_end
-        r_end_new   <- right_len - r_start
-        r_start <- r_start_new
-        r_end   <- r_end_new
-      }
-
-      # Handle negative coordinates from flipping
-      l_start <- max(0, l_start)
-      l_end   <- min(left_len, l_end)
-      r_start <- max(0, r_start)
-      r_end   <- min(right_len, r_end)
-
-      if (l_end <= l_start || r_end <= r_start) next
-
-      # Map to y coordinates within the row
-      ly_top <- pos_to_y(l_start, left_len, ry, rh)
-      ly_bot <- pos_to_y(l_end, left_len, ry, rh)
-      ry_top <- pos_to_y(r_start, right_len, ry, rh)
-      ry_bot <- pos_to_y(r_end, right_len, ry, rh)
-
-      # Color by reference chromosome; alpha by identity
-      ident_val <- as.numeric(blk$identity)
-      alpha_ribbon <- 0.2 + 0.5 * min(1, ident_val)
-
-      # Determine if this block indicates an inversion (strand = "-")
-      strand_val <- blk$strand
-      if (strand_val == "-") {
-        # Swap top/bottom on right side to show crossing
-        tmp <- ry_top
-        ry_top <- ry_bot
-        ry_bot <- tmp
-      }
-
-      # Check if this is a cross-chromosome block
-      # (ref_id for pairwise may map to a different chromosome)
-      fill_chr <- rid
-      tooltip <- sprintf(
-        "%s → %s\n%s: %.2f Mb\nIdentity: %.1f%%\nStrand: %s",
-        left_col_name, right_col_name, rid,
-        as.numeric(blk$union_bp) / 1e6,
-        ident_val * 100, strand_val
-      )
-
-      ribbon_idx <- ribbon_idx + 1
-      ribbon_polys[[ribbon_idx]] <- make_ribbon(
-        gz[1], gz[2], ly_top, ly_bot, ry_top, ry_bot,
-        fill_col = fill_chr, alpha_val = alpha_ribbon,
-        tooltip_text = tooltip
-      ) %>% mutate(group_id = ribbon_idx)
-    }
+    ribbon_idx <- ribbon_idx + 1
+    ribbon_polys[[ribbon_idx]] <- make_ribbon(
+      gz[1], gz[2], ly_top, ly_bot, ry_top, ry_bot,
+      chrom_id_val = cid, alpha_val = alpha_ribbon,
+      tooltip_text = tooltip, subgenome_val = sg
+    ) %>% mutate(group_id = ribbon_idx)
   }
 }
 
@@ -995,11 +1080,19 @@ if (has_ribbons) {
 } else {
   all_ribbons <- NULL
 }
+
+# --- Plot sizing ---
+n_chrom_rows <- length(chrom_nums)
+syn_plot_h <- max(4, n_chrom_rows * 0.5 + 2)
+syn_plot_w <- max(7.2, n_total_cols * 1.8 + 2)
 ```
 
 ```{r synteny_description, eval=has_synteny_data, results='asis'}
 cat('<p class="section-intro">\n')
 cat("Chromosome synteny between the reference and each assembly (nucleotide mode). ")
+if (exists("n_subgenomes") && n_subgenomes > 1) {
+  cat("Assemblies are grouped by reference subgenome. ")
+}
 cat("Ribbons connect syntenic macro-blocks between adjacent columns. ")
 cat("Color indicates the reference chromosome; opacity reflects alignment identity. ")
 cat("Crossed ribbons indicate inversions.\n")
@@ -1008,77 +1101,102 @@ cat("</p>\n")
 
 ## Riparian Plot
 
-```{r synteny_riparian, eval=(has_synteny_data && exists("has_ribbons") && has_ribbons), fig.width=10, fig.height=max(5, total_y * 0.45 + 2)}
-# --- Compose the plot ---
-
-# Base plot with coordinate system
-p_syn <- ggplot() +
-  coord_cartesian(
-    xlim = c(-1, max(col_x) + col_max_lens$max_len[n_cols] / scale_factor / 2 + 1),
-    ylim = c(total_y + 0.5, -0.5),  # reversed y: chr1 at top
-    expand = FALSE
-  )
-
-# Draw ribbons first (behind bars)
-p_syn <- p_syn +
-  geom_polygon_interactive(
-    data = all_ribbons,
-    aes(x = x, y = y, group = group_id, fill = fill,
-        alpha = alpha, tooltip = tooltip),
-    show.legend = FALSE
-  ) +
-  scale_fill_manual(values = chrom_pal, guide = "none") +
-  scale_alpha_identity()
-
-# Draw chromosome bars
-bar_rects_plot <- bar_rects %>%
+```{r synteny_riparian, eval=(has_synteny_data && exists("has_ribbons") && has_ribbons), fig.width=10, fig.height=10}
+# --- Chromosome labels on far left of plot (one set, from first group) ---
+first_sg <- subgenome_order[1]
+first_ref_col <- if (n_subgenomes > 1) paste0("Ref.", first_sg) else "Reference"
+first_ref_x <- col_info %>% filter(column == first_ref_col) %>% pull(x_center)
+chr_label_df <- chr_layout %>%
+  filter(subgenome == first_sg) %>%
   mutate(
-    fill_col = ifelse(column == "Reference", "grey70", "grey85"),
-    tooltip = paste0(column, "\n", contig, "\n",
-                     sprintf("%.2f Mb", contig_len / 1e6))
+    x = first_ref_x - 0.4,
+    y_mid = y_top + pill_height / 2,
+    label = chrom_id
   )
 
-p_syn <- p_syn +
-  ggnewscale::new_scale_fill() +
-  geom_rect_interactive(
-    data = bar_rects_plot,
-    aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax,
-        fill = fill_col, tooltip = tooltip),
-    color = "grey40", linewidth = 0.3
-  ) +
-  scale_fill_identity()
+# --- Compose the plot (single flat plot, no faceting) ---
+p_syn <- ggplot()
 
-# Column labels at top
-col_label_df <- tibble(
-  x = col_x,
-  label = col_order
-)
-p_syn <- p_syn +
-  geom_text(data = col_label_df,
-            aes(x = x, y = -0.3, label = label),
-            size = 2.5, fontface = "bold", family = base_family, vjust = 1)
+# Ribbons (behind pills)
+if (has_ribbons) {
+  p_syn <- p_syn +
+    geom_polygon_interactive(
+      data = all_ribbons,
+      aes(x = x, y = y, group = group_id, fill = chrom_id,
+          alpha = alpha, tooltip = tooltip),
+      show.legend = FALSE
+    ) +
+    scale_fill_manual(values = chrom_pal, guide = "none") +
+    scale_alpha_identity()
+}
 
-# Chromosome labels on the left
-chr_label_df <- tibble(
-  ref_id = ref_chr_order,
-  y_mid = row_y_top[ref_chr_order] + row_heights[ref_chr_order] / 2
-)
+# Reference pills (darker)
+ref_pill_data <- all_pills %>%
+  semi_join(col_info %>% filter(is_ref), by = "column")
+p_syn <- p_syn +
+  geom_segment(
+    data = ref_pill_data,
+    aes(x = x_center, xend = x_center, y = y_top, yend = y_bot),
+    linewidth = pill_lw, lineend = "round", color = "grey55"
+  )
+
+# Assembly pills (lighter, interactive)
+asm_pill_data <- all_pills %>%
+  semi_join(col_info %>% filter(!is_ref), by = "column")
+if (nrow(asm_pill_data) > 0) {
+  p_syn <- p_syn +
+    geom_segment_interactive(
+      data = asm_pill_data,
+      aes(x = x_center, xend = x_center, y = y_top, yend = y_bot,
+          tooltip = tooltip),
+      linewidth = pill_lw, lineend = "round", color = "grey78"
+    )
+}
+
+# Chromosome labels on left of each group
 p_syn <- p_syn +
   geom_text(data = chr_label_df,
-            aes(x = -0.5, y = y_mid, label = ref_id),
+            aes(x = x, y = y_mid, label = label),
             size = 2, hjust = 1, family = base_family)
 
-# Theme
+# Subgenome group labels (centered above each group, only if >1 subgenome)
+if (n_subgenomes > 1) {
+  sg_label_df <- col_info %>%
+    group_by(subgenome) %>%
+    summarise(x_mid = mean(x_center), .groups = "drop") %>%
+    mutate(y = min(row_layout$y_top) - 0.6,
+           label = paste0("Subgenome ", subgenome))
+
+  p_syn <- p_syn +
+    geom_text(data = sg_label_df,
+              aes(x = x_mid, y = y, label = label),
+              size = 2.8, fontface = "bold", family = base_family)
+}
+
+# Axis scales
 p_syn <- p_syn +
-  theme_void(base_size = base_font_pt, base_family = base_family) +
-  theme(plot.margin = margin(5, 5, 5, 40))
+  scale_x_continuous(
+    breaks = as.numeric(all_col_centers),
+    labels = all_col_labels,
+    expand = expansion(add = c(1.5, 0.5))
+  ) +
+  scale_y_reverse(expand = expansion(mult = c(0.02, 0.05)))
 
-# Dynamic sizing
-plot_h <- max(5, total_y * 0.45 + 2)
-plot_w <- min(10, max(7.2, n_cols * 2.5 + 2))
+# Theme (no faceting)
+p_syn <- p_syn +
+  theme_minimal(base_size = base_font_pt, base_family = base_family) +
+  theme(
+    axis.text.x = element_text(size = base_font_pt, face = "bold",
+                                family = base_family, angle = 45, hjust = 1),
+    axis.text.y = element_blank(),
+    axis.ticks = element_blank(),
+    axis.title = element_blank(),
+    panel.grid = element_blank(),
+    plot.margin = margin(5, 5, 5, 30)
+  )
 
-save_pdf(pdf_synteny, p_syn, width = 7.2, height = min(10, plot_h))
-girafe_styled(ggobj = p_syn, width_svg = plot_w, height_svg = plot_h)
+save_pdf(pdf_synteny, p_syn, width = 7.2, height = syn_plot_h)
+girafe_styled(ggobj = p_syn, width_svg = syn_plot_w, height_svg = syn_plot_h)
 ```
 
 ```{r synteny_empty, eval=(has_synteny_data && !(exists("has_ribbons") && has_ribbons))}

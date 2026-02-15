@@ -206,12 +206,16 @@ def split_chrom_subgenome(
             chrom_id = "Chr" + chrom_id[3:]
         return chrom_id, "NA"
 
+    # Strip fragment/copy suffixes (e.g. chr6A_f1 -> chr6A, chr1A_c2 -> chr1A)
+    # so that fragments are still recognized as belonging to their chromosome.
+    base_id = re.sub(r"_[fc]\d+$", "", norm_id)
+
     active_patterns = patterns if patterns is not None else get_ref_id_patterns()
     for pat in active_patterns:
-        m = pat.match(norm_id)
+        m = pat.match(base_id)
         if not m:
             continue
-        chrom_id = m.groupdict().get("chrom", norm_id)
+        chrom_id = m.groupdict().get("chrom", base_id)
         sub = m.groupdict().get("sg", "NA")
         if style == "Chr" and chrom_id.startswith("chr"):
             chrom_id = "Chr" + chrom_id[3:]

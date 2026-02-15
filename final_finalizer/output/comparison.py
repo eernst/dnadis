@@ -62,6 +62,7 @@ def build_assembly_result(
     contaminants_tsv_path: Optional[Path] = None,
     rdna_annotations_tsv: Optional[Path] = None,
     rdna_arrays_tsv: Optional[Path] = None,
+    per_subgenome_chrs: Optional[Dict[str, Path]] = None,
 ) -> AssemblyResult:
     """Build an AssemblyResult summarizing one assembly's finalization.
 
@@ -256,6 +257,7 @@ def build_assembly_result(
         contaminants_tsv=contaminants_tsv_path,
         rdna_annotations_tsv=rdna_annotations_tsv,
         rdna_arrays_tsv=rdna_arrays_tsv,
+        per_subgenome_chrs=per_subgenome_chrs or {},
     )
 
 
