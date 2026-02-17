@@ -118,7 +118,7 @@ from final_finalizer.output.tsv_output import (
 )
 from final_finalizer.output.plotting import (
     have_rscript,
-    run_plot,
+    run_unified_report,
 )
 
 # Import stats functions from alignment module
@@ -195,7 +195,7 @@ __all__ = [
     "compute_summary",
     "build_segment_support_from_rows",
     "have_rscript",
-    "run_plot",
+    "run_unified_report",
     # Chain parsing
     "parse_paf_primary",
     "write_stats_tsv",

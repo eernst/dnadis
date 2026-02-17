@@ -1,0 +1,1215 @@
+---
+title: "Multi-Assembly Comparison Report"
+params:
+  comparison_tsv: "__COMPARISON_TSV__"
+  completeness_tsv: "__COMPLETENESS_TSV__"
+  ref_lengths_tsv: "__REF_LENGTHS_TSV__"
+  per_assembly_summary_tsvs: "__PER_ASM_TSVS__"
+  assembly_names: "__ASM_NAMES__"
+  per_assembly_macro_blocks_tsvs: "__PER_ASM_MACRO_TSVS__"
+  pairwise_macro_blocks_tsvs: "__PAIRWISE_MACRO_TSVS__"
+  pairwise_names: "__PAIRWISE_NAMES__"
+  reference_name: "__REFNAME__"
+  synteny_mode: "__SYNTENY_MODE__"
+  chr_like_minlen: "__CHRLIKE__"
+  out_prefix: "__OUTPREFIX__"
+output:
+  html_document:
+    self_contained: true
+    toc: true
+    toc_float:
+      collapsed: false
+    toc_depth: 2
+    theme: flatly
+---
+
+```{css, echo=FALSE}
+body {
+  font-family: "Helvetica Neue", Helvetica, "Liberation Sans", Arial, sans-serif;
+  font-size: 13px;
+  max-width: 1300px;
+  margin: auto;
+}
+h1.title { font-size: 24px; margin-bottom: 4px; }
+h1 { font-size: 20px; border-bottom: 2px solid #2c3e50; padding-bottom: 4px; }
+h2 { font-size: 16px; }
+.gt_table { font-size: 11px !important; }
+.gt_col_heading { font-size: 10px !important; font-weight: bold !important; }
+.widget-container { margin: 16px 0; }
+.note-box {
+  background: #f8f9fa; border-left: 4px solid #6c757d;
+  padding: 10px 14px; margin: 12px 0; font-size: 12px; color: #495057;
+}
+.section-intro { font-size: 13px; color: #555; margin-bottom: 12px; }
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE,
+                      fig.width = 10, dpi = 150)
+
+if (!requireNamespace("pacman", quietly = TRUE))
+  install.packages("pacman", repos = "https://cloud.r-project.org")
+library(pacman)
+pacman::p_load(readr, dplyr, stringr, tidyr, tibble,
+               ggplot2, ggnewscale, patchwork, grid,
+               ggiraph, htmlwidgets, ggrepel,
+               ggokabeito, colorspace,
+               gt, gtExtras, scales,
+               showtext, sysfonts, knitr)
+
+# ---------------------------------------------------------------------------
+# Font setup (shared across all plots)
+# ---------------------------------------------------------------------------
+.resolve_font <- function(family) {
+  slug <- tolower(gsub(" ", "", family))
+  path <- systemfonts::match_fonts(family)$path
+  if (nzchar(path) && grepl(slug, tolower(gsub("[- ]", "", basename(path)))))
+    return(path)
+  NULL
+}
+base_family <- "sans"
+for (.fam in c("Helvetica Neue", "Helvetica", "Liberation Sans")) {
+  .r <- .resolve_font(.fam)
+  if (!is.null(.r)) {
+    sysfonts::font_add(.fam,
+      regular    = .r,
+      bold       = systemfonts::match_fonts(.fam, weight = "bold")$path,
+      italic     = systemfonts::match_fonts(.fam, italic = TRUE)$path,
+      bolditalic = systemfonts::match_fonts(.fam, italic = TRUE, weight = "bold")$path
+    )
+    base_family <- .fam
+    break
+  }
+}
+showtext_auto()
+
+# ---------------------------------------------------------------------------
+# Shared theming
+# ---------------------------------------------------------------------------
+base_font_pt <- 8
+axis_title_margin_pt <- 4
+axis_text_margin_pt <- 4
+
+axis_theme <- theme(
+  axis.title.x = element_text(size = base_font_pt, family = base_family,
+                               margin = margin(t = axis_title_margin_pt)),
+  axis.title.y = element_text(size = base_font_pt, family = base_family,
+                               margin = margin(r = axis_title_margin_pt)),
+  axis.text.x = element_text(size = base_font_pt, family = base_family,
+                               margin = margin(t = axis_text_margin_pt)),
+  axis.text.y = element_text(size = base_font_pt, family = base_family)
+)
+
+apply_legend_theme <- function(p, text_pt = base_font_pt, key_pt = base_font_pt,
+                               tight = TRUE) {
+  base <- theme(
+    legend.title = element_text(size = text_pt, family = base_family),
+    legend.text  = element_text(size = text_pt, family = base_family),
+    legend.key.height = grid::unit(key_pt, "pt"),
+    legend.key.width  = grid::unit(key_pt, "pt"),
+    legend.direction = "horizontal",
+    legend.box = "horizontal"
+  )
+  if (tight) {
+    base <- base + theme(
+      legend.box.margin = margin(0, 0, 0, 0),
+      legend.margin = margin(0, 0, 0, 0),
+      legend.spacing.y = grid::unit(0, "pt"),
+      legend.spacing.x = grid::unit(2, "pt")
+    )
+  }
+  p + base
+}
+
+# ---------------------------------------------------------------------------
+# Okabe-Ito palette and classification colors
+# ---------------------------------------------------------------------------
+oi <- palette_okabe_ito()
+
+classification_colors <- c(
+  "chrom_assigned"     = oi[5],
+  "chrom_unassigned"   = oi[2],
+  "organelle_complete" = oi[3],
+  "organelle_debris"   = oi[4],
+  "rDNA"               = oi[1],
+  "contaminant"        = oi[7],
+  "chrom_debris"       = lighten(oi[5], amount = 0.5),
+  "debris"             = oi[9],
+  "unclassified"       = oi[8]
+)
+
+classification_labels <- c(
+  "chrom_assigned"     = "Chromosome (assigned)",
+  "chrom_unassigned"   = "Chromosome (unassigned)",
+  "organelle_complete" = "Organelle (complete)",
+  "organelle_debris"   = "Organelle (debris)",
+  "rDNA"               = "rDNA",
+  "contaminant"        = "Contaminant",
+  "chrom_debris"       = "Chromosome debris",
+  "debris"             = "Debris",
+  "unclassified"       = "Unclassified"
+)
+
+classification_levels <- c(
+  "chrom_assigned", "chrom_unassigned", "organelle_complete", "organelle_debris",
+  "rDNA", "contaminant", "chrom_debris", "debris", "unclassified"
+)
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+save_pdf <- function(path, plot, width = 7.2, height = 5, dpi = 300) {
+  dev <- if (capabilities("cairo")) cairo_pdf else "pdf"
+  invisible(ggsave(path, plot, width = width, height = height, dpi = dpi, device = dev))
+}
+
+girafe_styled <- function(ggobj, width_svg = 10, height_svg = 6.9) {
+  g <- ggiraph::girafe(ggobj = ggobj, width_svg = width_svg, height_svg = height_svg)
+  ggiraph::girafe_options(g,
+    ggiraph::opts_tooltip(css = paste0(
+      "font-family: ", base_family, "; font-size: 9pt; ",
+      "background: white; padding: 6px; border: 1px solid #666;"
+    )),
+    ggiraph::opts_hover(css = "opacity: 0.8;"),
+    ggiraph::opts_toolbar(saveaspng = FALSE)
+  )
+}
+
+gt_theme <- function(gt_obj) {
+  gt_obj %>%
+    tab_options(
+      table.font.size = px(11),
+      column_labels.font.weight = "bold",
+      column_labels.border.top.style = "none",
+      column_labels.border.bottom.width = px(2),
+      column_labels.border.bottom.color = "#333",
+      table.border.top.style = "none",
+      table.border.bottom.style = "none",
+      table_body.border.bottom.color = "#999",
+      data_row.padding = px(4),
+      heading.border.bottom.style = "none"
+    ) %>%
+    opt_row_striping(row_striping = FALSE)
+}
+
+fmt_mb <- function(x) sprintf("%.1f", x / 1e6)
+fmt_pct <- function(x) ifelse(is.na(x), "\u2014", sprintf("%.1f%%", x * 100))
+
+# Assembly color palette (one color per assembly)
+asm_pal <- c(oi[5], oi[1], oi[3], oi[6], oi[7], oi[4], oi[2], oi[8], oi[9])
+
+# ---------------------------------------------------------------------------
+# Load data
+# ---------------------------------------------------------------------------
+comp_df <- read_tsv(params$comparison_tsv, show_col_types = FALSE)
+compl_df <- read_tsv(params$completeness_tsv, show_col_types = FALSE)
+ref_lengths <- read_tsv(params$ref_lengths_tsv, show_col_types = FALSE,
+                        col_types = cols(subgenome = col_character()))
+
+n_asm <- nrow(comp_df)
+asm_names <- comp_df$assembly
+asm_colors <- setNames(asm_pal[seq_len(min(n_asm, length(asm_pal)))], asm_names)
+
+# Load per-assembly summary TSVs
+asm_tsv_paths <- strsplit(params$per_assembly_summary_tsvs, ";")[[1]]
+asm_name_list <- strsplit(params$assembly_names, ";")[[1]]
+
+per_asm_summaries <- list()
+for (i in seq_along(asm_tsv_paths)) {
+  p <- asm_tsv_paths[i]
+  if (nzchar(p) && file.exists(p)) {
+    df <- read_tsv(p, show_col_types = FALSE,
+                   col_types = cols(assigned_subgenome = col_character()))
+    df$assembly <- asm_name_list[i]
+    per_asm_summaries[[i]] <- df
+  }
+}
+all_summary_df <- if (length(per_asm_summaries) > 0) bind_rows(per_asm_summaries) else NULL
+has_per_asm <- !is.null(all_summary_df) && nrow(all_summary_df) > 0
+
+has_any_chrom <- any(comp_df$n_chrom_assigned > 0, na.rm = TRUE)
+has_any_contam <- any(comp_df$n_contaminants > 0, na.rm = TRUE)
+has_any_depth <- any(!is.na(comp_df$mean_chrom_depth) & comp_df$mean_chrom_depth > 0)
+
+chr_like_minlen <- as.numeric(params$chr_like_minlen)
+
+# PDF output paths
+pdf_classbar <- paste0(params$out_prefix, ".classification_comparison.pdf")
+pdf_heatmap  <- paste0(params$out_prefix, ".chromosome_completeness.pdf")
+pdf_synteny  <- paste0(params$out_prefix, ".chromosome_synteny.pdf")
+
+# ---------------------------------------------------------------------------
+# Load per-assembly macro_blocks and pairwise macro_blocks for synteny plot
+# ---------------------------------------------------------------------------
+per_asm_macro_paths <- if (nzchar(params$per_assembly_macro_blocks_tsvs))
+  strsplit(params$per_assembly_macro_blocks_tsvs, ";")[[1]] else character(0)
+pairwise_macro_paths <- if (nzchar(params$pairwise_macro_blocks_tsvs))
+  strsplit(params$pairwise_macro_blocks_tsvs, ";")[[1]] else character(0)
+pairwise_pair_names <- if (nzchar(params$pairwise_names))
+  strsplit(params$pairwise_names, ";")[[1]] else character(0)
+
+# Load per-assembly macro_blocks (ref→asm) and tag with assembly name
+per_asm_macro_list <- list()
+for (i in seq_along(per_asm_macro_paths)) {
+  p <- per_asm_macro_paths[i]
+  if (nzchar(p) && file.exists(p)) {
+    df <- read_tsv(p, show_col_types = FALSE,
+                   col_types = cols(subgenome = col_character()))
+    if (nrow(df) > 0) {
+      df$assembly <- asm_name_list[i]
+      per_asm_macro_list[[i]] <- df
+    }
+  }
+}
+per_asm_macro_df <- if (length(per_asm_macro_list) > 0) bind_rows(per_asm_macro_list) else NULL
+
+# Load pairwise macro_blocks (asm→asm)
+pairwise_macro_list <- list()
+for (i in seq_along(pairwise_macro_paths)) {
+  p <- pairwise_macro_paths[i]
+  if (nzchar(p) && file.exists(p)) {
+    df <- read_tsv(p, show_col_types = FALSE,
+                   col_types = cols(subgenome = col_character()))
+    if (nrow(df) > 0 && i <= length(pairwise_pair_names)) {
+      df$pair_name <- pairwise_pair_names[i]
+      # Extract left and right assembly names from pair name
+      # Split only on first occurrence of "_vs_" to handle assembly names
+      # that might contain "_vs_" (unlikely but defensive)
+      parts <- strsplit(pairwise_pair_names[i], "_vs_", fixed = TRUE)[[1]]
+      if (length(parts) >= 2) {
+        df$left_assembly <- parts[1]
+        df$right_assembly <- paste(parts[-1], collapse = "_vs_")
+      } else {
+        warning(sprintf("Cannot parse pairwise pair name: %s", pairwise_pair_names[i]))
+        next
+      }
+      pairwise_macro_list[[i]] <- df
+    }
+  }
+}
+pairwise_macro_df <- if (length(pairwise_macro_list) > 0) bind_rows(pairwise_macro_list) else NULL
+
+has_synteny_data <- !is.null(per_asm_macro_df) && nrow(per_asm_macro_df) > 0 &&
+                    params$synteny_mode == "nucleotide"
+```
+
+---
+
+<p class="section-intro">
+**Reference**: `r if (nchar(params$reference_name) > 0) params$reference_name else "\u2014"` &emsp;
+**Synteny mode**: `r params$synteny_mode` &emsp;
+**Assemblies**: `r n_asm` &emsp;
+**Date**: `r Sys.Date()`
+</p>
+
+# 1. Assembly Overview {.tabset}
+
+## Summary Table
+
+```{r overview_table}
+tbl <- comp_df %>%
+  transmute(
+    Assembly = assembly,
+    Contigs  = total_contigs,
+    `Size (Mb)` = round(total_bp / 1e6, 1),
+    N50 = round(n50 / 1e6, 2),
+    L50 = l50,
+    `Largest (Mb)` = round(largest_contig / 1e6, 1),
+    `Chr assigned` = n_chrom_assigned,
+    `Chr unassigned` = n_chrom_unassigned,
+    `Full-length` = n_full_length,
+    `Both telo` = n_both_telomeres,
+    `Mean ref cov` = ifelse(is.na(mean_ref_coverage), "\u2014",
+                            sprintf("%.1f%%", mean_ref_coverage * 100)),
+    Chimeric = n_chimeric,
+    `Mean identity` = ifelse(is.na(mean_identity), "\u2014",
+                             sprintf("%.2f%%", mean_identity * 100)),
+    Contaminants = n_contaminants,
+    rDNA = n_rdna,
+    chrC = ifelse(chrC_found == "yes", "\u2713", "\u2014"),
+    chrM = ifelse(chrM_found == "yes", "\u2713", "\u2014")
+  )
+
+tbl %>%
+  gt() %>%
+  gt_theme() %>%
+  tab_header(title = "Assembly Comparison Summary") %>%
+  cols_align(align = "right", columns = where(is.numeric)) %>%
+  tab_spanner(label = "Contiguity", columns = c(Contigs, `Size (Mb)`, N50, L50, `Largest (Mb)`)) %>%
+  tab_spanner(label = "Chromosomes", columns = c(`Chr assigned`, `Chr unassigned`, `Full-length`, `Both telo`, `Mean ref cov`, Chimeric, `Mean identity`)) %>%
+  tab_spanner(label = "Other", columns = c(Contaminants, rDNA, chrC, chrM))
+```
+
+## Classification Distribution
+
+```{r classification_bar, fig.width=10, fig.height=max(3, n_asm * 0.8 + 1.5)}
+if (has_per_asm) {
+  clf_data <- all_summary_df %>%
+    group_by(assembly, classification) %>%
+    summarise(total_bp = sum(length, na.rm = TRUE), n_contigs = n(), .groups = "drop") %>%
+    mutate(
+      total_mb = total_bp / 1e6,
+      classification = factor(classification, levels = rev(classification_levels)),
+      assembly = factor(assembly, levels = rev(asm_names))
+    )
+
+  p_clf <- ggplot(clf_data, aes(x = assembly, y = total_mb, fill = classification)) +
+    geom_col_interactive(
+      aes(tooltip = paste0(assembly, "\n",
+                           classification_labels[as.character(classification)], "\n",
+                           sprintf("%.1f Mb (%d contigs)", total_mb, n_contigs))),
+      width = 0.7
+    ) +
+    scale_fill_manual(values = classification_colors, labels = classification_labels,
+                      drop = FALSE, name = NULL) +
+    coord_flip() +
+    labs(x = NULL, y = "Assembly size (Mb)") +
+    theme_minimal(base_size = base_font_pt, base_family = base_family) +
+    axis_theme +
+    theme(legend.position = "bottom",
+          panel.grid.major.y = element_blank())
+  p_clf <- apply_legend_theme(p_clf)
+
+  save_pdf(pdf_classbar, p_clf,
+           width = 7.2, height = max(3, n_asm * 0.8 + 1.5))
+  girafe_styled(ggobj = p_clf,
+                width_svg = 10,
+                height_svg = max(3, n_asm * 0.8 + 1.5))
+} else {
+  cat("Per-assembly contig summary data not available.")
+}
+```
+
+## Size Comparison
+
+```{r size_comparison, fig.width=10, fig.height=max(3, n_asm * 0.6 + 1.5)}
+size_data <- comp_df %>%
+  transmute(
+    assembly = factor(assembly, levels = rev(asm_names)),
+    `Chrom assigned`  = chrom_assigned_bp / 1e6,
+    `Organelle`       = organelle_bp / 1e6,
+    `rDNA`            = rdna_bp / 1e6,
+    `Contaminant`     = contaminant_bp / 1e6,
+    `Debris`          = debris_bp / 1e6,
+    `Unclassified`    = unclassified_bp / 1e6
+  ) %>%
+  pivot_longer(-assembly, names_to = "category", values_to = "mb") %>%
+  mutate(category = factor(category,
+    levels = c("Chrom assigned", "Organelle", "rDNA", "Contaminant", "Debris", "Unclassified")))
+
+cat_colors <- c(
+  "Chrom assigned" = oi[5], "Organelle" = oi[3], "rDNA" = oi[1],
+  "Contaminant" = oi[7], "Debris" = oi[9], "Unclassified" = oi[8]
+)
+
+p_size <- ggplot(size_data, aes(x = assembly, y = mb, fill = category)) +
+  geom_col_interactive(
+    aes(tooltip = paste0(assembly, "\n", category, ": ", sprintf("%.1f Mb", mb))),
+    position = "dodge", width = 0.7
+  ) +
+  scale_fill_manual(values = cat_colors, name = NULL) +
+  coord_flip() +
+  labs(x = NULL, y = "Size (Mb)") +
+  theme_minimal(base_size = base_font_pt, base_family = base_family) +
+  axis_theme +
+  theme(legend.position = "bottom", panel.grid.major.y = element_blank())
+p_size <- apply_legend_theme(p_size)
+
+girafe_styled(ggobj = p_size,
+              width_svg = 10,
+              height_svg = max(3, n_asm * 0.6 + 1.5))
+```
+
+
+# 2. Chromosome Completeness {.tabset}
+
+## Heatmap
+
+```{r completeness_heatmap, fig.width=10, fig.height=max(4, nrow(ref_lengths) * 0.3 + 2)}
+if (has_any_chrom) {
+  # Sort reference chromosomes by length
+  ref_order <- ref_lengths %>%
+    arrange(desc(ref_len)) %>%
+    pull(ref_id)
+
+  hm_data <- compl_df %>%
+    mutate(
+      ref_id = factor(ref_id, levels = rev(ref_order)),
+      assembly = factor(assembly, levels = asm_names),
+      best_ref_coverage = as.numeric(best_ref_coverage),
+      coverage_pct = ifelse(is.na(best_ref_coverage), 0, best_ref_coverage * 100)
+    )
+
+  # Telomere/full-length status for overlay
+  hm_data <- hm_data %>%
+    mutate(
+      status_label = case_when(
+        is_full_length == "yes" & has_both_telomeres == "yes" ~ "\u2605",  # star
+        is_full_length == "yes" ~ "\u25CF",  # filled circle
+        n_contigs > 0 ~ "\u25CB",  # open circle
+        TRUE ~ ""
+      ),
+      tooltip = paste0(
+        ref_id, " \u2014 ", assembly, "\n",
+        "Contigs: ", n_contigs, "\n",
+        "Assigned bp: ", scales::comma(total_assigned_bp), "\n",
+        "Best ref coverage: ", fmt_pct(best_ref_coverage), "\n",
+        "Full-length: ", is_full_length, "\n",
+        "Both telomeres: ", has_both_telomeres
+      )
+    )
+
+  p_hm <- ggplot(hm_data, aes(x = assembly, y = ref_id, fill = coverage_pct)) +
+    geom_tile_interactive(aes(tooltip = tooltip), color = "white", linewidth = 0.5) +
+    geom_text(aes(label = status_label), size = 2.5, color = "white", fontface = "bold") +
+    scale_fill_gradient2(
+      low = "#f0f0f0", mid = "#74add1", high = "#1a9850",
+      midpoint = 50, limits = c(0, 100),
+      name = "Ref coverage (%)",
+      na.value = "#f0f0f0"
+    ) +
+    labs(x = NULL, y = NULL) +
+    theme_minimal(base_size = base_font_pt, base_family = base_family) +
+    axis_theme +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1, size = base_font_pt),
+      legend.position = "bottom",
+      panel.grid = element_blank()
+    )
+  p_hm <- apply_legend_theme(p_hm)
+
+  save_pdf(pdf_heatmap, p_hm,
+           width = max(4, n_asm * 0.8 + 2),
+           height = max(4, length(ref_order) * 0.3 + 2))
+  girafe_styled(ggobj = p_hm,
+                width_svg = max(6, n_asm * 0.8 + 2),
+                height_svg = max(4, length(ref_order) * 0.3 + 2))
+} else {
+  cat("No chromosome-assigned contigs found in any assembly.")
+}
+```
+
+<div class="note-box">
+**Legend**: &#9733; = full-length with both telomeres, &#9679; = full-length, &#9675; = assigned (not full-length), blank = no contigs assigned.
+</div>
+
+## Completeness Table
+
+```{r completeness_table}
+if (has_any_chrom) {
+  tbl_data <- compl_df %>%
+    mutate(best_ref_coverage = as.numeric(best_ref_coverage)) %>%
+    select(ref_id, assembly, n_contigs, total_assigned_bp,
+           best_ref_coverage, is_full_length, has_both_telomeres) %>%
+    mutate(
+      `Assigned (Mb)` = round(total_assigned_bp / 1e6, 1),
+      `Ref cov (%)` = ifelse(is.na(best_ref_coverage), "\u2014",
+                             sprintf("%.1f", best_ref_coverage * 100)),
+      `Full-length` = ifelse(is_full_length == "yes", "\u2713", ""),
+      `Both telo` = ifelse(has_both_telomeres == "yes", "\u2713", "")
+    ) %>%
+    select(ref_id, assembly, n_contigs, `Assigned (Mb)`, `Ref cov (%)`,
+           `Full-length`, `Both telo`)
+
+  tbl_data %>%
+    gt(groupname_col = "ref_id") %>%
+    gt_theme() %>%
+    tab_header(title = "Chromosome Completeness by Reference") %>%
+    cols_label(
+      assembly = "Assembly", n_contigs = "Contigs",
+      `Assigned (Mb)` = "Assigned (Mb)",
+      `Ref cov (%)` = "Ref cov (%)",
+      `Full-length` = "Full-length",
+      `Both telo` = "Both telo"
+    ) %>%
+    cols_align(align = "right", columns = c(n_contigs, `Assigned (Mb)`, `Ref cov (%)`)) %>%
+    cols_align(align = "center", columns = c(`Full-length`, `Both telo`))
+} else {
+  cat("No chromosome-assigned contigs found in any assembly.")
+}
+```
+
+
+`r if (has_any_chrom && has_per_asm) "# 3. Quality Comparison {.tabset}" else ""`
+
+```{r quality_section, eval=(has_any_chrom && has_per_asm)}
+chrom_df <- all_summary_df %>%
+  filter(classification == "chrom_assigned")
+
+has_identity <- "seq_identity_vs_ref" %in% names(chrom_df) &&
+                !all(is.na(chrom_df$seq_identity_vs_ref))
+has_collin   <- "collinearity_score" %in% names(chrom_df) &&
+                !all(is.na(chrom_df$collinearity_score))
+has_gc_dev   <- "gc_deviation" %in% names(chrom_df) &&
+                !all(is.na(chrom_df$gc_deviation))
+```
+
+```{r quality_identity, eval=(has_any_chrom && has_per_asm && exists("has_identity") && has_identity), results='asis'}
+cat("## Sequence Identity\n\n")
+```
+
+```{r quality_identity_plot, eval=(has_any_chrom && has_per_asm && exists("has_identity") && has_identity), fig.width=10, fig.height=max(3, n_asm * 0.8 + 1)}
+p_ident <- ggplot(chrom_df, aes(x = assembly, y = seq_identity_vs_ref * 100,
+                                fill = assembly)) +
+  geom_violin(alpha = 0.6, width = 0.7) +
+  geom_boxplot(width = 0.15, outlier.size = 0.5, fill = "white", alpha = 0.7) +
+  scale_fill_manual(values = asm_colors, guide = "none") +
+  coord_flip() +
+  labs(x = NULL, y = "Sequence identity vs reference (%)") +
+  theme_minimal(base_size = base_font_pt, base_family = base_family) +
+  axis_theme +
+  theme(panel.grid.major.y = element_blank())
+
+girafe_styled(ggobj = p_ident, height_svg = max(3, n_asm * 0.8 + 1))
+```
+
+```{r quality_collinearity, eval=(has_any_chrom && has_per_asm && exists("has_collin") && has_collin), results='asis'}
+cat("## Collinearity\n\n")
+```
+
+```{r quality_collinearity_plot, eval=(has_any_chrom && has_per_asm && exists("has_collin") && has_collin), fig.width=10, fig.height=max(3, n_asm * 0.8 + 1)}
+p_collin <- ggplot(chrom_df, aes(x = assembly, y = collinearity_score * 100,
+                                  fill = assembly)) +
+  geom_violin(alpha = 0.6, width = 0.7) +
+  geom_boxplot(width = 0.15, outlier.size = 0.5, fill = "white", alpha = 0.7) +
+  scale_fill_manual(values = asm_colors, guide = "none") +
+  coord_flip() +
+  labs(x = NULL, y = "Collinearity (%)") +
+  theme_minimal(base_size = base_font_pt, base_family = base_family) +
+  axis_theme +
+  theme(panel.grid.major.y = element_blank())
+
+girafe_styled(ggobj = p_collin, height_svg = max(3, n_asm * 0.8 + 1))
+```
+
+```{r quality_gc, eval=(has_any_chrom && has_per_asm && exists("has_gc_dev") && has_gc_dev), results='asis'}
+cat("## GC Deviation\n\n")
+```
+
+```{r quality_gc_plot, eval=(has_any_chrom && has_per_asm && exists("has_gc_dev") && has_gc_dev), fig.width=10, fig.height=max(3, n_asm * 0.8 + 1)}
+p_gc <- ggplot(chrom_df, aes(x = assembly, y = abs(gc_deviation), fill = assembly)) +
+  geom_violin(alpha = 0.6, width = 0.7) +
+  geom_boxplot(width = 0.15, outlier.size = 0.5, fill = "white", alpha = 0.7) +
+  scale_fill_manual(values = asm_colors, guide = "none") +
+  coord_flip() +
+  labs(x = NULL, y = "|GC deviation| (std devs from reference)") +
+  theme_minimal(base_size = base_font_pt, base_family = base_family) +
+  axis_theme +
+  theme(panel.grid.major.y = element_blank())
+
+girafe_styled(ggobj = p_gc, height_svg = max(3, n_asm * 0.8 + 1))
+```
+
+
+`r if (has_any_contam) "# 4. Contamination Comparison" else ""`
+
+```{r contamination, eval=has_any_contam, fig.width=10, fig.height=max(3, n_asm * 0.6 + 1.5)}
+contam_data <- comp_df %>%
+  filter(n_contaminants > 0) %>%
+  mutate(assembly = factor(assembly, levels = rev(asm_names)))
+
+p_contam <- ggplot(contam_data, aes(x = assembly, fill = assembly)) +
+  geom_col_interactive(
+    aes(y = contaminant_bp / 1e6,
+        tooltip = paste0(assembly, "\n",
+                         n_contaminants, " contaminants\n",
+                         sprintf("%.2f Mb", contaminant_bp / 1e6), "\n",
+                         n_contaminant_species, " species")),
+    width = 0.6
+  ) +
+  scale_fill_manual(values = asm_colors, guide = "none") +
+  coord_flip() +
+  labs(x = NULL, y = "Contaminant sequence (Mb)") +
+  theme_minimal(base_size = base_font_pt, base_family = base_family) +
+  axis_theme +
+  theme(panel.grid.major.y = element_blank())
+
+girafe_styled(ggobj = p_contam,
+              height_svg = max(3, n_asm * 0.6 + 1.5))
+```
+
+```{r contamination_table, eval=has_any_contam}
+comp_df %>%
+  filter(n_contaminants > 0) %>%
+  transmute(
+    Assembly = assembly,
+    `N contaminants` = n_contaminants,
+    `Contam bp (Mb)` = round(contaminant_bp / 1e6, 2),
+    `Unique species` = n_contaminant_species
+  ) %>%
+  gt() %>%
+  gt_theme() %>%
+  tab_header(title = "Contamination Summary") %>%
+  cols_align(align = "right", columns = where(is.numeric))
+```
+
+
+`r if (has_any_depth) "# 5. Depth Comparison" else ""`
+
+```{r depth_section, eval=(has_any_depth && has_per_asm), fig.width=10, fig.height=max(3, n_asm * 0.8 + 1)}
+depth_df <- all_summary_df %>%
+  filter(classification == "chrom_assigned", !is.na(depth_mean))
+
+if (nrow(depth_df) > 0) {
+  p_depth <- ggplot(depth_df, aes(x = assembly, y = depth_mean, fill = assembly)) +
+    geom_violin(alpha = 0.6, width = 0.7) +
+    geom_boxplot(width = 0.15, outlier.size = 0.5, fill = "white", alpha = 0.7) +
+    scale_fill_manual(values = asm_colors, guide = "none") +
+    coord_flip() +
+    labs(x = NULL, y = "Mean read depth (chromosome contigs)") +
+    theme_minimal(base_size = base_font_pt, base_family = base_family) +
+    axis_theme +
+    theme(panel.grid.major.y = element_blank())
+
+  girafe_styled(ggobj = p_depth, height_svg = max(3, n_asm * 0.8 + 1))
+} else {
+  cat("No depth data available for chromosome-assigned contigs.")
+}
+```
+
+`r if (has_synteny_data) "# 6. Chromosome Synteny {.tabset}" else ""`
+
+```{r synteny_setup, eval=has_synteny_data, include=FALSE}
+# =========================================================================
+# Section 6: Chromosome Synteny Riparian Plot
+#
+# Per-subgenome grouped x-axis layout (no faceting).
+# Each subgenome gets its own horizontal group:
+#   [Ref.A | asm1 | asm2]  ||  [Ref.P | asm3]  ||  [Ref.T | asm4]
+# Within each group: ribbons connect adjacent columns.
+# Chromosome rows (chr1..chr_n) are shared across all groups.
+# =========================================================================
+
+# --- Assembly contig lookup (incl. original_name for name mapping) ---
+asm_contig_lookup <- list()
+for (i in seq_along(asm_name_list)) {
+  nm <- asm_name_list[i]
+  df <- per_asm_summaries[[i]]
+  if (!is.null(df)) {
+    lookup <- df %>%
+      filter(classification == "chrom_assigned") %>%
+      select(contig, original_name, assigned_ref_id, reversed, length) %>%
+      mutate(assembly = nm, reversed = (reversed == "yes"))
+    asm_contig_lookup[[nm]] <- lookup
+  }
+}
+asm_lookup_df <- bind_rows(asm_contig_lookup)
+
+# --- Fix per-assembly macro_blocks: map original_name -> new_name ---
+if (!is.null(per_asm_macro_df) && nrow(asm_lookup_df) > 0) {
+  name_map <- asm_lookup_df %>%
+    distinct(assembly, original_name, .keep_all = TRUE) %>%
+    select(assembly, original_name, new_name = contig)
+  per_asm_macro_df <- per_asm_macro_df %>%
+    left_join(name_map, by = c("assembly", "contig" = "original_name")) %>%
+    mutate(contig_new = coalesce(new_name, contig))
+} else if (!is.null(per_asm_macro_df)) {
+  per_asm_macro_df <- per_asm_macro_df %>% mutate(contig_new = contig)
+}
+
+# --- Nuclear chromosomes sorted by (subgenome, chrom_num) ---
+has_named_subgenomes <- any(
+  !is.na(ref_lengths$subgenome) & ref_lengths$subgenome != "NA"
+)
+
+if (has_named_subgenomes) {
+  nuc_ref <- ref_lengths %>%
+    filter(!is.na(subgenome) & subgenome != "NA") %>%
+    mutate(chrom_num = as.numeric(str_extract(chrom_id, "\\d+"))) %>%
+    arrange(subgenome, chrom_num)
+} else {
+  macro_rids <- unique(per_asm_macro_df$ref_id)
+  nuc_ref <- ref_lengths %>%
+    filter(ref_id %in% macro_rids) %>%
+    mutate(
+      subgenome = "all",
+      chrom_num = as.numeric(str_extract(ref_id, "\\d+"))
+    ) %>%
+    arrange(chrom_num)
+}
+
+subgenome_order <- unique(nuc_ref$subgenome)
+n_subgenomes <- length(subgenome_order)
+ref_chr_order <- nuc_ref$ref_id
+
+# --- Determine assemblies per subgenome ---
+# For each subgenome, find which assemblies have chromosomes assigned to it
+sg_assemblies <- list()
+for (sg in subgenome_order) {
+  sg_ref_ids <- nuc_ref %>% filter(subgenome == sg) %>% pull(ref_id)
+  asms_with_sg <- asm_lookup_df %>%
+    filter(assigned_ref_id %in% sg_ref_ids) %>%
+    pull(assembly) %>% unique()
+  # Maintain original assembly order
+  sg_assemblies[[sg]] <- asm_name_list[asm_name_list %in% asms_with_sg]
+}
+
+# --- X-axis layout: per-subgenome groups with wider inter-group gaps ---
+col_spacing <- 2    # within group
+group_gap   <- 4    # between groups
+
+# Build column positions and metadata
+col_info <- tibble(
+  column = character(), x_center = numeric(),
+  subgenome = character(), is_ref = logical()
+)
+all_col_centers <- numeric()   # named vector for x-axis breaks
+all_col_labels  <- character() # for x-axis labels
+gap_zones <- list()            # gap zone per adjacent-column pair within groups
+gap_meta  <- list()            # metadata: left_col, right_col, subgenome
+
+x_cursor <- 1
+for (sg_i in seq_along(subgenome_order)) {
+  sg <- subgenome_order[sg_i]
+  sg_asms <- sg_assemblies[[sg]]
+
+  # Reference column for this subgenome
+  ref_col_name <- if (n_subgenomes > 1) paste0("Ref.", sg) else "Reference"
+  ref_x <- x_cursor
+  col_info <- bind_rows(col_info, tibble(
+    column = ref_col_name, x_center = ref_x, subgenome = sg, is_ref = TRUE
+  ))
+  all_col_centers <- c(all_col_centers, setNames(ref_x, ref_col_name))
+  all_col_labels  <- c(all_col_labels, ref_col_name)
+
+  prev_x <- ref_x
+  prev_col <- ref_col_name
+
+  # Assembly columns for this subgenome
+  for (asm in sg_asms) {
+    asm_x <- prev_x + col_spacing
+    # Column label: use assembly name (may appear in multiple groups)
+    asm_col_name <- if (n_subgenomes > 1) paste0(asm, ".", sg) else asm
+    col_info <- bind_rows(col_info, tibble(
+      column = asm_col_name, x_center = asm_x, subgenome = sg, is_ref = FALSE
+    ))
+    all_col_centers <- c(all_col_centers, setNames(asm_x, asm_col_name))
+    all_col_labels  <- c(all_col_labels, asm)
+
+    # Gap zone between prev_col and this column
+    gap_zones[[length(gap_zones) + 1]] <- c(prev_x + 0.2, asm_x - 0.2)
+    gap_meta[[length(gap_meta) + 1]] <- list(
+      left_col = prev_col, right_col = asm_col_name,
+      left_is_ref = (prev_col == ref_col_name), subgenome = sg,
+      left_asm = if (prev_col == ref_col_name) NA_character_ else {
+        # Extract assembly name from compound col name
+        sub(paste0("\\.", sg, "$"), "", prev_col)
+      },
+      right_asm = asm
+    )
+    prev_x <- asm_x
+    prev_col <- asm_col_name
+  }
+
+  # Advance cursor for next group
+  if (sg_i < n_subgenomes) {
+    x_cursor <- prev_x + group_gap
+  }
+}
+
+n_total_cols <- nrow(col_info)
+
+# --- Y-axis layout: shared chromosome rows across all groups ---
+# Row heights based on max ref chromosome length per chrom_num
+chrom_nums <- sort(unique(nuc_ref$chrom_num))
+max_len_per_row <- nuc_ref %>%
+  group_by(chrom_num) %>%
+  summarise(max_len = max(ref_len), .groups = "drop") %>%
+  arrange(chrom_num)
+
+total_max_len <- sum(max_len_per_row$max_len)
+y_scale <- total_max_len / 15  # total maps to ~15 y-units
+row_gap <- 0.3
+
+# Compute y_top for each chrom_num row
+row_layout <- max_len_per_row %>%
+  mutate(
+    row_height = max_len / y_scale,
+    cum_height = cumsum(row_height) - row_height,
+    gap_above = (row_number() - 1) * row_gap,
+    y_top = cum_height + gap_above
+  )
+
+# Join row y_top back to chr_layout
+chr_layout <- nuc_ref %>%
+  left_join(row_layout %>% select(chrom_num, y_top_row = y_top),
+            by = "chrom_num") %>%
+  mutate(
+    pill_height = ref_len / y_scale,
+    y_top = y_top_row
+  )
+
+# Pill linewidth
+pill_lw <- 3.5
+
+# --- Build pill data for all columns ---
+pills_list <- list()
+
+for (sg in subgenome_order) {
+  sg_chr <- chr_layout %>% filter(subgenome == sg)
+  sg_asms <- sg_assemblies[[sg]]
+  ref_col_name <- if (n_subgenomes > 1) paste0("Ref.", sg) else "Reference"
+  ref_x <- col_info %>% filter(column == ref_col_name) %>% pull(x_center)
+
+  # Reference pills for this subgenome
+  pills_list[[ref_col_name]] <- sg_chr %>%
+    transmute(
+      column = ref_col_name,
+      ref_id, chrom_id, subgenome,
+      contig = ref_id, contig_len = ref_len, reversed = FALSE,
+      x_center = ref_x,
+      y_top, y_bot = y_top + pill_height,
+      pill_height,
+      tooltip = sprintf("Reference\n%s\n%.2f Mb", ref_id, ref_len / 1e6)
+    )
+
+  # Assembly pills for this subgenome
+  for (asm in sg_asms) {
+    asm_col_name <- if (n_subgenomes > 1) paste0(asm, ".", sg) else asm
+    asm_x <- col_info %>% filter(column == asm_col_name) %>% pull(x_center)
+
+    lk <- asm_lookup_df %>%
+      filter(assembly == asm, assigned_ref_id %in% sg_chr$ref_id) %>%
+      group_by(assigned_ref_id) %>%
+      arrange(desc(length)) %>%
+      slice(1) %>%
+      ungroup()
+
+    if (nrow(lk) == 0) next
+
+    asm_pills <- sg_chr %>%
+      inner_join(
+        lk %>% select(assigned_ref_id, asm_contig = contig,
+                       asm_len = length, asm_reversed = reversed),
+        by = c("ref_id" = "assigned_ref_id")
+      ) %>%
+      transmute(
+        column = asm_col_name,
+        ref_id, chrom_id, subgenome,
+        contig = asm_contig, contig_len = asm_len,
+        reversed = asm_reversed,
+        x_center = asm_x,
+        y_top,
+        pill_height = asm_len / y_scale,
+        y_bot = y_top + asm_len / y_scale,
+        tooltip = sprintf("%s\n%s\n%.2f Mb", asm, asm_contig, asm_len / 1e6)
+      )
+    pills_list[[asm_col_name]] <- asm_pills
+  }
+}
+
+all_pills <- bind_rows(pills_list)
+all_pills$column <- factor(all_pills$column, levels = col_info$column)
+
+# --- Chromosome color palette (by chrom_id, shared across subgenomes) ---
+unique_chroms <- unique(nuc_ref$chrom_id)
+unique_chroms <- unique_chroms[order(as.numeric(str_extract(unique_chroms, "\\d+")))]
+n_unique_chroms <- length(unique_chroms)
+if (n_unique_chroms <= 9) {
+  chrom_pal <- setNames(oi[seq_len(n_unique_chroms)], unique_chroms)
+} else {
+  chrom_pal <- setNames(
+    colorRampPalette(oi[1:9])(n_unique_chroms),
+    unique_chroms
+  )
+}
+
+# --- Helpers ---
+pos_to_y <- function(pos, seq_len, pill_y_top, pill_h) {
+  pill_y_top + (pos / seq_len) * pill_h
+}
+
+make_ribbon <- function(gap_left, gap_right,
+                        left_y_top, left_y_bot,
+                        right_y_top, right_y_bot,
+                        chrom_id_val, alpha_val, tooltip_text,
+                        subgenome_val, n_pts = 20) {
+  t <- seq(0, 1, length.out = n_pts)
+  s <- 0.5 - 0.5 * cos(pi * t)
+  x_fwd <- gap_left + t * (gap_right - gap_left)
+  top_fwd <- left_y_top + s * (right_y_top - left_y_top)
+  bot_fwd <- left_y_bot + s * (right_y_bot - left_y_bot)
+  tibble(
+    x = c(x_fwd, rev(x_fwd)),
+    y = c(top_fwd, rev(bot_fwd)),
+    chrom_id = chrom_id_val,
+    alpha = alpha_val,
+    tooltip = tooltip_text,
+    subgenome = subgenome_val
+  )
+}
+
+# --- Build ribbon polygons ---
+ribbon_polys <- list()
+ribbon_idx <- 0
+
+pill_lookup <- all_pills %>%
+  select(column, ref_id, chrom_id, contig, contig_len, reversed,
+         x_center, y_top, y_bot, pill_height, subgenome)
+
+max_ref_len <- max(nuc_ref$ref_len)
+min_span <- max(50000, max_ref_len * 0.001)
+
+for (gap_i in seq_along(gap_zones)) {
+  gz <- gap_zones[[gap_i]]
+  gm <- gap_meta[[gap_i]]
+  left_col_name  <- gm$left_col
+  right_col_name <- gm$right_col
+  sg <- gm$subgenome
+
+  sg_ref_ids <- nuc_ref %>% filter(subgenome == sg) %>% pull(ref_id)
+
+  # --- Gather blocks for this gap ---
+  if (gm$left_is_ref) {
+    right_asm <- gm$right_asm
+    if (!is.null(per_asm_macro_df)) {
+      macro_src <- per_asm_macro_df %>%
+        filter(assembly == right_asm, ref_id %in% sg_ref_ids)
+    } else {
+      macro_src <- NULL
+    }
+  } else {
+    left_asm  <- gm$left_asm
+    right_asm <- gm$right_asm
+    if (!is.null(pairwise_macro_df)) {
+      macro_src <- pairwise_macro_df %>%
+        filter(left_assembly == left_asm, right_assembly == right_asm)
+      if (n_subgenomes > 1) {
+        macro_src <- macro_src %>% filter(subgenome == sg)
+      }
+    } else {
+      macro_src <- NULL
+    }
+  }
+
+  if (is.null(macro_src) || nrow(macro_src) == 0) next
+
+  # Filter small blocks once for all blocks in this gap
+  macro_src <- macro_src %>% filter(qspan_bp >= min_span)
+  if (nrow(macro_src) == 0) next
+
+  # --- Iterate per block (supports off-target blocks) ---
+  for (b in seq_len(nrow(macro_src))) {
+    blk <- macro_src[b, ]
+
+    # Look up left and right pills by contig name
+    if (gm$left_is_ref) {
+      lp <- pill_lookup %>% filter(column == left_col_name, contig == blk$ref_id)
+      rp <- pill_lookup %>% filter(column == right_col_name, contig == blk$contig_new)
+    } else {
+      lp <- pill_lookup %>% filter(column == left_col_name, contig == blk$ref_id)
+      rp <- pill_lookup %>% filter(column == right_col_name, contig == blk$contig)
+    }
+    if (nrow(lp) == 0 || nrow(rp) == 0) next
+
+    left_len  <- lp$contig_len[1]
+    left_y    <- lp$y_top[1]
+    left_h    <- lp$pill_height[1]
+    right_len <- rp$contig_len[1]
+    right_y   <- rp$y_top[1]
+    right_h   <- rp$pill_height[1]
+
+    # Color by left pill's chrom_id (source chromosome)
+    cid <- as.character(lp$chrom_id[1])
+
+    # Left side coordinates — never reversed
+    # (ref coords are in reference frame; asm→asm coords are already oriented)
+    l_start <- as.numeric(blk$ref_start)
+    l_end   <- as.numeric(blk$ref_end)
+
+    # Right side coordinates
+    r_start <- as.numeric(blk$qstart)
+    r_end   <- as.numeric(blk$qend)
+    if (gm$left_is_ref && isTRUE(rp$reversed[1])) {
+      # ref→asm: right assembly contig may be reversed relative to reference
+      r_start_new <- right_len - r_end
+      r_end_new   <- right_len - r_start
+      r_start <- r_start_new
+      r_end   <- r_end_new
+    }
+    # asm→asm: no reversal — pairwise alignment used already-oriented FASTAs
+
+    # Clamp to valid ranges
+    l_start <- max(0, l_start); l_end <- min(left_len, l_end)
+    r_start <- max(0, r_start); r_end <- min(right_len, r_end)
+    if (l_end <= l_start || r_end <= r_start) next
+
+    # Map to y coordinates within each pill
+    ly_top <- pos_to_y(l_start, left_len, left_y, left_h)
+    ly_bot <- pos_to_y(l_end, left_len, left_y, left_h)
+    ry_top <- pos_to_y(r_start, right_len, right_y, right_h)
+    ry_bot <- pos_to_y(r_end, right_len, right_y, right_h)
+
+    # Determine effective strand in the oriented frame
+    strand_val <- blk$strand
+    if (gm$left_is_ref && isTRUE(rp$reversed[1])) {
+      # ref→asm: alignment was on unoriented query, but the pill shows the
+      # oriented contig.  Reversing the contig flips the strand.
+      strand_val <- if (strand_val == "+") "-" else "+"
+    }
+    # Inversions: strand = "-" -> swap top/bottom on right side
+    if (strand_val == "-") {
+      tmp <- ry_top; ry_top <- ry_bot; ry_bot <- tmp
+    }
+
+    ident_val <- as.numeric(blk$identity)
+    alpha_ribbon <- 0.2 + 0.5 * min(1, ident_val)
+
+    # Tooltip: show left → right contig/chromosome names
+    left_key  <- lp$contig[1]
+    right_key <- rp$contig[1]
+    tooltip <- sprintf(
+      "%s \u2192 %s\n%.2f Mb\nIdentity: %.1f%%\nStrand: %s",
+      left_key, right_key,
+      as.numeric(blk$union_bp) / 1e6,
+      ident_val * 100, strand_val
+    )
+
+    ribbon_idx <- ribbon_idx + 1
+    ribbon_polys[[ribbon_idx]] <- make_ribbon(
+      gz[1], gz[2], ly_top, ly_bot, ry_top, ry_bot,
+      chrom_id_val = cid, alpha_val = alpha_ribbon,
+      tooltip_text = tooltip, subgenome_val = sg
+    ) %>% mutate(group_id = ribbon_idx)
+  }
+}
+
+has_ribbons <- length(ribbon_polys) > 0
+if (has_ribbons) {
+  all_ribbons <- bind_rows(ribbon_polys)
+} else {
+  all_ribbons <- NULL
+}
+
+# --- Plot sizing ---
+n_chrom_rows <- length(chrom_nums)
+syn_plot_h <- max(4, n_chrom_rows * 0.5 + 2)
+syn_plot_w <- max(7.2, n_total_cols * 1.8 + 2)
+```
+
+```{r synteny_description, eval=has_synteny_data, results='asis'}
+cat('<p class="section-intro">\n')
+cat("Chromosome synteny between the reference and each assembly (nucleotide mode). ")
+if (exists("n_subgenomes") && n_subgenomes > 1) {
+  cat("Assemblies are grouped by reference subgenome. ")
+}
+cat("Ribbons connect syntenic macro-blocks between adjacent columns. ")
+cat("Color indicates the reference chromosome; opacity reflects alignment identity. ")
+cat("Crossed ribbons indicate inversions.\n")
+cat("</p>\n")
+```
+
+## Riparian Plot
+
+```{r synteny_riparian, eval=(has_synteny_data && exists("has_ribbons") && has_ribbons), fig.width=10, fig.height=10}
+# --- Chromosome labels on far left of plot (one set, from first group) ---
+first_sg <- subgenome_order[1]
+first_ref_col <- if (n_subgenomes > 1) paste0("Ref.", first_sg) else "Reference"
+first_ref_x <- col_info %>% filter(column == first_ref_col) %>% pull(x_center)
+chr_label_df <- chr_layout %>%
+  filter(subgenome == first_sg) %>%
+  mutate(
+    x = first_ref_x - 0.4,
+    y_mid = y_top + pill_height / 2,
+    label = chrom_id
+  )
+
+# --- Compose the plot (single flat plot, no faceting) ---
+p_syn <- ggplot()
+
+# Ribbons (behind pills)
+if (has_ribbons) {
+  p_syn <- p_syn +
+    geom_polygon_interactive(
+      data = all_ribbons,
+      aes(x = x, y = y, group = group_id, fill = chrom_id,
+          alpha = alpha, tooltip = tooltip),
+      show.legend = FALSE
+    ) +
+    scale_fill_manual(values = chrom_pal, guide = "none") +
+    scale_alpha_identity()
+}
+
+# Reference pills (darker)
+ref_pill_data <- all_pills %>%
+  semi_join(col_info %>% filter(is_ref), by = "column")
+p_syn <- p_syn +
+  geom_segment(
+    data = ref_pill_data,
+    aes(x = x_center, xend = x_center, y = y_top, yend = y_bot),
+    linewidth = pill_lw, lineend = "round", color = "grey55"
+  )
+
+# Assembly pills (lighter, interactive)
+asm_pill_data <- all_pills %>%
+  semi_join(col_info %>% filter(!is_ref), by = "column")
+if (nrow(asm_pill_data) > 0) {
+  p_syn <- p_syn +
+    geom_segment_interactive(
+      data = asm_pill_data,
+      aes(x = x_center, xend = x_center, y = y_top, yend = y_bot,
+          tooltip = tooltip),
+      linewidth = pill_lw, lineend = "round", color = "grey78"
+    )
+}
+
+# Chromosome labels on left of each group
+p_syn <- p_syn +
+  geom_text(data = chr_label_df,
+            aes(x = x, y = y_mid, label = label),
+            size = 2, hjust = 1, family = base_family)
+
+# Subgenome group labels (centered above each group, only if >1 subgenome)
+if (n_subgenomes > 1) {
+  sg_label_df <- col_info %>%
+    group_by(subgenome) %>%
+    summarise(x_mid = mean(x_center), .groups = "drop") %>%
+    mutate(y = min(row_layout$y_top) - 0.6,
+           label = paste0("Subgenome ", subgenome))
+
+  p_syn <- p_syn +
+    geom_text(data = sg_label_df,
+              aes(x = x_mid, y = y, label = label),
+              size = 2.8, fontface = "bold", family = base_family)
+}
+
+# Axis scales
+p_syn <- p_syn +
+  scale_x_continuous(
+    breaks = as.numeric(all_col_centers),
+    labels = all_col_labels,
+    expand = expansion(add = c(1.5, 0.5))
+  ) +
+  scale_y_reverse(expand = expansion(mult = c(0.02, 0.05)))
+
+# Theme (no faceting)
+p_syn <- p_syn +
+  theme_minimal(base_size = base_font_pt, base_family = base_family) +
+  theme(
+    axis.text.x = element_text(size = base_font_pt, face = "bold",
+                                family = base_family, angle = 45, hjust = 1),
+    axis.text.y = element_blank(),
+    axis.ticks = element_blank(),
+    axis.title = element_blank(),
+    panel.grid = element_blank(),
+    plot.margin = margin(5, 5, 5, 30)
+  )
+
+save_pdf(pdf_synteny, p_syn, width = 7.2, height = syn_plot_h)
+girafe_styled(ggobj = p_syn, width_svg = syn_plot_w, height_svg = syn_plot_h)
+```
+
+```{r synteny_empty, eval=(has_synteny_data && !(exists("has_ribbons") && has_ribbons))}
+cat("Synteny data available but no ribbon connections could be built. ",
+    "This may indicate that assemblies have very different chromosome structures.")
+```
+
+```{r synteny_not_nucleotide, eval=(!has_synteny_data && params$synteny_mode != "nucleotide"), results='asis'}
+# Don't show section header if not nucleotide mode — it's hidden by the conditional above
+```
+
+---
+
+<div class="note-box">
+Generated by **final_finalizer** multi-assembly comparison &mdash; `r Sys.Date()`
+</div>

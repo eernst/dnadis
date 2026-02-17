@@ -12,6 +12,7 @@ from final_finalizer.utils.logging_config import get_logger
 
 logger = get_logger("fasta_output")
 
+from final_finalizer.utils.reference_utils import split_chrom_subgenome
 from final_finalizer.utils.sequence_utils import (
     read_fasta_sequences,
     reverse_complement,
@@ -122,3 +123,50 @@ def write_classified_fastas(
         logger.done(f"{category}: {output_path} ({len(sorted_seqs)} contigs)")
 
     return output_paths
+
+
+def write_per_subgenome_chrs_fastas(
+    chrs_fasta: Path,
+    output_prefix: Path,
+) -> Dict[str, Path]:
+    """Split oriented chrs.fasta into per-subgenome FASTA files.
+
+    Reads the already-oriented chrs.fasta (headers are new_names like chr1A),
+    groups sequences by subgenome using split_chrom_subgenome(), and writes
+    one FASTA per subgenome: {prefix}.chrs.{sg}.fasta.
+
+    Args:
+        chrs_fasta: Path to the oriented chrs.fasta.
+        output_prefix: Output prefix for per-subgenome files.
+
+    Returns:
+        Dict mapping subgenome -> Path, e.g. {"A": Path("...chrs.A.fasta")}.
+        Empty dict if chrs.fasta is missing/empty or all subgenomes are "NA".
+    """
+    if not chrs_fasta.exists() or chrs_fasta.stat().st_size == 0:
+        return {}
+
+    sequences = read_fasta_sequences(chrs_fasta)
+    if not sequences:
+        return {}
+
+    # Group sequences by subgenome
+    sg_seqs: Dict[str, Dict[str, str]] = defaultdict(dict)
+    for name, seq in sequences.items():
+        _chrom_id, sg = split_chrom_subgenome(name)
+        if sg == "NA":
+            continue
+        sg_seqs[sg][name] = seq
+
+    if not sg_seqs:
+        return {}
+
+    result: Dict[str, Path] = {}
+    for sg in sorted(sg_seqs):
+        out_path = Path(f"{output_prefix}.chrs.{sg}.fasta")
+        sorted_seqs = dict(sorted(sg_seqs[sg].items(), key=lambda x: sort_key(x[0])))
+        write_fasta(sorted_seqs, out_path)
+        result[sg] = out_path
+        logger.info(f"Per-subgenome FASTA ({sg}): {out_path} ({len(sorted_seqs)} contigs)")
+
+    return result

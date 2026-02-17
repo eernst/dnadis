@@ -44,7 +44,6 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
     "common": {
         "threads": "threads",
         "plot": "plot",
-        "plot_html": "plot_html",
         "chr_like_minlen": "chr_like_minlen",
         "add_subgenome_suffix": "add_subgenome_suffix",
         "ref_id_pattern": "ref_id_pattern",
@@ -145,6 +144,11 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
         "scaffold": "scaffold",
         "scaffold_gap_size": "scaffold_gap_size",
     },
+    "multi_assembly": {
+        "fofn": "fofn",
+        "assembly_dir": "assembly_dir",
+        "output_dir": "output_dir",
+    },
 }
 
 
@@ -185,7 +189,7 @@ def load_config(path: Path) -> Dict[str, Any]:
             if toml_key in section_data:
                 value = section_data[toml_key]
                 # Convert paths to Path objects for path-like arguments
-                if argparse_dest in ("ref", "query", "ref_gff3", "reads", "chrC_ref", "chrM_ref", "rdna_ref"):
+                if argparse_dest in ("ref", "query", "ref_gff3", "reads", "chrC_ref", "chrM_ref", "rdna_ref", "fofn", "assembly_dir"):
                     if value is not None:
                         value = Path(value)
                 flat_config[argparse_dest] = value
@@ -214,7 +218,7 @@ def merge_config_with_args(config: Dict[str, Any], args: argparse.Namespace) -> 
 
         # Skip if CLI explicitly set a value (non-None for optional args)
         # This is a heuristic - works for most cases
-        if current_value is not None and key not in ("threads", "plot", "plot_html"):
+        if current_value is not None and key not in ("threads", "plot"):
             continue
 
         # For boolean flags that default to False, only override if not set via CLI

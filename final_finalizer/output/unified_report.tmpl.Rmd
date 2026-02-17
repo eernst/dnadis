@@ -132,12 +132,12 @@ oi <- palette_okabe_ito()
 
 classification_colors <- c(
   "chrom_assigned"     = oi[5],
-  "chrom_unassigned"   = oi[7],
+  "chrom_unassigned"   = oi[2],
   "organelle_complete" = oi[3],
   "organelle_debris"   = oi[4],
-  "rdna"               = oi[1],
-  "contaminant"        = oi[6],
-  "chrom_debris"       = oi[2],
+  "rDNA"               = oi[1],
+  "contaminant"        = oi[7],
+  "chrom_debris"       = lighten(oi[5], amount = 0.5),
   "debris"             = oi[9],
   "unclassified"       = oi[8]
 )
@@ -147,7 +147,7 @@ classification_labels <- c(
   "chrom_unassigned"   = "Chromosome (unassigned)",
   "organelle_complete" = "Organelle (complete)",
   "organelle_debris"   = "Organelle (debris)",
-  "rdna"               = "rDNA",
+  "rDNA"               = "rDNA",
   "contaminant"        = "Contaminant",
   "chrom_debris"       = "Chromosome debris",
   "debris"             = "Debris",
@@ -160,7 +160,7 @@ clf_labels_short <- c(
   "chrom_unassigned"   = "Chr unassigned",
   "organelle_complete" = "Organelle",
   "organelle_debris"   = "Organelle debris",
-  "rdna"               = "rDNA",
+  "rDNA"               = "rDNA",
   "contaminant"        = "Contaminant",
   "chrom_debris"       = "Chr debris",
   "debris"             = "Debris",
@@ -169,7 +169,7 @@ clf_labels_short <- c(
 
 classification_levels <- c(
   "chrom_assigned", "chrom_unassigned", "organelle_complete", "organelle_debris",
-  "rdna", "contaminant", "chrom_debris", "debris", "unclassified"
+  "rDNA", "contaminant", "chrom_debris", "debris", "unclassified"
 )
 
 # ---------------------------------------------------------------------------
@@ -1235,7 +1235,7 @@ depth_classification_order <- c(
   "chrom_assigned", "chrom_debris", "chrom_unassigned",
   "chrC", "chrC_debris", "chrM", "chrM_debris",
   "organelle_complete", "organelle_debris",
-  "rdna", "contaminant", "debris", "unclassified"
+  "rDNA", "contaminant", "debris", "unclassified"
 )
 depth_classification_colors <- c(
   "chrom_assigned"     = oi[5],
@@ -1247,7 +1247,7 @@ depth_classification_colors <- c(
   "chrM_debris"        = lighten(oi[6], amount = 0.5),
   "organelle_complete" = oi[3],
   "organelle_debris"   = oi[4],
-  "rdna"               = oi[1],
+  "rDNA"               = oi[1],
   "contaminant"        = oi[7],
   "debris"             = oi[9],
   "unclassified"       = oi[8]
@@ -1324,7 +1324,8 @@ if (nrow(df_chrom_depth) > 0) {
     ggiraph::geom_col_interactive(
       aes(fill = fill_category, tooltip = tooltip),
       width = 0.8, alpha = 0.85, orientation = "y") +
-    scale_fill_manual(values = sg_colors, name = "Subgenome") +
+    scale_fill_manual(values = sg_colors, name = "Subgenome",
+                      guide = if (has_subgenomes) "legend" else "none") +
     scale_y_reverse(breaks = chrom_breaks$mid_pos,
                     labels = str_replace(chrom_breaks$chrom_label, "^chr", ""),
                     expand = expansion(mult = c(0.01, 0.01))) +
@@ -1394,7 +1395,14 @@ depth_by_cat <- summary_df %>%
     breadth_10x = if ("depth_breadth_10x" %in% names(.)) mean(depth_breadth_10x, na.rm = TRUE) * 100 else NA_real_,
     .groups = "drop"
   ) %>%
-  mutate(label = classification_labels[classification]) %>% arrange(desc(n))
+  mutate(
+    color_swatch = mapply(function(c) {
+      col <- classification_colors[c]; if (is.na(col)) col <- "#999"
+      paste0('<span style="display:inline-block;width:10px;height:10px;background:', col,
+             ';border-radius:2px;margin-right:4px;"></span>')
+    }, classification),
+    label = paste0(color_swatch, classification_labels[classification])
+  ) %>% arrange(desc(mean_depth))
 
 sel <- c("label", "n", "mean_depth", "median_depth", "depth_cv")
 labels <- list(label = "Category", n = "Contigs", mean_depth = "Mean Depth",
@@ -1405,6 +1413,7 @@ if (has_breadth_col) {
   labels$breadth_1x <- "Breadth >= 1x"; labels$breadth_10x <- "Breadth >= 10x"
 }
 depth_by_cat %>% select(all_of(sel)) %>% gt() %>% cols_label(.list = labels) %>%
+  fmt(columns = label, fns = function(x) x) %>%
   fmt_number(columns = any_of(c("mean_depth", "median_depth")), decimals = 1) %>%
   fmt_number(columns = any_of("depth_cv"), decimals = 2) %>%
   fmt_number(columns = any_of(c("breadth_1x", "breadth_10x")), decimals = 1) %>%
@@ -1414,7 +1423,7 @@ depth_by_cat %>% select(all_of(sel)) %>% gt() %>% cols_label(.list = labels) %>%
 
 ```{r organelle_rdna_data}
 org_df <- summary_df %>% filter(classification %in% c("organelle_complete", "organelle_debris"))
-rdna_df <- summary_df %>% filter(classification == "rdna")
+rdna_df <- summary_df %>% filter(classification == "rDNA")
 has_organelles <- nrow(org_df) > 0
 has_rdna <- nrow(rdna_df) > 0
 ```
@@ -1509,20 +1518,19 @@ arrays_tbl <- arrays_show %>%
     id_dist = if (nrow(id_by_array) > 0) id_dist else lapply(seq_len(n()), function(i) {
       c(identity_min[i], identity_median[i], identity_max[i])
     }),
-    start_mb = sprintf("%.2f", start / 1e6),
-    end_mb = sprintf("%.2f", end / 1e6),
+    coords = sprintf("%.2f\u2013%.2f Mb", start / 1e6, end / 1e6),
     copies_text = paste0(n_total, " (", n_full, "F / ", n_partial, "P / ", n_fragment, "Fr)")
   )
 
 arrays_tbl %>%
-  select(array_id, contig, start_mb, end_mb, span_bar, span_text,
-         strand, copies_text, id_dist, id_text) %>%
+  select(array_id, contig, coords, span_bar, span_text,
+         copies_text, id_dist, id_text) %>%
   gt() %>%
   cols_label(
     array_id = "Array", contig = "Contig",
-    start_mb = "Start (Mb)", end_mb = "End (Mb)",
+    coords = "Coordinates",
     span_bar = "", span_text = "Span",
-    strand = "Strand", copies_text = "Copies (F/P/Fr)",
+    copies_text = "Copies (F/P/Fr)",
     id_dist = "", id_text = "Identity"
   ) %>%
   fmt(columns = span_bar, fns = function(x) x) %>%

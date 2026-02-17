@@ -18,11 +18,8 @@ from pathlib import Path
 
 # Map generated R script suffix → template filename
 SCRIPT_TO_TEMPLATE = {
-    "chromosome_overview": "chromosome_overview.tmpl.R",
-    "depth_overview": "depth_overview.tmpl.R",
-    "contaminant_table": "contaminant_table.tmpl.R",
-    "classification_summary_bar": "classification_summary_bar.tmpl.R",
     "unified_report": "unified_report.tmpl.Rmd",
+    "comparison_report": "comparison_report.tmpl.Rmd",
 }
 
 # Regex to find all __PLACEHOLDER__ tokens in a template
@@ -43,11 +40,8 @@ PLACEHOLDER_TSV = {
 
 # Output file suffixes per script type
 SCRIPT_OUTPUT_SUFFIXES = {
-    "chromosome_overview": (".chromosome_overview.pdf", ".chromosome_overview.html"),
-    "depth_overview": (".depth_overview.pdf", ".depth_overview.html"),
-    "contaminant_table": (None, ".contaminant_table.html"),
-    "classification_summary_bar": (".classification_summary_bar.pdf", ".classification_summary_bar.html"),
     "unified_report": (None, ".unified_report.html"),
+    "comparison_report": (None, ".comparison_report.html"),
 }
 
 
@@ -110,13 +104,13 @@ def extract_non_path_placeholders(
         context_after = template_text[end:line_end]
 
         # Build regex: literal context before + capture group + literal context after
-        pattern = re.escape(context_before) + r"(.+?)" + re.escape(context_after)
+        pattern = re.escape(context_before) + r"(.*?)" + re.escape(context_after)
         m = re.search(pattern, generated_text)
         if m:
             values[placeholder] = m.group(1)
         else:
             # Fallback: try without trailing context
-            pattern_no_trail = re.escape(context_before) + r"(.+)"
+            pattern_no_trail = re.escape(context_before) + r"(.*)"
             m2 = re.search(pattern_no_trail, generated_text)
             if m2:
                 values[placeholder] = m2.group(1).rstrip()
