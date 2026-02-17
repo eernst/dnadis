@@ -26,10 +26,7 @@ import argparse
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-try:
-    import tomli
-except ImportError:
-    tomli = None  # type: ignore
+import tomllib
 
 
 # Schema mapping TOML sections/keys to argparse argument names
@@ -162,21 +159,14 @@ def load_config(path: Path) -> Dict[str, Any]:
         Flat dictionary of configuration values with argparse dest names as keys
 
     Raises:
-        RuntimeError: If tomli is not installed
         ValueError: If the configuration file is invalid
     """
-    if tomli is None:
-        raise RuntimeError(
-            "TOML support requires the 'tomli' package. "
-            "Install with: pip install tomli"
-        )
-
     path = Path(path)
     if not path.exists():
         raise ValueError(f"Configuration file not found: {path}")
 
     with open(path, "rb") as f:
-        raw_config = tomli.load(f)
+        raw_config = tomllib.load(f)
 
     # Flatten TOML structure to argparse dest names
     flat_config: Dict[str, Any] = {}

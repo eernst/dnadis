@@ -8,10 +8,10 @@ from pathlib import Path
 
 def update_readme(readme_path: Path, python_version: str) -> bool:
     text = readme_path.read_text(encoding="utf-8")
-    pattern = re.compile(r"(conda create -n final_finalizer python=)(\d+\.\d+)")
+    pattern = re.compile(r"(python=)(\d+\.\d+)")
     replaced, n = pattern.subn(rf"\g<1>{python_version}", text)
     if n == 0:
-        raise ValueError("Unable to find conda create line with python= in README.md")
+        raise ValueError("Unable to find python= version string in README.md")
     if replaced != text:
         readme_path.write_text(replaced, encoding="utf-8")
         return True

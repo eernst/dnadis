@@ -27,10 +27,8 @@
 [![CI](https://github.com/eernst/final_finalizer/actions/workflows/ci.yml/badge.svg)](https://github.com/eernst/final_finalizer/actions/workflows/ci.yml)
 
 **Required:**
-- Python 3.9+
-- Python packages:
-  - [tomli](https://pypi.org/project/tomli/) - TOML configuration file support (Python <3.11 only)
-  - [intervaltree](https://pypi.org/project/intervaltree/) - efficient overlap detection (recommended for performance)
+- Python 3.11+
+- [intervaltree](https://github.com/chaimleib/intervaltree) - efficient overlap detection
 - [miniprot](https://github.com/lh3/miniprot) - protein-to-genome alignment
 - [gffread](https://github.com/gpertea/gffread) - GFF3/FASTA processing
 - [BLAST+](https://blast.ncbi.nlm.nih.gov/) - organelle/rDNA detection
@@ -49,26 +47,19 @@
 ### Conda environment
 
 ```bash
-conda create -n final_finalizer python=3.10 miniprot gffread blast mm2plus centrifuger -c bioconda -c conda-forge
+conda create -n final_finalizer \
+    python=3.11 intervaltree \
+    miniprot gffread blast mm2plus centrifuger infernal \
+    r-base r-ggplot2 r-dplyr r-readr r-stringr r-tibble r-tidyr \
+    r-patchwork r-ggnewscale r-pacman r-ggiraph r-htmlwidgets r-scales \
+    libxml2 pandoc \
+    -c bioconda -c conda-forge
 conda activate final_finalizer
-
-# Install Python dependencies
-pip install -r requirements.txt
 ```
 
 Optional (read depth analysis):
 ```bash
 conda install -n final_finalizer -c bioconda samtools mosdepth rasusa
-```
-
-Optional (plotting):
-```bash
-conda install -n final_finalizer -c conda-forge r-base r-ggplot2 r-dplyr r-readr r-stringr r-tibble r-tidyr r-patchwork r-ggnewscale r-pacman r-ggiraph r-htmlwidgets r-scales libxml2 pandoc
-```
-
-Optional (Infernal for rDNA sub-feature annotation):
-```bash
-conda install -n final_finalizer -c bioconda infernal
 ```
 
 Optional (taxonkit for contaminant table taxonomic lineage):
@@ -91,9 +82,17 @@ tar -xzf taxdump.tar.gz -C ~/.taxonkit
 
 Without taxonkit, the contaminant table will show species names parsed from scientific names. With taxonkit and the taxonomy database, you get full taxonomic lineage (Domain, Family, Genus, Species) in the contaminant table.
 
+### Development
+
+To run the test suite:
+```bash
+conda install -n final_finalizer -c conda-forge pytest pytest-cov
+conda run -n final_finalizer pytest -q
+```
+
 Latest tested conda package versions (CI):
 <!-- conda-versions-start -->
-- python: 3.10
+- python: 3.11
 - miniprot: unknown
 - gffread: unknown
 - blast: unknown
@@ -288,7 +287,7 @@ Uses Infernal covariance models from Rfam 15.0 for structure-based rRNA boundary
 
 **Dependencies:**
 - Required: BLAST+ (makeblastdb, blastn) for locus detection
-- Required: [Infernal](http://eddylab.org/infernal/) for sub-feature annotation (install via conda: `conda install -c bioconda infernal`)
+- Required: [Infernal](http://eddylab.org/infernal/) for sub-feature annotation (included in the recommended conda environment)
 
 **Use cases:**
 - Locate nucleolar organizer regions (NORs) on chromosomes

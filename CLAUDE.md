@@ -76,7 +76,7 @@ pytest -m "not integration"
 ### Code style
 ```bash
 # No formal linters configured - follow existing code style
-# Use Python 3.9+ type hints with `from __future__ import annotations`
+# Use Python 3.11+ type hints with `from __future__ import annotations`
 ```
 
 ## Architecture Overview
@@ -250,8 +250,7 @@ Tests are in `tests/` directory. 21 tests total:
 - Rscript (with ggplot2, dplyr, etc.) - visualization
 
 **Python packages**:
-- tomli - TOML config file parsing (Python <3.11 only)
-- intervaltree - efficient overlap detection (recommended for performance)
+- intervaltree - efficient overlap detection
 
 All external tools are called via subprocess with proper error handling. Use `utils/io_utils.py:have_exe()` to check availability before calling.
 
@@ -323,7 +322,6 @@ Classification happens in `classification/classifier.py:classify_all_contigs()`.
 The synteny block building algorithm in `chain_parsing.py` is critical for performance. Key optimizations:
 
 - **Interval tree filtering**: Uses `intervaltree` package for O(n log n) overlap detection
-- **Fallback to O(n²)**: If `intervaltree` not installed, falls back to slower nested loop
 - **Chain scoring**: Uses `score_topk=10` to consider top-K chains per contig × reference, not just the best chain
 
 If modifying chain parsing, ensure you handle both PAF (minimap2) and miniprot PAF formats correctly. Miniprot PAF includes gene IDs in alignment records.

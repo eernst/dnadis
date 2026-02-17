@@ -7,7 +7,6 @@ and computing evidence for contig-to-reference assignments.
 
 Performance: Uses interval trees (intervaltree package) for O(n log n) overlap
 detection during block filtering, replacing the previous O(n²) pairwise comparison.
-Falls back to sweep-line algorithm if intervaltree is not available.
 """
 from __future__ import annotations
 
@@ -15,11 +14,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Dict, Optional
 
-try:
-    from intervaltree import IntervalTree
-    HAVE_INTERVALTREE = True
-except ImportError:
-    HAVE_INTERVALTREE = False
+from intervaltree import IntervalTree
 
 from final_finalizer.models import Block, Chain, ChainEvidenceResult
 from final_finalizer.utils.io_utils import merge_intervals, open_maybe_gzip
@@ -446,53 +441,27 @@ def _filter_overlapping_hits_by_identity(
         # Sort by identity descending - process highest identity hits first
         hits_with_ident.sort(key=lambda x: -x[2])
 
-        if HAVE_INTERVALTREE:
-            # Use interval tree for O(n log n) performance
-            tree: IntervalTree = IntervalTree()
-            kept_hits: list[tuple[tuple[str, str, str], Block]] = []
+        # Use interval tree for O(n log n) performance
+        tree: IntervalTree = IntervalTree()
+        kept_hits: list[tuple[tuple[str, str, str], Block]] = []
 
-            for qs, qe, ident, key, blk in hits_with_ident:
-                # Ensure valid interval (qe > qs)
-                if qe <= qs:
-                    continue
+        for qs, qe, ident, key, blk in hits_with_ident:
+            # Ensure valid interval (qe > qs)
+            if qe <= qs:
+                continue
 
-                # Check if this hit overlaps with any existing higher-identity hit
-                # Since we process in identity order, any existing interval has higher/equal identity
-                overlapping = tree[qs:qe]
+            # Check if this hit overlaps with any existing higher-identity hit
+            # Since we process in identity order, any existing interval has higher/equal identity
+            overlapping = tree[qs:qe]
 
-                if not overlapping:
-                    # No overlapping higher-identity hits - keep this one
-                    tree[qs:qe] = (ident, key, blk)
-                    kept_hits.append((key, blk))
-                else:
-                    # Overlaps with higher-identity hit - filter this one out
-                    total_removed += 1
-                    removed_per_contig[contig] += 1
-        else:
-            # Fallback: O(n²) sweep line algorithm if intervaltree not available
-            kept_intervals: list[tuple[int, int, float]] = []
-            kept_hits = []
-
-            for qs, qe, ident, key, blk in hits_with_ident:
-                if qe <= qs:
-                    continue
-
-                # Check if this hit overlaps with any kept interval
-                dominated = False
-                for kept_qs, kept_qe, kept_ident in kept_intervals:
-                    # Check for 1+ bp overlap
-                    if qs < kept_qe and qe > kept_qs:
-                        # Overlap exists - since we process in identity order,
-                        # the kept interval has higher or equal identity
-                        dominated = True
-                        break
-
-                if not dominated:
-                    kept_intervals.append((qs, qe, ident))
-                    kept_hits.append((key, blk))
-                else:
-                    total_removed += 1
-                    removed_per_contig[contig] += 1
+            if not overlapping:
+                # No overlapping higher-identity hits - keep this one
+                tree[qs:qe] = (ident, key, blk)
+                kept_hits.append((key, blk))
+            else:
+                # Overlaps with higher-identity hit - filter this one out
+                total_removed += 1
+                removed_per_contig[contig] += 1
 
         # Add kept hits to filtered_blocks
         for key, blk in kept_hits:
