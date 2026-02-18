@@ -48,12 +48,12 @@
 
 ```bash
 conda create -n final_finalizer \
+    -c conda-forge -c bioconda \
     python=3.11 intervaltree \
     miniprot gffread blast mm2plus centrifuger infernal \
     r-base r-ggplot2 r-dplyr r-readr r-stringr r-tibble r-tidyr \
     r-patchwork r-ggnewscale r-pacman r-ggiraph r-htmlwidgets r-scales \
-    libxml2 pandoc \
-    -c bioconda -c conda-forge
+    r-rmarkdown libxml2 pandoc \
 conda activate final_finalizer
 ```
 
