@@ -35,7 +35,7 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
     "required": {
         "ref": "ref",
         "query": "query",
-        "outprefix": "outprefix",
+        "output_dir": "output_dir",
         "ref_gff3": "ref_gff3",
     },
     "common": {
@@ -144,7 +144,14 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
     "multi_assembly": {
         "fofn": "fofn",
         "assembly_dir": "assembly_dir",
-        "output_dir": "output_dir",
+    },
+    "distributed": {
+        "cluster": "cluster",
+        "max_threads_dist": "max_threads_dist",
+        "max_mem_dist": "max_mem_dist",
+        "max_time_dist": "max_time_dist",
+        "partition": "partition",
+        "qos": "qos",
     },
 }
 

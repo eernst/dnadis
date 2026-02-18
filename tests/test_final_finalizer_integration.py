@@ -236,7 +236,10 @@ def test_contig_orientation_detection(tmp_path):
     # Create output directory
     output_dir = tmp_path / "output"
     output_dir.mkdir(exist_ok=True)
-    output_prefix = output_dir / "test"
+
+    # Assembly name is derived from query filename: "test_query"
+    asm_name = "test_query"
+    output_prefix = output_dir / asm_name / asm_name
 
     # Run the full pipeline
     # We use a simplified set of arguments focusing on the core alignment and orientation detection
@@ -248,7 +251,7 @@ def test_contig_orientation_detection(tmp_path):
         "--query", str(query_fasta),
         "--ref", str(subset_ref_fasta),
         "--ref-gff3", str(subset_gff3),
-        "--outprefix", str(output_prefix),
+        "--output-dir", str(output_dir),
         "-t", "4",
         "--skip-contaminants",  # Skip contaminant detection to speed up test
         "--skip-rdna",  # Skip rDNA detection to speed up test

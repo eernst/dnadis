@@ -42,7 +42,7 @@
 - [taxonkit](https://github.com/shenwei356/taxonkit) + NCBI taxonomy database - taxonomic lineage for contaminant table (see below)
 - [infernal](http://eddylab.org/infernal/) - structure-based rRNA annotation with Rfam covariance models (for `--build-rdna-consensus`; bundled Rfam database)
 - R with ggplot2, dplyr, readr, stringr, tibble, tidyr, patchwork, ggnewscale, pacman - visualization (`--plot`)
-- R with ggiraph, htmlwidgets, pandoc - interactive visualization (`--plot-html`)
+- rmarkdown + pandoc - unified HTML report generation (`--plot`)
 
 ### Conda environment
 
@@ -106,10 +106,9 @@ Latest tested conda package versions (CI):
 ./final_finalizer.py \
     -r reference.fasta \
     -q assembly.fasta \
-    -o output_prefix \
+    -o output/ \
     --ref-gff3 reference.gff3 \
-    --plot \
-    --plot-html
+    --plot
 ```
 
 ## Usage
@@ -119,8 +118,8 @@ Latest tested conda package versions (CI):
 | Argument | Description |
 |----------|-------------|
 | `-r, --ref` | Reference genome FASTA (can be gzipped) |
-| `-q, --query` | Query assembly FASTA to classify |
-| `-o, --outprefix` | Output file prefix |
+| `-q, --query` | Query assembly FASTA to classify (single-assembly mode) |
+| `-o, --output-dir` | Output directory (reference/ and per-assembly subdirectories created inside) |
 | `--ref-gff3` | Reference GFF3 with protein-coding gene annotations. Required for `--synteny-mode protein`. |
 
 ### Common options
@@ -128,8 +127,7 @@ Latest tested conda package versions (CI):
 | Argument | Description | Default |
 |----------|-------------|---------|
 | `-t, --threads` | Number of threads | 8 |
-| `--plot` | Generate PDF visualization | off |
-| `--plot-html` | Also generate interactive HTML visualization | off |
+| `--plot` | Generate unified HTML report with embedded plots (requires rmarkdown + pandoc) | off |
 | `-v, --verbose` | Enable verbose (DEBUG level) logging | off |
 | `--quiet` | Suppress INFO messages (only warnings and errors) | off |
 | `--log-file` | Write logs to file (in addition to stderr) | none |
@@ -241,10 +239,9 @@ For complete column documentation for all TSV files, see [docs/output_formats.md
 
 | File | Description |
 |------|-------------|
+| `*.unified_report.html` | Self-contained HTML report with all plots (chromosome overview, classification, depth, contaminant table) |
 | `*.chromosome_overview.pdf` | Multi-panel plot showing contig composition, subgenome support, and alignment identity |
 | `*.depth_overview.pdf` | Read depth visualization by classification and chromosome (if `--reads` provided) |
-| `*.depth_overview.html` | Interactive version with tooltips (if `--plot-html` and `--reads` provided) |
-| `*.contaminant_table.html` | Interactive HTML table showing top contaminants ranked by abundance with inline visualizations (if contaminants detected) |
 | `*.contaminants.tsv` | Detailed contaminant summary with taxonomic lineage |
 
 ## Classification Pipeline
@@ -436,14 +433,13 @@ This creates a complete configuration file with all parameters and their current
 [required]
 ref = "/path/to/reference.fasta"
 query = "/path/to/assembly.fasta"
-outprefix = "output_prefix"
+output_dir = "/path/to/output_directory"
 ref_gff3 = "/path/to/reference.gff3"
 
 # Common Options
 [common]
 threads = 32
 plot = true
-plot_html = true
 chr_like_minlen = 1000000
 
 # Read Depth Analysis
@@ -472,11 +468,11 @@ assign_min_ratio = 1.25
 ./final_finalizer.py \
     -r TAIR10.fasta \
     -q my_assembly.fasta \
-    -o my_assembly_classified \
+    -o results/ \
     --ref-gff3 TAIR10.gff3 \
     -t 32 \
     --plot \
-    --plot-html
+
 ```
 
 ### Nucleotide mode for structural composition analysis
@@ -487,11 +483,11 @@ Use nucleotide mode when you want to detect chromosome-scale structural features
 ./final_finalizer.py \
     -r reference.fasta \
     -q assembly.fasta \
-    -o assembly_nucleotide \
+    -o results/ \
     --synteny-mode nucleotide \
     -t 32 \
     --plot \
-    --plot-html
+
 ```
 
 Note: Nucleotide mode does not require `--ref-gff3`, but if provided, gene count statistics will be included in the output.
@@ -502,13 +498,13 @@ Note: Nucleotide mode does not require `--ref-gff3`, but if provided, gene count
 ./final_finalizer.py \
     -r wheat_ref.fasta \
     -q wheat_assembly.fasta \
-    -o wheat_classified \
+    -o results/ \
     --ref-gff3 wheat_ref.gff3 \
     --centrifuger-idx /path/to/centrifuger/nt \
     --rdna-ref default \
     -t 64 \
     --plot \
-    --plot-html
+
 ```
 
 ### Non-polyploid with subgenome suffix
@@ -517,11 +513,11 @@ Note: Nucleotide mode does not require `--ref-gff3`, but if provided, gene count
 ./final_finalizer.py \
     -r rice_ref.fasta \
     -q rice_assembly.fasta \
-    -o rice_classified \
+    -o results/ \
     --ref-gff3 rice_ref.gff3 \
     --add-subgenome-suffix A \
     --plot \
-    --plot-html
+
 ```
 
 ### With read depth analysis (HiFi reads)
@@ -530,12 +526,12 @@ Note: Nucleotide mode does not require `--ref-gff3`, but if provided, gene count
 ./final_finalizer.py \
     -r reference.fasta \
     -q assembly.fasta \
-    -o assembly_classified \
+    -o results/ \
     --ref-gff3 reference.gff3 \
     --reads hifi_reads.fastq.gz \
     --reads-type lrhq \
     --plot \
-    --plot-html \
+
     -t 32
 ```
 
@@ -545,11 +541,11 @@ Note: Nucleotide mode does not require `--ref-gff3`, but if provided, gene count
 ./final_finalizer.py \
     -r reference.fasta \
     -q assembly.fasta \
-    -o assembly_classified \
+    -o results/ \
     --ref-gff3 reference.gff3 \
     --reads aligned_reads.bam \
     --plot \
-    --plot-html \
+
     -t 32
 ```
 
@@ -574,7 +570,7 @@ Note: Nucleotide mode does not require `--ref-gff3`, but if provided, gene count
 ./final_finalizer.py \
     -r reference.fasta \
     -q assembly.fasta \
-    -o assembly_classified \
+    -o results/ \
     --ref-gff3 reference.gff3 \
     --reads hifi_reads.fastq.gz \
     --reads-type lrhq \
