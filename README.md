@@ -18,6 +18,8 @@
 - **Debris detection** for assembly fragments (chromosome debris, organelle debris)
 - **Chimera flagging** for contigs with evidence from multiple chromosomes
 - **Orientation determination** for chromosome-assigned contigs
+- **Contig renaming** to reference-based names (e.g., `chr1A`, `chr1A_f1` for fragments, `contig_1` for unassigned)
+- **Reference-guided scaffolding** (optional) producing chromosome-scale pseudomolecules with AGP output (uses RagTag if available, otherwise built-in scaffolder)
 - **Read depth analysis** (optional) with automated downsampling and caching
 - **Publication-ready visualizations** (PDF plots via R/ggplot2)
 
@@ -40,6 +42,7 @@
 - [rasusa](https://github.com/mbhall88/rasusa) - FASTQ downsampling for depth analysis
 - [centrifuger](https://github.com/mourisl/centrifuger) - contaminant detection
 - [taxonkit](https://github.com/shenwei356/taxonkit) + NCBI taxonomy database - taxonomic lineage for contaminant table (see below)
+- [RagTag](https://github.com/malonge/RagTag) - improved reference-guided scaffolding (for `--scaffold`; built-in scaffolder used as fallback)
 - [infernal](http://eddylab.org/infernal/) - structure-based rRNA annotation with Rfam covariance models (for `--build-rdna-consensus`; bundled Rfam database)
 - R with ggplot2, dplyr, readr, stringr, tibble, tidyr, patchwork, ggnewscale, pacman - visualization (`--plot`)
 - rmarkdown + pandoc - unified HTML report generation (`--plot`)
@@ -189,18 +192,29 @@ Read type to minimap2 preset mapping:
 | `--skip-rdna` | Skip rDNA detection |
 | `--skip-contaminants` | Skip contaminant detection |
 
+### Scaffolding options
+
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--scaffold` | Produce reference-guided scaffolded chromosome sequences (uses RagTag if available, otherwise built-in scaffolder) | off |
+| `--scaffold-gap-size` | Number of Ns between contigs in scaffolded output | 100 |
+
+When `--scaffold` is enabled, chromosome-assigned contigs are grouped by reference chromosome and ordered into pseudomolecules. The scaffolder handles haplotype-aware grouping for polyploid assemblies (e.g., contigs assigned to chr1A are scaffolded separately from chr1B). Single T2T contigs that span a full chromosome produce trivial (single-component) AGP entries. Multi-contig chromosomes are ordered by reference position, either via RagTag (if installed) or the built-in scaffolder.
+
 ## Output Files
 
 ### FASTA outputs
 
 | File | Description |
 |------|-------------|
-| `*.chrs.fasta` | Chromosome-assigned contigs (reoriented if needed) |
+| `*.chrs.fasta` | Chromosome-assigned contigs (renamed and reoriented; scaffolded pseudomolecules if `--scaffold`) |
 | `*.organelles.fasta` | Organelle contigs (chrC, chrM) |
 | `*.rdna.fasta` | rDNA-containing contigs |
 | `*.contaminants.fasta` | Contaminant contigs |
 | `*.debris.fasta` | Assembly debris (fragments, duplicates) |
 | `*.unclassified.fasta` | Contigs that couldn't be classified |
+| `*.scaffolded.fasta` | Scaffolded chromosome pseudomolecules (if `--scaffold`) |
+| `*.scaffolded.agp` | AGP 2.0 file describing scaffold structure (if `--scaffold`) |
 
 ### Summary tables
 
@@ -260,9 +274,11 @@ The tool runs these phases in order:
 8. **Debris classification** - Reference-based debris detection for remaining contigs
 9. **Gene count statistics** (if GFF3 provided) - Compute gene proportion metrics
 10. **Orientation determination** - Determine strand for chromosome contigs based on synteny votes
-11. **Final classification** - Assign all contigs to categories with confidence levels
-12. **Read depth analysis** (optional) - Align reads and compute per-contig depth metrics
-13. **Output generation** - Write classified FASTAs, summary tables, and visualizations
+11. **Contig naming** - Rename contigs to reference-based names (e.g., `chr1A` for full-length, `chr1A_f1` for fragments, `contig_1` for unassigned)
+12. **Final classification** - Assign all contigs to categories with confidence levels
+13. **Reference-guided scaffolding** (optional, `--scaffold`) - Order and orient contigs into chromosome-scale pseudomolecules with AGP output
+14. **Read depth analysis** (optional) - Align reads and compute per-contig depth metrics
+15. **Output generation** - Write classified FASTAs, summary tables, and visualizations
 
 ## rDNA Consensus and Annotation
 
@@ -519,6 +535,20 @@ Note: Nucleotide mode does not require `--ref-gff3`, but if provided, gene count
     --plot \
 
 ```
+
+### With reference-guided scaffolding
+
+```bash
+./final_finalizer.py \
+    -r reference.fasta \
+    -q assembly.fasta \
+    -o results/ \
+    --ref-gff3 reference.gff3 \
+    --scaffold \
+    -t 32
+```
+
+This produces `*.scaffolded.fasta` (chromosome pseudomolecules) and `*.scaffolded.agp` (AGP 2.0 describing scaffold structure). If RagTag is installed, it is used for ordering; otherwise, the built-in scaffolder orders contigs by reference position.
 
 ### With read depth analysis (HiFi reads)
 
