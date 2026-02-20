@@ -415,5 +415,5 @@ class TestEstimateDepthResources:
         cfg = ClusterConfig()
         spec = estimate_depth_resources(reads, assembly, cfg)
         assert spec.cores <= 32
-        assert spec.memory_gb >= 4.0
+        assert spec.memory_gb >= 32.0
         assert spec.job_name == "depth"

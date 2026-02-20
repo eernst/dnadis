@@ -693,10 +693,15 @@ def align_reads_to_assembly(
         sort_tmp_dir.mkdir(parents=True, exist_ok=True)
     sort_tmp_prefix = sort_tmp_dir / "srt"
 
-    # samtools sort command (-T sets temp file prefix to avoid stale collisions)
+    # samtools sort: -m is per-thread.  With 32 GB SLURM allocation we can
+    # afford 8 sort threads × 2 GB each = 16 GB total sort buffer, leaving
+    # headroom for the minimap2 index and OS overhead.
+    sort_threads = max(1, min(threads // 2, 8))  # cap at 8 sort threads
+    sort_mem_per_thread_gb = 2  # 2 GB per thread
     sort_cmd = [
         "samtools", "sort",
-        "-@", str(max(1, threads // 2)),
+        "-@", str(sort_threads),
+        "-m", f"{sort_mem_per_thread_gb}G",
         "-T", str(sort_tmp_prefix),
         "-o", str(output_bam),
         "-",

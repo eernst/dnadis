@@ -159,8 +159,8 @@ def estimate_depth_resources(
     asm_bp = _estimate_genome_bp_from_filesize(assembly_path)
     reads_bytes = _file_size_bytes(reads_path)
 
-    # Memory: index + sort buffer
-    mem_gb = max(6.0, asm_bp * 8 / 1e9 + 4.0)
+    # Memory: index + sort buffer (8 GB sort budget to reduce NFS spill)
+    mem_gb = max(32.0, asm_bp * 8 / 1e9 + 8.0)
     # Time scales with reads file size (alignment dominates)
     time_min = _scale_time(60, reads_bytes, scale_bp=2_000_000_000)
 
