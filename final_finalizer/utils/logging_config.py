@@ -29,8 +29,28 @@ from __future__ import annotations
 
 import logging
 import sys
+import threading
 from pathlib import Path
 from typing import Optional
+
+# Thread-local assembly context for per-assembly log prefixes.
+_assembly_context = threading.local()
+
+
+def set_assembly_context(name: str) -> None:
+    """Set the assembly name for the current thread's log messages."""
+    _assembly_context.name = name
+
+
+def clear_assembly_context() -> None:
+    """Clear the assembly name for the current thread."""
+    _assembly_context.name = ""
+
+
+def _get_assembly_prefix() -> str:
+    """Return ``[name] `` if an assembly context is set, else ``""``."""
+    name = getattr(_assembly_context, "name", "")
+    return f"[{name}] " if name else ""
 
 
 # ANSI escape codes for formatting
@@ -70,17 +90,19 @@ class FinalFinalizerFormatter(logging.Formatter):
         # Format message
         msg = record.getMessage()
 
+        asm = _get_assembly_prefix()
+
         # Check for phase or done messages (custom attribute)
         if hasattr(record, 'is_phase') and record.is_phase:
             if self.use_color:
-                return f"{BOLD}{CYAN}[{tag}] {msg}{RESET}"
-            return f"[{tag}] {msg}"
+                return f"{BOLD}{CYAN}[{tag}] {asm}{msg}{RESET}"
+            return f"[{tag}] {asm}{msg}"
         elif hasattr(record, 'is_done') and record.is_done:
             if self.use_color:
-                return f"{GREEN}[done]{RESET} {msg}"
-            return f"[done] {msg}"
+                return f"{GREEN}[done]{RESET} {asm}{msg}"
+            return f"[done] {asm}{msg}"
         else:
-            return f"[{tag}] {msg}"
+            return f"[{tag}] {asm}{msg}"
 
 
 class StderrHandler(logging.StreamHandler):

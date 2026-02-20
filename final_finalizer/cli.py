@@ -346,8 +346,9 @@ def run_assembly(
     Returns:
         :class:`AssemblyResult` summarizing the assembly's classification.
     """
-    from final_finalizer.utils.logging_config import get_logger
+    from final_finalizer.utils.logging_config import get_logger, set_assembly_context
     logger = get_logger("cli")
+    set_assembly_context(assembly_name)
 
     # --- Unpack reference context into local variables ---
     # This keeps the rest of the function identical to the original main().
