@@ -1743,7 +1743,7 @@ def main():
         sys.exit(f"[error] --contaminant-min-coverage must be between 0.0 and 1.0, got {args.contaminant_min_coverage}")
 
     # --- Logging setup ---
-    output_dir = Path(args.output_dir)
+    output_dir = Path(args.output_dir).resolve()
     log_file = args.log_file
     if not log_file:
         log_file = str(output_dir / "final_finalizer.log")
