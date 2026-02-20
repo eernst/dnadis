@@ -388,6 +388,6 @@ class TestEstimateDepthResources:
         assembly.write_bytes(b"x" * 100_000)
         cfg = ClusterConfig()
         spec = estimate_depth_resources(reads, assembly, cfg)
-        assert spec.cores <= 16
+        assert spec.cores <= 32
         assert spec.memory_gb >= 4.0
         assert spec.job_name == "depth"

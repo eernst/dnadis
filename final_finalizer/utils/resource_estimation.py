@@ -165,7 +165,7 @@ def estimate_depth_resources(
     time_min = _scale_time(60, reads_bytes, scale_bp=2_000_000_000)
 
     spec = ResourceSpec(
-        cores=min(16, config.max_threads),
+        cores=min(32, config.max_threads),
         memory_gb=mem_gb,
         time_minutes=time_min,
         job_name="depth",
