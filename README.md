@@ -43,7 +43,7 @@
 - [centrifuger](https://github.com/mourisl/centrifuger) - contaminant detection
 - [taxonkit](https://github.com/shenwei356/taxonkit) + NCBI taxonomy database - taxonomic lineage for contaminant table (see below)
 - [RagTag](https://github.com/malonge/RagTag) - improved reference-guided scaffolding (for `--scaffold`; built-in scaffolder used as fallback)
-- [executorlib](https://github.com/pyiron/executorlib) - distributed SLURM job submission (required for `--cluster`; `conda install -c conda-forge executorlib`)
+- [executorlib](https://github.com/pyiron/executorlib) + [mpi4py](https://github.com/mpi4py/mpi4py) - distributed SLURM job submission (required for `--cluster`; `conda install -c conda-forge executorlib mpi4py`)
 - [infernal](http://eddylab.org/infernal/) - structure-based rRNA annotation with Rfam covariance models (for `--build-rdna-consensus`; bundled Rfam database)
 - R with ggplot2, dplyr, readr, stringr, tibble, tidyr, patchwork, ggnewscale, pacman - visualization (`--plot`)
 - rmarkdown + pandoc - unified HTML report generation (`--plot`)
@@ -212,9 +212,9 @@ When `--scaffold` is enabled, chromosome-assigned contigs are grouped by referen
 | `--max-mem-dist` | Max memory (GB) per distributed job | 128 |
 | `--max-time-dist` | Max wall time (minutes) per distributed job | 720 |
 
-**Requires [executorlib](https://github.com/pyiron/executorlib):**
+**Requires [executorlib](https://github.com/pyiron/executorlib) and mpi4py:**
 ```bash
-conda install -n final_finalizer -c conda-forge executorlib
+conda install -n final_finalizer -c conda-forge executorlib mpi4py
 ```
 
 When `--cluster` is enabled, compute-intensive phases (synteny alignment, BLAST detection, debris detection, contaminant screening, read depth) are submitted as individual SLURM jobs with per-job resource control. In multi-assembly mode, assemblies run concurrently with each submitting its own SLURM jobs. Without `--cluster`, all phases run locally.

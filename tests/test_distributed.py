@@ -17,6 +17,7 @@ from final_finalizer.utils.distributed import (
     LocalFuture,
     ResourceSpec,
     _ExecutorlibWrapper,
+    _patch_pysqa_template,
     _resource_spec_to_dict,
     clamp_resources,
     create_executor,
@@ -147,12 +148,13 @@ class TestResourceSpecToDict:
         assert d["memory_max"] == 16.5
         assert d["run_time_max"] == 1800  # 30 * 60 seconds
         assert d["partition"] == "cpuq"
-        assert "qos" not in d  # not supported by pysqa SLURM template
+        assert d["qos"] == "default"
 
-    def test_empty_partition_omitted(self):
-        spec = ResourceSpec(cores=4, partition="")
+    def test_empty_partition_and_qos_omitted(self):
+        spec = ResourceSpec(cores=4, partition="", qos="")
         d = _resource_spec_to_dict(spec)
         assert "partition" not in d
+        assert "qos" not in d
 
 
 class TestCreateExecutor:
@@ -164,10 +166,47 @@ class TestCreateExecutor:
     def test_enabled_without_executorlib_raises(self):
         """When executorlib is not installed, exits with error."""
         cfg = ClusterConfig(enabled=True)
-        # Mock executorlib import to fail
         with patch.dict("sys.modules", {"executorlib": None}):
             with pytest.raises(SystemExit):
                 create_executor(cfg)
+
+    def test_enabled_without_mpi4py_raises(self):
+        """When mpi4py is not installed, exits with error."""
+        cfg = ClusterConfig(enabled=True)
+        with patch.dict("sys.modules", {"mpi4py": None}):
+            with pytest.raises(SystemExit):
+                create_executor(cfg)
+
+
+class TestPatchPysqaTemplate:
+    def test_adds_qos_directive(self):
+        """Patching inserts --qos into the pysqa SLURM template."""
+        from pysqa.wrapper import slurm as _slurm_mod
+
+        original = _slurm_mod.template
+        try:
+            # Reset to a template without qos
+            _slurm_mod.template = original.replace(
+                "{%- if qos %}\n#SBATCH --qos={{qos}}\n{%- endif %}\n", ""
+            )
+            assert "qos" not in _slurm_mod.template
+            _patch_pysqa_template()
+            assert "#SBATCH --qos={{qos}}" in _slurm_mod.template
+        finally:
+            _slurm_mod.template = original
+
+    def test_idempotent(self):
+        """Calling _patch_pysqa_template twice doesn't duplicate the directive."""
+        from pysqa.wrapper import slurm as _slurm_mod
+
+        original = _slurm_mod.template
+        try:
+            _patch_pysqa_template()
+            after_first = _slurm_mod.template
+            _patch_pysqa_template()
+            assert _slurm_mod.template == after_first
+        finally:
+            _slurm_mod.template = original
 
 
 # ===================================================================

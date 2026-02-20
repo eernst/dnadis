@@ -1647,7 +1647,7 @@ def main():
     dist_grp.add_argument(
         "--cluster", action="store_true",
         help="Enable distributed execution via executorlib (submits phases as SLURM jobs). "
-             "Requires executorlib: conda install -c conda-forge executorlib",
+             "Requires: conda install -c conda-forge executorlib mpi4py",
     )
     dist_grp.add_argument(
         "--max-threads-dist", type=int, default=64,
