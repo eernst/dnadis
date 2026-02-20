@@ -208,7 +208,7 @@ ref_lengths <- read_tsv(params$ref_lengths_tsv, show_col_types = FALSE,
 
 n_asm <- nrow(comp_df)
 asm_names <- comp_df$assembly
-asm_colors <- setNames(asm_pal[seq_len(min(n_asm, length(asm_pal)))], asm_names)
+asm_colors <- setNames(rep_len(asm_pal, n_asm), asm_names)
 
 # Load per-assembly summary TSVs
 asm_tsv_paths <- strsplit(params$per_assembly_summary_tsvs, ";")[[1]]

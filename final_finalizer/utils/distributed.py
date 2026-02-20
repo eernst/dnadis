@@ -18,6 +18,7 @@ import random
 import subprocess
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
@@ -269,7 +270,10 @@ def _patch_sbatch_retry(max_retries: int = 8, base_delay: float = 15.0) -> None:
 # ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
-def create_executor(config: ClusterConfig) -> LocalExecutor | _ExecutorlibWrapper:
+def create_executor(
+    config: ClusterConfig,
+    output_dir: Path | None = None,
+) -> LocalExecutor | _ExecutorlibWrapper:
     """Return an executor matching *config*.
 
     * ``config.enabled == False`` → :class:`LocalExecutor`
@@ -277,6 +281,11 @@ def create_executor(config: ClusterConfig) -> LocalExecutor | _ExecutorlibWrappe
       :class:`_ExecutorlibWrapper` around ``SlurmClusterExecutor``
     * ``config.enabled == True`` but executorlib missing →
       raises :class:`SystemExit` with install instructions
+
+    When *output_dir* is provided the executorlib cache is placed under
+    ``{output_dir}/.executorlib_cache_{pid}/`` so that (a) different analyses
+    never collide and (b) each run gets a fresh cache — our own file-based
+    caching via :func:`file_exists_and_valid` handles reuse decisions.
     """
     if not config.enabled:
         return LocalExecutor()
@@ -302,8 +311,18 @@ def create_executor(config: ClusterConfig) -> LocalExecutor | _ExecutorlibWrappe
     _patch_pysqa_template()
     _patch_sbatch_retry()
 
+    # Use a fresh, per-run cache directory to avoid stale results from
+    # previous runs.  executorlib defaults to ./executorlib_cache/ which
+    # causes collisions between analyses sharing a working directory and
+    # returns cached "success" even when output files have been deleted.
+    if output_dir is not None:
+        import os
+        cache_dir = str(output_dir / f".executorlib_cache_{os.getpid()}")
+    else:
+        cache_dir = None  # fall back to executorlib default
+
     try:
-        inner = SlurmClusterExecutor()
+        inner = SlurmClusterExecutor(cache_directory=cache_dir)
         logger.info(
             "Distributed mode: executorlib SlurmClusterExecutor "
             f"(partition={config.partition}, qos={config.qos})"

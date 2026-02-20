@@ -445,6 +445,8 @@ def run_assembly(
                 resource_spec=synteny_spec if use_cluster else None,
             )
         synteny_future.result()  # block until alignment completes
+        if not file_exists_and_valid(miniprot_paf_gz):
+            raise RuntimeError(f"Synteny alignment did not produce output: {miniprot_paf_gz}")
 
         ev = parse_miniprot_synteny_evidence_and_segments(
             miniprot_paf_gz=miniprot_paf_gz,
@@ -480,6 +482,8 @@ def run_assembly(
                 resource_spec=synteny_spec if use_cluster else None,
             )
         synteny_future.result()  # block until alignment completes
+        if not file_exists_and_valid(paf_gz):
+            raise RuntimeError(f"Synteny alignment did not produce output: {paf_gz}")
 
         ev = parse_paf_chain_evidence_and_segments(
             paf_gz_path=paf_gz,
@@ -1804,7 +1808,7 @@ def main():
     failures = []
     results = []
 
-    with create_executor(cluster_config) as executor:
+    with create_executor(cluster_config, output_dir=output_dir) as executor:
         if cluster_config.enabled and n_total > 1:
             # Run assemblies concurrently — each run_assembly() is mostly
             # I/O-bound (waiting on SLURM futures), so threads work well.
