@@ -14,6 +14,9 @@ from __future__ import annotations
 
 import logging
 import math
+import random
+import subprocess
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
@@ -203,6 +206,54 @@ def _patch_pysqa_template() -> None:
 
 
 # ---------------------------------------------------------------------------
+# sbatch retry patching
+# ---------------------------------------------------------------------------
+def _patch_sbatch_retry(max_retries: int = 8, base_delay: float = 15.0) -> None:
+    """Add retry-with-backoff to executorlib's sbatch submission.
+
+    When many SLURM jobs are submitted concurrently (e.g. 16 assemblies each
+    submitting multiple phases), sbatch can fail transiently with exit code 1
+    due to ``QOSMaxJobsPerUserLimit`` or similar rate limits.  executorlib's
+    internal thread does not retry, so one failure kills the entire thread
+    and hangs all pending futures.
+
+    This function monkey-patches ``executorlib.standalone.scheduler.pysqa_execute_command``
+    to retry on ``CalledProcessError`` with exponential backoff + jitter.
+
+    Safe to call multiple times — patches only once.
+    """
+    try:
+        from executorlib.standalone import scheduler as _sched_mod  # type: ignore[import-untyped]
+    except ImportError:
+        return
+
+    if getattr(_sched_mod.pysqa_execute_command, "_retries_patched", False):
+        return  # already patched
+
+    _orig = _sched_mod.pysqa_execute_command
+
+    def _with_retry(**kwargs: Any) -> Any:
+        last_exc: subprocess.CalledProcessError | None = None
+        for attempt in range(max_retries):
+            try:
+                return _orig(**kwargs)
+            except subprocess.CalledProcessError as exc:
+                last_exc = exc
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt) + random.uniform(0, 5)
+                    logger.warning(
+                        f"sbatch failed (exit {exc.returncode}), "
+                        f"retrying in {delay:.0f}s "
+                        f"(attempt {attempt + 1}/{max_retries})"
+                    )
+                    time.sleep(delay)
+        raise last_exc  # type: ignore[misc]
+
+    _with_retry._retries_patched = True  # type: ignore[attr-defined]
+    _sched_mod.pysqa_execute_command = _with_retry
+
+
+# ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
 def create_executor(config: ClusterConfig) -> LocalExecutor | _ExecutorlibWrapper:
@@ -236,6 +287,7 @@ def create_executor(config: ClusterConfig) -> LocalExecutor | _ExecutorlibWrappe
         raise SystemExit(1)
 
     _patch_pysqa_template()
+    _patch_sbatch_retry()
 
     try:
         inner = SlurmClusterExecutor()

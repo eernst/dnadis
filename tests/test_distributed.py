@@ -18,6 +18,7 @@ from final_finalizer.utils.distributed import (
     ResourceSpec,
     _ExecutorlibWrapper,
     _patch_pysqa_template,
+    _patch_sbatch_retry,
     _resource_spec_to_dict,
     clamp_resources,
     create_executor,
@@ -213,6 +214,51 @@ class TestPatchPysqaTemplate:
             assert _slurm_mod.template == after_first
         finally:
             _slurm_mod.template = original
+
+
+class TestSbatchRetry:
+    def test_retries_on_failure_then_succeeds(self):
+        """Retry logic retries on CalledProcessError and returns on success."""
+        import subprocess
+        from executorlib.standalone import scheduler as _sched_mod
+
+        original = _sched_mod.pysqa_execute_command
+        call_count = 0
+
+        def _flaky(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                raise subprocess.CalledProcessError(1, "sbatch")
+            return b"12345\n"
+
+        try:
+            _sched_mod.pysqa_execute_command = _flaky
+            # Remove any existing patch marker so we can re-patch
+            _patch_sbatch_retry(max_retries=5, base_delay=0.01)
+            result = _sched_mod.pysqa_execute_command()
+            assert result == b"12345\n"
+            assert call_count == 3
+        finally:
+            _sched_mod.pysqa_execute_command = original
+
+    def test_raises_after_max_retries(self):
+        """Raises CalledProcessError after exhausting retries."""
+        import subprocess
+        from executorlib.standalone import scheduler as _sched_mod
+
+        original = _sched_mod.pysqa_execute_command
+
+        def _always_fail(**kwargs):
+            raise subprocess.CalledProcessError(1, "sbatch")
+
+        try:
+            _sched_mod.pysqa_execute_command = _always_fail
+            _patch_sbatch_retry(max_retries=2, base_delay=0.01)
+            with pytest.raises(subprocess.CalledProcessError):
+                _sched_mod.pysqa_execute_command()
+        finally:
+            _sched_mod.pysqa_execute_command = original
 
 
 # ===================================================================
