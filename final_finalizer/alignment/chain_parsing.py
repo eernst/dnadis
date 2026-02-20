@@ -14,7 +14,24 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Dict, Optional
 
-from intervaltree import IntervalTree
+try:
+    from intervaltree import IntervalTree
+except ModuleNotFoundError:
+    import sys
+
+    print(
+        "Error: required package 'intervaltree' is not installed.\n"
+        "\n"
+        "Install it with:\n"
+        "    conda install -c conda-forge intervaltree\n"
+        "\n"
+        "Or set up the full environment (see README.md):\n"
+        "    conda create -n final_finalizer -c conda-forge -c bioconda "
+        "python=3.11 intervaltree ...\n"
+        "    conda activate final_finalizer",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
 
 from final_finalizer.models import Block, Chain, ChainEvidenceResult
 from final_finalizer.utils.io_utils import merge_intervals, open_maybe_gzip
