@@ -8,8 +8,7 @@ dispatches work to either:
   with per-job resource control (requires ``--cluster`` flag)
 
 When ``--cluster`` is set but executorlib is not installed the factory
-:func:`create_executor` falls back to *LocalExecutor* with a warning so
-that the pipeline always runs.
+:func:`create_executor` exits with a clear error message.
 """
 from __future__ import annotations
 
@@ -112,14 +111,26 @@ class LocalExecutor:
 # executorlib helpers
 # ---------------------------------------------------------------------------
 def _resource_spec_to_dict(spec: ResourceSpec) -> dict:
-    """Convert a :class:`ResourceSpec` to the dict format executorlib expects."""
-    return {
+    """Convert a :class:`ResourceSpec` to the dict format executorlib/pysqa expects.
+
+    Keys are passed through to the pysqa SLURM template
+    (``pysqa.wrapper.slurm.template``):
+    - ``cores`` → ``#SBATCH --cpus-per-task``
+    - ``memory_max`` → ``#SBATCH --mem`` (GB)
+    - ``run_time_max`` → ``#SBATCH --time`` (seconds, converted to minutes)
+    - ``partition`` → ``#SBATCH --partition``
+    - ``job_name`` → ``#SBATCH --job-name``
+    """
+    d: dict = {
         "cores": spec.cores,
-        "memory": spec.memory_gb,           # executorlib expects GB
-        "run_time": spec.time_minutes * 60, # executorlib expects seconds
-        "partition": spec.partition,
-        "qos": spec.qos,
+        "memory_max": spec.memory_gb,            # pysqa expects GB
+        "run_time_max": spec.time_minutes * 60,  # pysqa expects seconds
     }
+    if spec.partition:
+        d["partition"] = spec.partition
+    if spec.job_name:
+        d["job_name"] = spec.job_name
+    return d
 
 
 class _ExecutorlibWrapper:
@@ -167,14 +178,7 @@ def create_executor(config: ClusterConfig) -> LocalExecutor | _ExecutorlibWrappe
         return LocalExecutor()
 
     try:
-        from executorlib import Executor  # type: ignore[import-untyped]
-
-        inner = Executor(backend="slurm_submission")
-        logger.info(
-            "Distributed mode: executorlib SlurmClusterExecutor "
-            f"(partition={config.partition}, qos={config.qos})"
-        )
-        return _ExecutorlibWrapper(inner)
+        from executorlib import SlurmClusterExecutor  # type: ignore[import-untyped]
     except ImportError:
         logger.error(
             "--cluster requires the executorlib package, which is not installed.\n"
@@ -182,3 +186,14 @@ def create_executor(config: ClusterConfig) -> LocalExecutor | _ExecutorlibWrappe
             "Or run without --cluster for local execution."
         )
         raise SystemExit(1)
+
+    try:
+        inner = SlurmClusterExecutor()
+        logger.info(
+            "Distributed mode: executorlib SlurmClusterExecutor "
+            f"(partition={config.partition})"
+        )
+        return _ExecutorlibWrapper(inner)
+    except Exception as exc:
+        logger.error(f"Failed to initialise SlurmClusterExecutor: {exc}")
+        raise SystemExit(1) from exc

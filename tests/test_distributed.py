@@ -144,10 +144,15 @@ class TestResourceSpecToDict:
         )
         d = _resource_spec_to_dict(spec)
         assert d["cores"] == 8
-        assert d["memory"] == 16.5
-        assert d["run_time"] == 1800  # 30 * 60 seconds
+        assert d["memory_max"] == 16.5
+        assert d["run_time_max"] == 1800  # 30 * 60 seconds
         assert d["partition"] == "cpuq"
-        assert d["qos"] == "default"
+        assert "qos" not in d  # not supported by pysqa SLURM template
+
+    def test_empty_partition_omitted(self):
+        spec = ResourceSpec(cores=4, partition="")
+        d = _resource_spec_to_dict(spec)
+        assert "partition" not in d
 
 
 class TestCreateExecutor:
