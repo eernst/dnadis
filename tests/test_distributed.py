@@ -64,7 +64,7 @@ class TestClusterConfig:
         assert cfg.max_mem_gb == 128.0
         assert cfg.max_time_minutes == 720
         assert cfg.partition == "cpuq"
-        assert cfg.qos == "default"
+        assert cfg.qos == ""
 
 
 class TestClampResources:

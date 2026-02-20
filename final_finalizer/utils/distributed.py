@@ -47,7 +47,7 @@ class ClusterConfig:
     max_mem_gb: float = 128.0
     max_time_minutes: int = 720
     partition: str = "cpuq"
-    qos: str = "default"
+    qos: str = ""
 
 
 def clamp_resources(spec: ResourceSpec, config: ClusterConfig) -> ResourceSpec:

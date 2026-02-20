@@ -1696,8 +1696,8 @@ def main():
         help="SLURM partition for distributed jobs [cpuq]",
     )
     dist_grp.add_argument(
-        "--qos", type=str, default="default",
-        help="SLURM QOS for distributed jobs [default]",
+        "--qos", type=str, default="",
+        help="SLURM QOS for distributed jobs [unset — use cluster default]",
     )
 
     # =========================================================================
