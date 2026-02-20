@@ -35,6 +35,36 @@ from pathlib import Path
 from typing import Dict, Optional, Set, Tuple
 
 
+class _TeeWriter:
+    """Write to two file-like objects simultaneously (e.g. stderr + log file)."""
+
+    def __init__(self, a: object, b: object) -> None:
+        self._a = a
+        self._b = b
+
+    def write(self, data: str) -> int:
+        self._a.write(data)  # type: ignore[union-attr]
+        try:
+            self._b.write(data)  # type: ignore[union-attr]
+            self._b.flush()  # type: ignore[union-attr]
+        except OSError:
+            pass
+        return len(data)
+
+    def flush(self) -> None:
+        self._a.flush()  # type: ignore[union-attr]
+        try:
+            self._b.flush()  # type: ignore[union-attr]
+        except OSError:
+            pass
+
+    def fileno(self) -> int:
+        return self._a.fileno()  # type: ignore[union-attr]
+
+    def isatty(self) -> bool:
+        return self._a.isatty()  # type: ignore[union-attr]
+
+
 def _validate_input_path(path_str: str) -> Path:
     """Validate that an input file path exists and is readable.
 
@@ -1723,6 +1753,16 @@ def main():
     logger = get_logger("cli")
     if not args.log_file:
         logger.info(f"Logging to: {log_file}")
+
+    # Tee stderr to a file so that unlogged output (thread tracebacks, external
+    # tool messages, etc.) is preserved alongside the structured log.
+    stderr_log = output_dir / "final_finalizer.stderr.log"
+    try:
+        _stderr_fh = open(stderr_log, "a")  # noqa: SIM115
+        _orig_stderr = sys.stderr
+        sys.stderr = _TeeWriter(_orig_stderr, _stderr_fh)
+    except OSError:
+        pass  # non-critical — don't fail if we can't open the file
 
     if args.ref_id_pattern:
         set_ref_id_patterns(compile_ref_id_patterns(args.ref_id_pattern))
