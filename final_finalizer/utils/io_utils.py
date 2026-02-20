@@ -56,6 +56,10 @@ def file_exists_and_valid(path: Path, min_size: int = 1) -> bool:
 def run_to_gzip(cmd: list[str], gz_out: Path, err_path: Path, timeout: int = 7200) -> None:
     """Run a command, streaming stdout into a gzipped file. Stderr -> err_path.
 
+    Writes to a temporary file first, then atomically renames on success.
+    This prevents truncated gzip files from being left on disk when the
+    process is killed (e.g. SLURM timeout, OOM).
+
     Args:
         cmd: Command and arguments to run
         gz_out: Output path for gzipped stdout
@@ -66,45 +70,53 @@ def run_to_gzip(cmd: list[str], gz_out: Path, err_path: Path, timeout: int = 720
         RuntimeError: If command fails or times out
     """
     err_path.parent.mkdir(parents=True, exist_ok=True)
+    gz_out.parent.mkdir(parents=True, exist_ok=True)
+    tmp_out = gz_out.with_suffix(gz_out.suffix + ".tmp")
 
-    with err_path.open("wb") as err_fh, gzip.open(gz_out, "wb") as gz_fh:
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=err_fh)
-        try:
-            assert proc.stdout is not None
-            for chunk in iter(lambda: proc.stdout.read(1 << 20), b""):
-                gz_fh.write(chunk)
-        finally:
+    try:
+        with err_path.open("wb") as err_fh, gzip.open(tmp_out, "wb") as gz_fh:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=err_fh)
             try:
-                if proc.stdout:
-                    proc.stdout.close()
+                assert proc.stdout is not None
+                for chunk in iter(lambda: proc.stdout.read(1 << 20), b""):
+                    gz_fh.write(chunk)
             finally:
                 try:
-                    ret = proc.wait(timeout=timeout)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait()
-                    raise RuntimeError(
-                        f"Command timed out after {timeout}s: {' '.join(cmd)}\n"
-                        f"Error log: {err_path}"
-                    )
+                    if proc.stdout:
+                        proc.stdout.close()
+                finally:
+                    try:
+                        ret = proc.wait(timeout=timeout)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait()
+                        raise RuntimeError(
+                            f"Command timed out after {timeout}s: {' '.join(cmd)}\n"
+                            f"Error log: {err_path}"
+                        )
 
-    if ret != 0:
-        # Read error log preview for better error messages
-        error_preview = ""
-        try:
-            if err_path.exists():
-                with err_path.open("r", errors="replace") as ef:
-                    lines = ef.readlines()[:10]
-                    error_preview = "".join(lines)
-        except Exception:
-            pass
+        if ret != 0:
+            # Read error log preview for better error messages
+            error_preview = ""
+            try:
+                if err_path.exists():
+                    with err_path.open("r", errors="replace") as ef:
+                        lines = ef.readlines()[:10]
+                        error_preview = "".join(lines)
+            except Exception:
+                pass
 
-        raise RuntimeError(
-            f"Command failed with return code {ret}\n"
-            f"Command: {' '.join(cmd)}\n"
-            f"Error log: {err_path}\n"
-            f"Preview:\n{error_preview}"
-        )
+            raise RuntimeError(
+                f"Command failed with return code {ret}\n"
+                f"Command: {' '.join(cmd)}\n"
+                f"Error log: {err_path}\n"
+                f"Preview:\n{error_preview}"
+            )
+
+        tmp_out.rename(gz_out)
+    except BaseException:
+        tmp_out.unlink(missing_ok=True)
+        raise
 
 
 def merge_intervals(intervals: list[tuple[int, int]]) -> tuple[list[tuple[int, int]], int]:
