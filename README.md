@@ -57,7 +57,7 @@ conda create -n final_finalizer \
     miniprot gffread blast mm2plus centrifuger infernal \
     r-base r-ggplot2 r-dplyr r-readr r-stringr r-tibble r-tidyr \
     r-patchwork r-ggnewscale r-pacman r-ggiraph r-htmlwidgets r-scales \
-    r-rmarkdown libxml2 pandoc \
+    r-gt r-xml2 r-rmarkdown libxml2 xz pandoc \
 conda activate final_finalizer
 ```
 
