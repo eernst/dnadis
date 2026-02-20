@@ -144,8 +144,9 @@ class TestResourceSpecToDict:
             partition="cpuq", qos="default",
         )
         d = _resource_spec_to_dict(spec)
-        assert d["cores"] == 8
-        assert d["memory_max"] == 16.5
+        assert d["cores"] == 1  # always 1 → serial backend (no MPI)
+        assert d["threads_per_core"] == 8  # pysqa: 1×8 → --cpus-per-task=8
+        assert d["memory_max"] == 17  # ceil(16.5) → integer GB for SLURM
         assert d["run_time_max"] == 1800  # 30 * 60 seconds
         assert d["partition"] == "cpuq"
         assert d["qos"] == "default"
@@ -155,6 +156,11 @@ class TestResourceSpecToDict:
         d = _resource_spec_to_dict(spec)
         assert "partition" not in d
         assert "qos" not in d
+
+    def test_memory_ceiled_to_integer(self):
+        spec = ResourceSpec(memory_gb=7.281214928)
+        d = _resource_spec_to_dict(spec)
+        assert d["memory_max"] == 8  # ceil → integer GB for SLURM
 
 
 class TestCreateExecutor:

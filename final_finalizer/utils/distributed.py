@@ -13,6 +13,7 @@ When ``--cluster`` is set but executorlib is not installed the factory
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
@@ -113,9 +114,15 @@ class LocalExecutor:
 def _resource_spec_to_dict(spec: ResourceSpec) -> dict:
     """Convert a :class:`ResourceSpec` to the dict format executorlib/pysqa expects.
 
-    Keys are passed through to the pysqa SLURM template
-    (``pysqa.wrapper.slurm.template``):
-    - ``cores`` → ``#SBATCH --cpus-per-task``
+    executorlib uses ``cores`` to decide between MPI (``cache_parallel.py``)
+    and single-process (``cache_serial.py``) execution.  Since our submitted
+    functions are single-process wrappers around multi-threaded tools
+    (minimap2, blastn, etc.), we always set ``cores=1`` to select the serial
+    backend and use ``threads_per_core`` to request the actual CPU count.
+    pysqa multiplies ``cores × threads_per_core`` for ``--cpus-per-task``.
+
+    Keys passed through to the pysqa SLURM template:
+    - ``cores × threads_per_core`` → ``#SBATCH --cpus-per-task``
     - ``memory_max`` → ``#SBATCH --mem`` (GB)
     - ``run_time_max`` → ``#SBATCH --time`` (seconds, converted to minutes)
     - ``partition`` → ``#SBATCH --partition``
@@ -123,9 +130,10 @@ def _resource_spec_to_dict(spec: ResourceSpec) -> dict:
     - ``job_name`` → ``#SBATCH --job-name``
     """
     d: dict = {
-        "cores": spec.cores,
-        "memory_max": spec.memory_gb,            # pysqa expects GB
-        "run_time_max": spec.time_minutes * 60,  # pysqa expects seconds
+        "cores": 1,                              # 1 process → cache_serial.py (no MPI)
+        "threads_per_core": spec.cores,           # pysqa: 1 × N → --cpus-per-task=N
+        "memory_max": math.ceil(spec.memory_gb),  # pysqa renders --mem={{memory_max}}G; SLURM needs integer
+        "run_time_max": spec.time_minutes * 60,   # pysqa expects seconds
     }
     if spec.partition:
         d["partition"] = spec.partition
