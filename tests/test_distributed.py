@@ -31,6 +31,7 @@ from final_finalizer.utils.resource_estimation import (
     estimate_contaminant_resources,
     estimate_debris_resources,
     estimate_depth_resources,
+    estimate_pairwise_resources,
     estimate_synteny_resources,
 )
 
@@ -404,6 +405,37 @@ class TestEstimateContaminantResources:
         cfg = ClusterConfig()
         spec = estimate_contaminant_resources(idx_prefix, cfg)
         assert spec.memory_gb >= 4.0  # Minimum
+
+
+class TestEstimatePairwiseResources:
+    def test_basic(self, tmp_path):
+        left = tmp_path / "left.fa"
+        right = tmp_path / "right.fa"
+        left.write_bytes(b"x" * 100_000)
+        right.write_bytes(b"x" * 200_000)
+        cfg = ClusterConfig(max_threads=32)
+        spec = estimate_pairwise_resources(left, right, cfg)
+        assert spec.cores <= 32
+        assert spec.memory_gb >= 4.0
+        assert spec.time_minutes >= 30
+        assert spec.job_name == "pairwise"
+
+    def test_clamped_to_config(self, tmp_path):
+        left = tmp_path / "left.fa"
+        right = tmp_path / "right.fa"
+        left.write_bytes(b"x" * 100)
+        right.write_bytes(b"x" * 100)
+        cfg = ClusterConfig(max_threads=4, max_mem_gb=3.0, max_time_minutes=10)
+        spec = estimate_pairwise_resources(left, right, cfg)
+        assert spec.cores <= 4
+        assert spec.memory_gb <= 3.0
+        assert spec.time_minutes <= 10
+
+    def test_nonexistent_files(self):
+        cfg = ClusterConfig()
+        spec = estimate_pairwise_resources(Path("/no/left.fa"), Path("/no/right.fa"), cfg)
+        assert spec.memory_gb >= 4.0  # Minimum
+        assert spec.job_name == "pairwise"
 
 
 class TestEstimateDepthResources:

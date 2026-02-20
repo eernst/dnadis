@@ -150,6 +150,30 @@ def estimate_contaminant_resources(
     return clamp_resources(spec, config)
 
 
+def estimate_pairwise_resources(
+    left_fasta: Path,
+    right_fasta: Path,
+    config: ClusterConfig,
+) -> ResourceSpec:
+    """Estimate resources for pairwise assembly-vs-assembly synteny alignment."""
+    left_bp = _estimate_genome_bp_from_filesize(left_fasta)
+    right_bp = _estimate_genome_bp_from_filesize(right_fasta)
+    max_bp = max(left_bp, right_bp)
+
+    # minimap2 whole-genome: memory dominated by target (left) index
+    mem_gb = max(4.0, max_bp * 8 / 1e9 + 2.0)
+    time_min = _scale_time(30, max_bp)
+    cores = min(32, config.max_threads)
+
+    spec = ResourceSpec(
+        cores=cores,
+        memory_gb=mem_gb,
+        time_minutes=time_min,
+        job_name="pairwise",
+    )
+    return clamp_resources(spec, config)
+
+
 def estimate_depth_resources(
     reads_path: Path,
     assembly_path: Path,
