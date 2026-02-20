@@ -1646,7 +1646,8 @@ def main():
     dist_grp = p.add_argument_group("Distributed computing (SLURM cluster)")
     dist_grp.add_argument(
         "--cluster", action="store_true",
-        help="Enable distributed execution via executorlib (submits phases as SLURM jobs)",
+        help="Enable distributed execution via executorlib (submits phases as SLURM jobs). "
+             "Requires executorlib: conda install -c conda-forge executorlib",
     )
     dist_grp.add_argument(
         "--max-threads-dist", type=int, default=64,

@@ -156,13 +156,13 @@ class TestCreateExecutor:
         ex = create_executor(cfg)
         assert isinstance(ex, LocalExecutor)
 
-    def test_enabled_without_executorlib_falls_back(self):
-        """When executorlib is not installed, falls back to LocalExecutor."""
+    def test_enabled_without_executorlib_raises(self):
+        """When executorlib is not installed, exits with error."""
         cfg = ClusterConfig(enabled=True)
         # Mock executorlib import to fail
         with patch.dict("sys.modules", {"executorlib": None}):
-            ex = create_executor(cfg)
-            assert isinstance(ex, LocalExecutor)
+            with pytest.raises(SystemExit):
+                create_executor(cfg)
 
 
 # ===================================================================

@@ -43,6 +43,7 @@
 - [centrifuger](https://github.com/mourisl/centrifuger) - contaminant detection
 - [taxonkit](https://github.com/shenwei356/taxonkit) + NCBI taxonomy database - taxonomic lineage for contaminant table (see below)
 - [RagTag](https://github.com/malonge/RagTag) - improved reference-guided scaffolding (for `--scaffold`; built-in scaffolder used as fallback)
+- [executorlib](https://github.com/pyiron/executorlib) - distributed SLURM job submission (required for `--cluster`; `conda install -c conda-forge executorlib`)
 - [infernal](http://eddylab.org/infernal/) - structure-based rRNA annotation with Rfam covariance models (for `--build-rdna-consensus`; bundled Rfam database)
 - R with ggplot2, dplyr, readr, stringr, tibble, tidyr, patchwork, ggnewscale, pacman - visualization (`--plot`)
 - rmarkdown + pandoc - unified HTML report generation (`--plot`)
@@ -200,6 +201,23 @@ Read type to minimap2 preset mapping:
 | `--scaffold-gap-size` | Number of Ns between contigs in scaffolded output | 100 |
 
 When `--scaffold` is enabled, chromosome-assigned contigs are grouped by reference chromosome and ordered into pseudomolecules. The scaffolder handles haplotype-aware grouping for polyploid assemblies (e.g., contigs assigned to chr1A are scaffolded separately from chr1B). Single T2T contigs that span a full chromosome produce trivial (single-component) AGP entries. Multi-contig chromosomes are ordered by reference position, either via RagTag (if installed) or the built-in scaffolder.
+
+### Distributed computing (SLURM cluster)
+
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--cluster` | Submit compute phases as SLURM jobs via executorlib | off |
+| `--partition` | SLURM partition for distributed jobs | cpuq |
+| `--max-threads-dist` | Max threads per distributed job | 64 |
+| `--max-mem-dist` | Max memory (GB) per distributed job | 128 |
+| `--max-time-dist` | Max wall time (minutes) per distributed job | 720 |
+
+**Requires [executorlib](https://github.com/pyiron/executorlib):**
+```bash
+conda install -n final_finalizer -c conda-forge executorlib
+```
+
+When `--cluster` is enabled, compute-intensive phases (synteny alignment, BLAST detection, debris detection, contaminant screening, read depth) are submitted as individual SLURM jobs with per-job resource control. In multi-assembly mode, assemblies run concurrently with each submitting its own SLURM jobs. Without `--cluster`, all phases run locally.
 
 ## Output Files
 

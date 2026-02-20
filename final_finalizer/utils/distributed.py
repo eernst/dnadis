@@ -161,7 +161,7 @@ def create_executor(config: ClusterConfig) -> LocalExecutor | _ExecutorlibWrappe
     * ``config.enabled == True`` and executorlib installed →
       :class:`_ExecutorlibWrapper` around ``SlurmClusterExecutor``
     * ``config.enabled == True`` but executorlib missing →
-      :class:`LocalExecutor` with a warning
+      raises :class:`SystemExit` with install instructions
     """
     if not config.enabled:
         return LocalExecutor()
@@ -176,9 +176,9 @@ def create_executor(config: ClusterConfig) -> LocalExecutor | _ExecutorlibWrappe
         )
         return _ExecutorlibWrapper(inner)
     except ImportError:
-        logger.warning(
-            "--cluster requested but executorlib is not installed. "
-            "Falling back to local (sequential) execution. "
-            "Install with: conda install -c conda-forge executorlib"
+        logger.error(
+            "--cluster requires the executorlib package, which is not installed.\n"
+            "Install with:  conda install -c conda-forge executorlib\n"
+            "Or run without --cluster for local execution."
         )
-        return LocalExecutor()
+        raise SystemExit(1)
