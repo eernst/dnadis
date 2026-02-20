@@ -217,48 +217,74 @@ class TestPatchPysqaTemplate:
 
 
 class TestSbatchRetry:
+    """Tests for the subprocess.check_output retry wrapper.
+
+    The retry patch replaces the ``subprocess`` module in the scheduler's
+    namespace so that ``check_output`` retries on ``CalledProcessError``.
+    This works even when pysqa stores a direct reference to
+    ``pysqa_execute_command`` because the function still looks up
+    ``subprocess`` from its own module globals on every call.
+    """
+
     def test_retries_on_failure_then_succeeds(self):
         """Retry logic retries on CalledProcessError and returns on success."""
-        import subprocess
+        import subprocess as _subprocess
         from executorlib.standalone import scheduler as _sched_mod
 
-        original = _sched_mod.pysqa_execute_command
-        call_count = 0
+        # Clean slate: remove any prior patch
+        _orig_subprocess = _sched_mod.subprocess
+        if hasattr(_sched_mod, "_sbatch_retry_patched"):
+            delattr(_sched_mod, "_sbatch_retry_patched")
+        _sched_mod.subprocess = _subprocess
 
-        def _flaky(**kwargs):
+        call_count = 0
+        _real_check_output = _subprocess.check_output
+
+        def _flaky(*args, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count < 3:
-                raise subprocess.CalledProcessError(1, "sbatch")
+                raise _subprocess.CalledProcessError(1, "sbatch")
             return b"12345\n"
 
+        _subprocess.check_output = _flaky
         try:
-            _sched_mod.pysqa_execute_command = _flaky
-            # Remove any existing patch marker so we can re-patch
             _patch_sbatch_retry(max_retries=5, base_delay=0.01)
-            result = _sched_mod.pysqa_execute_command()
+            # The patched check_output retries _flaky via the module replacement
+            result = _sched_mod.subprocess.check_output(["sbatch", "test.sh"])
             assert result == b"12345\n"
             assert call_count == 3
         finally:
-            _sched_mod.pysqa_execute_command = original
+            _subprocess.check_output = _real_check_output
+            if hasattr(_sched_mod, "_sbatch_retry_patched"):
+                delattr(_sched_mod, "_sbatch_retry_patched")
+            _sched_mod.subprocess = _orig_subprocess
 
     def test_raises_after_max_retries(self):
         """Raises CalledProcessError after exhausting retries."""
-        import subprocess
+        import subprocess as _subprocess
         from executorlib.standalone import scheduler as _sched_mod
 
-        original = _sched_mod.pysqa_execute_command
+        _orig_subprocess = _sched_mod.subprocess
+        if hasattr(_sched_mod, "_sbatch_retry_patched"):
+            delattr(_sched_mod, "_sbatch_retry_patched")
+        _sched_mod.subprocess = _subprocess
 
-        def _always_fail(**kwargs):
-            raise subprocess.CalledProcessError(1, "sbatch")
+        _real_check_output = _subprocess.check_output
 
+        def _always_fail(*args, **kwargs):
+            raise _subprocess.CalledProcessError(1, "sbatch")
+
+        _subprocess.check_output = _always_fail
         try:
-            _sched_mod.pysqa_execute_command = _always_fail
             _patch_sbatch_retry(max_retries=2, base_delay=0.01)
-            with pytest.raises(subprocess.CalledProcessError):
-                _sched_mod.pysqa_execute_command()
+            with pytest.raises(_subprocess.CalledProcessError):
+                _sched_mod.subprocess.check_output(["sbatch", "test.sh"])
         finally:
-            _sched_mod.pysqa_execute_command = original
+            _subprocess.check_output = _real_check_output
+            if hasattr(_sched_mod, "_sbatch_retry_patched"):
+                delattr(_sched_mod, "_sbatch_retry_patched")
+            _sched_mod.subprocess = _orig_subprocess
 
 
 # ===================================================================

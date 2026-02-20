@@ -82,7 +82,7 @@ def estimate_synteny_resources(
         mem_gb = max(4.0, ref_bp * 8 / 1e9 + 2.0)
         time_min = _scale_time(60, max(ref_bp, qry_bp))
 
-    cores = min(16, config.max_threads)
+    cores = min(32, config.max_threads)
 
     spec = ResourceSpec(
         cores=cores,

@@ -217,8 +217,14 @@ def _patch_sbatch_retry(max_retries: int = 8, base_delay: float = 15.0) -> None:
     internal thread does not retry, so one failure kills the entire thread
     and hangs all pending futures.
 
-    This function monkey-patches ``executorlib.standalone.scheduler.pysqa_execute_command``
-    to retry on ``CalledProcessError`` with exponential backoff + jitter.
+    pysqa stores a direct reference to ``pysqa_execute_command`` at
+    construction time (``self._execute_command_function``), so replacing the
+    module attribute does not affect calls made through the stored reference.
+    Instead, we replace the ``subprocess`` module in the scheduler's namespace
+    with a copy whose ``check_output`` retries on ``CalledProcessError``.
+    The original function always looks up ``subprocess`` from its own module
+    globals, so the retry wrapper is invoked regardless of who holds the
+    function reference.
 
     Safe to call multiple times — patches only once.
     """
@@ -227,16 +233,19 @@ def _patch_sbatch_retry(max_retries: int = 8, base_delay: float = 15.0) -> None:
     except ImportError:
         return
 
-    if getattr(_sched_mod.pysqa_execute_command, "_retries_patched", False):
+    if getattr(_sched_mod, "_sbatch_retry_patched", False):
         return  # already patched
 
-    _orig = _sched_mod.pysqa_execute_command
+    import types as _types
 
-    def _with_retry(**kwargs: Any) -> Any:
+    _real_subprocess = _sched_mod.subprocess
+    _orig_check_output = _real_subprocess.check_output
+
+    def _check_output_with_retry(*args: Any, **kwargs: Any) -> Any:
         last_exc: subprocess.CalledProcessError | None = None
         for attempt in range(max_retries):
             try:
-                return _orig(**kwargs)
+                return _orig_check_output(*args, **kwargs)
             except subprocess.CalledProcessError as exc:
                 last_exc = exc
                 if attempt < max_retries - 1:
@@ -249,8 +258,12 @@ def _patch_sbatch_retry(max_retries: int = 8, base_delay: float = 15.0) -> None:
                     time.sleep(delay)
         raise last_exc  # type: ignore[misc]
 
-    _with_retry._retries_patched = True  # type: ignore[attr-defined]
-    _sched_mod.pysqa_execute_command = _with_retry
+    # Build a drop-in replacement for the subprocess module with retry logic
+    _retry_mod = _types.ModuleType("subprocess")
+    _retry_mod.__dict__.update(_real_subprocess.__dict__)
+    _retry_mod.check_output = _check_output_with_retry  # type: ignore[attr-defined]
+    _sched_mod.subprocess = _retry_mod  # type: ignore[attr-defined]
+    _sched_mod._sbatch_retry_patched = True  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------
