@@ -414,7 +414,7 @@ def run_assembly(
 
     # --- Executor setup ---
     # Import here to avoid circular imports at module level
-    from final_finalizer.utils.distributed import LocalExecutor, ResourceSpec
+    from final_finalizer.utils.distributed import LocalExecutor, LocalFuture, ResourceSpec
     if executor is None:
         executor = LocalExecutor()
     use_cluster = cluster_config is not None and cluster_config.enabled
@@ -434,12 +434,16 @@ def run_assembly(
     if args.synteny_mode == "protein":
         logger.phase("Phase 2: Protein-anchor synteny analysis")
 
-        synteny_future = executor.submit(
-            run_miniprot,
-            args.miniprot, qry, proteins_faa, miniprot_paf_gz,
-            _job_threads(synteny_spec), args.miniprot_args, miniprot_err,
-            resource_spec=synteny_spec if use_cluster else None,
-        )
+        if file_exists_and_valid(miniprot_paf_gz):
+            logger.info(f"Reusing cached miniprot PAF: {miniprot_paf_gz}")
+            synteny_future = LocalFuture(lambda: None)
+        else:
+            synteny_future = executor.submit(
+                run_miniprot,
+                args.miniprot, qry, proteins_faa, miniprot_paf_gz,
+                _job_threads(synteny_spec), args.miniprot_args, miniprot_err,
+                resource_spec=synteny_spec if use_cluster else None,
+            )
         synteny_future.result()  # block until alignment completes
 
         ev = parse_miniprot_synteny_evidence_and_segments(
@@ -464,13 +468,17 @@ def run_assembly(
         logger.info("Note: Nucleotide mode is optimized for within-species or closely related genomes. "
                     "For highly divergent species, protein mode may provide more reliable assignments.")
 
-        synteny_future = executor.submit(
-            run_minimap2_synteny,
-            ref, qry, paf_gz, _job_threads(synteny_spec),
-            args.preset, args.kmer, args.window, err_log,
-            permissive=True,
-            resource_spec=synteny_spec if use_cluster else None,
-        )
+        if file_exists_and_valid(paf_gz):
+            logger.info(f"Reusing cached minimap2 PAF: {paf_gz}")
+            synteny_future = LocalFuture(lambda: None)
+        else:
+            synteny_future = executor.submit(
+                run_minimap2_synteny,
+                ref, qry, paf_gz, _job_threads(synteny_spec),
+                args.preset, args.kmer, args.window, err_log,
+                permissive=True,
+                resource_spec=synteny_spec if use_cluster else None,
+            )
         synteny_future.result()  # block until alignment completes
 
         ev = parse_paf_chain_evidence_and_segments(
@@ -1906,6 +1914,42 @@ def main():
                             pair_prefix = sg_dir / pair_name
                             left_fasta = left.per_subgenome_chrs[sg]
                             right_fasta = right.per_subgenome_chrs[sg]
+                            macro_tsv = Path(str(pair_prefix) + ".macro_blocks.tsv")
+                            if file_exists_and_valid(macro_tsv):
+                                logger.info(f"Reusing cached pairwise: {macro_tsv}")
+                                pairwise_pairs.append((pair_name, macro_tsv))
+                            else:
+                                res_spec = estimate_pairwise_resources(
+                                    left_fasta, right_fasta, cluster_config,
+                                )
+                                pw_threads = res_spec.cores if use_cluster_pw else args.threads
+                                fut = executor.submit(
+                                    compute_pairwise_synteny,
+                                    left_fasta=left_fasta,
+                                    right_fasta=right_fasta,
+                                    left_name=left.assembly_name,
+                                    right_name=right.assembly_name,
+                                    outprefix=pair_prefix,
+                                    threads=pw_threads,
+                                    resource_spec=res_spec if use_cluster_pw else None,
+                                    **chain_kwargs,
+                                )
+                                pairwise_futures.append((pair_name, fut))
+                else:
+                    logger.phase("Pairwise assembly synteny (nucleotide mode)")
+                    pairwise_dir = output_dir / "pairwise"
+                    pairwise_dir.mkdir(exist_ok=True)
+                    for i in range(len(results) - 1):
+                        left, right = results[i], results[i + 1]
+                        pair_name = f"{left.assembly_name}_vs_{right.assembly_name}"
+                        pair_prefix = pairwise_dir / pair_name
+                        left_fasta = Path(str(left.outprefix) + ".chrs.fasta")
+                        right_fasta = Path(str(right.outprefix) + ".chrs.fasta")
+                        macro_tsv = Path(str(pair_prefix) + ".macro_blocks.tsv")
+                        if file_exists_and_valid(macro_tsv):
+                            logger.info(f"Reusing cached pairwise: {macro_tsv}")
+                            pairwise_pairs.append((pair_name, macro_tsv))
+                        else:
                             res_spec = estimate_pairwise_resources(
                                 left_fasta, right_fasta, cluster_config,
                             )
@@ -1922,32 +1966,6 @@ def main():
                                 **chain_kwargs,
                             )
                             pairwise_futures.append((pair_name, fut))
-                else:
-                    logger.phase("Pairwise assembly synteny (nucleotide mode)")
-                    pairwise_dir = output_dir / "pairwise"
-                    pairwise_dir.mkdir(exist_ok=True)
-                    for i in range(len(results) - 1):
-                        left, right = results[i], results[i + 1]
-                        pair_name = f"{left.assembly_name}_vs_{right.assembly_name}"
-                        pair_prefix = pairwise_dir / pair_name
-                        left_fasta = Path(str(left.outprefix) + ".chrs.fasta")
-                        right_fasta = Path(str(right.outprefix) + ".chrs.fasta")
-                        res_spec = estimate_pairwise_resources(
-                            left_fasta, right_fasta, cluster_config,
-                        )
-                        pw_threads = res_spec.cores if use_cluster_pw else args.threads
-                        fut = executor.submit(
-                            compute_pairwise_synteny,
-                            left_fasta=left_fasta,
-                            right_fasta=right_fasta,
-                            left_name=left.assembly_name,
-                            right_name=right.assembly_name,
-                            outprefix=pair_prefix,
-                            threads=pw_threads,
-                            resource_spec=res_spec if use_cluster_pw else None,
-                            **chain_kwargs,
-                        )
-                        pairwise_futures.append((pair_name, fut))
 
                 # Collect pairwise results
                 for pair_name, fut in pairwise_futures:
