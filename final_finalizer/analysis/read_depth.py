@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import os
 import statistics
 import subprocess
 from enum import Enum
@@ -680,8 +681,26 @@ def align_reads_to_assembly(
     else:
         mm2_cmd.append(str(reads))
 
-    # samtools sort command
-    sort_cmd = ["samtools", "sort", "-@", str(max(1, threads // 2)), "-o", str(output_bam), "-"]
+    # Choose a temp directory for samtools sort intermediates.
+    # Prefer SLURM node-local storage when available; fall back to a unique
+    # subdirectory next to the output BAM to avoid collisions with stale
+    # temp files from previous runs.
+    _slurm_tmpdir = os.environ.get("SLURM_TMPDIR", "")
+    if _slurm_tmpdir and os.path.isdir(_slurm_tmpdir) and os.access(_slurm_tmpdir, os.W_OK):
+        sort_tmp_dir = Path(_slurm_tmpdir)
+    else:
+        sort_tmp_dir = work_dir / "sort_tmp"
+        sort_tmp_dir.mkdir(parents=True, exist_ok=True)
+    sort_tmp_prefix = sort_tmp_dir / "srt"
+
+    # samtools sort command (-T sets temp file prefix to avoid stale collisions)
+    sort_cmd = [
+        "samtools", "sort",
+        "-@", str(max(1, threads // 2)),
+        "-T", str(sort_tmp_prefix),
+        "-o", str(output_bam),
+        "-",
+    ]
 
     logger.info(f"Aligning reads with {mapper} -x {preset}")
 
@@ -765,6 +784,11 @@ def align_reads_to_assembly(
                         proc.wait()
                     except Exception:
                         pass
+        # Remove sort temp directory (only the one we created, not SLURM_TMPDIR)
+        _local_sort_tmp = work_dir / "sort_tmp"
+        if _local_sort_tmp.is_dir():
+            import shutil
+            shutil.rmtree(_local_sort_tmp, ignore_errors=True)
 
 
 def run_mosdepth(
