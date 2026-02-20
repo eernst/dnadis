@@ -263,7 +263,7 @@ def prepare_reference(args, ref_outprefix: Path) -> ReferenceContext:
             raise RuntimeError("--ref-gff3 is required for protein mode but GFF3 processing failed")
         proteins_faa = Path(str(ref_outprefix) + ".ref_proteins.fa")
         gffread_err = Path(str(ref_outprefix) + ".gffread.err")
-        run_gffread_extract_proteins(args.gffread, ref, ref_gff3, proteins_faa, gffread_err)
+        run_gffread_extract_proteins("gffread", ref, ref_gff3, proteins_faa, gffread_err)
 
     # --- Compute chr_like_minlen ---
     if args.chr_like_minlen is None:
@@ -986,7 +986,7 @@ def run_assembly(
     rdna_annotations_tsv = None
     rdna_arrays_tsv_path = None
     rdna_ref = ref_ctx.rdna_ref
-    if getattr(args, 'build_rdna_consensus', False) and not args.skip_rdna and rdna_hit_intervals:
+    if not args.skip_rdna_consensus and not args.skip_rdna and rdna_hit_intervals:
         logger.phase("Phase 11.7: Building rDNA consensus from query assembly")
         from final_finalizer.detection.rdna_consensus import build_rdna_consensus
 
@@ -1083,7 +1083,7 @@ def run_assembly(
                 logger.done(f"rDNA GFF3:         {rdna_annotations_gff3}")
         else:
             logger.warning("rDNA consensus building did not produce a result")
-    elif getattr(args, 'build_rdna_consensus', False) and args.skip_rdna:
+    elif not args.skip_rdna_consensus and args.skip_rdna:
         logger.info("Phase 11.7: Skipping rDNA consensus (--skip-rdna)")
 
     # --- Phase 12: Scaffolding (optional) ---
@@ -1223,7 +1223,7 @@ def run_assembly(
         per_subgenome_chrs=per_sg_chrs,
     )
 
-    if args.plot:
+    if not args.skip_plot:
         agp_tsv = Path(str(outprefix) + ".scaffolded.agp") if args.scaffold and scaffolded_seqs else None
         contam_tsv_arg = contaminants_tsv if contaminants_filtered else None
 
@@ -1263,14 +1263,14 @@ def main():
         # Create a minimal namespace with defaults
         defaults = argparse.Namespace(
             ref=None, query=None, output_dir=None, ref_gff3=None,
-            threads=8, plot=False, assembly_name="", reference_name="",
+            threads=8, skip_plot=False, assembly_name="", reference_name="",
             verbose=False, quiet=False,
             log_file=None, config=None, dump_config=True, chr_like_minlen=None,
             add_subgenome_suffix=None, ref_id_pattern=None, reads=None,
             reads_type="lrhq", skip_depth=False, depth_window_size=1000,
-            depth_target_coverage=0, keep_depth_bam=False, synteny_mode="protein",
+            depth_target_coverage=0, keep_depth_bam=False, synteny_mode="nucleotide",
             skip_organelles=False, skip_rdna=False, skip_contaminants=False,
-            gffread="gffread", miniprot="miniprot", miniprot_args="",
+            miniprot="miniprot", miniprot_args="",
             chrC_ref=None, chrM_ref=None, rdna_ref=None, centrifuger_idx=None,
             assign_min_frac=0.10, assign_min_ratio=1.25, chimera_primary_frac=0.8,
             chimera_secondary_frac=0.2, low_ref_span_threshold=0.75,
@@ -1281,7 +1281,7 @@ def main():
             miniprot_min_genes=3, miniprot_min_segments=5, min_span_frac=0.20,
             min_span_bp=50000, organelle_min_cov=0.80, chrC_len_tolerance=0.05,
             chrM_len_tolerance=0.20, rdna_min_cov=0.50,
-            build_rdna_consensus=False, rdna_ref_features=None,
+            skip_rdna_consensus=False, rdna_ref_features=None,
             chr_debris_min_cov=0.80,
             chr_debris_min_identity=0.90, contaminant_min_score=1000, contaminant_min_coverage=0.50,
             debris_min_cov=0.50, debris_min_protein_hits=2, preset="asm20", kmer=None, window=None, aln_minlen=10000,
@@ -1332,7 +1332,7 @@ def main():
     # =========================================================================
     common = p.add_argument_group("Common options")
     common.add_argument("-t", "--threads", type=_positive_int, default=8, help="Threads for minimap2/miniprot [8]")
-    common.add_argument("--plot", action="store_true", help="Generate unified HTML report (requires rmarkdown + pandoc)")
+    common.add_argument("--skip-plot", action="store_true", help="Skip unified HTML report generation")
     common.add_argument("--assembly-name", type=str, default="", metavar="NAME", help="Assembly name for plot subtitles (default: omitted)")
     common.add_argument("--reference-name", type=str, default="", metavar="NAME", help="Reference name for plot subtitles (default: omitted)")
     common.add_argument("-v", "--verbose", action="store_true", help="Enable verbose (DEBUG level) logging")
@@ -1397,13 +1397,13 @@ def main():
     synteny.add_argument(
         "--synteny-mode",
         choices=["protein", "nucleotide"],
-        default="protein",
+        default="nucleotide",
         help="Synteny evidence source for classification. "
-        "protein: Use miniprot protein-anchored synteny (requires --ref-gff3). "
         "nucleotide: Use minimap2 whole-genome nucleotide alignment with permissive chaining "
         "for chromosome-scale structural composition analysis. Creates megabase-scale blocks "
         "by chaining through repetitive regions. Suitable for both within-species and cross-species comparisons. "
-        "[protein]",
+        "protein: Use miniprot protein-anchored synteny (requires --ref-gff3). "
+        "[nucleotide]",
     )
 
     # =========================================================================
@@ -1418,7 +1418,6 @@ def main():
     # External tool paths
     # =========================================================================
     tools = p.add_argument_group("External tool paths")
-    tools.add_argument("--gffread", default="gffread", help="gffread executable [gffread]")
     tools.add_argument("--miniprot", default="miniprot", help="miniprot executable [miniprot]")
     tools.add_argument("--miniprot-args", default="", help='Extra args for miniprot (e.g. "-G 200k" to increase max intron size for plants with large introns) [none]')
 
@@ -1573,10 +1572,8 @@ def main():
         help="Min query coverage for rDNA classification [0.50]",
     )
     rdna_thresh.add_argument(
-        "--build-rdna-consensus", action="store_true",
-        help="Build a consensus 45S rDNA from the query assembly and use it to "
-        "annotate rDNA loci across all contigs, detect NOR locations, and "
-        "improve rDNA classification.",
+        "--skip-rdna-consensus", action="store_true",
+        help="Skip building a consensus 45S rDNA and annotating rDNA loci.",
     )
     rdna_thresh.add_argument(
         "--rdna-ref-features", type=str, default=None, metavar="TSV",
@@ -1916,7 +1913,7 @@ def main():
                     if macro_tsv:
                         pairwise_pairs.append((pair_name, macro_tsv))
 
-        if args.plot:
+        if not args.skip_plot:
             from final_finalizer.output.plotting import run_comparison_report
             if not run_comparison_report(
                 comparison_tsv=comparison_tsv,

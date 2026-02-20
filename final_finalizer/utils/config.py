@@ -40,7 +40,7 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
     },
     "common": {
         "threads": "threads",
-        "plot": "plot",
+        "skip_plot": "skip_plot",
         "chr_like_minlen": "chr_like_minlen",
         "add_subgenome_suffix": "add_subgenome_suffix",
         "ref_id_pattern": "ref_id_pattern",
@@ -62,7 +62,6 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
         "skip_contaminants": "skip_contaminants",
     },
     "external_tools": {
-        "gffread": "gffread",
         "miniprot": "miniprot",
         "miniprot_args": "miniprot_args",
     },
@@ -108,7 +107,7 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
     },
     "thresholds_rdna": {
         "rdna_min_cov": "rdna_min_cov",
-        "build_rdna_consensus": "build_rdna_consensus",
+        "skip_rdna_consensus": "skip_rdna_consensus",
         "rdna_ref_features": "rdna_ref_features",
     },
     "thresholds_chromosome_debris": {
@@ -215,7 +214,7 @@ def merge_config_with_args(config: Dict[str, Any], args: argparse.Namespace) -> 
 
         # Skip if CLI explicitly set a value (non-None for optional args)
         # This is a heuristic - works for most cases
-        if current_value is not None and key not in ("threads", "plot"):
+        if current_value is not None and key not in ("threads", "skip_plot"):
             continue
 
         # For boolean flags that default to False, only override if not set via CLI
