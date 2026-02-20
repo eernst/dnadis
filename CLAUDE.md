@@ -7,8 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 `final_finalizer` is a bioinformatics genome assembly finalization tool that classifies contigs from *de novo* genome assemblies into biological categories (chromosomes, organelles, rDNA, contaminants, debris) using synteny evidence (protein-anchored or nucleotide whole-genome alignment), organelle/rDNA alignments, and taxonomic classification.
 
 **Key concepts**:
-- **Protein mode** (default): Uses protein homology (via miniprot) as the primary evidence source. Proteins are more conserved than nucleotide sequences, work across distantly related species, and are robust to repetitive sequences. Ideal for detecting conserved gene content.
-- **Nucleotide mode**: Uses whole-genome nucleotide alignment (via minimap2) for structural composition analysis. Detects actual sequence-level identity, making it ideal for identifying structural features like chromosomal fusions, homeologous recombination, or introgression events.
+- **Nucleotide mode** (default): Uses whole-genome nucleotide alignment (via minimap2) for structural composition analysis. Detects actual sequence-level identity, making it ideal for identifying structural features like chromosomal fusions, homeologous recombination, or introgression events.
+- **Protein mode**: Uses protein homology (via miniprot) as the primary evidence source. Proteins are more conserved than nucleotide sequences, work across distantly related species, and are robust to repetitive sequences. Ideal for detecting conserved gene content.
 
 ## Development Commands
 
@@ -42,19 +42,18 @@ pytest -m "not integration"
 
 ### Running the tool
 ```bash
-# Basic run (protein mode - default)
+# Basic run (nucleotide mode - default)
 # Output goes to output_dir/assembly/assembly.* (name derived from query filename)
-./final_finalizer.py -r reference.fasta -q assembly.fasta -o results/ --ref-gff3 reference.gff3
+./final_finalizer.py -r reference.fasta -q assembly.fasta -o results/
 
-# Nucleotide mode for structural composition analysis
-./final_finalizer.py -r reference.fasta -q assembly.fasta -o results/ --synteny-mode nucleotide
+# Protein mode for gene-level classification (requires --ref-gff3)
+./final_finalizer.py -r reference.fasta -q assembly.fasta -o results/ --synteny-mode protein --ref-gff3 reference.gff3
 
 # With all features enabled (protein mode)
 ./final_finalizer.py -r ref.fasta -q assembly.fasta -o results/ \
-    --ref-gff3 ref.gff3 \
+    --synteny-mode protein --ref-gff3 ref.gff3 \
     --reads hifi.fastq.gz \
     --centrifuger-idx /path/to/index \
-    --plot \
     -v --log-file analysis.log
 
 # Multi-assembly mode: analyze multiple assemblies against a common reference
@@ -143,17 +142,17 @@ final_finalizer/
    - Returns `ReferenceContext` dataclass shared across all assemblies
 
 2. **Synteny Analysis** (`alignment/`) - **Mode-dependent**
-   - **Protein mode** (`--synteny-mode protein`, default):
+   - **Nucleotide mode** (`--synteny-mode nucleotide`, default):
+     - Run minimap2 whole-genome alignment (query vs reference)
+     - Parse PAF output in `chain_parsing.py:parse_paf_chain_evidence_and_segments()`
+     - Chain alignments into synteny blocks based on nucleotide identity
+     - Gate-based filtering requires minimum segments and span (no gene count requirement)
+   - **Protein mode** (`--synteny-mode protein`):
      - Run miniprot to align proteins to query assembly
      - Parse PAF output in `chain_parsing.py:parse_miniprot_synteny_evidence_and_segments()`
      - Filter overlapping hits using **interval tree** (O(n log n), not O(n²))
      - Chain alignments into synteny blocks based on protein hits
      - Gate-based filtering requires minimum genes, segments, and span
-   - **Nucleotide mode** (`--synteny-mode nucleotide`):
-     - Run minimap2 whole-genome alignment (query vs reference)
-     - Parse PAF output in `chain_parsing.py:parse_paf_chain_evidence_and_segments()`
-     - Chain alignments into synteny blocks based on nucleotide identity
-     - Gate-based filtering requires minimum segments and span (no gene count requirement)
 
 3. **Detection Pipeline** (`detection/`)
    - Organelle detection via BLAST (chrC, chrM)
@@ -179,7 +178,7 @@ final_finalizer/
 6. **Output Generation** (`output/`)
    - Classified FASTA files (chromosomes, organelles, rDNA, etc.)
    - TSV summary tables (contig_summary, evidence_summary, segments, macro_blocks, contaminants with taxonomic lineage)
-   - Unified HTML report with embedded plots (if `--plot`; requires rmarkdown + pandoc):
+   - Unified HTML report with embedded plots (enabled by default; skip with `--skip-plot`; requires rmarkdown + pandoc):
      - Chromosome overview, classification bar, read depth overview, contaminant table
 
 ### Key Design Patterns
@@ -200,7 +199,7 @@ final_finalizer/
 
 **TOML configuration**: `config.py` provides schema-based config file support. CLI arguments override config file values.
 
-**Distributed computing** (`--cluster`): Optional SLURM job submission via [executorlib](https://github.com/pyiron/executorlib). When `--cluster` is set, compute-intensive phases (synteny alignment, BLAST detection, debris detection, contaminant screening, read depth) are submitted as individual SLURM jobs with per-job resource control. The coordinator process orchestrates submission and waits on futures. Two levels of parallelism: intra-assembly (independent phases like organelle + rDNA BLAST run as parallel SLURM jobs) and inter-assembly (multiple `run_assembly()` calls run concurrently via ThreadPoolExecutor, each submitting its own SLURM jobs). When `--cluster` is not set, `LocalExecutor` provides synchronous execution with zero overhead — behavior is identical to the non-distributed code path. If `--cluster` is set but executorlib is not installed, falls back to `LocalExecutor` with a warning. Resource estimation (`resource_estimation.py`) sizes each job based on input file sizes and caps against `--max-threads-dist`, `--max-mem-dist`, `--max-time-dist`.
+**Distributed computing** (`--cluster`): Optional SLURM job submission via [executorlib](https://github.com/pyiron/executorlib). When `--cluster` is set, compute-intensive phases (synteny alignment, BLAST detection, debris detection, contaminant screening, read depth) are submitted as individual SLURM jobs with per-job resource control. The coordinator process orchestrates submission and waits on futures. Two levels of parallelism: intra-assembly (independent phases like organelle + rDNA BLAST run as parallel SLURM jobs) and inter-assembly (multiple `run_assembly()` calls run concurrently via ThreadPoolExecutor, each submitting its own SLURM jobs). When `--cluster` is not set, `LocalExecutor` provides synchronous execution with zero overhead — behavior is identical to the non-distributed code path. If `--cluster` is set but executorlib or mpi4py is not installed, the tool exits with a clear error message and install instructions. Resource estimation (`resource_estimation.py`) sizes each job based on input file sizes and caps against `--max-threads-dist`, `--max-mem-dist`, `--max-time-dist`.
 
 ### Critical Security Notes
 
@@ -219,8 +218,8 @@ final_finalizer/
 **Organelle reference extraction**: If `--chrC-ref` or `--chrM-ref` not provided, code attempts to extract from main reference FASTA. If organelle sequences not found, organelle detection is skipped (not an error).
 
 **Synteny mode selection**: The tool supports two synteny modes controlled by `--synteny-mode`:
-- **protein** (default): Uses miniprot protein-anchored synteny. Requires `--ref-gff3`. Calls `parse_miniprot_synteny_evidence_and_segments()`.
-- **nucleotide**: Uses minimap2 whole-genome nucleotide alignment with permissive chaining for structural composition analysis. Calls `parse_paf_chain_evidence_and_segments()`. Both parsers in `chain_parsing.py` produce compatible `ChainEvidenceResult` objects.
+- **nucleotide** (default): Uses minimap2 whole-genome nucleotide alignment with permissive chaining for structural composition analysis. Calls `parse_paf_chain_evidence_and_segments()`.
+- **protein**: Uses miniprot protein-anchored synteny. Requires `--ref-gff3`. Calls `parse_miniprot_synteny_evidence_and_segments()`. Both parsers in `chain_parsing.py` produce compatible `ChainEvidenceResult` objects.
 
 **Permissive synteny chaining in nucleotide mode**: Nucleotide mode always uses permissive minimap2 chaining parameters (`--max-chain-skip=300 -z 10000,1000 -r 50000`) to create megabase-scale synteny blocks by chaining through repetitive regions and small gaps (kb-scale). This approach:
 - Works well for both within-species and cross-species comparisons
@@ -236,7 +235,7 @@ The permissive parameters are balanced by downstream filtering (identity thresho
 
 **Reference length normalization**: `reference_utils.py:get_min_nuclear_chrom_length()` filters out organelles (chrC/chrM) and non-chromosome sequences via `is_nuclear_chromosome()` when computing the smallest nuclear chromosome length. This ensures `--chr-like-minlen` thresholds are computed correctly.
 
-**rDNA consensus building**: When `--build-rdna-consensus` is enabled, the tool builds a species-specific 45S rDNA consensus from the query assembly and annotates rRNA sub-features (18S, 5.8S, 25S/28S, ITS1, ITS2). Sub-feature annotation uses Infernal/cmscan with bundled Rfam 15.0 covariance models for structure-based boundary detection. The bundled Rfam database (`data/rfam/euk-rrna.cm`) contains 4 eukaryotic rRNA models (5S, 5.8S, 18S, 28S) and is automatically pressed (indexed) on first use. Requires Infernal (`conda install -c bioconda infernal`). Output includes a GFF3 file (`*.rdna_annotations.gff3`) with hierarchical features using proper Sequence Ontology terms (SO:0001637 for rRNA_gene, SO:0000252 for rRNA, SO:0000635 for ITS).
+**rDNA consensus building**: The tool builds a species-specific 45S rDNA consensus from the query assembly by default and annotates rRNA sub-features (18S, 5.8S, 25S/28S, ITS1, ITS2). Use `--skip-rdna-consensus` to disable. Sub-feature annotation uses Infernal/cmscan with bundled Rfam 15.0 covariance models for structure-based boundary detection. The bundled Rfam database (`data/rfam/euk-rrna.cm`) contains 4 eukaryotic rRNA models (5S, 5.8S, 18S, 28S) and is automatically pressed (indexed) on first use. Requires Infernal (`conda install -c bioconda infernal`). Output includes a GFF3 file (`*.rdna_annotations.gff3`) with hierarchical features using proper Sequence Ontology terms (SO:0001637 for rRNA_gene, SO:0000252 for rRNA, SO:0000635 for ITS).
 
 **Rfam database auto-pressing**: The bundled Rfam covariance models are stored in text format and automatically pressed to binary indices (`.i1f`, `.i1i`, `.i1m`, `.i1p`) by Infernal on first use. The tool checks for existing indices and only presses if they're missing or outdated. This eliminates the need for manual database preparation.
 
@@ -263,12 +262,12 @@ Tests are in `tests/` directory (7 test files, ~150 tests):
 - mosdepth - depth calculation
 - rasusa - FASTQ downsampling
 - centrifuger - contaminant detection
-- infernal (cmscan) - structure-based rRNA annotation with Rfam models (for --build-rdna-consensus)
+- infernal (cmscan) - structure-based rRNA annotation with Rfam models (rDNA consensus building; enabled by default, skip with --skip-rdna-consensus)
 - Rscript (with ggplot2, dplyr, etc.) - visualization
 
 **Python packages**:
 - intervaltree - efficient overlap detection
-- executorlib (optional) - SLURM job submission for `--cluster` mode (`conda install -c conda-forge executorlib`)
+- executorlib + mpi4py (optional) - SLURM job submission for `--cluster` mode (`conda install -c conda-forge executorlib mpi4py`)
 
 All external tools are called via subprocess with proper error handling. Use `utils/io_utils.py:have_exe()` to check availability before calling.
 
@@ -283,13 +282,13 @@ All external tools are called via subprocess with proper error handling. Use `ut
 - `*.macro_blocks.tsv` - Aggregated synteny macro-blocks
 - `*.ref_lengths.tsv` - Reference chromosome lengths
 - `*.contaminants.tsv` - Detailed contaminant summary with taxonomic lineage (if contaminants detected)
-- `*.rdna_annotations.tsv` - rRNA sub-feature annotations in TSV format (if `--build-rdna-consensus` used)
-- `*.rdna_arrays.tsv` - rDNA array locations per contig (if `--build-rdna-consensus` used and arrays detected)
+- `*.rdna_annotations.tsv` - rRNA sub-feature annotations in TSV format (produced by default; skip with `--skip-rdna-consensus`)
+- `*.rdna_arrays.tsv` - rDNA array locations per contig (produced by default when arrays are detected; skip with `--skip-rdna-consensus`)
 
 **GFF3 outputs**:
-- `*.rdna_annotations.gff3` - Hierarchical rRNA gene annotations with 18S, 5.8S, 25S, ITS1, ITS2 sub-features (if `--build-rdna-consensus` used)
+- `*.rdna_annotations.gff3` - Hierarchical rRNA gene annotations with 18S, 5.8S, 25S, ITS1, ITS2 sub-features (produced by default; skip with `--skip-rdna-consensus`)
 
-**Visualization** (requires rmarkdown + pandoc; `--plot`):
+**Visualization** (enabled by default; skip with `--skip-plot`; requires rmarkdown + pandoc):
 - `*.unified_report.html` - Self-contained HTML report with all plots (chromosome overview, classification bar, depth overview, contaminant table)
 - Individual PDFs (`*.chromosome_overview.pdf`, etc.) are also exported from within the report
 

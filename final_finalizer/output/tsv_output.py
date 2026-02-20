@@ -77,7 +77,7 @@ def write_contig_summary_tsv(
     ref_norm_to_orig: Optional[Dict[str, str]] = None,
     scaffold_confidences: Optional[Dict[str, Tuple[float, float, float]]] = None,
 ) -> None:
-    """Write enhanced contig_summary.tsv with classification columns.
+    """Write contig_summary.tsv with classification columns.
 
     Includes classification columns:
     - original_name

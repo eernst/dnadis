@@ -1151,8 +1151,8 @@ def run_assembly(
     chrs_fasta = Path(str(outprefix) + ".chrs.fasta")
     per_sg_chrs = write_per_subgenome_chrs_fastas(chrs_fasta, outprefix)
 
-    # --- Phase 13: Write enhanced summary TSV ---
-    logger.phase("Phase 13: Writing enhanced summary TSV")
+    # --- Phase 13: Write summary TSV ---
+    logger.phase("Phase 13: Writing summary TSV")
     summary_tsv = Path(str(outprefix) + ".contig_summary.tsv")
 
     write_contig_summary_tsv(
