@@ -1764,6 +1764,9 @@ def main():
     if not args.log_file:
         logger.info(f"Logging to: {log_file}")
 
+    import shlex
+    logger.info(f"Command: {shlex.join(sys.argv)}")
+
     # Tee stderr to a file so that unlogged output (thread tracebacks, external
     # tool messages, etc.) is preserved alongside the structured log.
     stderr_log = output_dir / "final_finalizer.stderr.log"
