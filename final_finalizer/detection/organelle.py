@@ -13,7 +13,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from final_finalizer.detection.blast import run_makeblastdb, run_blastn_megablast
 from final_finalizer.models import OrganelleHit
-from final_finalizer.utils.io_utils import merge_intervals
+from final_finalizer.utils.io_utils import file_exists_and_valid, merge_intervals
 from final_finalizer.utils.logging_config import get_logger
 from final_finalizer.utils.reference_utils import normalize_organelle_id
 from final_finalizer.utils.sequence_utils import (
@@ -36,6 +36,10 @@ def extract_organelle_from_ref(
 
     Returns True if found and extracted, False otherwise.
     """
+    if file_exists_and_valid(output_path):
+        logger.info(f"Reusing cached {organelle_id} reference: {output_path}")
+        return True
+
     sequences = read_fasta_sequences(ref_fasta)
     if ref_norm_to_orig:
         candidate = ref_norm_to_orig.get(organelle_id)

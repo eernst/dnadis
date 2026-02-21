@@ -378,3 +378,121 @@ def check_gc_cache(
         return False
 
     return True
+
+
+# ----------------------------
+# Reference-only GC content caching
+# ----------------------------
+
+
+def write_ref_gc_tsv(
+    tsv_path: Path,
+    metadata_path: Path,
+    ref_gc: Dict[str, float],
+    ref_path: Path,
+) -> None:
+    """Write reference-only GC content cache file with metadata.
+
+    Args:
+        tsv_path: Path for TSV output
+        metadata_path: Path for JSON metadata
+        ref_gc: Reference GC content dict (seqid -> gc_content)
+        ref_path: Path to reference FASTA (for cache validation)
+    """
+    with tsv_path.open("w") as f:
+        f.write("seqid\tgc_content\n")
+        for seqid, gc in ref_gc.items():
+            f.write(f"{seqid}\t{gc:.6f}\n")
+
+    ref_resolved = ref_path.resolve()
+    try:
+        ref_stat = ref_resolved.stat()
+        ref_mtime = ref_stat.st_mtime
+        ref_size = ref_stat.st_size
+    except OSError:
+        ref_mtime = 0
+        ref_size = 0
+
+    metadata = {
+        "ref_path": str(ref_resolved),
+        "ref_name": ref_path.name,
+        "ref_mtime": ref_mtime,
+        "ref_size": ref_size,
+        "ref_seqs": len(ref_gc),
+    }
+
+    with metadata_path.open("w") as f:
+        json.dump(metadata, f, indent=2)
+
+
+def read_ref_gc_tsv(tsv_path: Path) -> Dict[str, float]:
+    """Read cached reference-only GC content from TSV file.
+
+    Args:
+        tsv_path: Path to reference GC content TSV
+
+    Returns:
+        Dict mapping sequence name to GC content (0.0-1.0)
+    """
+    ref_gc: Dict[str, float] = {}
+
+    with tsv_path.open() as f:
+        f.readline()  # Skip header
+        for line in f:
+            parts = line.strip().split("\t")
+            if len(parts) != 2:
+                continue
+            seqid, gc_str = parts
+            ref_gc[seqid] = float(gc_str)
+
+    return ref_gc
+
+
+def check_ref_gc_cache(
+    tsv_path: Path,
+    metadata_path: Path,
+    ref_path: Path,
+) -> bool:
+    """Check if reference-only GC content cache is valid.
+
+    Validates that TSV and metadata files exist, and that the reference
+    file path, mtime, and size all match.
+
+    Args:
+        tsv_path: Path to GC content TSV
+        metadata_path: Path to metadata JSON
+        ref_path: Current reference FASTA path
+
+    Returns:
+        True if cache is valid and can be reused
+    """
+    if not tsv_path.exists() or not metadata_path.exists():
+        return False
+
+    try:
+        with metadata_path.open() as f:
+            metadata = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return False
+
+    ref_resolved = ref_path.resolve()
+
+    if metadata.get("ref_path") != str(ref_resolved):
+        logger.info(
+            f"Ref GC cache invalid: ref path changed "
+            f"(cached={metadata.get('ref_name', 'unknown')}, current={ref_path.name})"
+        )
+        return False
+
+    try:
+        ref_stat = ref_resolved.stat()
+        if metadata.get("ref_mtime", 0) != ref_stat.st_mtime:
+            logger.info(f"Ref GC cache invalid: ref file modified ({ref_path.name})")
+            return False
+        if metadata.get("ref_size", 0) != ref_stat.st_size:
+            logger.info(f"Ref GC cache invalid: ref file size changed ({ref_path.name})")
+            return False
+    except OSError:
+        return False
+
+    return True

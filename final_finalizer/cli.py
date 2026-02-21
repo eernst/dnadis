@@ -109,10 +109,13 @@ from final_finalizer.utils.sequence_utils import (
     calculate_gc_content_fasta,
     calculate_gc_stats,
     check_gc_cache,
+    check_ref_gc_cache,
     read_fasta_lengths,
     read_gc_content_tsv,
+    read_ref_gc_tsv,
     write_filtered_fasta,
     write_gc_content_tsv,
+    write_ref_gc_tsv,
 )
 from final_finalizer.utils.reference_utils import (
     compile_ref_id_patterns,
@@ -209,8 +212,15 @@ def prepare_reference(args, ref_outprefix: Path) -> ReferenceContext:
     ref_lengths_norm, ref_orig_to_norm, ref_norm_to_orig = read_fasta_lengths_with_map(ref)
     ref_ids_raw = set(read_fasta_lengths(ref).keys())
 
-    # Compute reference GC content (always computed eagerly — it's fast)
-    ref_gc_all = calculate_gc_content_fasta(ref)
+    # Compute reference GC content (cached across reruns)
+    ref_gc_tsv = Path(str(ref_outprefix) + ".ref_gc.tsv")
+    ref_gc_meta = Path(str(ref_outprefix) + ".ref_gc.metadata.json")
+    if check_ref_gc_cache(ref_gc_tsv, ref_gc_meta, ref):
+        logger.info(f"Reusing cached reference GC content: {ref_gc_tsv}")
+        ref_gc_all = read_ref_gc_tsv(ref_gc_tsv)
+    else:
+        ref_gc_all = calculate_gc_content_fasta(ref)
+        write_ref_gc_tsv(ref_gc_tsv, ref_gc_meta, ref_gc_all, ref)
     ref_gc_nuclear = {
         ref_norm_to_orig.get(k, k): v
         for k, v in ref_gc_all.items()
