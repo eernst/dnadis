@@ -26,10 +26,7 @@ import argparse
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-try:
-    import tomli
-except ImportError:
-    tomli = None  # type: ignore
+import tomllib
 
 
 # Schema mapping TOML sections/keys to argparse argument names
@@ -38,12 +35,12 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
     "required": {
         "ref": "ref",
         "query": "query",
-        "outprefix": "outprefix",
+        "output_dir": "output_dir",
         "ref_gff3": "ref_gff3",
     },
     "common": {
         "threads": "threads",
-        "plot": "plot",
+        "skip_plot": "skip_plot",
         "chr_like_minlen": "chr_like_minlen",
         "add_subgenome_suffix": "add_subgenome_suffix",
         "ref_id_pattern": "ref_id_pattern",
@@ -65,7 +62,6 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
         "skip_contaminants": "skip_contaminants",
     },
     "external_tools": {
-        "gffread": "gffread",
         "miniprot": "miniprot",
         "miniprot_args": "miniprot_args",
     },
@@ -111,7 +107,7 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
     },
     "thresholds_rdna": {
         "rdna_min_cov": "rdna_min_cov",
-        "build_rdna_consensus": "build_rdna_consensus",
+        "skip_rdna_consensus": "skip_rdna_consensus",
         "rdna_ref_features": "rdna_ref_features",
     },
     "thresholds_chromosome_debris": {
@@ -147,7 +143,14 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
     "multi_assembly": {
         "fofn": "fofn",
         "assembly_dir": "assembly_dir",
-        "output_dir": "output_dir",
+    },
+    "distributed": {
+        "cluster": "cluster",
+        "max_threads_dist": "max_threads_dist",
+        "max_mem_dist": "max_mem_dist",
+        "max_time_dist": "max_time_dist",
+        "partition": "partition",
+        "qos": "qos",
     },
 }
 
@@ -162,21 +165,14 @@ def load_config(path: Path) -> Dict[str, Any]:
         Flat dictionary of configuration values with argparse dest names as keys
 
     Raises:
-        RuntimeError: If tomli is not installed
         ValueError: If the configuration file is invalid
     """
-    if tomli is None:
-        raise RuntimeError(
-            "TOML support requires the 'tomli' package. "
-            "Install with: pip install tomli"
-        )
-
     path = Path(path)
     if not path.exists():
         raise ValueError(f"Configuration file not found: {path}")
 
     with open(path, "rb") as f:
-        raw_config = tomli.load(f)
+        raw_config = tomllib.load(f)
 
     # Flatten TOML structure to argparse dest names
     flat_config: Dict[str, Any] = {}
@@ -218,7 +214,11 @@ def merge_config_with_args(config: Dict[str, Any], args: argparse.Namespace) -> 
 
         # Skip if CLI explicitly set a value (non-None for optional args)
         # This is a heuristic - works for most cases
-        if current_value is not None and key not in ("threads", "plot"):
+        if current_value is not None and key not in (
+            "threads", "skip_plot",
+            "max_threads_dist", "max_mem_dist", "max_time_dist",
+            "partition", "qos",
+        ):
             continue
 
         # For boolean flags that default to False, only override if not set via CLI

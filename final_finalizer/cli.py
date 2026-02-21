@@ -35,6 +35,36 @@ from pathlib import Path
 from typing import Dict, Optional, Set, Tuple
 
 
+class _TeeWriter:
+    """Write to two file-like objects simultaneously (e.g. stderr + log file)."""
+
+    def __init__(self, a: object, b: object) -> None:
+        self._a = a
+        self._b = b
+
+    def write(self, data: str) -> int:
+        self._a.write(data)  # type: ignore[union-attr]
+        try:
+            self._b.write(data)  # type: ignore[union-attr]
+            self._b.flush()  # type: ignore[union-attr]
+        except OSError:
+            pass
+        return len(data)
+
+    def flush(self) -> None:
+        self._a.flush()  # type: ignore[union-attr]
+        try:
+            self._b.flush()  # type: ignore[union-attr]
+        except OSError:
+            pass
+
+    def fileno(self) -> int:
+        return self._a.fileno()  # type: ignore[union-attr]
+
+    def isatty(self) -> bool:
+        return self._a.isatty()  # type: ignore[union-attr]
+
+
 def _validate_input_path(path_str: str) -> Path:
     """Validate that an input file path exists and is readable.
 
@@ -233,7 +263,7 @@ def prepare_reference(args, ref_outprefix: Path) -> ReferenceContext:
             raise RuntimeError("--ref-gff3 is required for protein mode but GFF3 processing failed")
         proteins_faa = Path(str(ref_outprefix) + ".ref_proteins.fa")
         gffread_err = Path(str(ref_outprefix) + ".gffread.err")
-        run_gffread_extract_proteins(args.gffread, ref, ref_gff3, proteins_faa, gffread_err)
+        run_gffread_extract_proteins("gffread", ref, ref_gff3, proteins_faa, gffread_err)
 
     # --- Compute chr_like_minlen ---
     if args.chr_like_minlen is None:
@@ -296,6 +326,8 @@ def run_assembly(
     assembly_name: str,
     reads: Optional[Path],
     outprefix: Path,
+    executor=None,
+    cluster_config=None,
 ) -> AssemblyResult:
     """Run the full analysis pipeline for a single query assembly.
 
@@ -314,8 +346,9 @@ def run_assembly(
     Returns:
         :class:`AssemblyResult` summarizing the assembly's classification.
     """
-    from final_finalizer.utils.logging_config import get_logger
+    from final_finalizer.utils.logging_config import get_logger, set_assembly_context
     logger = get_logger("cli")
+    set_assembly_context(assembly_name)
 
     # --- Unpack reference context into local variables ---
     # This keeps the rest of the function identical to the original main().
@@ -379,11 +412,41 @@ def run_assembly(
     miniprot_paf_gz = Path(str(outprefix) + ".miniprot.paf.gz")
     miniprot_err = Path(str(outprefix) + ".miniprot.err")
 
+    # --- Executor setup ---
+    # Import here to avoid circular imports at module level
+    from final_finalizer.utils.distributed import LocalExecutor, LocalFuture, ResourceSpec
+    if executor is None:
+        executor = LocalExecutor()
+    use_cluster = cluster_config is not None and cluster_config.enabled
+
+    # Helper: choose thread count for a submitted job
+    def _job_threads(spec: ResourceSpec) -> int:
+        """Return thread count: spec.cores in cluster mode, args.threads locally."""
+        return spec.cores if use_cluster else args.threads
+
     # --- Phase 2: Synteny analysis (protein or nucleotide) ---
+    if use_cluster:
+        from final_finalizer.utils.resource_estimation import estimate_synteny_resources
+        synteny_spec = estimate_synteny_resources(ref, qry, args.synteny_mode, cluster_config)
+    else:
+        synteny_spec = ResourceSpec()
+
     if args.synteny_mode == "protein":
         logger.phase("Phase 2: Protein-anchor synteny analysis")
 
-        run_miniprot(args.miniprot, qry, proteins_faa, miniprot_paf_gz, args.threads, args.miniprot_args, miniprot_err)
+        if file_exists_and_valid(miniprot_paf_gz):
+            logger.info(f"Reusing cached miniprot PAF: {miniprot_paf_gz}")
+            synteny_future = LocalFuture(lambda: None)
+        else:
+            synteny_future = executor.submit(
+                run_miniprot,
+                args.miniprot, qry, proteins_faa, miniprot_paf_gz,
+                _job_threads(synteny_spec), args.miniprot_args, miniprot_err,
+                resource_spec=synteny_spec if use_cluster else None,
+            )
+        synteny_future.result()  # block until alignment completes
+        if not file_exists_and_valid(miniprot_paf_gz):
+            raise RuntimeError(f"Synteny alignment did not produce output: {miniprot_paf_gz}")
 
         ev = parse_miniprot_synteny_evidence_and_segments(
             miniprot_paf_gz=miniprot_paf_gz,
@@ -406,10 +469,21 @@ def run_assembly(
         logger.info("Running minimap2 with permissive chaining for chromosome-scale structural analysis")
         logger.info("Note: Nucleotide mode is optimized for within-species or closely related genomes. "
                     "For highly divergent species, protein mode may provide more reliable assignments.")
-        run_minimap2_synteny(
-            ref, qry, paf_gz, args.threads, args.preset, args.kmer, args.window, err_log,
-            permissive=True  # Always use permissive chaining in nucleotide mode
-        )
+
+        if file_exists_and_valid(paf_gz):
+            logger.info(f"Reusing cached minimap2 PAF: {paf_gz}")
+            synteny_future = LocalFuture(lambda: None)
+        else:
+            synteny_future = executor.submit(
+                run_minimap2_synteny,
+                ref, qry, paf_gz, _job_threads(synteny_spec),
+                args.preset, args.kmer, args.window, err_log,
+                permissive=True,
+                resource_spec=synteny_spec if use_cluster else None,
+            )
+        synteny_future.result()  # block until alignment completes
+        if not file_exists_and_valid(paf_gz):
+            raise RuntimeError(f"Synteny alignment did not produce output: {paf_gz}")
 
         ev = parse_paf_chain_evidence_and_segments(
             paf_gz_path=paf_gz,
@@ -609,52 +683,98 @@ def run_assembly(
         blast_query_fasta = qry
         blast_query_lengths = qry_lengths
 
-    # --- Phase 4: Organelle detection ---
+    # --- Phases 4-5: Organelle + rDNA detection (parallel in cluster mode) ---
     chrC_contig: Optional[str] = None
     chrM_contig: Optional[str] = None
     organelle_debris: Set[str] = set()
     organelle_hits: Dict = {}
+    rdna_contigs: Set[str] = set()
+    rdna_hits: Dict = {}
+    rdna_hit_intervals: Dict[str, list] = {}  # Raw BLAST intervals for consensus building
 
+    if use_cluster:
+        from final_finalizer.utils.resource_estimation import estimate_blast_resources
+        blast_spec = estimate_blast_resources(blast_query_fasta, cluster_config, job_name="blast")
+    else:
+        blast_spec = ResourceSpec()
+
+    organelle_future = None
+    rdna_future = None
+
+    # Submit organelle detection
     if not args.skip_organelles:
         logger.phase("Phase 4: Organelle detection")
         if ref_ctx.chrC_ref or ref_ctx.chrM_ref:
-            chrC_contig, chrM_contig, organelle_debris, organelle_hits = detect_organelles(
+            organelle_future = executor.submit(
+                detect_organelles,
                 query_fasta=blast_query_fasta,
                 query_lengths=blast_query_lengths,
                 chrC_ref=ref_ctx.chrC_ref,
                 chrM_ref=ref_ctx.chrM_ref,
                 work_dir=work_dir / "organelles",
-                threads=args.threads,
+                threads=_job_threads(blast_spec),
                 min_coverage=args.organelle_min_cov,
                 chrC_len_tol=getattr(args, 'chrC_len_tolerance', 0.05),
                 chrM_len_tol=getattr(args, 'chrM_len_tolerance', 0.20),
+                resource_spec=blast_spec if use_cluster else None,
             )
     else:
         logger.info("Phase 4: Skipping organelle detection (--skip-organelles)")
 
-    # --- Phase 5: rDNA detection ---
-    rdna_contigs: Set[str] = set()
-    rdna_hits: Dict = {}
-    rdna_hit_intervals: Dict[str, list] = {}  # Raw BLAST intervals for consensus building
+    # In cluster mode, submit rDNA in parallel with organelle (exclude_contigs=set()),
+    # then reconcile after both finish.  In local mode, wait for organelle first
+    # so rDNA can use accurate exclude_contigs.
+    if use_cluster and not args.skip_rdna and ref_ctx.rdna_ref:
+        logger.phase("Phase 5: rDNA detection")
+        rdna_future = executor.submit(
+            detect_rdna_contigs,
+            query_fasta=blast_query_fasta,
+            query_lengths=blast_query_lengths,
+            rdna_ref=ref_ctx.rdna_ref,
+            work_dir=work_dir / "rdna",
+            threads=_job_threads(blast_spec),
+            min_coverage=args.rdna_min_cov,
+            exclude_contigs=set(),  # reconcile after organelle results
+            resource_spec=blast_spec,
+        )
+
+    # Collect organelle results
+    if organelle_future is not None:
+        chrC_contig, chrM_contig, organelle_debris, organelle_hits = organelle_future.result()
+
     already_classified = {chrC_contig, chrM_contig} | organelle_debris
     already_classified.discard(None)
 
-    if not args.skip_rdna:
+    # In local mode, submit rDNA now with accurate exclude_contigs
+    if not use_cluster and not args.skip_rdna and ref_ctx.rdna_ref:
         logger.phase("Phase 5: rDNA detection")
-        rdna_ref = ref_ctx.rdna_ref
+        rdna_future = executor.submit(
+            detect_rdna_contigs,
+            query_fasta=blast_query_fasta,
+            query_lengths=blast_query_lengths,
+            rdna_ref=ref_ctx.rdna_ref,
+            work_dir=work_dir / "rdna",
+            threads=_job_threads(blast_spec),
+            min_coverage=args.rdna_min_cov,
+            exclude_contigs=already_classified,
+            resource_spec=None,
+        )
 
-        if rdna_ref:
-            rdna_contigs, rdna_hits, rdna_hit_intervals = detect_rdna_contigs(
-                query_fasta=blast_query_fasta,
-                query_lengths=blast_query_lengths,
-                rdna_ref=rdna_ref,
-                work_dir=work_dir / "rdna",
-                threads=args.threads,
-                min_coverage=args.rdna_min_cov,
-                exclude_contigs=already_classified,
-            )
-    else:
+    if args.skip_rdna:
         logger.info("Phase 5: Skipping rDNA detection (--skip-rdna)")
+
+    # Collect rDNA results
+    if rdna_future is not None:
+        rdna_contigs, rdna_hits, rdna_hit_intervals = rdna_future.result()
+        # Reconcile: if phases ran in parallel (cluster mode), remove any
+        # organelle-classified contigs from rDNA results.  The classifier
+        # already prioritises organelle over rDNA, but cleaning up here
+        # keeps downstream counts consistent.
+        if use_cluster and already_classified:
+            rdna_contigs -= already_classified
+            for c in already_classified:
+                rdna_hits.pop(c, None)
+                rdna_hit_intervals.pop(c, None)
 
     # --- Phase 6: Chromosome debris detection ---
     logger.phase("Phase 6: Chromosome debris detection")
@@ -663,16 +783,25 @@ def run_assembly(
     chromosome_debris: Set[str] = set()
     chrom_debris_hits: Dict = {}
     if chromosome_contigs:
-        chromosome_debris, chrom_debris_hits = detect_chromosome_debris(
+        if use_cluster:
+            from final_finalizer.utils.resource_estimation import estimate_debris_resources
+            debris_spec = estimate_debris_resources(qry, cluster_config)
+        else:
+            debris_spec = ResourceSpec()
+
+        debris_future = executor.submit(
+            detect_chromosome_debris,
             query_fasta=qry,
             query_lengths=qry_lengths,
             chromosome_contigs=chromosome_contigs,
             work_dir=work_dir / "chr_debris",
-            threads=args.threads,
+            threads=_job_threads(debris_spec),
             min_coverage=args.chr_debris_min_cov,
             min_identity=args.chr_debris_min_identity,
             exclude_contigs=already_classified,
+            resource_spec=debris_spec if use_cluster else None,
         )
+        chromosome_debris, chrom_debris_hits = debris_future.result()
         already_classified = already_classified | chromosome_debris
 
     # --- Phase 7: Contaminant detection ---
@@ -686,15 +815,24 @@ def run_assembly(
             write_filtered_fasta(qry, residual_fasta, residual_contigs)
             residual_lengths = {k: v for k, v in qry_lengths.items() if k in residual_contigs}
 
-            contaminants = detect_contaminants(
+            if use_cluster:
+                from final_finalizer.utils.resource_estimation import estimate_contaminant_resources
+                contam_spec = estimate_contaminant_resources(args.centrifuger_idx, cluster_config)
+            else:
+                contam_spec = ResourceSpec()
+
+            contam_future = executor.submit(
+                detect_contaminants,
                 query_fasta=residual_fasta,
                 query_lengths=residual_lengths,
                 centrifuger_idx=args.centrifuger_idx,
                 work_dir=work_dir / "contaminants",
-                threads=args.threads,
+                threads=_job_threads(contam_spec),
                 min_score=args.contaminant_min_score,
                 exclude_contigs=set(),
+                resource_spec=contam_spec if use_cluster else None,
             )
+            contaminants = contam_future.result()
     else:
         logger.info("Phase 7: Skipping contaminant detection")
 
@@ -816,18 +954,27 @@ def run_assembly(
         from final_finalizer.analysis.read_depth import calculate_depth_metrics
         from final_finalizer.models import DepthStats
 
+        if use_cluster:
+            from final_finalizer.utils.resource_estimation import estimate_depth_resources
+            depth_spec = estimate_depth_resources(reads, qry, cluster_config)
+        else:
+            depth_spec = ResourceSpec()
+
         depth_work_dir = work_dir / "read_depth"
-        depth_stats = calculate_depth_metrics(
+        depth_future = executor.submit(
+            calculate_depth_metrics,
             reads=reads,
             assembly=qry,
             contig_lengths=qry_lengths,
             work_dir=depth_work_dir,
-            threads=args.threads,
+            threads=_job_threads(depth_spec),
             reads_type=args.reads_type,
             window_size=args.depth_window_size,
             target_coverage=args.depth_target_coverage if args.depth_target_coverage > 0 else None,
             keep_bam=args.keep_depth_bam,
+            resource_spec=depth_spec if use_cluster else None,
         )
+        depth_stats = depth_future.result()
 
         # Attach depth stats to classifications
         for clf in classifications:
@@ -851,7 +998,7 @@ def run_assembly(
     rdna_annotations_tsv = None
     rdna_arrays_tsv_path = None
     rdna_ref = ref_ctx.rdna_ref
-    if getattr(args, 'build_rdna_consensus', False) and not args.skip_rdna and rdna_hit_intervals:
+    if not args.skip_rdna_consensus and not args.skip_rdna and rdna_hit_intervals:
         logger.phase("Phase 11.7: Building rDNA consensus from query assembly")
         from final_finalizer.detection.rdna_consensus import build_rdna_consensus
 
@@ -948,7 +1095,7 @@ def run_assembly(
                 logger.done(f"rDNA GFF3:         {rdna_annotations_gff3}")
         else:
             logger.warning("rDNA consensus building did not produce a result")
-    elif getattr(args, 'build_rdna_consensus', False) and args.skip_rdna:
+    elif not args.skip_rdna_consensus and args.skip_rdna:
         logger.info("Phase 11.7: Skipping rDNA consensus (--skip-rdna)")
 
     # --- Phase 12: Scaffolding (optional) ---
@@ -1008,8 +1155,8 @@ def run_assembly(
     chrs_fasta = Path(str(outprefix) + ".chrs.fasta")
     per_sg_chrs = write_per_subgenome_chrs_fastas(chrs_fasta, outprefix)
 
-    # --- Phase 13: Write enhanced summary TSV ---
-    logger.phase("Phase 13: Writing enhanced summary TSV")
+    # --- Phase 13: Write summary TSV ---
+    logger.phase("Phase 13: Writing summary TSV")
     summary_tsv = Path(str(outprefix) + ".contig_summary.tsv")
 
     write_contig_summary_tsv(
@@ -1088,7 +1235,7 @@ def run_assembly(
         per_subgenome_chrs=per_sg_chrs,
     )
 
-    if args.plot:
+    if not args.skip_plot:
         agp_tsv = Path(str(outprefix) + ".scaffolded.agp") if args.scaffold and scaffolded_seqs else None
         contam_tsv_arg = contaminants_tsv if contaminants_filtered else None
 
@@ -1127,15 +1274,15 @@ def main():
         from final_finalizer.utils.config import dump_config_template
         # Create a minimal namespace with defaults
         defaults = argparse.Namespace(
-            ref=None, query=None, outprefix=None, ref_gff3=None,
-            threads=8, plot=False, assembly_name="", reference_name="",
+            ref=None, query=None, output_dir=None, ref_gff3=None,
+            threads=8, skip_plot=False, assembly_name="", reference_name="",
             verbose=False, quiet=False,
             log_file=None, config=None, dump_config=True, chr_like_minlen=None,
             add_subgenome_suffix=None, ref_id_pattern=None, reads=None,
             reads_type="lrhq", skip_depth=False, depth_window_size=1000,
-            depth_target_coverage=0, keep_depth_bam=False, synteny_mode="protein",
+            depth_target_coverage=0, keep_depth_bam=False, synteny_mode="nucleotide",
             skip_organelles=False, skip_rdna=False, skip_contaminants=False,
-            gffread="gffread", miniprot="miniprot", miniprot_args="",
+            miniprot="miniprot", miniprot_args="",
             chrC_ref=None, chrM_ref=None, rdna_ref=None, centrifuger_idx=None,
             assign_min_frac=0.10, assign_min_ratio=1.25, chimera_primary_frac=0.8,
             chimera_secondary_frac=0.2, low_ref_span_threshold=0.75,
@@ -1146,12 +1293,14 @@ def main():
             miniprot_min_genes=3, miniprot_min_segments=5, min_span_frac=0.20,
             min_span_bp=50000, organelle_min_cov=0.80, chrC_len_tolerance=0.05,
             chrM_len_tolerance=0.20, rdna_min_cov=0.50,
-            build_rdna_consensus=False, rdna_ref_features=None,
+            skip_rdna_consensus=False, rdna_ref_features=None,
             chr_debris_min_cov=0.80,
             chr_debris_min_identity=0.90, contaminant_min_score=1000, contaminant_min_coverage=0.50,
             debris_min_cov=0.50, debris_min_protein_hits=2, preset="asm20", kmer=None, window=None, aln_minlen=10000,
             scaffold=False, scaffold_gap_size=100,
-            fofn=None, assembly_dir=None, output_dir=None,
+            fofn=None, assembly_dir=None,
+            cluster=False, max_threads_dist=64, max_mem_dist=128.0,
+            max_time_dist=720, partition="cpuq", qos="",
         )
         print(dump_config_template(defaults))
         sys.exit(0)
@@ -1164,10 +1313,10 @@ def main():
     # =========================================================================
     # Required arguments (single-assembly mode)
     # =========================================================================
-    req = p.add_argument_group("Required arguments (single-assembly mode)")
+    req = p.add_argument_group("Required arguments")
     req.add_argument("-r", "--ref", type=_validate_input_path, required=True, help="Reference assembly FASTA (plain or gzipped; chrNA/chrNP/etc.)")
-    req.add_argument("-q", "--query", type=_validate_input_path, default=None, help="Query assembly FASTA (plain or gzipped; contigs/scaffolds)")
-    req.add_argument("-o", "--outprefix", default=None, help="Output prefix (no extension)")
+    req.add_argument("-q", "--query", type=_validate_input_path, default=None, help="Query assembly FASTA (single-assembly mode; plain or gzipped)")
+    req.add_argument("-o", "--output-dir", type=str, required=True, help="Output directory (reference/ and per-assembly subdirectories created inside)")
     req.add_argument(
         "--ref-gff3",
         type=_validate_input_path,
@@ -1189,17 +1338,13 @@ def main():
         "--assembly-dir", type=_validate_input_dir, default=None,
         help="Directory of FASTA files to process as multiple assemblies",
     )
-    multi.add_argument(
-        "--output-dir", type=str, default=None,
-        help="Output directory for multi-assembly mode (required with --fofn/--assembly-dir)",
-    )
 
     # =========================================================================
     # Common options
     # =========================================================================
     common = p.add_argument_group("Common options")
     common.add_argument("-t", "--threads", type=_positive_int, default=8, help="Threads for minimap2/miniprot [8]")
-    common.add_argument("--plot", action="store_true", help="Generate unified HTML report (requires rmarkdown + pandoc)")
+    common.add_argument("--skip-plot", action="store_true", help="Skip unified HTML report generation")
     common.add_argument("--assembly-name", type=str, default="", metavar="NAME", help="Assembly name for plot subtitles (default: omitted)")
     common.add_argument("--reference-name", type=str, default="", metavar="NAME", help="Reference name for plot subtitles (default: omitted)")
     common.add_argument("-v", "--verbose", action="store_true", help="Enable verbose (DEBUG level) logging")
@@ -1209,7 +1354,7 @@ def main():
     common.add_argument("--dump-config", action="store_true", help="Print TOML config template and exit")
     common.add_argument(
         "-C", "--chr-like-minlen", type=int, default=None,
-        help="Minimum contig length (bp) to be considered chromosome-like. Default: 80%% of smallest nuclear ref chromosome.",
+        help="Minimum contig length (bp) to be considered chromosome-like. Default: 25%% of smallest nuclear ref chromosome.",
     )
     common.add_argument(
         "--add-subgenome-suffix", type=str, default=None,
@@ -1264,13 +1409,13 @@ def main():
     synteny.add_argument(
         "--synteny-mode",
         choices=["protein", "nucleotide"],
-        default="protein",
+        default="nucleotide",
         help="Synteny evidence source for classification. "
-        "protein: Use miniprot protein-anchored synteny (requires --ref-gff3). "
         "nucleotide: Use minimap2 whole-genome nucleotide alignment with permissive chaining "
         "for chromosome-scale structural composition analysis. Creates megabase-scale blocks "
         "by chaining through repetitive regions. Suitable for both within-species and cross-species comparisons. "
-        "[protein]",
+        "protein: Use miniprot protein-anchored synteny (requires --ref-gff3). "
+        "[nucleotide]",
     )
 
     # =========================================================================
@@ -1285,7 +1430,6 @@ def main():
     # External tool paths
     # =========================================================================
     tools = p.add_argument_group("External tool paths")
-    tools.add_argument("--gffread", default="gffread", help="gffread executable [gffread]")
     tools.add_argument("--miniprot", default="miniprot", help="miniprot executable [miniprot]")
     tools.add_argument("--miniprot-args", default="", help='Extra args for miniprot (e.g. "-G 200k" to increase max intron size for plants with large introns) [none]')
 
@@ -1440,10 +1584,8 @@ def main():
         help="Min query coverage for rDNA classification [0.50]",
     )
     rdna_thresh.add_argument(
-        "--build-rdna-consensus", action="store_true",
-        help="Build a consensus 45S rDNA from the query assembly and use it to "
-        "annotate rDNA loci across all contigs, detect NOR locations, and "
-        "improve rDNA classification.",
+        "--skip-rdna-consensus", action="store_true",
+        help="Skip building a consensus 45S rDNA and annotating rDNA loci.",
     )
     rdna_thresh.add_argument(
         "--rdna-ref-features", type=str, default=None, metavar="TSV",
@@ -1539,6 +1681,36 @@ def main():
     )
 
     # =========================================================================
+    # Distributed computing (SLURM cluster)
+    # =========================================================================
+    dist_grp = p.add_argument_group("Distributed computing (SLURM cluster)")
+    dist_grp.add_argument(
+        "--cluster", action="store_true",
+        help="Enable distributed execution via executorlib (submits phases as SLURM jobs). "
+             "Requires: conda install -c conda-forge executorlib mpi4py",
+    )
+    dist_grp.add_argument(
+        "--max-threads-dist", type=int, default=64,
+        help="Max threads per distributed job [64]",
+    )
+    dist_grp.add_argument(
+        "--max-mem-dist", type=float, default=128.0,
+        help="Max memory (GB) per distributed job [128]",
+    )
+    dist_grp.add_argument(
+        "--max-time-dist", type=int, default=720,
+        help="Max wall time (minutes) per distributed job [720]",
+    )
+    dist_grp.add_argument(
+        "--partition", type=str, default="cpuq",
+        help="SLURM partition for distributed jobs [cpuq]",
+    )
+    dist_grp.add_argument(
+        "--qos", type=str, default="",
+        help="SLURM QOS for distributed jobs [unset — use cluster default]",
+    )
+
+    # =========================================================================
     # Scaffolding options
     # =========================================================================
     scaffold_grp = p.add_argument_group("Scaffolding options")
@@ -1566,38 +1738,25 @@ def main():
     is_multi = bool(getattr(args, 'fofn', None) or getattr(args, 'assembly_dir', None))
 
     if is_multi:
-        # Multi-assembly mode validation
         if args.fofn and args.assembly_dir:
             sys.exit("[error] --fofn and --assembly-dir are mutually exclusive")
-        if not args.output_dir:
-            sys.exit("[error] --output-dir is required with --fofn/--assembly-dir")
         if args.query:
             sys.exit("[error] -q/--query cannot be used with --fofn/--assembly-dir")
-        if args.outprefix:
-            sys.exit("[error] -o/--outprefix cannot be used with --fofn/--assembly-dir")
     else:
-        # Single-assembly mode validation
         if not args.query:
             sys.exit("[error] -q/--query is required in single-assembly mode")
-        if not args.outprefix:
-            sys.exit("[error] -o/--outprefix is required in single-assembly mode")
 
-    # Validate synteny mode requirements
     if args.synteny_mode == "protein" and not args.ref_gff3:
         sys.exit("[error] --ref-gff3 is required when using --synteny-mode protein")
 
-    # Validate contaminant coverage threshold
     if not 0.0 <= args.contaminant_min_coverage <= 1.0:
         sys.exit(f"[error] --contaminant-min-coverage must be between 0.0 and 1.0, got {args.contaminant_min_coverage}")
 
-    # Setup logging
-    # Auto-enable log file alongside output if not explicitly set
+    # --- Logging setup ---
+    output_dir = Path(args.output_dir).resolve()
     log_file = args.log_file
     if not log_file:
-        if is_multi:
-            log_file = str(Path(args.output_dir) / "final_finalizer.log")
-        else:
-            log_file = str(Path(args.outprefix).parent / "final_finalizer.log")
+        log_file = str(output_dir / "final_finalizer.log")
 
     from final_finalizer.utils.logging_config import setup_logging, get_logger
     setup_logging(verbose=args.verbose, quiet=args.quiet, log_file=log_file)
@@ -1605,36 +1764,97 @@ def main():
     if not args.log_file:
         logger.info(f"Logging to: {log_file}")
 
+    # Tee stderr to a file so that unlogged output (thread tracebacks, external
+    # tool messages, etc.) is preserved alongside the structured log.
+    stderr_log = output_dir / "final_finalizer.stderr.log"
+    try:
+        _stderr_fh = open(stderr_log, "a")  # noqa: SIM115
+        _orig_stderr = sys.stderr
+        sys.stderr = _TeeWriter(_orig_stderr, _stderr_fh)
+    except OSError:
+        pass  # non-critical — don't fail if we can't open the file
+
     if args.ref_id_pattern:
         set_ref_id_patterns(compile_ref_id_patterns(args.ref_id_pattern))
 
-    # --- Dispatch ---
+    # --- Build cluster config ---
+    from final_finalizer.utils.distributed import ClusterConfig, create_executor
+
+    cluster_config = ClusterConfig(
+        enabled=args.cluster,
+        max_threads=args.max_threads_dist,
+        max_mem_gb=args.max_mem_dist,
+        max_time_minutes=args.max_time_dist,
+        partition=args.partition,
+        qos=args.qos,
+    )
+
+    # --- Resolve assembly list (single-assembly is a 1-element list) ---
     if is_multi:
         from final_finalizer.utils.multi_assembly import resolve_assemblies
-
         assemblies = resolve_assemblies(args)
-        output_dir = Path(args.output_dir)
-        ref_outprefix = output_dir / "reference" / "reference"
-        ref_ctx = prepare_reference(args, ref_outprefix)
+    else:
+        from final_finalizer.utils.multi_assembly import _strip_fasta_extension
+        name = args.assembly_name if args.assembly_name else _strip_fasta_extension(args.query.name)
+        assemblies = [(args.query, name, args.reads)]
 
-        n_total = len(assemblies)
-        n_ok = 0
-        failures = []
-        results = []
+    # --- Shared reference preparation ---
+    ref_outprefix = output_dir / "reference" / "reference"
+    ref_ctx = prepare_reference(args, ref_outprefix)
 
-        for i, (asm_path, asm_name, asm_reads) in enumerate(assemblies):
-            logger.phase(f"=== Assembly: {asm_name} ({i + 1}/{n_total}) ===")
-            asm_outprefix = output_dir / asm_name / asm_name
-            try:
-                result = run_assembly(args, ref_ctx, asm_path, asm_name, asm_reads, asm_outprefix)
-                results.append(result)
-                n_ok += 1
-            except Exception as e:
-                logger.error(f"Assembly '{asm_name}' failed: {e}")
-                failures.append((asm_name, str(e)))
+    # --- Run assemblies ---
+    n_total = len(assemblies)
+    n_ok = 0
+    failures = []
+    results = []
 
-        # Write cross-assembly comparison outputs
-        if results:
+    with create_executor(cluster_config, output_dir=output_dir) as executor:
+        if cluster_config.enabled and n_total > 1:
+            # Run assemblies concurrently — each run_assembly() is mostly
+            # I/O-bound (waiting on SLURM futures), so threads work well.
+            from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
+
+            logger.info(f"Cluster mode: running {n_total} assemblies concurrently")
+
+            def _run_one(i_asm):
+                i, (asm_path, asm_name, asm_reads) = i_asm
+                logger.phase(f"=== Assembly: {asm_name} ({i + 1}/{n_total}) ===")
+                asm_outprefix = output_dir / asm_name / asm_name
+                return run_assembly(
+                    args, ref_ctx, asm_path, asm_name, asm_reads,
+                    asm_outprefix, executor=executor, cluster_config=cluster_config,
+                )
+
+            with _ThreadPoolExecutor(max_workers=n_total) as pool:
+                futs = {
+                    pool.submit(_run_one, (i, asm)): asm[1]
+                    for i, asm in enumerate(assemblies)
+                }
+                for fut in futs:
+                    name = futs[fut]
+                    try:
+                        results.append(fut.result())
+                        n_ok += 1
+                    except Exception as e:
+                        logger.error(f"Assembly '{name}' failed: {e}")
+                        failures.append((name, str(e)))
+        else:
+            for i, (asm_path, asm_name, asm_reads) in enumerate(assemblies):
+                logger.phase(f"=== Assembly: {asm_name} ({i + 1}/{n_total}) ===")
+                asm_outprefix = output_dir / asm_name / asm_name
+                try:
+                    result = run_assembly(
+                        args, ref_ctx, asm_path, asm_name, asm_reads,
+                        asm_outprefix, executor=executor, cluster_config=cluster_config,
+                    )
+                    results.append(result)
+                    n_ok += 1
+                except Exception as e:
+                    logger.error(f"Assembly '{asm_name}' failed: {e}")
+                    failures.append((asm_name, str(e)))
+
+        # --- Cross-assembly comparison (only with ≥2 assemblies) ---
+        if n_total > 1 and results:
             from final_finalizer.output.comparison import (
                 write_comparison_summary_tsv,
                 write_chromosome_completeness_tsv,
@@ -1647,15 +1867,34 @@ def main():
             logger.done(f"Chromosome completeness: {completeness_tsv}")
 
             # Pairwise assembly-vs-assembly synteny (nucleotide mode only)
-            # Stores (pair_name, tsv_path) tuples to keep names and paths synchronized
             pairwise_pairs = []
             if args.synteny_mode == "nucleotide" and len(results) >= 2:
-                # Check if any assembly has per-subgenome chrs files (polyploid)
+                from final_finalizer.alignment.pairwise import compute_pairwise_synteny
+                from final_finalizer.utils.resource_estimation import estimate_pairwise_resources
+
+                # Build chain-parsing kwargs once (all plain types, serializable)
+                chain_kwargs = dict(
+                    preset=args.preset,
+                    kmer=args.kmer,
+                    window=args.window,
+                    assign_minlen=args.assign_minlen,
+                    assign_minmapq=args.assign_minmapq,
+                    assign_tp=args.assign_tp,
+                    chain_q_gap=args.chain_q_gap,
+                    chain_r_gap=args.chain_r_gap,
+                    chain_diag_slop=args.chain_diag_slop,
+                    assign_min_ident=args.assign_min_ident,
+                    assign_chain_topk=args.assign_chain_topk,
+                    assign_chain_score=args.assign_chain_score,
+                    assign_chain_min_bp=args.assign_chain_min_bp,
+                    assign_ref_score=args.assign_ref_score,
+                )
+
+                use_cluster_pw = cluster_config.enabled
                 any_has_sg = any(r.per_subgenome_chrs for r in results)
+                pairwise_futures = []  # (pair_name, future)
 
                 if any_has_sg:
-                    # Per-subgenome pairwise: group assemblies by subgenome
-                    from final_finalizer.alignment.pairwise import compute_subgenome_pairwise
                     from collections import defaultdict as _defaultdict
 
                     logger.phase("Per-subgenome pairwise synteny (nucleotide mode)")
@@ -1677,21 +1916,30 @@ def main():
                             left, right = sg_results[i], sg_results[i + 1]
                             pair_name = f"{left.assembly_name}_vs_{right.assembly_name}"
                             pair_prefix = sg_dir / pair_name
-                            macro_tsv = compute_subgenome_pairwise(
-                                left_fasta=left.per_subgenome_chrs[sg],
-                                right_fasta=right.per_subgenome_chrs[sg],
-                                left_name=left.assembly_name,
-                                right_name=right.assembly_name,
-                                outprefix=pair_prefix,
-                                threads=args.threads,
-                                args=args,
-                            )
-                            if macro_tsv:
+                            left_fasta = left.per_subgenome_chrs[sg]
+                            right_fasta = right.per_subgenome_chrs[sg]
+                            macro_tsv = Path(str(pair_prefix) + ".macro_blocks.tsv")
+                            if file_exists_and_valid(macro_tsv):
+                                logger.info(f"Reusing cached pairwise: {macro_tsv}")
                                 pairwise_pairs.append((pair_name, macro_tsv))
+                            else:
+                                res_spec = estimate_pairwise_resources(
+                                    left_fasta, right_fasta, cluster_config,
+                                )
+                                pw_threads = res_spec.cores if use_cluster_pw else args.threads
+                                fut = executor.submit(
+                                    compute_pairwise_synteny,
+                                    left_fasta=left_fasta,
+                                    right_fasta=right_fasta,
+                                    left_name=left.assembly_name,
+                                    right_name=right.assembly_name,
+                                    outprefix=pair_prefix,
+                                    threads=pw_threads,
+                                    resource_spec=res_spec if use_cluster_pw else None,
+                                    **chain_kwargs,
+                                )
+                                pairwise_futures.append((pair_name, fut))
                 else:
-                    # Non-polyploid fallback: adjacent full-assembly pairwise
-                    from final_finalizer.alignment.pairwise import compute_pairwise_synteny
-
                     logger.phase("Pairwise assembly synteny (nucleotide mode)")
                     pairwise_dir = output_dir / "pairwise"
                     pairwise_dir.mkdir(exist_ok=True)
@@ -1699,17 +1947,40 @@ def main():
                         left, right = results[i], results[i + 1]
                         pair_name = f"{left.assembly_name}_vs_{right.assembly_name}"
                         pair_prefix = pairwise_dir / pair_name
-                        macro_tsv = compute_pairwise_synteny(
-                            left_result=left,
-                            right_result=right,
-                            outprefix=pair_prefix,
-                            threads=args.threads,
-                            args=args,
-                        )
+                        left_fasta = Path(str(left.outprefix) + ".chrs.fasta")
+                        right_fasta = Path(str(right.outprefix) + ".chrs.fasta")
+                        macro_tsv = Path(str(pair_prefix) + ".macro_blocks.tsv")
+                        if file_exists_and_valid(macro_tsv):
+                            logger.info(f"Reusing cached pairwise: {macro_tsv}")
+                            pairwise_pairs.append((pair_name, macro_tsv))
+                        else:
+                            res_spec = estimate_pairwise_resources(
+                                left_fasta, right_fasta, cluster_config,
+                            )
+                            pw_threads = res_spec.cores if use_cluster_pw else args.threads
+                            fut = executor.submit(
+                                compute_pairwise_synteny,
+                                left_fasta=left_fasta,
+                                right_fasta=right_fasta,
+                                left_name=left.assembly_name,
+                                right_name=right.assembly_name,
+                                outprefix=pair_prefix,
+                                threads=pw_threads,
+                                resource_spec=res_spec if use_cluster_pw else None,
+                                **chain_kwargs,
+                            )
+                            pairwise_futures.append((pair_name, fut))
+
+                # Collect pairwise results
+                for pair_name, fut in pairwise_futures:
+                    try:
+                        macro_tsv = fut.result()
                         if macro_tsv:
                             pairwise_pairs.append((pair_name, macro_tsv))
+                    except Exception as e:
+                        logger.error(f"Pairwise '{pair_name}' failed: {e}")
 
-            if args.plot:
+            if not args.skip_plot:
                 from final_finalizer.output.plotting import run_comparison_report
                 if not run_comparison_report(
                     comparison_tsv=comparison_tsv,
@@ -1724,15 +1995,16 @@ def main():
                 ):
                     logger.error("Comparison report generation failed.")
 
+    # --- Summary ---
+    if n_total > 1:
         logger.phase("=== Multi-assembly summary ===")
         logger.done(f"{n_ok}/{n_total} assemblies completed successfully")
         if failures:
             for name, err in failures:
                 logger.error(f"  FAILED: {name} — {err}")
-    else:
-        outprefix = Path(args.outprefix)
-        ref_ctx = prepare_reference(args, outprefix)
-        run_assembly(args, ref_ctx, args.query, args.assembly_name, args.reads, outprefix)
+
+    if failures:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

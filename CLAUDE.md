@@ -7,8 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 `final_finalizer` is a bioinformatics genome assembly finalization tool that classifies contigs from *de novo* genome assemblies into biological categories (chromosomes, organelles, rDNA, contaminants, debris) using synteny evidence (protein-anchored or nucleotide whole-genome alignment), organelle/rDNA alignments, and taxonomic classification.
 
 **Key concepts**:
-- **Protein mode** (default): Uses protein homology (via miniprot) as the primary evidence source. Proteins are more conserved than nucleotide sequences, work across distantly related species, and are robust to repetitive sequences. Ideal for detecting conserved gene content.
-- **Nucleotide mode**: Uses whole-genome nucleotide alignment (via minimap2) for structural composition analysis. Detects actual sequence-level identity, making it ideal for identifying structural features like chromosomal fusions, homeologous recombination, or introgression events.
+- **Nucleotide mode** (default): Uses whole-genome nucleotide alignment (via minimap2) for structural composition analysis. Detects actual sequence-level identity, making it ideal for identifying structural features like chromosomal fusions, homeologous recombination, or introgression events.
+- **Protein mode**: Uses protein homology (via miniprot) as the primary evidence source. Proteins are more conserved than nucleotide sequences, work across distantly related species, and are robust to repetitive sequences. Ideal for detecting conserved gene content.
 
 ## Development Commands
 
@@ -42,29 +42,36 @@ pytest -m "not integration"
 
 ### Running the tool
 ```bash
-# Basic run (protein mode - default)
-./final_finalizer.py -r reference.fasta -q assembly.fasta -o output --ref-gff3 reference.gff3
+# Basic run (nucleotide mode - default)
+# Output goes to output_dir/assembly/assembly.* (name derived from query filename)
+./final_finalizer.py -r reference.fasta -q assembly.fasta -o results/
 
-# Nucleotide mode for structural composition analysis
-# Uses permissive chaining to create megabase-scale blocks (chains through repetitive regions)
-./final_finalizer.py -r reference.fasta -q assembly.fasta -o output --synteny-mode nucleotide
+# Protein mode for gene-level classification (requires --ref-gff3)
+./final_finalizer.py -r reference.fasta -q assembly.fasta -o results/ --synteny-mode protein --ref-gff3 reference.gff3
 
 # With all features enabled (protein mode)
-./final_finalizer.py -r ref.fasta -q assembly.fasta -o output \
-    --ref-gff3 ref.gff3 \
+./final_finalizer.py -r ref.fasta -q assembly.fasta -o results/ \
+    --synteny-mode protein --ref-gff3 ref.gff3 \
     --reads hifi.fastq.gz \
     --centrifuger-idx /path/to/index \
-    --plot \
     -v --log-file analysis.log
 
 # Multi-assembly mode: analyze multiple assemblies against a common reference
 # Using a file-of-filenames (TSV with columns: path, name, reads)
 ./final_finalizer.py -r ref.fasta --ref-gff3 ref.gff3 \
-    --fofn assemblies.tsv --output-dir multi_output/
+    --fofn assemblies.tsv -o multi_output/
 
 # Multi-assembly mode: scan a directory of FASTA files
 ./final_finalizer.py -r ref.fasta --ref-gff3 ref.gff3 \
-    --assembly-dir /path/to/assemblies/ --output-dir multi_output/
+    --assembly-dir /path/to/assemblies/ -o multi_output/
+
+# Distributed mode: submit compute phases as SLURM jobs via executorlib
+./final_finalizer.py -r ref.fasta -q assembly.fasta -o results/ --ref-gff3 ref.gff3 \
+    --cluster --partition cpuq --max-threads-dist 32 --max-mem-dist 64
+
+# Multi-assembly + distributed: assemblies run concurrently, each phase is a SLURM job
+./final_finalizer.py -r ref.fasta --ref-gff3 ref.gff3 \
+    --fofn assemblies.tsv -o multi_output/ --cluster
 
 # Dump config template
 ./final_finalizer.py --dump-config > config.toml
@@ -76,7 +83,7 @@ pytest -m "not integration"
 ### Code style
 ```bash
 # No formal linters configured - follow existing code style
-# Use Python 3.9+ type hints with `from __future__ import annotations`
+# Use Python 3.11+ type hints with `from __future__ import annotations`
 ```
 
 ## Architecture Overview
@@ -90,15 +97,18 @@ final_finalizer/
 ├── data/                  # Bundled reference data
 │   └── rfam/              # Rfam 15.0 subset: eukaryotic rRNA covariance models (auto-pressed on first use)
 ├── alignment/             # Alignment and synteny block building
-│   ├── external_tools.py  # Wrappers for miniprot, minimap2, gffread, BLAST
+│   ├── external_tools.py  # Wrappers for miniprot, minimap2, gffread
 │   ├── chain_parsing.py   # PAF/miniprot parsing → synteny blocks (O(n log n) interval tree)
-│   └── stats.py           # Alignment statistics
+│   ├── stats.py           # Alignment statistics
+│   └── pairwise.py        # Pairwise assembly-vs-assembly synteny (nucleotide mode)
 ├── classification/        # Contig classification logic
 │   └── classifier.py      # Gate-based assignment, orientation, confidence levels
 ├── detection/             # Feature detection modules
+│   ├── blast.py           # BLAST wrappers (makeblastdb, blastn megablast)
 │   ├── organelle.py       # chrC/chrM detection via BLAST
 │   ├── rdna.py            # rDNA detection via BLAST
 │   ├── rdna_consensus.py  # Consensus 45S rDNA building and sub-feature annotation
+│   ├── telomere.py        # Telomere repeat detection at contig ends
 │   ├── debris.py          # Chromosome debris detection via minimap2
 │   └── contaminant.py     # Centrifuger taxonomic classification
 ├── analysis/              # Read depth analysis
@@ -106,14 +116,18 @@ final_finalizer/
 ├── output/                # Output generation
 │   ├── fasta_output.py    # Write classified FASTA files
 │   ├── tsv_output.py      # TSV summary tables
-│   └── plotting.py        # R/ggplot2 visualization
+│   ├── plotting.py        # R/ggplot2 visualization
+│   ├── scaffolding.py     # Reference-guided scaffolded chromosome sequences
+│   └── comparison.py      # Cross-assembly comparison TSVs
 └── utils/                 # Shared utilities
     ├── io_utils.py        # File I/O, gzip handling, interval merging
     ├── sequence_utils.py  # FASTA reading/writing, reverse complement
     ├── reference_utils.py # Reference chromosome ID normalization
     ├── logging_config.py  # Custom logging with [info]/[warn]/[error] format
     ├── config.py          # TOML configuration file support
-    └── multi_assembly.py  # FOFN/directory parsing for multi-assembly mode
+    ├── multi_assembly.py  # FOFN/directory parsing for multi-assembly mode
+    ├── distributed.py     # Executor abstraction (LocalExecutor / executorlib SLURM)
+    └── resource_estimation.py  # Per-phase resource estimation for SLURM jobs
 ```
 
 ### Data Flow
@@ -128,17 +142,17 @@ final_finalizer/
    - Returns `ReferenceContext` dataclass shared across all assemblies
 
 2. **Synteny Analysis** (`alignment/`) - **Mode-dependent**
-   - **Protein mode** (`--synteny-mode protein`, default):
+   - **Nucleotide mode** (`--synteny-mode nucleotide`, default):
+     - Run minimap2 whole-genome alignment (query vs reference)
+     - Parse PAF output in `chain_parsing.py:parse_paf_chain_evidence_and_segments()`
+     - Chain alignments into synteny blocks based on nucleotide identity
+     - Gate-based filtering requires minimum segments and span (no gene count requirement)
+   - **Protein mode** (`--synteny-mode protein`):
      - Run miniprot to align proteins to query assembly
      - Parse PAF output in `chain_parsing.py:parse_miniprot_synteny_evidence_and_segments()`
      - Filter overlapping hits using **interval tree** (O(n log n), not O(n²))
      - Chain alignments into synteny blocks based on protein hits
      - Gate-based filtering requires minimum genes, segments, and span
-   - **Nucleotide mode** (`--synteny-mode nucleotide`):
-     - Run minimap2 whole-genome alignment (query vs reference)
-     - Parse PAF output in `chain_parsing.py:parse_paf_chain_evidence_and_segments()`
-     - Chain alignments into synteny blocks based on nucleotide identity
-     - Gate-based filtering requires minimum segments and span (no gene count requirement)
 
 3. **Detection Pipeline** (`detection/`)
    - Organelle detection via BLAST (chrC, chrM)
@@ -164,12 +178,12 @@ final_finalizer/
 6. **Output Generation** (`output/`)
    - Classified FASTA files (chromosomes, organelles, rDNA, etc.)
    - TSV summary tables (contig_summary, evidence_summary, segments, macro_blocks, contaminants with taxonomic lineage)
-   - Unified HTML report with embedded plots (if `--plot`; requires rmarkdown + pandoc):
+   - Unified HTML report with embedded plots (enabled by default; skip with `--skip-plot`; requires rmarkdown + pandoc):
      - Chromosome overview, classification bar, read depth overview, contaminant table
 
 ### Key Design Patterns
 
-**Multi-assembly architecture**: `cli.py` is structured as three functions: `prepare_reference()` computes shared reference state once (returns `ReferenceContext`), `run_assembly()` runs the full per-assembly pipeline, and `main()` is a thin dispatcher. In single-assembly mode (`-q`/`-o`), `ref_outprefix == outprefix` for backward compatibility. In multi-assembly mode (`--fofn`/`--assembly-dir` + `--output-dir`), reference files go under `{output_dir}/reference/` and each assembly gets its own `{output_dir}/{name}/` subfolder. If one assembly fails in multi-assembly mode, others continue; a summary is logged at the end.
+**Unified assembly architecture**: `cli.py` is structured as three functions: `prepare_reference()` computes shared reference state once (returns `ReferenceContext`), `run_assembly()` runs the full per-assembly pipeline, and `main()` is a thin dispatcher. Single-assembly mode (`-q`) and multi-assembly mode (`--fofn`/`--assembly-dir`) flow through the same code path — single-assembly simply produces a 1-element assembly list. Both use `--output-dir` (`-o`) with a uniform layout: reference files go under `{output_dir}/reference/` and each assembly gets its own `{output_dir}/{name}/` subfolder. In single-assembly mode, the assembly name is derived from `--assembly-name` or the query filename stem. If one assembly fails, others continue; a summary is logged at the end. Cross-assembly comparison outputs are produced when there are ≥2 assemblies.
 
 **Gate-based assignment**: Contigs must satisfy ALL criteria for chromosome assignment (AND logic). This prevents spurious assignments from single conserved genes or repetitive sequences. Gate requirements differ by mode:
 - **Protein mode**: Requires ≥5 segments, ≥3 genes, ≥50kb span, ≥20% span fraction (configurable via `--miniprot-min-*` flags)
@@ -185,6 +199,8 @@ final_finalizer/
 
 **TOML configuration**: `config.py` provides schema-based config file support. CLI arguments override config file values.
 
+**Distributed computing** (`--cluster`): Optional SLURM job submission via [executorlib](https://github.com/pyiron/executorlib). When `--cluster` is set, compute-intensive phases (synteny alignment, BLAST detection, debris detection, contaminant screening, read depth) are submitted as individual SLURM jobs with per-job resource control. The coordinator process orchestrates submission and waits on futures. Two levels of parallelism: intra-assembly (independent phases like organelle + rDNA BLAST run as parallel SLURM jobs) and inter-assembly (multiple `run_assembly()` calls run concurrently via ThreadPoolExecutor, each submitting its own SLURM jobs). When `--cluster` is not set, `LocalExecutor` provides synchronous execution with zero overhead — behavior is identical to the non-distributed code path. If `--cluster` is set but executorlib or mpi4py is not installed, the tool exits with a clear error message and install instructions. Resource estimation (`resource_estimation.py`) sizes each job based on input file sizes and caps against `--max-threads-dist`, `--max-mem-dist`, `--max-time-dist`.
+
 ### Critical Security Notes
 
 **Command injection prevention**: `alignment/external_tools.py` validates extra arguments against shell metacharacters using regex pattern `[;&|` `$(){}[\]<>!\\'"#]`. This prevents command injection via user-provided arguments like `--miniprot-extra-args`.
@@ -195,15 +211,15 @@ final_finalizer/
 
 ## Common Gotchas
 
-**GC deviation returns None**: `classifier.py:compute_gc_deviation()` returns `None` (not 0.0) when reference GC std < 0.001. This prevents division-by-zero and ensures low-confidence classification for contigs when GC comparison is meaningless.
+**GC deviation returns None**: The GC deviation helpers `_gc_deviation_vs_ref()` and `_gc_deviation_vs_asm()` (inner functions of `classifier.py:classify_all_contigs()`) return `None` (not 0.0) when GC std < 0.001. This prevents division-by-zero and ensures low-confidence classification for contigs when GC comparison is meaningless.
 
 **Subsample fraction validation**: `read_depth.py` validates `--depth-target-coverage` is non-negative. Invalid fractions raise `ValueError` with clear error messages.
 
 **Organelle reference extraction**: If `--chrC-ref` or `--chrM-ref` not provided, code attempts to extract from main reference FASTA. If organelle sequences not found, organelle detection is skipped (not an error).
 
 **Synteny mode selection**: The tool supports two synteny modes controlled by `--synteny-mode`:
-- **protein** (default): Uses miniprot protein-anchored synteny. Requires `--ref-gff3`. Calls `parse_miniprot_synteny_evidence_and_segments()`.
-- **nucleotide**: Uses minimap2 whole-genome nucleotide alignment with permissive chaining for structural composition analysis. Calls `parse_paf_chain_evidence_and_segments()`. Both parsers in `chain_parsing.py` produce compatible `ChainEvidenceResult` objects.
+- **nucleotide** (default): Uses minimap2 whole-genome nucleotide alignment with permissive chaining for structural composition analysis. Calls `parse_paf_chain_evidence_and_segments()`.
+- **protein**: Uses miniprot protein-anchored synteny. Requires `--ref-gff3`. Calls `parse_miniprot_synteny_evidence_and_segments()`. Both parsers in `chain_parsing.py` produce compatible `ChainEvidenceResult` objects.
 
 **Permissive synteny chaining in nucleotide mode**: Nucleotide mode always uses permissive minimap2 chaining parameters (`--max-chain-skip=300 -z 10000,1000 -r 50000`) to create megabase-scale synteny blocks by chaining through repetitive regions and small gaps (kb-scale). This approach:
 - Works well for both within-species and cross-species comparisons
@@ -217,15 +233,15 @@ The permissive parameters are balanced by downstream filtering (identity thresho
 
 **Why permissive chaining**: Even for byte-for-byte identical sequences, minimap2's conservative default parameters split alignments at complex repetitive regions (long homopolymer runs, tandem repeats). For chromosome classification and structural composition visualization, these kb-scale gaps are noise that obscures megabase-scale patterns. Permissive chaining creates continuous blocks that better represent biological chromosome architecture.
 
-**Reference length normalization**: `reference_utils.py:normalize_ref_lengths()` filters out organelles (chrC/chrM) and unlocalized scaffolds (chr*_random) from nuclear chromosome length calculations. This ensures `--chr-like-minlen` thresholds are computed correctly.
+**Reference length normalization**: `reference_utils.py:get_min_nuclear_chrom_length()` filters out organelles (chrC/chrM) and non-chromosome sequences via `is_nuclear_chromosome()` when computing the smallest nuclear chromosome length. This ensures `--chr-like-minlen` thresholds are computed correctly.
 
-**rDNA consensus building**: When `--build-rdna-consensus` is enabled, the tool builds a species-specific 45S rDNA consensus from the query assembly and annotates rRNA sub-features (18S, 5.8S, 25S/28S, ITS1, ITS2). Sub-feature annotation uses Infernal/cmscan with bundled Rfam 15.0 covariance models for structure-based boundary detection. The bundled Rfam database (`data/rfam/euk-rrna.cm`) contains 4 eukaryotic rRNA models (5S, 5.8S, 18S, 28S) and is automatically pressed (indexed) on first use. Requires Infernal (`conda install -c bioconda infernal`). Output includes a GFF3 file (`*.rdna_annotations.gff3`) with hierarchical features using proper Sequence Ontology terms (SO:0001637 for rRNA_gene, SO:0000252 for rRNA, SO:0000635 for ITS).
+**rDNA consensus building**: The tool builds a species-specific 45S rDNA consensus from the query assembly by default and annotates rRNA sub-features (18S, 5.8S, 25S/28S, ITS1, ITS2). Use `--skip-rdna-consensus` to disable. Sub-feature annotation uses Infernal/cmscan with bundled Rfam 15.0 covariance models for structure-based boundary detection. The bundled Rfam database (`data/rfam/euk-rrna.cm`) contains 4 eukaryotic rRNA models (5S, 5.8S, 18S, 28S) and is automatically pressed (indexed) on first use. Requires Infernal (`conda install -c bioconda infernal`). Output includes a GFF3 file (`*.rdna_annotations.gff3`) with hierarchical features using proper Sequence Ontology terms (SO:0001637 for rRNA_gene, SO:0000252 for rRNA, SO:0000635 for ITS).
 
 **Rfam database auto-pressing**: The bundled Rfam covariance models are stored in text format and automatically pressed to binary indices (`.i1f`, `.i1i`, `.i1m`, `.i1p`) by Infernal on first use. The tool checks for existing indices and only presses if they're missing or outdated. This eliminates the need for manual database preparation.
 
 ## Testing Philosophy
 
-Tests are in `tests/` directory. 21 tests total:
+Tests are in `tests/` directory (7 test files, ~150 tests):
 - Unit tests: Test individual functions with minimal dependencies
 - Integration tests: Marked with `@pytest.mark.integration`, may download large reference files (Arabidopsis TAIR10)
 
@@ -246,12 +262,12 @@ Tests are in `tests/` directory. 21 tests total:
 - mosdepth - depth calculation
 - rasusa - FASTQ downsampling
 - centrifuger - contaminant detection
-- infernal (cmscan) - structure-based rRNA annotation with Rfam models (for --build-rdna-consensus)
+- infernal (cmscan) - structure-based rRNA annotation with Rfam models (rDNA consensus building; enabled by default, skip with --skip-rdna-consensus)
 - Rscript (with ggplot2, dplyr, etc.) - visualization
 
 **Python packages**:
-- tomli - TOML config file parsing (Python <3.11 only)
-- intervaltree - efficient overlap detection (recommended for performance)
+- intervaltree - efficient overlap detection
+- executorlib + mpi4py (optional) - SLURM job submission for `--cluster` mode (`conda install -c conda-forge executorlib mpi4py`)
 
 All external tools are called via subprocess with proper error handling. Use `utils/io_utils.py:have_exe()` to check availability before calling.
 
@@ -266,27 +282,31 @@ All external tools are called via subprocess with proper error handling. Use `ut
 - `*.macro_blocks.tsv` - Aggregated synteny macro-blocks
 - `*.ref_lengths.tsv` - Reference chromosome lengths
 - `*.contaminants.tsv` - Detailed contaminant summary with taxonomic lineage (if contaminants detected)
+- `*.rdna_annotations.tsv` - rRNA sub-feature annotations in TSV format (produced by default; skip with `--skip-rdna-consensus`)
+- `*.rdna_arrays.tsv` - rDNA array locations per contig (produced by default when arrays are detected; skip with `--skip-rdna-consensus`)
 
 **GFF3 outputs**:
-- `*.rdna_annotations.gff3` - Hierarchical rRNA gene annotations with 18S, 5.8S, 25S, ITS1, ITS2 sub-features (if `--build-rdna-consensus` used)
+- `*.rdna_annotations.gff3` - Hierarchical rRNA gene annotations with 18S, 5.8S, 25S, ITS1, ITS2 sub-features (produced by default; skip with `--skip-rdna-consensus`)
 
-**Visualization** (requires rmarkdown + pandoc; `--plot`):
+**Visualization** (enabled by default; skip with `--skip-plot`; requires rmarkdown + pandoc):
 - `*.unified_report.html` - Self-contained HTML report with all plots (chromosome overview, classification bar, depth overview, contaminant table)
 - Individual PDFs (`*.chromosome_overview.pdf`, etc.) are also exported from within the report
 
-**Multi-assembly output structure** (`--fofn`/`--assembly-dir` + `--output-dir`):
+**Output directory structure** (uniform for single- and multi-assembly):
 ```
 {output_dir}/
   reference/
     reference.ref_lengths.tsv
     reference.ref_proteins.fa           # protein mode
     reference.ref_gff3.filtered.gff3    # if GFF3 provided
-  {assembly_name_1}/
-    {assembly_name_1}.contig_summary.tsv
-    {assembly_name_1}.chrs.fasta
+  {assembly_name}/
+    {assembly_name}.contig_summary.tsv
+    {assembly_name}.chrs.fasta
     ...
-  {assembly_name_2}/
+  {assembly_name_2}/                    # multi-assembly only
     ...
+  comparison_summary.tsv                # multi-assembly only (≥2 assemblies)
+  chromosome_completeness.tsv           # multi-assembly only (≥2 assemblies)
 ```
 
 See `docs/output_formats.md` for complete column documentation.
@@ -323,8 +343,7 @@ Classification happens in `classification/classifier.py:classify_all_contigs()`.
 The synteny block building algorithm in `chain_parsing.py` is critical for performance. Key optimizations:
 
 - **Interval tree filtering**: Uses `intervaltree` package for O(n log n) overlap detection
-- **Fallback to O(n²)**: If `intervaltree` not installed, falls back to slower nested loop
-- **Chain scoring**: Uses `score_topk=10` to consider top-K chains per contig × reference, not just the best chain
+- **Chain scoring**: Uses `assign_chain_topk=3` (configurable via `--assign-chain-topk`) to consider top-K chains per contig × reference, not just the best chain
 
 If modifying chain parsing, ensure you handle both PAF (minimap2) and miniprot PAF formats correctly. Miniprot PAF includes gene IDs in alignment records.
 

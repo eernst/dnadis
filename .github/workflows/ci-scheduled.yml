@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.12"]
+        python-version: ["3.11", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - name: Setup micromamba
@@ -21,6 +21,7 @@ jobs:
           environment-name: final_finalizer
           create-args: >-
             python=${{ matrix.python-version }}
+            intervaltree
             miniprot gffread blast minimap2 centrifuger pytest
             -c conda-forge -c bioconda
       - name: Run tests
@@ -67,6 +68,7 @@ jobs:
           environment-name: final_finalizer
           create-args: >-
             python=${{ steps.latest.outputs.python }}
+            intervaltree
             miniprot gffread blast minimap2 centrifuger pytest
             -c conda-forge -c bioconda
       - name: Capture conda versions

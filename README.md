@@ -7,8 +7,8 @@
 ## Features
 
 - **Dual synteny modes**:
-  - **Protein mode** (default): Protein-anchored synteny blocks (miniprot) for gene-level classification
-  - **Nucleotide mode**: Whole-genome nucleotide alignment (minimap2) for structural composition analysis
+  - **Nucleotide mode** (default): Whole-genome nucleotide alignment (minimap2) for structural composition analysis
+  - **Protein mode**: Protein-anchored synteny blocks (miniprot) for gene-level classification
 - **Chromosome assignment** with gate-based filtering to prevent spurious assignments
 - **Subgenome resolution** for polyploid genomes with multiple chromosome sets
 - **Organelle detection** (chloroplast/chrC, mitochondrion/chrM) via BLAST
@@ -18,6 +18,8 @@
 - **Debris detection** for assembly fragments (chromosome debris, organelle debris)
 - **Chimera flagging** for contigs with evidence from multiple chromosomes
 - **Orientation determination** for chromosome-assigned contigs
+- **Contig renaming** to reference-based names (e.g., `chr1A`, `chr1A_f1` for fragments, `contig_1` for unassigned)
+- **Reference-guided scaffolding** (optional) producing chromosome-scale pseudomolecules with AGP output (uses RagTag if available, otherwise built-in scaffolder)
 - **Read depth analysis** (optional) with automated downsampling and caching
 - **Publication-ready visualizations** (PDF plots via R/ggplot2)
 
@@ -27,10 +29,8 @@
 [![CI](https://github.com/eernst/final_finalizer/actions/workflows/ci.yml/badge.svg)](https://github.com/eernst/final_finalizer/actions/workflows/ci.yml)
 
 **Required:**
-- Python 3.9+
-- Python packages:
-  - [tomli](https://pypi.org/project/tomli/) - TOML configuration file support (Python <3.11 only)
-  - [intervaltree](https://pypi.org/project/intervaltree/) - efficient overlap detection (recommended for performance)
+- Python 3.11+
+- [intervaltree](https://github.com/chaimleib/intervaltree) - efficient overlap detection
 - [miniprot](https://github.com/lh3/miniprot) - protein-to-genome alignment
 - [gffread](https://github.com/gpertea/gffread) - GFF3/FASTA processing
 - [BLAST+](https://blast.ncbi.nlm.nih.gov/) - organelle/rDNA detection
@@ -42,33 +42,28 @@
 - [rasusa](https://github.com/mbhall88/rasusa) - FASTQ downsampling for depth analysis
 - [centrifuger](https://github.com/mourisl/centrifuger) - contaminant detection
 - [taxonkit](https://github.com/shenwei356/taxonkit) + NCBI taxonomy database - taxonomic lineage for contaminant table (see below)
-- [infernal](http://eddylab.org/infernal/) - structure-based rRNA annotation with Rfam covariance models (for `--build-rdna-consensus`; bundled Rfam database)
-- R with ggplot2, dplyr, readr, stringr, tibble, tidyr, patchwork, ggnewscale, pacman - visualization (`--plot`)
-- R with ggiraph, htmlwidgets, pandoc - interactive visualization (`--plot-html`)
+- [RagTag](https://github.com/malonge/RagTag) - improved reference-guided scaffolding (for `--scaffold`; built-in scaffolder used as fallback)
+- [executorlib](https://github.com/pyiron/executorlib) + [mpi4py](https://github.com/mpi4py/mpi4py) - distributed SLURM job submission (required for `--cluster`; `conda install -c conda-forge executorlib mpi4py`)
+- [infernal](http://eddylab.org/infernal/) - structure-based rRNA annotation with Rfam covariance models (for rDNA consensus building; enabled by default, skip with `--skip-rdna-consensus`; bundled Rfam database)
+- R with ggplot2, dplyr, readr, stringr, tibble, tidyr, patchwork, ggnewscale, pacman - visualization (enabled by default; skip with `--skip-plot`)
+- rmarkdown + pandoc - unified HTML report generation (enabled by default; skip with `--skip-plot`)
 
 ### Conda environment
 
 ```bash
-conda create -n final_finalizer python=3.10 miniprot gffread blast mm2plus centrifuger -c bioconda -c conda-forge
+conda create -n final_finalizer \
+    -c conda-forge -c bioconda \
+    python=3.11 intervaltree \
+    miniprot gffread blast mm2plus centrifuger infernal \
+    r-base r-ggplot2 r-dplyr r-readr r-stringr r-tibble r-tidyr \
+    r-patchwork r-ggnewscale r-pacman r-ggiraph r-htmlwidgets r-scales \
+    r-gt r-svglite r-xml2 r-rmarkdown libxml2 xz pandoc \
 conda activate final_finalizer
-
-# Install Python dependencies
-pip install -r requirements.txt
 ```
 
 Optional (read depth analysis):
 ```bash
 conda install -n final_finalizer -c bioconda samtools mosdepth rasusa
-```
-
-Optional (plotting):
-```bash
-conda install -n final_finalizer -c conda-forge r-base r-ggplot2 r-dplyr r-readr r-stringr r-tibble r-tidyr r-patchwork r-ggnewscale r-pacman r-ggiraph r-htmlwidgets r-scales libxml2 pandoc
-```
-
-Optional (Infernal for rDNA sub-feature annotation):
-```bash
-conda install -n final_finalizer -c bioconda infernal
 ```
 
 Optional (taxonkit for contaminant table taxonomic lineage):
@@ -91,9 +86,17 @@ tar -xzf taxdump.tar.gz -C ~/.taxonkit
 
 Without taxonkit, the contaminant table will show species names parsed from scientific names. With taxonkit and the taxonomy database, you get full taxonomic lineage (Domain, Family, Genus, Species) in the contaminant table.
 
+### Development
+
+To run the test suite:
+```bash
+conda install -n final_finalizer -c conda-forge pytest pytest-cov
+conda run -n final_finalizer pytest -q
+```
+
 Latest tested conda package versions (CI):
 <!-- conda-versions-start -->
-- python: 3.10
+- python: 3.11
 - miniprot: unknown
 - gffread: unknown
 - blast: unknown
@@ -107,10 +110,8 @@ Latest tested conda package versions (CI):
 ./final_finalizer.py \
     -r reference.fasta \
     -q assembly.fasta \
-    -o output_prefix \
-    --ref-gff3 reference.gff3 \
-    --plot \
-    --plot-html
+    -o output/ \
+    --ref-gff3 reference.gff3
 ```
 
 ## Usage
@@ -120,8 +121,8 @@ Latest tested conda package versions (CI):
 | Argument | Description |
 |----------|-------------|
 | `-r, --ref` | Reference genome FASTA (can be gzipped) |
-| `-q, --query` | Query assembly FASTA to classify |
-| `-o, --outprefix` | Output file prefix |
+| `-q, --query` | Query assembly FASTA to classify (single-assembly mode) |
+| `-o, --output-dir` | Output directory (reference/ and per-assembly subdirectories created inside) |
 | `--ref-gff3` | Reference GFF3 with protein-coding gene annotations. Required for `--synteny-mode protein`. |
 
 ### Common options
@@ -129,8 +130,7 @@ Latest tested conda package versions (CI):
 | Argument | Description | Default |
 |----------|-------------|---------|
 | `-t, --threads` | Number of threads | 8 |
-| `--plot` | Generate PDF visualization | off |
-| `--plot-html` | Also generate interactive HTML visualization | off |
+| `--skip-plot` | Skip unified HTML report generation | off |
 | `-v, --verbose` | Enable verbose (DEBUG level) logging | off |
 | `--quiet` | Suppress INFO messages (only warnings and errors) | off |
 | `--log-file` | Write logs to file (in addition to stderr) | none |
@@ -146,7 +146,7 @@ Latest tested conda package versions (CI):
 | `--chrC-ref` | Chloroplast reference FASTA (default: extract from --ref) |
 | `--chrM-ref` | Mitochondrion reference FASTA (default: extract from --ref) |
 | `--rdna-ref` | rDNA reference FASTA, or 'default' for bundled Arabidopsis 45S |
-| `--build-rdna-consensus` | Build consensus 45S rDNA from query assembly, annotate sub-features (18S/5.8S/25S/ITS), and output GFF3 annotations |
+| `--skip-rdna-consensus` | Skip building consensus 45S rDNA and annotating rDNA loci (enabled by default) |
 | `--centrifuger-idx` | Centrifuger index prefix for contaminant screening |
 
 ### Read depth analysis
@@ -178,11 +178,11 @@ Read type to minimap2 preset mapping:
 
 | Argument | Description | Default |
 |----------|-------------|---------|
-| `--synteny-mode` | Synteny evidence source: `protein` (miniprot) or `nucleotide` (minimap2) | protein |
+| `--synteny-mode` | Synteny evidence source: `protein` (miniprot) or `nucleotide` (minimap2) | nucleotide |
 
-**Protein mode** (default): Uses miniprot protein-anchored synteny. Requires `--ref-gff3`. Ideal for detecting conserved gene content across distantly related species.
+**Nucleotide mode** (default): Uses minimap2 whole-genome nucleotide alignment with permissive chaining for chromosome-scale structural composition analysis. Creates megabase-scale synteny blocks by chaining through repetitive regions. Suitable for both within-species and cross-species comparisons. Ideal for identifying structural features like chromosomal fusions, homeologous recombination, or introgression events.
 
-**Nucleotide mode**: Uses minimap2 whole-genome nucleotide alignment with permissive chaining for chromosome-scale structural composition analysis. Creates megabase-scale synteny blocks by chaining through repetitive regions. Suitable for both within-species and cross-species comparisons. Ideal for identifying structural features like chromosomal fusions, homeologous recombination, or introgression events.
+**Protein mode**: Uses miniprot protein-anchored synteny. Requires `--ref-gff3`. Ideal for detecting conserved gene content across distantly related species.
 
 ### Pipeline toggles
 
@@ -192,18 +192,46 @@ Read type to minimap2 preset mapping:
 | `--skip-rdna` | Skip rDNA detection |
 | `--skip-contaminants` | Skip contaminant detection |
 
+### Scaffolding options
+
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--scaffold` | Produce reference-guided scaffolded chromosome sequences (uses RagTag if available, otherwise built-in scaffolder) | off |
+| `--scaffold-gap-size` | Number of Ns between contigs in scaffolded output | 100 |
+
+When `--scaffold` is enabled, chromosome-assigned contigs are grouped by reference chromosome and ordered into pseudomolecules. The scaffolder handles haplotype-aware grouping for polyploid assemblies (e.g., contigs assigned to chr1A are scaffolded separately from chr1B). Single T2T contigs that span a full chromosome produce trivial (single-component) AGP entries. Multi-contig chromosomes are ordered by reference position, either via RagTag (if installed) or the built-in scaffolder.
+
+### Distributed computing (SLURM cluster)
+
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--cluster` | Submit compute phases as SLURM jobs via executorlib | off |
+| `--partition` | SLURM partition for distributed jobs | cpuq |
+| `--max-threads-dist` | Max threads per distributed job | 64 |
+| `--max-mem-dist` | Max memory (GB) per distributed job | 128 |
+| `--max-time-dist` | Max wall time (minutes) per distributed job | 720 |
+
+**Requires [executorlib](https://github.com/pyiron/executorlib) and mpi4py:**
+```bash
+conda install -n final_finalizer -c conda-forge executorlib mpi4py
+```
+
+When `--cluster` is enabled, compute-intensive phases (synteny alignment, BLAST detection, debris detection, contaminant screening, read depth) are submitted as individual SLURM jobs with per-job resource control. In multi-assembly mode, assemblies run concurrently with each submitting its own SLURM jobs. Without `--cluster`, all phases run locally.
+
 ## Output Files
 
 ### FASTA outputs
 
 | File | Description |
 |------|-------------|
-| `*.chrs.fasta` | Chromosome-assigned contigs (reoriented if needed) |
+| `*.chrs.fasta` | Chromosome-assigned contigs (renamed and reoriented; scaffolded pseudomolecules if `--scaffold`) |
 | `*.organelles.fasta` | Organelle contigs (chrC, chrM) |
 | `*.rdna.fasta` | rDNA-containing contigs |
 | `*.contaminants.fasta` | Contaminant contigs |
 | `*.debris.fasta` | Assembly debris (fragments, duplicates) |
 | `*.unclassified.fasta` | Contigs that couldn't be classified |
+| `*.scaffolded.fasta` | Scaffolded chromosome pseudomolecules (if `--scaffold`) |
+| `*.scaffolded.agp` | AGP 2.0 file describing scaffold structure (if `--scaffold`) |
 
 ### Summary tables
 
@@ -214,7 +242,7 @@ Read type to minimap2 preset mapping:
 | `*.segments.tsv` | Individual synteny segments |
 | `*.macro_blocks.tsv` | Aggregated synteny macro-blocks |
 | `*.ref_lengths.tsv` | Reference chromosome lengths |
-| `*.rdna_annotations.gff3` | Hierarchical rRNA gene annotations with 18S, 5.8S, 25S, ITS1, ITS2 sub-features (if `--build-rdna-consensus` used) |
+| `*.rdna_annotations.gff3` | Hierarchical rRNA gene annotations with 18S, 5.8S, 25S, ITS1, ITS2 sub-features (produced by default; skip with `--skip-rdna-consensus`) |
 
 ### Key columns in `contig_summary.tsv`
 
@@ -242,10 +270,9 @@ For complete column documentation for all TSV files, see [docs/output_formats.md
 
 | File | Description |
 |------|-------------|
+| `*.unified_report.html` | Self-contained HTML report with all plots (chromosome overview, classification, depth, contaminant table) |
 | `*.chromosome_overview.pdf` | Multi-panel plot showing contig composition, subgenome support, and alignment identity |
 | `*.depth_overview.pdf` | Read depth visualization by classification and chromosome (if `--reads` provided) |
-| `*.depth_overview.html` | Interactive version with tooltips (if `--plot-html` and `--reads` provided) |
-| `*.contaminant_table.html` | Interactive HTML table showing top contaminants ranked by abundance with inline visualizations (if contaminants detected) |
 | `*.contaminants.tsv` | Detailed contaminant summary with taxonomic lineage |
 
 ## Classification Pipeline
@@ -264,13 +291,15 @@ The tool runs these phases in order:
 8. **Debris classification** - Reference-based debris detection for remaining contigs
 9. **Gene count statistics** (if GFF3 provided) - Compute gene proportion metrics
 10. **Orientation determination** - Determine strand for chromosome contigs based on synteny votes
-11. **Final classification** - Assign all contigs to categories with confidence levels
-12. **Read depth analysis** (optional) - Align reads and compute per-contig depth metrics
-13. **Output generation** - Write classified FASTAs, summary tables, and visualizations
+11. **Contig naming** - Rename contigs to reference-based names (e.g., `chr1A` for full-length, `chr1A_f1` for fragments, `contig_1` for unassigned)
+12. **Final classification** - Assign all contigs to categories with confidence levels
+13. **Reference-guided scaffolding** (optional, `--scaffold`) - Order and orient contigs into chromosome-scale pseudomolecules with AGP output
+14. **Read depth analysis** (optional) - Align reads and compute per-contig depth metrics
+15. **Output generation** - Write classified FASTAs, summary tables, and visualizations
 
 ## rDNA Consensus and Annotation
 
-When `--build-rdna-consensus` is enabled, the tool builds a species-specific consensus 45S rDNA sequence from the query assembly and uses it to annotate ribosomal RNA genes with accurate sub-feature boundaries.
+By default, the tool builds a species-specific consensus 45S rDNA sequence from the query assembly and uses it to annotate ribosomal RNA genes with accurate sub-feature boundaries. This step runs automatically unless `--skip-rdna-consensus` is set.
 
 **Pipeline:**
 1. Extract rDNA-containing regions from the assembly using BLAST against a reference 45S sequence
@@ -288,7 +317,7 @@ Uses Infernal covariance models from Rfam 15.0 for structure-based rRNA boundary
 
 **Dependencies:**
 - Required: BLAST+ (makeblastdb, blastn) for locus detection
-- Required: [Infernal](http://eddylab.org/infernal/) for sub-feature annotation (install via conda: `conda install -c bioconda infernal`)
+- Required: [Infernal](http://eddylab.org/infernal/) for sub-feature annotation (included in the recommended conda environment)
 
 **Use cases:**
 - Locate nucleolar organizer regions (NORs) on chromosomes
@@ -437,14 +466,13 @@ This creates a complete configuration file with all parameters and their current
 [required]
 ref = "/path/to/reference.fasta"
 query = "/path/to/assembly.fasta"
-outprefix = "output_prefix"
+output_dir = "/path/to/output_directory"
 ref_gff3 = "/path/to/reference.gff3"
 
 # Common Options
 [common]
 threads = 32
 plot = true
-plot_html = true
 chr_like_minlen = 1000000
 
 # Read Depth Analysis
@@ -473,26 +501,23 @@ assign_min_ratio = 1.25
 ./final_finalizer.py \
     -r TAIR10.fasta \
     -q my_assembly.fasta \
-    -o my_assembly_classified \
+    -o results/ \
     --ref-gff3 TAIR10.gff3 \
-    -t 32 \
-    --plot \
-    --plot-html
+    -t 32
+
 ```
 
 ### Nucleotide mode for structural composition analysis
 
-Use nucleotide mode when you want to detect chromosome-scale structural features like fusions, translocations, or homeologous exchanges. This mode uses whole-genome nucleotide alignment and is suitable for both within-species and cross-species comparisons.
+Use nucleotide mode when you want to detect chromosome-scale structural features like fusions, translocations, or homeologous exchanges. Nucleotide mode is the default and uses whole-genome nucleotide alignment; it is suitable for both within-species and cross-species comparisons.
 
 ```bash
 ./final_finalizer.py \
     -r reference.fasta \
     -q assembly.fasta \
-    -o assembly_nucleotide \
-    --synteny-mode nucleotide \
-    -t 32 \
-    --plot \
-    --plot-html
+    -o results/ \
+    -t 32
+
 ```
 
 Note: Nucleotide mode does not require `--ref-gff3`, but if provided, gene count statistics will be included in the output.
@@ -503,13 +528,12 @@ Note: Nucleotide mode does not require `--ref-gff3`, but if provided, gene count
 ./final_finalizer.py \
     -r wheat_ref.fasta \
     -q wheat_assembly.fasta \
-    -o wheat_classified \
+    -o results/ \
     --ref-gff3 wheat_ref.gff3 \
     --centrifuger-idx /path/to/centrifuger/nt \
     --rdna-ref default \
-    -t 64 \
-    --plot \
-    --plot-html
+    -t 64
+
 ```
 
 ### Non-polyploid with subgenome suffix
@@ -518,12 +542,25 @@ Note: Nucleotide mode does not require `--ref-gff3`, but if provided, gene count
 ./final_finalizer.py \
     -r rice_ref.fasta \
     -q rice_assembly.fasta \
-    -o rice_classified \
+    -o results/ \
     --ref-gff3 rice_ref.gff3 \
-    --add-subgenome-suffix A \
-    --plot \
-    --plot-html
+    --add-subgenome-suffix A
+
 ```
+
+### With reference-guided scaffolding
+
+```bash
+./final_finalizer.py \
+    -r reference.fasta \
+    -q assembly.fasta \
+    -o results/ \
+    --ref-gff3 reference.gff3 \
+    --scaffold \
+    -t 32
+```
+
+This produces `*.scaffolded.fasta` (chromosome pseudomolecules) and `*.scaffolded.agp` (AGP 2.0 describing scaffold structure). If RagTag is installed, it is used for ordering; otherwise, the built-in scaffolder orders contigs by reference position.
 
 ### With read depth analysis (HiFi reads)
 
@@ -531,12 +568,10 @@ Note: Nucleotide mode does not require `--ref-gff3`, but if provided, gene count
 ./final_finalizer.py \
     -r reference.fasta \
     -q assembly.fasta \
-    -o assembly_classified \
+    -o results/ \
     --ref-gff3 reference.gff3 \
     --reads hifi_reads.fastq.gz \
     --reads-type lrhq \
-    --plot \
-    --plot-html \
     -t 32
 ```
 
@@ -546,11 +581,9 @@ Note: Nucleotide mode does not require `--ref-gff3`, but if provided, gene count
 ./final_finalizer.py \
     -r reference.fasta \
     -q assembly.fasta \
-    -o assembly_classified \
+    -o results/ \
     --ref-gff3 reference.gff3 \
     --reads aligned_reads.bam \
-    --plot \
-    --plot-html \
     -t 32
 ```
 
@@ -575,13 +608,12 @@ Note: Nucleotide mode does not require `--ref-gff3`, but if provided, gene count
 ./final_finalizer.py \
     -r reference.fasta \
     -q assembly.fasta \
-    -o assembly_classified \
+    -o results/ \
     --ref-gff3 reference.gff3 \
     --reads hifi_reads.fastq.gz \
     --reads-type lrhq \
     --depth-target-coverage 20 \
     --keep-depth-bam \
-    --plot \
     -t 32
 ```
 
@@ -591,7 +623,7 @@ Note: Nucleotide mode does not require `--ref-gff3`, but if provided, gene count
 
 The tool supports two complementary synteny modes:
 
-#### Protein mode (default)
+#### Protein mode
 
 Uses protein homology as the primary evidence source because:
 - Proteins are more conserved than nucleotide sequences
@@ -609,7 +641,7 @@ Miniprot alignments are:
 
 **Performance optimization**: The pipeline uses interval trees (via the `intervaltree` package) for efficient O(n log n) overlap detection during synteny block filtering, replacing the previous O(n²) algorithm. This significantly improves runtime for large assemblies with many protein alignments.
 
-#### Nucleotide mode
+#### Nucleotide mode (default)
 
 Uses whole-genome nucleotide alignment for structural composition analysis:
 - Detects actual sequence-level identity and synteny
@@ -683,7 +715,7 @@ Two complementary approaches:
 
 ### Contaminant visualization
 
-When contaminants are detected (with `--centrifuger-idx`) and plotting is enabled (`--plot`), final_finalizer generates a **contaminant table** (`*.contaminant_table.html`): an interactive HTML table showing top contaminants ranked by abundance (depth × length if depth data available, otherwise total length). Features include species-level aggregation with binomial names, inline gradient bars for Total Mb and Depth columns, colored domain badges, family grouping, and min-max spread values for multi-contig entries. HTML-only output (CSS gradients don't render to PDF).
+When contaminants are detected (with `--centrifuger-idx`) and plotting is enabled (the default; disable with `--skip-plot`), final_finalizer generates a **contaminant table** (`*.contaminant_table.html`): an interactive HTML table showing top contaminants ranked by abundance (depth × length if depth data available, otherwise total length). Features include species-level aggregation with binomial names, inline gradient bars for Total Mb and Depth columns, colored domain badges, family grouping, and min-max spread values for multi-contig entries. HTML-only output (CSS gradients don't render to PDF).
 
 The table filters to high-confidence contaminants (coverage ≥ `--contaminant-min-coverage`, default 0.50) to reduce noise from conserved gene matches. See [docs/output_formats.md](docs/output_formats.md#contaminant-table-visualization-html) for detailed documentation on the table format and interpretation.
 
@@ -706,7 +738,7 @@ If you use this tool, please cite:
 - [gffread](https://github.com/gpertea/gffread)
 - [centrifuger](https://github.com/mourisl/centrifuger) (if used)
 - [taxonkit](https://github.com/shenwei356/taxonkit) (if used for contaminant visualization)
-- [Infernal](http://eddylab.org/infernal/) and [Rfam](https://rfam.org/) (if `--build-rdna-consensus` used for rRNA annotation):
+- [Infernal](http://eddylab.org/infernal/) and [Rfam](https://rfam.org/) (if rDNA consensus building was used for rRNA annotation):
   - Nawrocki EP, Eddy SR (2013). Infernal 1.1: 100-fold faster RNA homology searches. Bioinformatics, 29(22):2933-2935. https://doi.org/10.1093/bioinformatics/btt509
   - Kalvari I, et al. (2021). Rfam 14: expanded coverage of metagenomic, viral and microRNA families. Nucleic Acids Research, 49(D1):D192-D200. https://doi.org/10.1093/nar/gkaa1047
 
