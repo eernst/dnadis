@@ -33,15 +33,15 @@ def compute_pairwise_synteny(
     window: Optional[int] = None,
     assign_minlen: int = 5000,
     assign_minmapq: int = 0,
-    assign_tp: bool = False,
+    assign_tp: str = "PI",
     chain_q_gap: int = 500_000,
     chain_r_gap: int = 500_000,
     chain_diag_slop: int = 200_000,
     assign_min_ident: float = 0.0,
     assign_chain_topk: int = 3,
-    assign_chain_score: str = "span",
+    assign_chain_score: str = "matches",
     assign_chain_min_bp: int = 50_000,
-    assign_ref_score: str = "span",
+    assign_ref_score: str = "all",
 ) -> Optional[Path]:
     """Run minimap2 + chain parsing between two assemblies' chrs.fasta files.
 
@@ -60,7 +60,7 @@ def compute_pairwise_synteny(
         window: minimap2 window size (None = use preset default).
         assign_minlen: Minimum alignment length for chain parsing.
         assign_minmapq: Minimum mapping quality.
-        assign_tp: Whether to require tp:A:P tag.
+        assign_tp: Which alignment type tags to accept ("P", "PI", or "ALL").
         chain_q_gap: Maximum query gap for chaining.
         chain_r_gap: Maximum reference gap for chaining.
         chain_diag_slop: Diagonal slop for chaining.

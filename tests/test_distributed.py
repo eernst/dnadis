@@ -1,6 +1,7 @@
 """Unit tests for distributed computing support."""
 from __future__ import annotations
 
+import importlib.util
 import sys
 import textwrap
 import types
@@ -186,6 +187,10 @@ class TestCreateExecutor:
                 create_executor(cfg)
 
 
+@pytest.mark.skipif(
+    not importlib.util.find_spec("pysqa"),
+    reason="pysqa not installed",
+)
 class TestPatchPysqaTemplate:
     def test_adds_qos_directive(self):
         """Patching inserts --qos into the pysqa SLURM template."""
@@ -217,6 +222,10 @@ class TestPatchPysqaTemplate:
             _slurm_mod.template = original
 
 
+@pytest.mark.skipif(
+    not importlib.util.find_spec("executorlib"),
+    reason="executorlib not installed",
+)
 class TestSbatchRetry:
     """Tests for the subprocess.check_output retry wrapper.
 

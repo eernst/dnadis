@@ -1300,7 +1300,7 @@ def main():
             scaffold=False, scaffold_gap_size=100,
             fofn=None, assembly_dir=None,
             cluster=False, max_threads_dist=64, max_mem_dist=128.0,
-            max_time_dist=720, partition="cpuq", qos="default",
+            max_time_dist=720, partition="cpuq", qos="",
         )
         print(dump_config_template(defaults))
         sys.exit(0)

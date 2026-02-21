@@ -214,7 +214,11 @@ def merge_config_with_args(config: Dict[str, Any], args: argparse.Namespace) -> 
 
         # Skip if CLI explicitly set a value (non-None for optional args)
         # This is a heuristic - works for most cases
-        if current_value is not None and key not in ("threads", "skip_plot"):
+        if current_value is not None and key not in (
+            "threads", "skip_plot",
+            "max_threads_dist", "max_mem_dist", "max_time_dist",
+            "partition", "qos",
+        ):
             continue
 
         # For boolean flags that default to False, only override if not set via CLI
