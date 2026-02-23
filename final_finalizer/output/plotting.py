@@ -134,7 +134,7 @@ def run_unified_report(
     logger.info(f"Rendering unified report: {report_html}")
     try:
         subprocess.run(
-            ["Rscript", "-e", f"rmarkdown::render('{_esc(report_rmd)}')"],
+            ["Rscript", "-e", f"rmarkdown::render('{_esc(report_rmd)}', quiet = TRUE)"],
             check=True,
         )
     except subprocess.CalledProcessError as e:
@@ -255,7 +255,7 @@ def run_comparison_report(
     logger.info(f"Rendering comparison report: {report_html}")
     try:
         subprocess.run(
-            ["Rscript", "-e", f"rmarkdown::render('{_esc(report_rmd)}')"],
+            ["Rscript", "-e", f"rmarkdown::render('{_esc(report_rmd)}', quiet = TRUE)"],
             check=True,
         )
     except subprocess.CalledProcessError as e:
