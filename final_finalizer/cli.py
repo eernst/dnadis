@@ -379,7 +379,7 @@ def run_assembly(
     ref_lengths = ref_lengths_norm
 
     # --- Phase 1: Reading query FASTA ---
-    logger.phase("Phase 1: Reading query FASTA")
+    logger.phase("Phase 1: Reading query assembly")
 
     # Create output directory if it doesn't exist
     out_dir = outprefix.parent
@@ -713,7 +713,7 @@ def run_assembly(
 
     # Submit organelle detection
     if not args.skip_organelles:
-        logger.phase("Phase 4: Organelle detection")
+        logger.phase("Phase 3: Organelle detection")
         if ref_ctx.chrC_ref or ref_ctx.chrM_ref:
             organelle_future = executor.submit(
                 detect_organelles,
@@ -729,13 +729,13 @@ def run_assembly(
                 resource_spec=blast_spec if use_cluster else None,
             )
     else:
-        logger.info("Phase 4: Skipping organelle detection (--skip-organelles)")
+        logger.info("Phase 3: Skipping organelle detection (--skip-organelles)")
 
     # In cluster mode, submit rDNA in parallel with organelle (exclude_contigs=set()),
     # then reconcile after both finish.  In local mode, wait for organelle first
     # so rDNA can use accurate exclude_contigs.
     if use_cluster and not args.skip_rdna and ref_ctx.rdna_ref:
-        logger.phase("Phase 5: rDNA detection")
+        logger.phase("Phase 4: rDNA detection")
         rdna_future = executor.submit(
             detect_rdna_contigs,
             query_fasta=blast_query_fasta,
@@ -757,7 +757,7 @@ def run_assembly(
 
     # In local mode, submit rDNA now with accurate exclude_contigs
     if not use_cluster and not args.skip_rdna and ref_ctx.rdna_ref:
-        logger.phase("Phase 5: rDNA detection")
+        logger.phase("Phase 4: rDNA detection")
         rdna_future = executor.submit(
             detect_rdna_contigs,
             query_fasta=blast_query_fasta,
@@ -771,7 +771,7 @@ def run_assembly(
         )
 
     if args.skip_rdna:
-        logger.info("Phase 5: Skipping rDNA detection (--skip-rdna)")
+        logger.info("Phase 4: Skipping rDNA detection (--skip-rdna)")
 
     # Collect rDNA results
     if rdna_future is not None:
@@ -786,8 +786,8 @@ def run_assembly(
                 rdna_hits.pop(c, None)
                 rdna_hit_intervals.pop(c, None)
 
-    # --- Phase 6: Chromosome debris detection ---
-    logger.phase("Phase 6: Chromosome debris detection")
+    # --- Phase 5: Chromosome debris detection ---
+    logger.phase("Phase 5: Chromosome debris detection")
     already_classified = already_classified | rdna_contigs
 
     chromosome_debris: Set[str] = set()
@@ -814,11 +814,11 @@ def run_assembly(
         chromosome_debris, chrom_debris_hits = debris_future.result()
         already_classified = already_classified | chromosome_debris
 
-    # --- Phase 7: Contaminant detection ---
+    # --- Phase 6: Contaminant detection ---
     contaminants: Dict[str, Tuple[int, str]] = {}
 
     if not args.skip_contaminants and args.centrifuger_idx:
-        logger.phase("Phase 7: Contaminant detection")
+        logger.phase("Phase 6: Contaminant detection")
         residual_contigs = set(qry_lengths.keys()) - already_classified - chromosome_contigs
         if residual_contigs:
             residual_fasta = work_dir / "residual_for_contaminant_screen.fa"
@@ -844,10 +844,10 @@ def run_assembly(
             )
             contaminants = contam_future.result()
     else:
-        logger.info("Phase 7: Skipping contaminant detection")
+        logger.info("Phase 6: Skipping contaminant detection")
 
-    # --- Phase 8: Debris/unclassified classification ---
-    logger.phase("Phase 8: Debris/unclassified classification")
+    # --- Phase 7: Debris/unclassified classification ---
+    logger.phase("Phase 7: Debris/unclassified classification")
 
     already_classified = already_classified | set(contaminants.keys()) | chromosome_contigs
     remaining_contigs = set(qry_lengths.keys()) - already_classified
@@ -866,8 +866,8 @@ def run_assembly(
     )
     other_debris = additional_debris
 
-    # --- Phase 9: Gene count statistics ---
-    logger.phase("Phase 9: Gene count statistics")
+    # --- Phase 8: Gene count statistics ---
+    logger.phase("Phase 8: Gene count statistics")
     if ref_gff3:
         ref_gene_counts = count_genes_per_ref_chrom(ref_gff3, ref_id_map=ref_orig_to_norm)
         compute_mean_gene_proportion(
@@ -880,8 +880,8 @@ def run_assembly(
         logger.info("No GFF3 available - skipping gene count statistics")
         ref_gene_counts = {}
 
-    # --- Phase 10: Orientation determination ---
-    logger.phase("Phase 10: Orientation determination")
+    # --- Phase 9: Orientation determination ---
+    logger.phase("Phase 9: Orientation determination")
     contig_orientations = determine_contig_orientations(
         macro_block_rows=ev.macro_block_rows,
         best_ref=best_ref,
@@ -889,10 +889,10 @@ def run_assembly(
         query_lengths=qry_lengths,
     )
 
-    # --- Phase 10.5: Telomere detection (optional) ---
+    # --- Phase 10: Telomere detection (optional) ---
     telomere_results = None
     if not args.disable_telomere_detection:
-        logger.phase("Phase 10.5: Telomere detection")
+        logger.phase("Phase 10: Telomere detection")
         from final_finalizer.detection.telomere import detect_telomeres
         telomere_results = detect_telomeres(
             query_fasta=qry,
@@ -902,9 +902,9 @@ def run_assembly(
             min_repeats=args.telomere_min_repeats,
         )
     else:
-        logger.info("Phase 10.5: Skipping telomere detection (--disable-telomere-detection)")
+        logger.info("Phase 10: Skipping telomere detection (--disable-telomere-detection)")
 
-    # --- Phase 11: Classify all contigs ---
+    # --- Phase 11: Classification ---
     logger.phase("Phase 11: Classifying all contigs")
 
     # Filter contaminants by coverage threshold (low coverage hits may be false positives)
@@ -957,10 +957,10 @@ def run_assembly(
     for clf in classifications:
         clf.reversed = contig_orientations.get(clf.original_name, False)
 
-    # --- Phase 11.5: Read depth analysis (optional) ---
+    # --- Phase 12: Read depth analysis (optional) ---
     depth_stats: Dict[str, 'DepthStats'] = {}
     if reads and not args.skip_depth:
-        logger.phase("Phase 11.5: Read depth analysis")
+        logger.phase("Phase 12: Read depth analysis")
         from final_finalizer.analysis.read_depth import calculate_depth_metrics
         from final_finalizer.models import DepthStats
 
@@ -999,9 +999,9 @@ def run_assembly(
         if depth_stats:
             logger.done(f"Depth analysis complete for {len(depth_stats)} contigs")
     elif reads and args.skip_depth:
-        logger.info("Phase 11.5: Skipping depth analysis (--skip-depth)")
+        logger.info("Phase 12: Skipping depth analysis (--skip-depth)")
 
-    # --- Phase 11.7: rDNA consensus building (optional) ---
+    # --- Phase 13: rDNA consensus building (optional) ---
     rdna_consensus_obj = None
     rdna_loci = []
     rdna_arrays = []
@@ -1009,7 +1009,7 @@ def run_assembly(
     rdna_arrays_tsv_path = None
     rdna_ref = ref_ctx.rdna_ref
     if not args.skip_rdna_consensus and not args.skip_rdna and rdna_hit_intervals:
-        logger.phase("Phase 11.7: Building rDNA consensus from query assembly")
+        logger.phase("Phase 13: Building rDNA consensus from query assembly")
         from final_finalizer.detection.rdna_consensus import build_rdna_consensus
 
         # Build classification lookup for annotation
@@ -1106,13 +1106,13 @@ def run_assembly(
         else:
             logger.warning("rDNA consensus building did not produce a result")
     elif not args.skip_rdna_consensus and args.skip_rdna:
-        logger.info("Phase 11.7: Skipping rDNA consensus (--skip-rdna)")
+        logger.info("Phase 13: Skipping rDNA consensus (--skip-rdna)")
 
-    # --- Phase 12: Scaffolding (optional) ---
+    # --- Phase 14: Scaffolding (optional) ---
     scaffolded_seqs: Dict[str, str] = {}
     scaffold_confidences: Optional[Dict[str, tuple]] = None
     if args.scaffold:
-        logger.phase("Phase 12: Reference-guided scaffolding")
+        logger.phase("Phase 14: Reference-guided scaffolding")
         from final_finalizer.output.scaffolding import scaffold_chromosomes, write_agp, orientations_from_agp
 
         scaffolded_seqs, agp_lines, scaffold_confidences = scaffold_chromosomes(
@@ -1149,10 +1149,10 @@ def run_assembly(
                 if clf.original_name in agp_orients:
                     clf.reversed = agp_orients[clf.original_name]
     else:
-        logger.info("Phase 12: Skipping scaffolding (use --scaffold to enable)")
+        logger.info("Phase 14: Skipping scaffolding (use --scaffold to enable)")
 
-    # --- Phase 12.5: Write FASTA outputs ---
-    logger.phase("Phase 12.5: Writing FASTA outputs")
+    # --- Phase 15: Write FASTA outputs ---
+    logger.phase("Phase 15: Writing FASTA outputs")
     write_classified_fastas(
         query_fasta=qry,
         classifications=classifications,
@@ -1165,8 +1165,8 @@ def run_assembly(
     chrs_fasta = Path(str(outprefix) + ".chrs.fasta")
     per_sg_chrs = write_per_subgenome_chrs_fastas(chrs_fasta, outprefix)
 
-    # --- Phase 13: Write summary TSV ---
-    logger.phase("Phase 13: Writing summary TSV")
+    # --- Phase 16: Write summary TSV ---
+    logger.phase("Phase 16: Writing summary TSV")
     summary_tsv = Path(str(outprefix) + ".contig_summary.tsv")
 
     write_contig_summary_tsv(

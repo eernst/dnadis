@@ -1,4 +1,4 @@
-"""Tests for multi-assembly comparison output (Phase 2)."""
+"""Tests for multi-assembly comparison output."""
 from __future__ import annotations
 
 import sys
