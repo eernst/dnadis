@@ -218,6 +218,12 @@ def run_comparison_report(
         abs_esc(r.macro_blocks_tsv) for r in assembly_results
     )
 
+    # Per-assembly rDNA arrays TSVs (for rDNA comparison section)
+    per_asm_rdna_tsvs = ";".join(
+        abs_esc(r.rdna_arrays_tsv) if r.rdna_arrays_tsv and r.rdna_arrays_tsv.exists() else ""
+        for r in assembly_results
+    )
+
     # Pairwise macro_blocks TSVs and pair labels (for asm→asm ribbons)
     # Names and paths are kept synchronized as (pair_name, tsv_path) tuples
     if pairwise_pairs:
@@ -234,6 +240,7 @@ def run_comparison_report(
         .replace("__PER_ASM_TSVS__", per_asm_tsvs)
         .replace("__ASM_NAMES__", asm_names)
         .replace("__PER_ASM_MACRO_TSVS__", per_asm_macro_tsvs)
+        .replace("__PER_ASM_RDNA_TSVS__", per_asm_rdna_tsvs)
         .replace("__PAIRWISE_MACRO_TSVS__", pw_macro_str)
         .replace("__PAIRWISE_NAMES__", pw_names_str)
         .replace("__REFNAME__", str(reference_name).replace('"', '\\"'))
