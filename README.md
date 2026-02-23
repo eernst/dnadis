@@ -277,25 +277,26 @@ For complete column documentation for all TSV files, see [docs/output_formats.md
 
 ## Classification Pipeline
 
-The tool runs these phases in order:
+Reference preparation runs first: read reference genome, compute GC statistics, prepare organelle/rDNA references, and (in protein mode) extract proteins from GFF3. Then the per-assembly pipeline runs these phases:
 
-1. **Reference preparation** - Read reference genome and compute GC statistics
-2. **Synteny analysis** (mode-dependent):
-   - **Protein mode**: Extract proteins from GFF3 (gffread), align to query assembly (miniprot)
-   - **Nucleotide mode**: Whole-genome alignment with permissive chaining (minimap2)
-3. **Synteny block building** - Chain alignments into synteny blocks; identify chromosome candidates
-4. **Organelle detection** - BLAST non-chromosome contigs against chrC/chrM references
-5. **rDNA detection** - BLAST against rDNA reference
-6. **Chromosome debris detection** - High-coverage, high-identity matches to assembled chromosomes
-7. **Contaminant detection** - Centrifuger taxonomic classification with two-gate filtering (score ≥1000, coverage ≥0.50)
-8. **Debris classification** - Reference-based debris detection for remaining contigs
-9. **Gene count statistics** (if GFF3 provided) - Compute gene proportion metrics
-10. **Orientation determination** - Determine strand for chromosome contigs based on synteny votes
-11. **Contig naming** - Rename contigs to reference-based names (e.g., `chr1A` for full-length, `chr1A_f1` for fragments, `contig_1` for unassigned)
-12. **Final classification** - Assign all contigs to categories with confidence levels
-13. **Reference-guided scaffolding** (optional, `--scaffold`) - Order and orient contigs into chromosome-scale pseudomolecules with AGP output
-14. **Read depth analysis** (optional) - Align reads and compute per-contig depth metrics
-15. **Output generation** - Write classified FASTAs, summary tables, and visualizations
+| Phase | Description |
+|-------|-------------|
+| 1 | **Read query assembly** — parse FASTA, compute contig lengths and GC |
+| 2 | **Synteny analysis** — protein mode (miniprot) or nucleotide mode (minimap2); chain alignments into synteny blocks and identify chromosome candidates |
+| 3 | **Organelle detection** — BLAST against chrC/chrM references (skip with `--skip-organelles`) |
+| 4 | **rDNA detection** — BLAST against rDNA reference (skip with `--skip-rdna`) |
+| 5 | **Chromosome debris detection** — high-coverage, high-identity matches to assembled chromosomes (minimap2) |
+| 6 | **Contaminant detection** — centrifuger taxonomic classification with two-gate filtering (score ≥1000, coverage ≥0.50; requires `--centrifuger-idx`) |
+| 7 | **Debris classification** — reference-based debris detection for remaining contigs |
+| 8 | **Gene count statistics** — compute gene proportion metrics (if GFF3 provided) |
+| 9 | **Orientation determination** — determine strand for chromosome contigs based on synteny votes |
+| 10 | **Telomere detection** — scan contig ends for telomeric repeats (disable with `--disable-telomere-detection`) |
+| 11 | **Classification** — assign all contigs to categories with confidence levels; rename contigs to reference-based names (e.g., `chr1A`, `chr1A_f1`, `contig_1`) |
+| 12 | **Read depth analysis** — align reads and compute per-contig depth metrics (optional, requires `--reads`) |
+| 13 | **rDNA consensus building** — build species-specific 45S rDNA consensus and annotate rRNA sub-features (skip with `--skip-rdna-consensus`) |
+| 14 | **Reference-guided scaffolding** — order and orient contigs into chromosome-scale pseudomolecules with AGP output (optional, `--scaffold`) |
+| 15 | **Write FASTA outputs** — classified FASTA files (chromosomes, organelles, rDNA, etc.) |
+| 16 | **Write summary TSV** — per-contig classification table, evidence summaries, and visualizations |
 
 ## rDNA Consensus and Annotation
 

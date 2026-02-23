@@ -181,6 +181,33 @@ final_finalizer/
    - Unified HTML report with embedded plots (enabled by default; skip with `--skip-plot`; requires rmarkdown + pandoc):
      - Chromosome overview, classification bar, read depth overview, contaminant table
 
+### Pipeline Phases
+
+`run_assembly()` logs each phase with a numbered prefix. Phases are sequential integers; optional phases are skipped with an info message.
+
+| Phase | Description | Optional? |
+|-------|-------------|-----------|
+| 1 | Reading query assembly | |
+| 2 | Synteny analysis (protein or nucleotide, mode-dependent) | |
+| 3 | Organelle detection (BLAST) | `--skip-organelles` |
+| 4 | rDNA detection (BLAST) | `--skip-rdna` |
+| 5 | Chromosome debris detection (minimap2) | |
+| 6 | Contaminant detection (centrifuger) | requires `--centrifuger-idx` |
+| 7 | Debris/unclassified classification | |
+| 8 | Gene count statistics | requires `--ref-gff3` |
+| 9 | Orientation determination | |
+| 10 | Telomere detection | `--disable-telomere-detection` |
+| 11 | Classification (assign all contigs) | |
+| 12 | Read depth analysis | requires `--reads` |
+| 13 | rDNA consensus building | `--skip-rdna-consensus` |
+| 14 | Reference-guided scaffolding | `--scaffold` |
+| 15 | Writing FASTA outputs | |
+| 16 | Writing summary TSV | |
+
+Reference preparation (`prepare_reference()`) runs before phase 1 and is not numbered — it produces the shared `ReferenceContext`. Multi-assembly orchestration (assembly headers, pairwise synteny, comparison report) also runs outside the per-assembly phase sequence.
+
+The rDNA consensus module (`rdna_consensus.py`) uses internal "Step 1-4" numbering within phase 13.
+
 ### Key Design Patterns
 
 **Unified assembly architecture**: `cli.py` is structured as three functions: `prepare_reference()` computes shared reference state once (returns `ReferenceContext`), `run_assembly()` runs the full per-assembly pipeline, and `main()` is a thin dispatcher. Single-assembly mode (`-q`) and multi-assembly mode (`--fofn`/`--assembly-dir`) flow through the same code path — single-assembly simply produces a 1-element assembly list. Both use `--output-dir` (`-o`) with a uniform layout: reference files go under `{output_dir}/reference/` and each assembly gets its own `{output_dir}/{name}/` subfolder. In single-assembly mode, the assembly name is derived from `--assembly-name` or the query filename stem. If one assembly fails, others continue; a summary is logged at the end. Cross-assembly comparison outputs are produced when there are ≥2 assemblies.
