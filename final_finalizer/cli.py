@@ -891,7 +891,7 @@ def run_assembly(
 
     # --- Phase 10: Telomere detection (optional) ---
     telomere_results = None
-    if not args.disable_telomere_detection:
+    if not args.skip_telomeres:
         logger.phase("Phase 10: Telomere detection")
         from final_finalizer.detection.telomere import detect_telomeres
         telomere_results = detect_telomeres(
@@ -902,7 +902,7 @@ def run_assembly(
             min_repeats=args.telomere_min_repeats,
         )
     else:
-        logger.info("Phase 10: Skipping telomere detection (--disable-telomere-detection)")
+        logger.info("Phase 10: Skipping telomere detection (--skip-telomeres)")
 
     # --- Phase 11: Classification ---
     logger.phase("Phase 11: Classifying all contigs")
@@ -1659,8 +1659,8 @@ def main():
         help="Reference span coverage threshold for full-length classification [0.70]",
     )
     fl_grp.add_argument(
-        "--disable-telomere-detection", action="store_true",
-        help="Disable telomere detection (enabled by default)",
+        "--skip-telomeres", action="store_true",
+        help="Skip telomere detection (enabled by default)",
     )
     fl_grp.add_argument(
         "--telomere-motif", type=str, default="TTTAGGG",

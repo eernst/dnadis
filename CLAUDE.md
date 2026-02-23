@@ -196,7 +196,7 @@ final_finalizer/
 | 7 | Debris/unclassified classification | |
 | 8 | Gene count statistics | requires `--ref-gff3` |
 | 9 | Orientation determination | |
-| 10 | Telomere detection | `--disable-telomere-detection` |
+| 10 | Telomere detection | `--skip-telomeres` |
 | 11 | Classification (assign all contigs) | |
 | 12 | Read depth analysis | requires `--reads` |
 | 13 | rDNA consensus building | `--skip-rdna-consensus` |

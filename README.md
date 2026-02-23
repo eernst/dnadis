@@ -290,7 +290,7 @@ Reference preparation runs first: read reference genome, compute GC statistics, 
 | 7 | **Debris classification** — reference-based debris detection for remaining contigs |
 | 8 | **Gene count statistics** — compute gene proportion metrics (if GFF3 provided) |
 | 9 | **Orientation determination** — determine strand for chromosome contigs based on synteny votes |
-| 10 | **Telomere detection** — scan contig ends for telomeric repeats (disable with `--disable-telomere-detection`) |
+| 10 | **Telomere detection** — scan contig ends for telomeric repeats (skip with `--skip-telomeres`) |
 | 11 | **Classification** — assign all contigs to categories with confidence levels; rename contigs to reference-based names (e.g., `chr1A`, `chr1A_f1`, `contig_1`) |
 | 12 | **Read depth analysis** — align reads and compute per-contig depth metrics (optional, requires `--reads`) |
 | 13 | **rDNA consensus building** — build species-specific 45S rDNA consensus and annotate rRNA sub-features (skip with `--skip-rdna-consensus`) |
