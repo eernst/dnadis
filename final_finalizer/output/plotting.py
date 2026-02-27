@@ -135,10 +135,13 @@ def run_unified_report(
     try:
         subprocess.run(
             ["Rscript", "-e", f"rmarkdown::render('{_esc(report_rmd)}', quiet = TRUE)"],
-            check=True,
+            check=True, capture_output=True, text=True,
         )
     except subprocess.CalledProcessError as e:
         logger.warning(f"Rscript failed with code {e.returncode}; unified report not generated.")
+        if e.stderr:
+            for line in e.stderr.strip().splitlines()[-20:]:
+                logger.warning(f"  R: {line}")
         return False
     else:
         if report_html.exists():
@@ -256,10 +259,13 @@ def run_comparison_report(
     try:
         subprocess.run(
             ["Rscript", "-e", f"rmarkdown::render('{_esc(report_rmd)}', quiet = TRUE)"],
-            check=True,
+            check=True, capture_output=True, text=True,
         )
     except subprocess.CalledProcessError as e:
         logger.warning(f"Rscript failed with code {e.returncode}; comparison report not generated.")
+        if e.stderr:
+            for line in e.stderr.strip().splitlines()[-20:]:
+                logger.warning(f"  R: {line}")
         return False
     else:
         if report_html.exists():

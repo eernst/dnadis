@@ -483,10 +483,15 @@ if (has_per_asm) {
 
 ## Heatmap
 
-```{r completeness_heatmap, fig.width=10, fig.height=max(4, n_asm * 0.5 + 3)}
+```{r completeness_heatmap, fig.width=10, fig.height=max(3, n_asm * 0.35 + 2)}
 if (has_any_chrom) {
+  # Exclude organelle chromosomes from the heatmap (they have their own section)
+  organelle_ids <- ref_lengths %>%
+    filter(grepl("^chr[CM]$|^chrPt$|^chrMt$", ref_id)) %>% pull(ref_id)
+
   # Natural sort reference chromosomes: strip "chr" prefix, sort by subgenome + number
   ref_order <- ref_lengths %>%
+    filter(!ref_id %in% organelle_ids) %>%
     mutate(
       chrom_num = as.numeric(str_extract(ref_id, "\\d+")),
       sg = if (has_subgenomes) subgenome else "G"
@@ -494,16 +499,11 @@ if (has_any_chrom) {
     arrange(sg, chrom_num) %>%
     pull(ref_id)
 
-  # Short chromosome labels (strip "chr" prefix)
-  chr_short_labels <- setNames(
-    str_replace(ref_order, "^chr", ""),
-    ref_order
-  )
-
   hm_data <- compl_df %>%
+    filter(!ref_id %in% organelle_ids) %>%
     mutate(
       ref_id = factor(ref_id, levels = ref_order),
-      assembly = factor(assembly, levels = rev(asm_names)),
+      assembly = factor(assembly, levels = asm_names),
       best_ref_coverage = as.numeric(best_ref_coverage),
       coverage_pct = ifelse(is.na(best_ref_coverage), 0, best_ref_coverage * 100)
     )
@@ -556,93 +556,317 @@ if (has_any_chrom) {
     hm_data$off_target_pct <- 0
   }
 
-  # --- Telomere/full-length status symbols ---
+  # --- Compute per-cell telomere status from per-assembly summaries ---
+  if (has_per_asm && "has_5p_telomere" %in% names(all_summary_df) &&
+      "has_3p_telomere" %in% names(all_summary_df)) {
+    telo_info <- all_summary_df %>%
+      filter(classification == "chrom_assigned") %>%
+      group_by(assembly, assigned_ref_id) %>%
+      summarise(
+        any_5p = any(has_5p_telomere == "yes", na.rm = TRUE),
+        any_3p = any(has_3p_telomere == "yes", na.rm = TRUE),
+        .groups = "drop"
+      )
+    hm_data <- hm_data %>%
+      left_join(telo_info, by = c("assembly" = "assembly",
+                                   "ref_id" = "assigned_ref_id")) %>%
+      mutate(any_5p = ifelse(is.na(any_5p), FALSE, any_5p),
+             any_3p = ifelse(is.na(any_3p), FALSE, any_3p))
+  } else {
+    hm_data <- hm_data %>%
+      mutate(any_5p = (has_both_telomeres == "yes"),
+             any_3p = (has_both_telomeres == "yes"))
+  }
+
+  # Shape status for each cell
   hm_data <- hm_data %>%
     mutate(
-      status_label = case_when(
-        is_full_length == "yes" & has_both_telomeres == "yes" ~ "*",
-        is_full_length == "yes" ~ "\u25CF",
-        n_contigs > 0 ~ "\u25CB",
-        TRUE ~ ""
+      shape_status = case_when(
+        n_contigs == 0              ~ "unassigned",
+        is_full_length != "yes"     ~ "incomplete",
+        any_5p & any_3p             ~ "telo_both",
+        any_5p & !any_3p            ~ "telo_5p",
+        !any_5p & any_3p            ~ "telo_3p",
+        TRUE                        ~ "full_length"
       ),
-      # Multi-contig indicator
-      multi_label = ifelse(n_contigs > 1, as.character(n_contigs), ""),
+      multi_label = ifelse(n_contigs > 1, as.character(n_contigs), "")
+    )
+
+  # --- Border color: dark subgenome color or red gradient for off-target ---
+  compute_offtarget_border <- function(ot_pct) {
+    if (is.na(ot_pct) || ot_pct <= 0) return(NA_character_)
+    frac <- min(ot_pct / 20, 1)
+    ramp <- colorRampPalette(c("#e08080", "#e74c3c"))(101)
+    ramp[round(frac * 100) + 1]
+  }
+  hm_data <- hm_data %>%
+    mutate(
+      sg_dark_col = unname(sg_cols_dark[ifelse(sg %in% names(sg_cols_dark), sg, "NA")]),
+      border_color = ifelse(
+        off_target_pct > 0,
+        sapply(off_target_pct, compute_offtarget_border),
+        darken(sg_dark_col, 0.2)
+      ),
+      border_lw = ifelse(off_target_pct > 0, 0.6, 0.3),
       tooltip = paste0(
         ref_id, " \u2014 ", assembly, "\n",
         "Contigs: ", n_contigs, "\n",
         "Assigned bp: ", scales::comma(total_assigned_bp), "\n",
         "Best ref coverage: ", fmt_pct(best_ref_coverage), "\n",
         "Full-length: ", is_full_length, "\n",
-        "Both telomeres: ", has_both_telomeres,
+        "Telomeres: ", case_when(
+          shape_status == "telo_both" ~ "both",
+          shape_status == "telo_5p"   ~ "5\u2032 only",
+          shape_status == "telo_3p"   ~ "3\u2032 only",
+          TRUE ~ "none"
+        ),
         ifelse(off_target_pct > 0,
                paste0("\nOff-target: ", sprintf("%.1f%%", off_target_pct)), "")
       )
     )
 
-  # --- Off-target border color (white -> red gradient) ---
-  compute_offtarget_border <- function(ot_pct) {
-    if (is.na(ot_pct) || ot_pct <= 0) return("white")
-    frac <- min(ot_pct / 20, 1)  # saturate at 20% off-target
-    ramp <- colorRampPalette(c("white", "#e74c3c"))(101)
-    ramp[round(frac * 100) + 1]
+  # =====================================================================
+  # X-axis layout: manual positioning with subgenome gaps
+  # =====================================================================
+  x_spacing   <- 1.0
+  x_group_gap <- 1.8
+  ref_layout <- ref_lengths %>%
+    filter(!ref_id %in% organelle_ids) %>%
+    mutate(
+      chrom_num = as.numeric(str_extract(ref_id, "\\d+")),
+      sg = if (has_subgenomes) subgenome else "G"
+    ) %>%
+    arrange(sg, chrom_num)
+  sg_groups   <- unique(ref_layout$sg)
+  n_sg_groups <- length(sg_groups)
+
+  x_positions <- tibble(ref_id = character(), x_center = numeric(),
+                         sg = character(), chrom_label = character())
+  x_cursor <- 1.0
+  for (sg_i in seq_along(sg_groups)) {
+    sg_val  <- sg_groups[sg_i]
+    sg_refs <- ref_layout %>% filter(sg == sg_val)
+    for (j in seq_len(nrow(sg_refs))) {
+      rid <- sg_refs$ref_id[j]
+      lbl <- str_replace(rid, "^chr", "")
+      if (has_subgenomes) lbl <- str_replace(lbl, "[A-Z]$", "")
+      x_positions <- bind_rows(x_positions, tibble(
+        ref_id = rid, x_center = x_cursor, sg = sg_val, chrom_label = lbl
+      ))
+      if (j < nrow(sg_refs)) x_cursor <- x_cursor + x_spacing
+    }
+    if (sg_i < n_sg_groups) x_cursor <- x_cursor + x_group_gap
   }
-  hm_data$border_color <- sapply(hm_data$off_target_pct, compute_offtarget_border)
 
-  # --- Transposed heatmap: assemblies on y-axis, chromosomes on x-axis ---
-  p_hm <- ggplot(hm_data, aes(x = ref_id, y = assembly))
+  # Y-axis layout
+  y_spacing <- 1.0
+  y_positions <- tibble(assembly = asm_names,
+                         y_center = seq_along(asm_names) * y_spacing)
 
-  # Subgenome faceting
-  if (has_subgenomes) {
+  # Join positions into hm_data
+  hm_data <- hm_data %>%
+    mutate(assembly = as.character(assembly),
+           ref_id = as.character(ref_id)) %>%
+    left_join(x_positions %>% select(ref_id, x_center), by = "ref_id") %>%
+    left_join(y_positions, by = "assembly")
+
+  # =====================================================================
+  # Polygon construction helpers
+  # =====================================================================
+  pill_hw     <- 0.30
+  rect_hh     <- 0.32   # half-height of core rectangle (straight edges)
+  cap_r_val   <- 0.08   # cap extends beyond rect; ratio = 0.32/0.40 = 80%
+  jagged_hh   <- 0.34   # slightly taller than rect for zigzag visibility
+  n_teeth_val <- 2
+  tooth_d_val <- 0.06   # deeper teeth for visibility
+
+  # rect_hh = half-height of core rectangle; caps extend beyond by cr
+  make_pill <- function(xc, yc, hw, rh, cr, cap_top, cap_bot, n_arc = 20) {
+    rect_top <- yc - rh
+    rect_bot <- yc + rh
+    x <- c(); y <- c()
+    if (cap_top) {
+      theta <- seq(0, pi, length.out = n_arc)
+      x <- c(x, xc + hw * cos(theta))
+      y <- c(y, rect_top - cr * sin(theta))
+    } else {
+      x <- c(x, xc + hw, xc - hw)
+      y <- c(y, rect_top, rect_top)
+    }
+    x <- c(x, xc - hw); y <- c(y, rect_bot)
+    if (cap_bot) {
+      theta <- seq(pi, 0, length.out = n_arc)
+      x <- c(x, xc + hw * cos(theta))
+      y <- c(y, rect_bot + cr * sin(theta))
+    } else {
+      x <- c(x, xc + hw); y <- c(y, rect_bot)
+    }
+    tibble(x = x, y = y)
+  }
+
+  make_pill_jagged <- function(xc, yc, hw, hh_rect, n_t, tooth_d) {
+    top_y <- yc - hh_rect; bot_y <- yc + hh_rect
+    tw <- (2 * hw) / n_t
+    x <- c(); y <- c()
+    for (i in 0:(n_t - 1)) {
+      xl <- xc - hw + i * tw; xm <- xl + tw / 2; xr <- xl + tw
+      x <- c(x, xl, xm, xr)
+      y <- c(y, top_y, top_y + tooth_d, top_y)
+    }
+    x <- c(x, xc + hw); y <- c(y, bot_y)
+    for (i in (n_t - 1):0) {
+      xl <- xc - hw + i * tw; xm <- xl + tw / 2; xr <- xl + tw
+      x <- c(x, xr, xm, xl)
+      y <- c(y, bot_y, bot_y - tooth_d, bot_y)
+    }
+    tibble(x = x, y = y)
+  }
+
+  make_cell_polygon <- function(xc, yc, status) {
+    switch(status,
+      telo_both   = make_pill(xc, yc, pill_hw, rect_hh, cap_r_val, TRUE, TRUE),
+      telo_5p     = make_pill(xc, yc, pill_hw, rect_hh, cap_r_val, TRUE, FALSE),
+      telo_3p     = make_pill(xc, yc, pill_hw, rect_hh, cap_r_val, FALSE, TRUE),
+      full_length = make_pill(xc, yc, pill_hw, rect_hh, 0, FALSE, FALSE),
+      incomplete  = make_pill_jagged(xc, yc, pill_hw, jagged_hh,
+                                     n_teeth_val, tooth_d_val),
+      unassigned  = make_pill(xc, yc, pill_hw, rect_hh, 0, FALSE, FALSE)
+    )
+  }
+
+  # =====================================================================
+  # Build polygon data frame
+  # =====================================================================
+  poly_list <- list()
+  for (i in seq_len(nrow(hm_data))) {
+    row <- hm_data[i, ]
+    if (is.na(row$x_center) || is.na(row$y_center)) next
+    pts <- make_cell_polygon(row$x_center, row$y_center, row$shape_status)
+    pts$cell_id <- i
+    pts$fill_color <- if (row$shape_status == "unassigned") "#f0f0f0" else row$cell_fill
+    pts$border_color <- if (row$shape_status == "unassigned") NA_character_ else row$border_color
+    pts$border_lw <- if (row$shape_status == "unassigned") 0 else row$border_lw
+    pts$tooltip <- row$tooltip
+    pts$data_id <- paste0(row$ref_id, "_", row$assembly)
+    pts$shape_status <- row$shape_status
+    poly_list[[i]] <- pts
+  }
+  all_polys <- bind_rows(poly_list)
+  unassigned_polys <- all_polys %>% filter(shape_status == "unassigned")
+  assigned_polys   <- all_polys %>% filter(shape_status != "unassigned")
+  multi_df <- hm_data %>% filter(multi_label != "")
+
+  # =====================================================================
+  # Annotation data
+  # =====================================================================
+  sg_extent <- x_positions %>%
+    group_by(sg) %>%
+    summarise(x_min = min(x_center), x_max = max(x_center),
+              x_mid = mean(x_center), .groups = "drop")
+  y_grid_top   <- min(y_positions$y_center) - 0.5
+  chr_label_y1 <- y_grid_top - 0.10   # odd-numbered chromosomes (closer to grid)
+  chr_label_y2 <- y_grid_top - 0.35   # even-numbered chromosomes (staggered up)
+  x_positions  <- x_positions %>%
+    mutate(label_y = ifelse(as.numeric(chrom_label) %% 2 == 0,
+                            chr_label_y2, chr_label_y1))
+  sep_line_y   <- y_grid_top - 0.65
+  sg_label_y   <- y_grid_top - 0.90
+
+  # =====================================================================
+  # Compose ggplot
+  # =====================================================================
+  p_hm <- ggplot()
+
+  # 1. Unassigned placeholders (grey, no border)
+  if (nrow(unassigned_polys) > 0) {
     p_hm <- p_hm +
-      facet_grid(. ~ sg, scales = "free_x", space = "free_x",
-                 labeller = labeller(sg = function(x) paste0("Subgenome ", x)))
+      geom_polygon(data = unassigned_polys,
+                   aes(x = x, y = y, group = cell_id),
+                   fill = "#f0f0f0", color = NA)
   }
 
+  # 2. Assigned pills (precomputed fill/color via scale_*_identity)
+  if (nrow(assigned_polys) > 0) {
+    p_hm <- p_hm +
+      geom_polygon_interactive(
+        data = assigned_polys,
+        aes(x = x, y = y, group = cell_id,
+            fill = fill_color, color = border_color,
+            linewidth = border_lw,
+            tooltip = tooltip, data_id = data_id),
+        show.legend = FALSE
+      ) +
+      scale_fill_identity() +
+      scale_color_identity() +
+      scale_linewidth_identity()
+  }
+
+  # 3. Multi-contig count labels (small number inside pill)
+  if (nrow(multi_df) > 0) {
+    p_hm <- p_hm +
+      geom_text(data = multi_df,
+                aes(x = x_center, y = y_center, label = multi_label),
+                size = base_font_pt / .pt * 0.8, color = "white",
+                fontface = "bold", family = base_family)
+  }
+
+  # 4. Subgenome separator lines + labels (polyploid only)
+  if (has_subgenomes && n_sg_groups >= 2) {
+    sg_line_df <- sg_extent %>%
+      mutate(y = sep_line_y,
+             color = unname(sg_cols_dark[sg]))
+    p_hm <- p_hm +
+      geom_segment(data = sg_line_df,
+                   aes(x = x_min - 0.4, xend = x_max + 0.4,
+                       y = y, yend = y),
+                   color = sg_line_df$color, linewidth = 0.5) +
+      geom_text(data = sg_extent,
+                aes(x = x_mid, y = sg_label_y,
+                    label = paste0("Subgenome ", sg)),
+                size = base_font_pt / .pt, fontface = "bold",
+                family = base_family)
+  }
+
+  # 5. Chromosome number labels (staggered odd/even to avoid overlap)
+  n_chroms <- length(ref_order)
   p_hm <- p_hm +
-    geom_tile_interactive(
-      aes(tooltip = tooltip),
-      fill = hm_data$cell_fill,
-      color = hm_data$border_color,
-      linewidth = ifelse(hm_data$off_target_pct > 0, 1.2, 0.5)
-    ) +
-    # Status symbols (telomere/full-length)
-    geom_text(aes(label = status_label), size = 3.5,
-              color = "white", fontface = "bold") +
-    # Multi-contig count in bottom-left corner
-    geom_text(
-      data = hm_data %>% filter(multi_label != ""),
-      aes(label = multi_label),
-      size = 1.5, color = "grey30",
-      hjust = 0, vjust = 1,
-      nudge_x = -0.35, nudge_y = 0.35
-    ) +
-    scale_x_discrete(labels = chr_short_labels) +
-    coord_fixed(ratio = 1) +
-    labs(x = NULL, y = NULL,
-         caption = paste0("* = full-length + both telomeres, ",
-                          "\u25CF = full-length, ",
-                          "\u25CB = assigned (not full-length), ",
-                          "blank = no contigs assigned",
-                          if (has_off_target) "; red border = off-target synteny" else "")) +
-    theme_minimal(base_size = base_font_pt, base_family = base_family) +
-    axis_theme +
+    geom_text(data = x_positions,
+              aes(x = x_center, y = label_y, label = chrom_label),
+              size = base_font_pt / .pt, family = base_family,
+              hjust = 0.5)
+
+  # 6. Assembly labels (left of grid)
+  x_left_edge <- min(x_positions$x_center) - pill_hw - 0.5
+  p_hm <- p_hm +
+    geom_text(data = y_positions,
+              aes(x = x_left_edge, y = y_center, label = assembly),
+              size = base_font_pt / .pt, hjust = 1, family = base_family)
+
+  # Scales and theme
+  p_hm <- p_hm +
+    scale_y_reverse() +
+    coord_cartesian(clip = "off") +
+    labs(caption = paste0(
+      "Pill = telomeres, rect = full-length, zigzag = incomplete, ",
+      "grey = unassigned. Fill intensity = ref coverage.",
+      if (has_off_target) " Red border = off-target synteny." else ""
+    )) +
+    theme_void(base_size = base_font_pt, base_family = base_family) +
     theme(
-      axis.text.x = element_text(angle = 45, hjust = 1, size = base_font_pt),
-      legend.position = "none",
-      panel.grid = element_blank(),
+      plot.margin = margin(8, 2, 5,
+                           max(25, max(nchar(as.character(asm_names))) * 3)),
       plot.caption = element_text(size = 6, hjust = 0, color = "#666")
     )
 
-  hm_width <- if (has_subgenomes) {
-    max(6, length(ref_order) * 0.4 + n_sg * 1.5 + 2)
-  } else {
-    max(6, length(ref_order) * 0.4 + 2)
-  }
-  hm_height <- max(4, n_asm * 0.5 + 3)
+  # --- Dynamic sizing ---
+  n_chroms <- length(ref_order)
+  n_sg_gaps <- max(0, n_sg_groups - 1)
+  hm_width  <- max(6, n_chroms * 0.45 + n_sg_gaps * 0.8 + 2.5)
+  hm_height <- max(3, n_asm * 0.5 + 2.0)
 
   save_pdf(pdf_heatmap, p_hm, width = min(7.2, hm_width), height = hm_height)
   girafe_styled(ggobj = p_hm,
-                width_svg = min(13, hm_width),
+                width_svg = min(13, hm_width * 1.4),
                 height_svg = hm_height)
 } else {
   cat("No chromosome-assigned contigs found in any assembly.")
@@ -650,7 +874,14 @@ if (has_any_chrom) {
 ```
 
 <div class="note-box">
-**Legend**: **\*** = full-length with both telomeres, &#9679; = full-length, &#9675; = assigned (not full-length), blank = no contigs assigned. Red border intensity indicates off-target synteny. Small numbers indicate multi-contig assignments. Fill color intensity shows reference coverage (per-subgenome gradient).
+<b>Legend</b>:&ensp;
+<svg width="14" height="24" style="vertical-align:middle"><rect x="1" y="1" width="12" height="22" rx="6" fill="#8cc5e3" stroke="#2a6496" stroke-width="0.8"/></svg>&thinsp;Both telomeres&emsp;
+<svg width="14" height="24" style="vertical-align:middle"><path d="M1,7 C1,1 13,1 13,7 L13,23 L1,23 Z" fill="#8cc5e3" stroke="#2a6496" stroke-width="0.8"/></svg>&thinsp;5&#x2032; telomere&emsp;
+<svg width="14" height="24" style="vertical-align:middle"><path d="M1,1 L13,1 L13,17 C13,23 1,23 1,17 Z" fill="#8cc5e3" stroke="#2a6496" stroke-width="0.8"/></svg>&thinsp;3&#x2032; telomere&emsp;
+<svg width="14" height="20" style="vertical-align:middle"><rect x="1" y="1" width="12" height="18" fill="#8cc5e3" stroke="#2a6496" stroke-width="0.8"/></svg>&thinsp;Full-length&emsp;
+<svg width="14" height="20" style="vertical-align:middle"><path d="M1,4 L4,1 L7,4 L10,1 L13,4 L13,16 L10,19 L7,16 L4,19 L1,16 Z" fill="#8cc5e3" stroke="#2a6496" stroke-width="0.8"/></svg>&thinsp;Incomplete&emsp;
+<svg width="14" height="20" style="vertical-align:middle"><rect x="1" y="1" width="12" height="18" fill="#f0f0f0" stroke="none"/></svg>&thinsp;Unassigned<br>
+Fill intensity = reference coverage. Red border = off-target synteny. Small numbers = multi-contig.
 </div>
 
 ## Completeness Table
