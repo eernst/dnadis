@@ -295,7 +295,7 @@ Tests are in `tests/` directory (7 test files, ~165 tests):
 - rasusa - FASTQ downsampling
 - centrifuger - contaminant detection
 - infernal (cmscan) - structure-based rRNA annotation with Rfam models (rDNA consensus building; enabled by default, skip with --skip-rdna-consensus)
-- compleasm - BUSCO completeness evaluation (requires `--compleasm-lineage`; skip with `--skip-compleasm`)
+- compleasm - BUSCO completeness evaluation (requires `--compleasm-lineage`; skip with `--skip-compleasm`; **install in a separate conda environment** due to dependency conflicts — see README.md)
 - Rscript (with ggplot2, dplyr, etc.) - visualization
 
 **Python packages**:

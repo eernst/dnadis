@@ -45,6 +45,7 @@
 - [RagTag](https://github.com/malonge/RagTag) - improved reference-guided scaffolding (for `--scaffold`; built-in scaffolder used as fallback)
 - [executorlib](https://github.com/pyiron/executorlib) + [mpi4py](https://github.com/mpi4py/mpi4py) - distributed SLURM job submission (required for `--cluster`; `conda install -c conda-forge executorlib mpi4py`)
 - [infernal](http://eddylab.org/infernal/) - structure-based rRNA annotation with Rfam covariance models (for rDNA consensus building; enabled by default, skip with `--skip-rdna-consensus`; bundled Rfam database)
+- [compleasm](https://github.com/huangnengCSU/compleasm) - BUSCO completeness evaluation (requires `--compleasm-lineage`; install in a **separate conda environment** due to dependency conflicts — see below)
 - R with ggplot2, dplyr, readr, stringr, tibble, tidyr, patchwork, ggnewscale, pacman - visualization (enabled by default; skip with `--skip-plot`)
 - rmarkdown + pandoc - unified HTML report generation (enabled by default; skip with `--skip-plot`)
 
@@ -85,6 +86,24 @@ tar -xzf taxdump.tar.gz -C ~/.taxonkit
 ```
 
 Without taxonkit, the contaminant table will show species names parsed from scientific names. With taxonkit and the taxonomy database, you get full taxonomic lineage (Domain, Family, Genus, Species) in the contaminant table.
+
+Optional (compleasm for BUSCO completeness evaluation):
+
+Compleasm has dependency conflicts with the main environment (dendropy version clash between compleasm and sepp), so it must be installed in a **separate conda environment**. The pipeline calls it as an external command, so it just needs to be on `PATH`:
+
+```bash
+# Create a separate environment for compleasm
+conda create -n compleasm -c bioconda -c conda-forge compleasm
+
+# Make compleasm available to the pipeline by adding it to PATH before running:
+export PATH="$(conda run -n compleasm bash -c 'echo $CONDA_PREFIX')/bin:$PATH"
+
+# Or activate both environments (compleasm first, then final_finalizer):
+conda activate compleasm
+conda activate --stack final_finalizer
+```
+
+Then use `--compleasm-lineage <lineage>` (e.g., `embryophyta`, `liliopsida`, `eukaryota`) to enable BUSCO evaluation on chromosome-assigned and non-chromosome contigs.
 
 ### Development
 
