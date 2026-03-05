@@ -54,6 +54,7 @@ pytest -m "not integration"
     --synteny-mode protein --ref-gff3 ref.gff3 \
     --reads hifi.fastq.gz \
     --centrifuger-idx /path/to/index \
+    --compleasm-lineage embryophyta \
     -v --log-file analysis.log
 
 # Multi-assembly mode: analyze multiple assemblies against a common reference
@@ -110,7 +111,8 @@ final_finalizer/
 │   ├── rdna_consensus.py  # Consensus 45S rDNA building and sub-feature annotation
 │   ├── telomere.py        # Telomere repeat detection at contig ends
 │   ├── debris.py          # Chromosome debris detection via minimap2
-│   └── contaminant.py     # Centrifuger taxonomic classification
+│   ├── contaminant.py     # Centrifuger taxonomic classification
+│   └── compleasm.py       # Compleasm (BUSCO completeness) evaluation
 ├── analysis/              # Read depth analysis
 │   └── read_depth.py      # Depth calculation via mosdepth with caching
 ├── output/                # Output generation
@@ -203,6 +205,7 @@ final_finalizer/
 | 14 | Reference-guided scaffolding | `--scaffold` |
 | 15 | Writing FASTA outputs | |
 | 16 | Writing summary TSV | |
+| 17 | Compleasm (BUSCO completeness) evaluation | requires `--compleasm-lineage` / `--skip-compleasm` |
 
 Reference preparation (`prepare_reference()`) runs before phase 1 and is not numbered — it produces the shared `ReferenceContext`. Multi-assembly orchestration (assembly headers, pairwise synteny, comparison report) also runs outside the per-assembly phase sequence.
 
@@ -226,7 +229,7 @@ The rDNA consensus module (`rdna_consensus.py`) uses internal "Step 1-4" numberi
 
 **TOML configuration**: `config.py` provides schema-based config file support. CLI arguments override config file values.
 
-**Distributed computing** (`--cluster`): Optional SLURM job submission via [executorlib](https://github.com/pyiron/executorlib). When `--cluster` is set, compute-intensive phases (synteny alignment, BLAST detection, debris detection, contaminant screening, read depth) are submitted as individual SLURM jobs with per-job resource control. The coordinator process orchestrates submission and waits on futures. Two levels of parallelism: intra-assembly (independent phases like organelle + rDNA BLAST run as parallel SLURM jobs) and inter-assembly (multiple `run_assembly()` calls run concurrently via ThreadPoolExecutor, each submitting its own SLURM jobs). When `--cluster` is not set, `LocalExecutor` provides synchronous execution with zero overhead — behavior is identical to the non-distributed code path. If `--cluster` is set but executorlib or mpi4py is not installed, the tool exits with a clear error message and install instructions. Resource estimation (`resource_estimation.py`) sizes each job based on input file sizes and caps against `--max-threads-dist`, `--max-mem-dist`, `--max-time-dist`.
+**Distributed computing** (`--cluster`): Optional SLURM job submission via [executorlib](https://github.com/pyiron/executorlib). When `--cluster` is set, compute-intensive phases (synteny alignment, BLAST detection, debris detection, contaminant screening, read depth, compleasm) are submitted as individual SLURM jobs with per-job resource control. The coordinator process orchestrates submission and waits on futures. Two levels of parallelism: intra-assembly (independent phases like organelle + rDNA BLAST run as parallel SLURM jobs) and inter-assembly (multiple `run_assembly()` calls run concurrently via ThreadPoolExecutor, each submitting its own SLURM jobs). When `--cluster` is not set, `LocalExecutor` provides synchronous execution with zero overhead — behavior is identical to the non-distributed code path. If `--cluster` is set but executorlib or mpi4py is not installed, the tool exits with a clear error message and install instructions. Resource estimation (`resource_estimation.py`) sizes each job based on input file sizes and caps against `--max-threads-dist`, `--max-mem-dist`, `--max-time-dist`.
 
 ### Critical Security Notes
 
@@ -266,9 +269,11 @@ The permissive parameters are balanced by downstream filtering (identity thresho
 
 **Rfam database auto-pressing**: The bundled Rfam covariance models are stored in text format and automatically pressed to binary indices (`.i1f`, `.i1i`, `.i1m`, `.i1p`) by Infernal on first use. The tool checks for existing indices and only presses if they're missing or outdated. This eliminates the need for manual database preparation.
 
+**Compleasm (BUSCO) evaluation**: Phase 17 runs compleasm on two FASTA subsets: `chrs.fasta` (chromosome-assigned contigs) and `non_chrs.fasta` (debris + unclassified + contaminants). Requires `--compleasm-lineage` (e.g., `eukaryota`, `viridiplantae`, `embryophyta`). Optionally specify `--compleasm-library` for pre-downloaded lineage files to avoid runtime downloads. Both compleasm runs are submitted in parallel via the executor. Results are stored as `CompleasmResult` dataclass fields on `AssemblyResult` (`compleasm_chrs`, `compleasm_non_chrs`) and included in `comparison_summary.tsv` columns (`compleasm_lineage`, `compleasm_chrs_S/D/F/I/M`, `compleasm_non_chrs_S/D/F/I/M`). The detection module is in `detection/compleasm.py`, which parses compleasm's `summary.txt` output format. Cached results are reused if the output directory already contains a `summary.txt`.
+
 ## Testing Philosophy
 
-Tests are in `tests/` directory (7 test files, ~150 tests):
+Tests are in `tests/` directory (7 test files, ~165 tests):
 - Unit tests: Test individual functions with minimal dependencies
 - Integration tests: Marked with `@pytest.mark.integration`, may download large reference files (Arabidopsis TAIR10)
 
@@ -290,6 +295,7 @@ Tests are in `tests/` directory (7 test files, ~150 tests):
 - rasusa - FASTQ downsampling
 - centrifuger - contaminant detection
 - infernal (cmscan) - structure-based rRNA annotation with Rfam models (rDNA consensus building; enabled by default, skip with --skip-rdna-consensus)
+- compleasm - BUSCO completeness evaluation (requires `--compleasm-lineage`; skip with `--skip-compleasm`)
 - Rscript (with ggplot2, dplyr, etc.) - visualization
 
 **Python packages**:
@@ -300,7 +306,7 @@ All external tools are called via subprocess with proper error handling. Use `ut
 
 ## Output Files Reference
 
-**FASTA outputs**: `*.chrs.fasta`, `*.organelles.fasta`, `*.rdna.fasta`, `*.contaminants.fasta`, `*.debris.fasta`, `*.unclassified.fasta`
+**FASTA outputs**: `*.chrs.fasta`, `*.organelles.fasta`, `*.rdna.fasta`, `*.contaminants.fasta`, `*.debris.fasta`, `*.unclassified.fasta`, `*.non_chrs.fasta` (combined non-chromosome contigs, produced when compleasm is enabled)
 
 **TSV outputs**:
 - `*.contig_summary.tsv` - Per-contig classification with all evidence fields
