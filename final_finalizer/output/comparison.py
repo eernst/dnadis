@@ -368,18 +368,8 @@ def write_comparison_summary_tsv(
                 _fmt(r.mean_chrom_depth, ".2f"),
                 # Compleasm columns
                 r.compleasm_chrs.lineage if r.compleasm_chrs else "",
-                str(r.compleasm_chrs.n_total) if r.compleasm_chrs else "",
-                _fmt(r.compleasm_chrs.pct_single, ".2f") if r.compleasm_chrs else "",
-                _fmt(r.compleasm_chrs.pct_duplicated, ".2f") if r.compleasm_chrs else "",
-                _fmt(r.compleasm_chrs.pct_fragmented, ".2f") if r.compleasm_chrs else "",
-                _fmt(r.compleasm_chrs.pct_interspersed, ".2f") if r.compleasm_chrs else "",
-                _fmt(r.compleasm_chrs.pct_missing, ".2f") if r.compleasm_chrs else "",
-                str(r.compleasm_non_chrs.n_total) if r.compleasm_non_chrs else "",
-                _fmt(r.compleasm_non_chrs.pct_single, ".2f") if r.compleasm_non_chrs else "",
-                _fmt(r.compleasm_non_chrs.pct_duplicated, ".2f") if r.compleasm_non_chrs else "",
-                _fmt(r.compleasm_non_chrs.pct_fragmented, ".2f") if r.compleasm_non_chrs else "",
-                _fmt(r.compleasm_non_chrs.pct_interspersed, ".2f") if r.compleasm_non_chrs else "",
-                _fmt(r.compleasm_non_chrs.pct_missing, ".2f") if r.compleasm_non_chrs else "",
+                *(r.compleasm_chrs.tsv_fields() if r.compleasm_chrs else [""] * 6),
+                *(r.compleasm_non_chrs.tsv_fields() if r.compleasm_non_chrs else [""] * 6),
             ]
             fh.write("\t".join(row) + "\n")
 

@@ -1223,11 +1223,9 @@ def run_assembly(
     compleasm_chrs_result = None
     compleasm_non_chrs_result = None
 
-    can_compleasm = (
-        getattr(args, 'compleasm_lineage', None)
-        and not getattr(args, 'skip_compleasm', False)
-    )
+    can_compleasm = args.compleasm_lineage and not args.skip_compleasm
     if can_compleasm:
+        import shutil
         logger.phase("Phase 17: Compleasm (BUSCO completeness) evaluation")
 
         chrs_fasta = Path(str(outprefix) + ".chrs.fasta")
@@ -1235,17 +1233,16 @@ def run_assembly(
         # Build non_chrs.fasta by concatenating all non-chromosome FASTAs
         non_chrs_fasta = Path(str(outprefix) + ".non_chrs.fasta")
         non_chr_suffixes = [".debris.fasta", ".unclassified.fasta", ".contaminants.fasta"]
-        if not non_chrs_fasta.exists():
+        if not file_exists_and_valid(non_chrs_fasta):
             with non_chrs_fasta.open("wb") as out_fh:
                 for suffix in non_chr_suffixes:
                     src = Path(str(outprefix) + suffix)
-                    if src.exists() and src.stat().st_size > 0:
-                        out_fh.write(src.read_bytes())
-            if non_chrs_fasta.stat().st_size == 0:
+                    if file_exists_and_valid(src):
+                        with src.open("rb") as in_fh:
+                            shutil.copyfileobj(in_fh, out_fh)
+            if not file_exists_and_valid(non_chrs_fasta):
                 logger.info("No non-chromosome contigs for compleasm")
 
-        compleasm_lineage = args.compleasm_lineage
-        compleasm_library = getattr(args, 'compleasm_library', None)
         compleasm_threads = args.threads
 
         if use_cluster:
@@ -1260,18 +1257,18 @@ def run_assembly(
             run_compleasm,
             fasta=chrs_fasta,
             output_dir=work_dir / "compleasm_chrs",
-            lineage=compleasm_lineage,
+            lineage=args.compleasm_lineage,
             threads=compleasm_threads,
-            library_path=compleasm_library,
+            library_path=args.compleasm_library,
             resource_spec=compleasm_spec if use_cluster else None,
         )
         compleasm_non_chrs_future = executor.submit(
             run_compleasm,
             fasta=non_chrs_fasta,
             output_dir=work_dir / "compleasm_non_chrs",
-            lineage=compleasm_lineage,
+            lineage=args.compleasm_lineage,
             threads=compleasm_threads,
-            library_path=compleasm_library,
+            library_path=args.compleasm_library,
             resource_spec=compleasm_spec if use_cluster else None,
         )
 
@@ -1279,21 +1276,11 @@ def run_assembly(
         compleasm_non_chrs_result = compleasm_non_chrs_future.result()
 
         if compleasm_chrs_result:
-            logger.done(
-                f"Compleasm chrs:     S:{compleasm_chrs_result.pct_single:.1f}% "
-                f"D:{compleasm_chrs_result.pct_duplicated:.1f}% "
-                f"F:{compleasm_chrs_result.pct_fragmented:.1f}% "
-                f"M:{compleasm_chrs_result.pct_missing:.1f}%"
-            )
+            logger.done(f"Compleasm chrs:     {compleasm_chrs_result.summary_line()}")
         if compleasm_non_chrs_result:
-            logger.done(
-                f"Compleasm non-chrs: S:{compleasm_non_chrs_result.pct_single:.1f}% "
-                f"D:{compleasm_non_chrs_result.pct_duplicated:.1f}% "
-                f"F:{compleasm_non_chrs_result.pct_fragmented:.1f}% "
-                f"M:{compleasm_non_chrs_result.pct_missing:.1f}%"
-            )
+            logger.done(f"Compleasm non-chrs: {compleasm_non_chrs_result.summary_line()}")
     else:
-        if getattr(args, 'compleasm_lineage', None):
+        if args.compleasm_lineage:
             logger.info("Phase 17: Skipping compleasm (--skip-compleasm)")
         else:
             logger.info("Phase 17: Skipping compleasm (no --compleasm-lineage specified)")

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 from final_finalizer.models import CompleasmResult
-from final_finalizer.utils.io_utils import have_exe
+from final_finalizer.utils.io_utils import file_exists_and_valid, have_exe
 from final_finalizer.utils.logging_config import get_logger
 
 logger = get_logger("compleasm")
@@ -37,7 +37,7 @@ def parse_compleasm_summary(summary_path: Path) -> Optional[CompleasmResult]:
     Returns:
         CompleasmResult or None if the file cannot be parsed.
     """
-    if not summary_path.exists():
+    if not file_exists_and_valid(summary_path):
         logger.warning(f"Compleasm summary not found: {summary_path}")
         return None
 
@@ -102,14 +102,14 @@ def run_compleasm(
         logger.warning("compleasm not found in PATH, skipping BUSCO evaluation")
         return None
 
-    if not fasta.exists() or fasta.stat().st_size == 0:
+    if not file_exists_and_valid(fasta):
         logger.info(f"Skipping compleasm: input FASTA empty or missing ({fasta.name})")
         return None
 
     summary_path = output_dir / "summary.txt"
 
     # Re-use cached result if available
-    if summary_path.exists():
+    if file_exists_and_valid(summary_path):
         logger.info(f"Reusing cached compleasm result: {summary_path}")
         return parse_compleasm_summary(summary_path)
 

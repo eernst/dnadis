@@ -388,7 +388,11 @@ class RdnaArray:
 
 @dataclass
 class CompleasmResult:
-    """BUSCO completeness assessment from compleasm."""
+    """BUSCO completeness assessment from compleasm.
+
+    Percentages are stored as parsed from compleasm's output rather than
+    derived from counts, to preserve compleasm's own rounding.
+    """
     lineage: str
     n_total: int          # N (total BUSCOs in lineage)
     n_single: int         # S count
@@ -402,6 +406,26 @@ class CompleasmResult:
     pct_interspersed: float
     pct_missing: float
     summary_path: Path
+
+    def summary_line(self) -> str:
+        """One-line summary string for logging (e.g. 'S:85.3% D:7.0% F:3.9% M:3.1%')."""
+        return (
+            f"S:{self.pct_single:.1f}% D:{self.pct_duplicated:.1f}% "
+            f"F:{self.pct_fragmented:.1f}% M:{self.pct_missing:.1f}%"
+        )
+
+    def tsv_fields(self) -> list[str]:
+        """Return [N, S%, D%, F%, I%, M%] as formatted strings for TSV output."""
+        def _fmt(val: float) -> str:
+            return f"{val:.2f}"
+        return [
+            str(self.n_total),
+            _fmt(self.pct_single),
+            _fmt(self.pct_duplicated),
+            _fmt(self.pct_fragmented),
+            _fmt(self.pct_interspersed),
+            _fmt(self.pct_missing),
+        ]
 
 
 @dataclass
