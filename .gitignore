@@ -42,3 +42,6 @@ data/Ler.chr.all.v2.0.fasta.gz
 *.cm.i1i
 *.cm.i1m
 *.cm.i1p
+
+# Compleasm/BUSCO lineage downloads
+mb_downloads/
