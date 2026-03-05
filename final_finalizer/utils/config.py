@@ -140,6 +140,11 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
         "scaffold": "scaffold",
         "scaffold_gap_size": "scaffold_gap_size",
     },
+    "compleasm": {
+        "compleasm_lineage": "compleasm_lineage",
+        "compleasm_library": "compleasm_library",
+        "skip_compleasm": "skip_compleasm",
+    },
     "multi_assembly": {
         "fofn": "fofn",
         "assembly_dir": "assembly_dir",

@@ -150,6 +150,7 @@ from final_finalizer.detection.rdna import (
 )
 from final_finalizer.detection.debris import detect_chromosome_debris
 from final_finalizer.detection.contaminant import detect_contaminants
+from final_finalizer.detection.compleasm import run_compleasm
 from final_finalizer.classification.classifier import (
     classify_all_contigs,
     classify_debris_and_unclassified,
@@ -1218,6 +1219,85 @@ def run_assembly(
     for cat, count in sorted(clf_counts.items()):
         logger.info(f"       {cat}: {count}")
 
+    # --- Phase 17: Compleasm (BUSCO) evaluation ---
+    compleasm_chrs_result = None
+    compleasm_non_chrs_result = None
+
+    can_compleasm = (
+        getattr(args, 'compleasm_lineage', None)
+        and not getattr(args, 'skip_compleasm', False)
+    )
+    if can_compleasm:
+        logger.phase("Phase 17: Compleasm (BUSCO completeness) evaluation")
+
+        chrs_fasta = Path(str(outprefix) + ".chrs.fasta")
+
+        # Build non_chrs.fasta by concatenating all non-chromosome FASTAs
+        non_chrs_fasta = Path(str(outprefix) + ".non_chrs.fasta")
+        non_chr_suffixes = [".debris.fasta", ".unclassified.fasta", ".contaminants.fasta"]
+        if not non_chrs_fasta.exists():
+            with non_chrs_fasta.open("wb") as out_fh:
+                for suffix in non_chr_suffixes:
+                    src = Path(str(outprefix) + suffix)
+                    if src.exists() and src.stat().st_size > 0:
+                        out_fh.write(src.read_bytes())
+            if non_chrs_fasta.stat().st_size == 0:
+                logger.info("No non-chromosome contigs for compleasm")
+
+        compleasm_lineage = args.compleasm_lineage
+        compleasm_library = getattr(args, 'compleasm_library', None)
+        compleasm_threads = args.threads
+
+        if use_cluster:
+            from final_finalizer.utils.resource_estimation import estimate_compleasm_resources
+            compleasm_spec = estimate_compleasm_resources(chrs_fasta, cluster_config)
+            compleasm_threads = _job_threads(compleasm_spec)
+        else:
+            compleasm_spec = ResourceSpec()
+
+        # Submit both compleasm runs in parallel
+        compleasm_chrs_future = executor.submit(
+            run_compleasm,
+            fasta=chrs_fasta,
+            output_dir=work_dir / "compleasm_chrs",
+            lineage=compleasm_lineage,
+            threads=compleasm_threads,
+            library_path=compleasm_library,
+            resource_spec=compleasm_spec if use_cluster else None,
+        )
+        compleasm_non_chrs_future = executor.submit(
+            run_compleasm,
+            fasta=non_chrs_fasta,
+            output_dir=work_dir / "compleasm_non_chrs",
+            lineage=compleasm_lineage,
+            threads=compleasm_threads,
+            library_path=compleasm_library,
+            resource_spec=compleasm_spec if use_cluster else None,
+        )
+
+        compleasm_chrs_result = compleasm_chrs_future.result()
+        compleasm_non_chrs_result = compleasm_non_chrs_future.result()
+
+        if compleasm_chrs_result:
+            logger.done(
+                f"Compleasm chrs:     S:{compleasm_chrs_result.pct_single:.1f}% "
+                f"D:{compleasm_chrs_result.pct_duplicated:.1f}% "
+                f"F:{compleasm_chrs_result.pct_fragmented:.1f}% "
+                f"M:{compleasm_chrs_result.pct_missing:.1f}%"
+            )
+        if compleasm_non_chrs_result:
+            logger.done(
+                f"Compleasm non-chrs: S:{compleasm_non_chrs_result.pct_single:.1f}% "
+                f"D:{compleasm_non_chrs_result.pct_duplicated:.1f}% "
+                f"F:{compleasm_non_chrs_result.pct_fragmented:.1f}% "
+                f"M:{compleasm_non_chrs_result.pct_missing:.1f}%"
+            )
+    else:
+        if getattr(args, 'compleasm_lineage', None):
+            logger.info("Phase 17: Skipping compleasm (--skip-compleasm)")
+        else:
+            logger.info("Phase 17: Skipping compleasm (no --compleasm-lineage specified)")
+
     # Build assembly result for cross-assembly comparison
     from final_finalizer.output.comparison import build_assembly_result
     result = build_assembly_result(
@@ -1243,6 +1323,8 @@ def run_assembly(
         rdna_annotations_tsv=rdna_annotations_tsv,
         rdna_arrays_tsv=rdna_arrays_tsv_path,
         per_subgenome_chrs=per_sg_chrs,
+        compleasm_chrs=compleasm_chrs_result,
+        compleasm_non_chrs=compleasm_non_chrs_result,
     )
 
     if not args.skip_plot:
@@ -1308,6 +1390,7 @@ def main():
             chr_debris_min_identity=0.90, contaminant_min_score=1000, contaminant_min_coverage=0.50,
             debris_min_cov=0.50, debris_min_protein_hits=2, preset="asm20", kmer=None, window=None, aln_minlen=10000,
             scaffold=False, scaffold_gap_size=100,
+            compleasm_lineage=None, compleasm_library=None, skip_compleasm=False,
             fofn=None, assembly_dir=None,
             cluster=False, max_threads_dist=64, max_mem_dist=128.0,
             max_time_dist=720, partition="cpuq", qos="",
@@ -1731,6 +1814,23 @@ def main():
     scaffold_grp.add_argument(
         "--scaffold-gap-size", type=int, default=100,
         help="Number of Ns between contigs in scaffolded output [100]",
+    )
+
+    # =========================================================================
+    # Compleasm (BUSCO completeness) options
+    # =========================================================================
+    compleasm_grp = p.add_argument_group("Compleasm (BUSCO) options")
+    compleasm_grp.add_argument(
+        "--compleasm-lineage", type=str, default=None,
+        help="BUSCO lineage for compleasm evaluation (e.g., eukaryota, viridiplantae, embryophyta). Required for compleasm to run.",
+    )
+    compleasm_grp.add_argument(
+        "--compleasm-library", type=str, default=None,
+        help="Path to pre-downloaded compleasm lineage files [auto-download]",
+    )
+    compleasm_grp.add_argument(
+        "--skip-compleasm", action="store_true",
+        help="Skip compleasm even if --compleasm-lineage is specified",
     )
 
     args = p.parse_args()

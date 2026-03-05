@@ -174,6 +174,25 @@ def estimate_pairwise_resources(
     return clamp_resources(spec, config)
 
 
+def estimate_compleasm_resources(
+    fasta_path: Path,
+    config: ClusterConfig,
+) -> ResourceSpec:
+    """Estimate resources for compleasm BUSCO evaluation (phase 17)."""
+    qry_bp = _estimate_genome_bp_from_filesize(fasta_path)
+    # compleasm/miniprot: memory scales modestly with genome size
+    mem_gb = max(4.0, qry_bp * 4 / 1e9 + 2.0)
+    time_min = _scale_time(30, qry_bp)
+
+    spec = ResourceSpec(
+        cores=min(16, config.max_threads),
+        memory_gb=mem_gb,
+        time_minutes=time_min,
+        job_name="compleasm",
+    )
+    return clamp_resources(spec, config)
+
+
 def estimate_depth_resources(
     reads_path: Path,
     assembly_path: Path,

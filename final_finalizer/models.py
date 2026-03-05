@@ -387,6 +387,24 @@ class RdnaArray:
 
 
 @dataclass
+class CompleasmResult:
+    """BUSCO completeness assessment from compleasm."""
+    lineage: str
+    n_total: int          # N (total BUSCOs in lineage)
+    n_single: int         # S count
+    n_duplicated: int     # D count
+    n_fragmented: int     # F count
+    n_interspersed: int   # I count
+    n_missing: int        # M count
+    pct_single: float
+    pct_duplicated: float
+    pct_fragmented: float
+    pct_interspersed: float
+    pct_missing: float
+    summary_path: Path
+
+
+@dataclass
 class DepthStats:
     """Read depth statistics for a contig.
 
@@ -493,3 +511,7 @@ class AssemblyResult:
 
     # Per-subgenome chrs.fasta paths (polyploid references)
     per_subgenome_chrs: Dict[str, Path] = field(default_factory=dict)
+
+    # Compleasm (BUSCO) completeness results
+    compleasm_chrs: Optional['CompleasmResult'] = None
+    compleasm_non_chrs: Optional['CompleasmResult'] = None
