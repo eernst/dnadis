@@ -19,7 +19,7 @@
 
   * [x] Add compleasm S/D/F/I/M columns to `comparison_summary.tsv` (numeric counts + percentages)
 
-  * [ ] Plot in the comparison Rmd as a horizontal 100% stacked bar with the default BUSCO/compleasm color scheme
+  * [x] Plot in the comparison Rmd as a horizontal 100% stacked bar with the default BUSCO/compleasm color scheme
 
 ## Mammalian, other non-plant genome support
 

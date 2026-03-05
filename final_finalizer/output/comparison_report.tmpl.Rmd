@@ -478,6 +478,95 @@ if (has_per_asm) {
 }
 ```
 
+```{r compleasm_setup, include=FALSE}
+# Check if compleasm data is available in comparison TSV
+has_compleasm <- "compleasm_chrs_S" %in% names(comp_df) &&
+  any(!is.na(comp_df$compleasm_chrs_S) & comp_df$compleasm_chrs_S != "", na.rm = TRUE)
+```
+
+`r if (has_compleasm) "## BUSCO Completeness" else ""`
+
+```{r compleasm_bar, eval=has_compleasm, fig.width=10, fig.height=max(3, n_asm * 1.2 + 1.5)}
+# Standard BUSCO/compleasm color scheme
+busco_colors <- c(
+  "Single-copy"    = "#33a2c4",
+  "Duplicated"     = "#225ea8",
+  "Fragmented"     = "#fdae61",
+  "Interspersed"   = "#fee08b",
+  "Missing"        = "#d73027"
+)
+busco_levels <- names(busco_colors)
+
+# Build long-format data for both chrs and non-chrs
+busco_long <- bind_rows(
+  comp_df %>%
+    transmute(
+      assembly,
+      dataset = "Chromosomes",
+      `Single-copy`  = as.numeric(compleasm_chrs_S),
+      Duplicated     = as.numeric(compleasm_chrs_D),
+      Fragmented     = as.numeric(compleasm_chrs_F),
+      Interspersed   = as.numeric(compleasm_chrs_I),
+      Missing        = as.numeric(compleasm_chrs_M)
+    ),
+  comp_df %>%
+    transmute(
+      assembly,
+      dataset = "Non-chromosomes",
+      `Single-copy`  = as.numeric(compleasm_non_chrs_S),
+      Duplicated     = as.numeric(compleasm_non_chrs_D),
+      Fragmented     = as.numeric(compleasm_non_chrs_F),
+      Interspersed   = as.numeric(compleasm_non_chrs_I),
+      Missing        = as.numeric(compleasm_non_chrs_M)
+    )
+) %>%
+  filter(!is.na(`Single-copy`)) %>%
+  pivot_longer(cols = all_of(busco_levels), names_to = "category", values_to = "pct") %>%
+  mutate(
+    category = factor(category, levels = rev(busco_levels)),
+    assembly = factor(assembly, levels = rev(asm_names)),
+    dataset  = factor(dataset, levels = c("Chromosomes", "Non-chromosomes"))
+  )
+
+if (nrow(busco_long) > 0) {
+  p_busco <- ggplot(busco_long,
+                    aes(x = assembly, y = pct, fill = category)) +
+    geom_col_interactive(
+      aes(tooltip = paste0(assembly, " \u2014 ", dataset, "\n",
+                           category, ": ", sprintf("%.1f%%", pct))),
+      width = 0.7, position = "stack"
+    ) +
+    scale_fill_manual(values = busco_colors, drop = FALSE, name = NULL) +
+    coord_flip() +
+    facet_wrap(~ dataset) +
+    labs(x = NULL, y = "BUSCO genes (%)") +
+    scale_y_continuous(limits = c(0, 100), expand = c(0, 0)) +
+    theme_minimal(base_size = base_font_pt, base_family = base_family) +
+    axis_theme +
+    theme(legend.position = "bottom",
+          panel.grid.major.y = element_blank(),
+          strip.text = element_text(size = base_font_pt, family = base_family,
+                                    face = "bold"))
+  p_busco <- apply_legend_theme(p_busco)
+
+  pdf_busco <- paste0(params$out_prefix, ".busco_completeness.pdf")
+  save_pdf(pdf_busco, p_busco,
+           width = 7.2, height = max(3, n_asm * 1.2 + 1.5))
+  girafe_styled(ggobj = p_busco,
+                width_svg = 10,
+                height_svg = max(3, n_asm * 1.2 + 1.5))
+}
+```
+
+```{r compleasm_note, eval=has_compleasm, results='asis'}
+lineage_name <- comp_df$compleasm_lineage[!is.na(comp_df$compleasm_lineage) &
+                                           comp_df$compleasm_lineage != ""][1]
+cat(sprintf('<div class="note-box">Lineage: <strong>%s</strong>. ',
+            lineage_name))
+cat("Chromosomes = chrs.fasta (chromosome-assigned contigs); ")
+cat("Non-chromosomes = debris + unclassified + contaminants.</div>\n")
+```
+
 
 # 2. Chromosome Completeness {.tabset}
 
