@@ -1903,54 +1903,40 @@ has_any_rdna <- any(comp_df$n_rdna > 0, na.rm = TRUE)
 cat("## Summary\n\n")
 ```
 
-```{r rdna_summary, eval=(has_per_asm && exists("has_any_rdna") && has_any_rdna), fig.width=10, fig.height=max(3, n_asm * 0.6 + 1.5)}
-# rDNA summary from per-assembly data
-rdna_summary <- all_summary_df %>%
-  filter(classification == "rDNA") %>%
-  group_by(assembly) %>%
-  summarise(
-    n_rdna_contigs = n(),
-    total_rdna_bp = sum(length, na.rm = TRUE),
-    .groups = "drop"
-  ) %>%
-  mutate(
-    assembly = factor(assembly, levels = rev(asm_names)),
-    total_rdna_mb = total_rdna_bp / 1e6
-  )
-
-if (nrow(rdna_summary) > 0) {
-  p_rdna <- ggplot(rdna_summary,
-                   aes(x = total_rdna_mb, y = assembly, fill = assembly)) +
-    geom_col_interactive(
-      aes(tooltip = paste0(assembly, "\n",
-                           n_rdna_contigs, " rDNA contigs\n",
-                           sprintf("%.2f Mb", total_rdna_mb))),
-      width = 0.6
-    ) +
-    scale_fill_manual(values = asm_colors, guide = "none") +
-    labs(x = "Total rDNA (Mb)", y = NULL) +
-    theme_minimal(base_size = base_font_pt, base_family = base_family) +
-    axis_theme +
-    theme(panel.grid.major.y = element_blank())
-
-  girafe_styled(ggobj = p_rdna,
-                height_svg = max(3, n_asm * 0.6 + 1.5))
-}
-
-# Table
+```{r rdna_summary, eval=(has_per_asm && exists("has_any_rdna") && has_any_rdna)}
 rdna_tbl <- comp_df %>%
   transmute(
     Assembly = assembly,
-    `rDNA contigs` = n_rdna,
-    `Total rDNA (Mb)` = round(rdna_bp / 1e6, 2),
-    `rDNA arrays` = n_rdna_arrays
+    rdna_mb = round(rdna_bp / 1e6, 2),
+    `Contigs` = n_rdna,
+    `Arrays` = n_rdna_arrays
   )
 
+max_rdna_mb <- max(rdna_tbl$rdna_mb, na.rm = TRUE)
+
 rdna_tbl %>%
+  rowwise() %>%
+  mutate(
+    `Total (Mb)` = {
+      pct <- if (max_rdna_mb > 0) min(100, rdna_mb / max_rdna_mb * 100) else 0
+      paste0('<div style="background: linear-gradient(to right, rgba(70,130,180,0.3) ',
+             round(pct, 1), '%, transparent ', round(pct, 1),
+             '%); padding: 2px 6px; border-radius: 2px; white-space: nowrap;">',
+             sprintf("%.2f", rdna_mb), '</div>')
+    }
+  ) %>%
+  ungroup() %>%
+  select(Assembly, `Total (Mb)`, Contigs, Arrays) %>%
   gt() %>%
-  gt_theme() %>%
-  tab_header(title = "rDNA Summary") %>%
-  cols_align(align = "right", columns = where(is.numeric))
+  fmt(columns = `Total (Mb)`, fns = function(x) lapply(x, html)) %>%
+  cols_align(align = "right", columns = c(Contigs, Arrays)) %>%
+  cols_width(`Total (Mb)` ~ px(140)) %>%
+  tab_style(
+    style = css(vertical_align = "middle"),
+    locations = cells_body()
+  ) %>%
+  tab_header(title = md("**rDNA Summary**")) %>%
+  gt_theme()
 ```
 
 ```{r rdna_arrays_header, eval=(has_per_asm && exists("has_any_rdna") && has_any_rdna && has_rdna_arrays), results='asis'}
@@ -1972,14 +1958,14 @@ arr_tbl <- all_rdna_arrays_df %>%
 arr_tbl %>%
   gt() %>%
   gt_theme() %>%
-  tab_header(title = "rDNA Array Details") %>%
+  tab_header(title = md("**rDNA Array Details**")) %>%
   cols_align(align = "right", columns = c(`N copies`, `Total bp`))
 ```
 
 
 `r if (has_per_asm && any(comp_df$chrC_found == "yes" | comp_df$chrM_found == "yes", na.rm = TRUE)) "# 7. Organelle Comparison" else ""`
 
-```{r organelle_section, eval=(has_per_asm && any(comp_df$chrC_found == "yes" | comp_df$chrM_found == "yes", na.rm = TRUE)), fig.width=10, fig.height=max(3, n_asm * 0.6 + 1.5)}
+```{r organelle_section, eval=(has_per_asm && any(comp_df$chrC_found == "yes" | comp_df$chrM_found == "yes", na.rm = TRUE))}
 # Extract organelle contigs from per-assembly data
 org_df <- all_summary_df %>%
   filter(classification == "organelle_complete") %>%
@@ -1998,122 +1984,128 @@ org_df <- all_summary_df %>%
     .groups = "drop"
   ) %>%
   mutate(
-    assembly = factor(assembly, levels = rev(asm_names)),
+    assembly = as.character(assembly),
     total_mb = total_bp / 1e6
   )
 
-if (nrow(org_df) > 0) {
-  org_colors <- c("chrC" = oi[3], "chrM" = oi[1], "Other" = oi[8])
-
-  p_org <- ggplot(org_df, aes(x = total_mb, y = assembly, fill = org_type)) +
-    geom_col_interactive(
-      aes(tooltip = paste0(assembly, "\n", org_type, "\n",
-                           n_contigs, " contig(s)\n",
-                           sprintf("%.3f Mb", total_mb), "\n",
-                           contigs)),
-      position = "dodge", width = 0.6
-    ) +
-    scale_fill_manual(values = org_colors, name = NULL) +
-    labs(x = "Organelle size (Mb)", y = NULL) +
-    theme_minimal(base_size = base_font_pt, base_family = base_family) +
-    axis_theme +
-    theme(legend.position = "bottom", panel.grid.major.y = element_blank())
-  p_org <- apply_legend_theme(p_org)
-
-  girafe_styled(ggobj = p_org,
-                height_svg = max(3, n_asm * 0.6 + 1.5))
-}
-
-# Organelle table
-org_wide <- org_df %>%
-  select(assembly, org_type, n_contigs, total_bp, contigs) %>%
-  pivot_wider(names_from = org_type,
-              values_from = c(n_contigs, total_bp, contigs),
-              values_fill = list(n_contigs = 0, total_bp = 0, contigs = ""))
-
-org_tbl <- comp_df %>%
-  transmute(
-    Assembly = assembly,
-    chrC = ifelse(chrC_found == "yes", "\u2713", "\u2014"),
-    chrM = ifelse(chrM_found == "yes", "\u2713", "\u2014")
+# Build wide table with bar cells for chrC and chrM
+org_wide <- comp_df %>%
+  transmute(Assembly = assembly) %>%
+  left_join(
+    org_df %>% filter(org_type == "chrC") %>%
+      transmute(Assembly = assembly, chrC_bp = total_bp, chrC_contigs = contigs),
+    by = "Assembly"
+  ) %>%
+  left_join(
+    org_df %>% filter(org_type == "chrM") %>%
+      transmute(Assembly = assembly, chrM_bp = total_bp, chrM_contigs = contigs),
+    by = "Assembly"
+  ) %>%
+  mutate(
+    chrC_bp = replace_na(chrC_bp, 0),
+    chrM_bp = replace_na(chrM_bp, 0),
+    chrC_contigs = replace_na(chrC_contigs, "\u2014"),
+    chrM_contigs = replace_na(chrM_contigs, "\u2014")
   )
 
-# Try to enrich with contig details
-if (nrow(org_df) > 0) {
-  org_detail <- org_df %>%
-    mutate(assembly = as.character(assembly)) %>%
-    select(assembly, org_type, contigs, total_mb) %>%
-    pivot_wider(names_from = org_type,
-                values_from = c(contigs, total_mb),
-                values_fill = list(contigs = "\u2014", total_mb = 0))
+max_chrC_bp <- max(org_wide$chrC_bp, na.rm = TRUE)
+max_chrM_bp <- max(org_wide$chrM_bp, na.rm = TRUE)
 
-  detail_cols <- names(org_detail)
-  org_display <- org_detail %>%
-    transmute(
-      Assembly = assembly,
-      `chrC contig` = if ("contigs_chrC" %in% detail_cols) contigs_chrC else "\u2014",
-      `chrC (Mb)` = if ("total_mb_chrC" %in% detail_cols)
-                      sprintf("%.3f", total_mb_chrC) else "\u2014",
-      `chrM contig` = if ("contigs_chrM" %in% detail_cols) contigs_chrM else "\u2014",
-      `chrM (Mb)` = if ("total_mb_chrM" %in% detail_cols)
-                      sprintf("%.3f", total_mb_chrM) else "\u2014"
-    )
+# chrM unit: Kb if max >= 1 Mb, else plain bp with commas
+chrM_use_kb <- max_chrM_bp >= 1e6
+chrM_col_label <- if (chrM_use_kb) "Size (Kb)" else "Size (bp)"
 
-  org_display %>%
-    gt() %>%
-    gt_theme() %>%
-    tab_header(title = "Organelle Summary") %>%
-    tab_spanner(label = "Chloroplast", columns = c(`chrC contig`, `chrC (Mb)`)) %>%
-    tab_spanner(label = "Mitochondria", columns = c(`chrM contig`, `chrM (Mb)`))
-} else {
-  org_tbl %>%
-    gt() %>%
-    gt_theme() %>%
-    tab_header(title = "Organelle Summary")
-}
+# Chloroplast color: green-tinted, Mitochondria: red-tinted
+chrC_rgba <- "rgba(76,153,0,0.25)"
+chrM_rgba <- "rgba(180,70,70,0.25)"
+
+org_gt_df <- org_wide %>%
+  rowwise() %>%
+  mutate(
+    chrC_size = if (chrC_bp > 0) {
+      pct <- min(100, chrC_bp / max_chrC_bp * 100)
+      paste0('<div style="background: linear-gradient(to right, ', chrC_rgba, ' ',
+             round(pct, 1), '%, transparent ', round(pct, 1),
+             '%); padding: 2px 6px; border-radius: 2px; white-space: nowrap;">',
+             formatC(chrC_bp, format = "d", big.mark = ","), '</div>')
+    } else "\u2014",
+    chrM_size = if (chrM_bp > 0) {
+      pct <- min(100, chrM_bp / max_chrM_bp * 100)
+      val_text <- if (chrM_use_kb) {
+        formatC(round(chrM_bp / 1e3), format = "d", big.mark = ",")
+      } else {
+        formatC(chrM_bp, format = "d", big.mark = ",")
+      }
+      paste0('<div style="background: linear-gradient(to right, ', chrM_rgba, ' ',
+             round(pct, 1), '%, transparent ', round(pct, 1),
+             '%); padding: 2px 6px; border-radius: 2px; white-space: nowrap;">',
+             val_text, '</div>')
+    } else "\u2014",
+    chrC_contig = chrC_contigs,
+    chrM_contig = chrM_contigs
+  ) %>%
+  ungroup() %>%
+  select(Assembly, chrC_contig, chrC_size, chrM_contig, chrM_size)
+
+# Dynamic column labels
+chrC_size_label <- "Size (bp)"
+
+org_gt_df %>%
+  gt() %>%
+  fmt(columns = c(chrC_size, chrM_size), fns = function(x) lapply(x, html)) %>%
+  cols_label(
+    chrC_contig = "Contig", chrC_size = chrC_size_label,
+    chrM_contig = "Contig", chrM_size = chrM_col_label
+  ) %>%
+  cols_width(chrC_size ~ px(140), chrM_size ~ px(140)) %>%
+  tab_spanner(label = "Chloroplast", columns = c(chrC_contig, chrC_size)) %>%
+  tab_spanner(label = "Mitochondria", columns = c(chrM_contig, chrM_size)) %>%
+  tab_style(
+    style = css(vertical_align = "middle"),
+    locations = cells_body()
+  ) %>%
+  tab_header(title = md("**Organelle Summary**")) %>%
+  gt_theme()
 ```
 
 
 `r if (has_any_contam) "# 8. Contamination Comparison" else ""`
 
-```{r contamination, eval=has_any_contam, fig.width=10, fig.height=max(3, n_asm * 0.6 + 1.5)}
-contam_data <- comp_df %>%
-  filter(n_contaminants > 0) %>%
-  mutate(assembly = factor(assembly, levels = rev(asm_names)))
-
-p_contam <- ggplot(contam_data, aes(x = assembly, fill = assembly)) +
-  geom_col_interactive(
-    aes(y = contaminant_bp / 1e6,
-        tooltip = paste0(assembly, "\n",
-                         n_contaminants, " contaminants\n",
-                         sprintf("%.2f Mb", contaminant_bp / 1e6), "\n",
-                         n_contaminant_species, " species")),
-    width = 0.6
-  ) +
-  scale_fill_manual(values = asm_colors, guide = "none") +
-  coord_flip() +
-  labs(x = NULL, y = "Contaminant sequence (Mb)") +
-  theme_minimal(base_size = base_font_pt, base_family = base_family) +
-  axis_theme +
-  theme(panel.grid.major.y = element_blank())
-
-girafe_styled(ggobj = p_contam,
-              height_svg = max(3, n_asm * 0.6 + 1.5))
-```
-
-```{r contamination_table, eval=has_any_contam}
-comp_df %>%
+```{r contamination, eval=has_any_contam}
+contam_tbl <- comp_df %>%
   filter(n_contaminants > 0) %>%
   transmute(
     Assembly = assembly,
-    `N contaminants` = n_contaminants,
-    `Contam bp (Mb)` = round(contaminant_bp / 1e6, 2),
-    `Unique species` = n_contaminant_species
+    contam_mb = round(contaminant_bp / 1e6, 2),
+    Contigs = n_contaminants,
+    Species = n_contaminant_species
+  )
+
+max_contam_mb <- max(contam_tbl$contam_mb, na.rm = TRUE)
+
+contam_tbl %>%
+  rowwise() %>%
+  mutate(
+    `Total (Mb)` = {
+      pct <- if (max_contam_mb > 0) min(100, contam_mb / max_contam_mb * 100) else 0
+      paste0('<div style="background: linear-gradient(to right, rgba(180,70,70,0.25) ',
+             round(pct, 1), '%, transparent ', round(pct, 1),
+             '%); padding: 2px 6px; border-radius: 2px; white-space: nowrap;">',
+             sprintf("%.2f", contam_mb), '</div>')
+    }
   ) %>%
+  ungroup() %>%
+  select(Assembly, `Total (Mb)`, Contigs, Species) %>%
   gt() %>%
-  gt_theme() %>%
-  tab_header(title = "Contamination Summary") %>%
-  cols_align(align = "right", columns = where(is.numeric))
+  fmt(columns = `Total (Mb)`, fns = function(x) lapply(x, html)) %>%
+  cols_align(align = "right", columns = c(Contigs, Species)) %>%
+  cols_width(`Total (Mb)` ~ px(140)) %>%
+  tab_style(
+    style = css(vertical_align = "middle"),
+    locations = cells_body()
+  ) %>%
+  tab_header(title = md("**Contamination Summary**")) %>%
+  gt_theme()
 ```
 
 
