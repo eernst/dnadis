@@ -345,6 +345,216 @@ has_rdna_arrays <- !is.null(all_rdna_arrays_df) && nrow(all_rdna_arrays_df) > 0
 
 # 1. Assembly Overview {.tabset}
 
+```{r compleasm_setup, include=FALSE}
+# Check if compleasm data is available in comparison TSV
+has_compleasm <- "compleasm_chrs_S" %in% names(comp_df) &&
+  any(!is.na(comp_df$compleasm_chrs_S) & comp_df$compleasm_chrs_S != "", na.rm = TRUE)
+```
+
+## Classification
+
+```{r classification_table, eval=has_per_asm, results='asis'}
+# Summarise per assembly × classification
+clf_wide <- all_summary_df %>%
+  group_by(assembly, classification) %>%
+  summarise(total_mb = sum(length, na.rm = TRUE) / 1e6,
+            n_contigs = n(), .groups = "drop") %>%
+  tidyr::pivot_wider(
+    names_from = classification,
+    values_from = c(total_mb, n_contigs),
+    values_fill = list(total_mb = 0, n_contigs = 0L)
+  )
+
+# Ensure all classification columns exist (even if no assembly has them)
+for (cl in classification_levels) {
+  mb_col <- paste0("total_mb_", cl)
+  if (!mb_col %in% names(clf_wide)) clf_wide[[mb_col]] <- 0
+}
+
+# Build stacked bar SVG
+clf_colors <- unname(classification_colors[classification_levels])
+
+make_clf_bar <- function(...) {
+  vals <- as.numeric(c(...))
+  total <- sum(vals, na.rm = TRUE)
+  if (is.na(total) || total == 0) return("")
+  bar_w <- 200; bar_h <- 14; x <- 0; rects <- ""
+  for (j in seq_along(vals)) {
+    w <- vals[j] / total * bar_w
+    if (!is.na(w) && w > 0.1) {
+      rects <- paste0(rects, sprintf(
+        '<rect x="%.1f" y="0" width="%.1f" height="%d" fill="%s"/>', x, w, bar_h, clf_colors[j]))
+      x <- x + w
+    }
+  }
+  sprintf('<svg width="%d" height="%d" style="vertical-align:middle" xmlns="http://www.w3.org/2000/svg">%s</svg>',
+          bar_w, bar_h, rects)
+}
+
+mb_cols <- paste0("total_mb_", classification_levels)
+
+clf_table <- clf_wide %>%
+  mutate(assembly = factor(assembly, levels = asm_names)) %>%
+  arrange(assembly) %>%
+  rowwise() %>%
+  mutate(bar = make_clf_bar(!!!syms(mb_cols))) %>%
+  ungroup()
+
+# Select and rename columns for gt
+clf_gt_df <- clf_table %>%
+  select(Assembly = assembly, bar, all_of(mb_cols))
+
+# Short column labels
+clf_short <- c(
+  "chrom_assigned"     = "Chr",
+  "chrom_unassigned"   = "Unasgn",
+  "organelle_complete" = "Org",
+  "organelle_debris"   = "OrgD",
+  "rDNA"               = "rDNA",
+  "contaminant"        = "Cont",
+  "chrom_debris"       = "ChrD",
+  "debris"             = "Debris",
+  "unclassified"       = "Unclf"
+)
+
+col_labels <- setNames(
+  as.list(c("", clf_short[classification_levels])),
+  c("bar", mb_cols)
+)
+
+# Drop columns that are all zero
+nonzero_mb <- mb_cols[sapply(mb_cols, function(col) any(clf_gt_df[[col]] > 0))]
+zero_mb <- setdiff(mb_cols, nonzero_mb)
+
+clf_gt_df %>%
+  { if (length(zero_mb) > 0) select(., -all_of(zero_mb)) else . } %>%
+  gt() %>%
+  fmt(columns = bar, fns = function(x) lapply(x, html)) %>%
+  fmt_number(columns = any_of(nonzero_mb), decimals = 1) %>%
+  cols_label(.list = col_labels[c("bar", nonzero_mb)]) %>%
+  cols_width(bar ~ px(220)) %>%
+  cols_width(any_of(nonzero_mb) ~ px(52)) %>%
+  cols_align(align = "right", columns = any_of(nonzero_mb)) %>%
+  tab_header(
+    title = md("**Classification**"),
+    subtitle = "Mb per category"
+  ) %>%
+  tab_source_note(md(paste0(
+    paste(sapply(classification_levels[classification_levels %in%
+      sub("total_mb_", "", nonzero_mb)], function(cl) {
+      sprintf('<span style="display:inline-block;width:12px;height:12px;background:%s;margin-right:3px;vertical-align:middle;"></span>%s',
+              classification_colors[cl], classification_labels[cl])
+    }), collapse = " &nbsp; ")
+  ))) %>%
+  tab_style(
+    style = css(vertical_align = "middle"),
+    locations = cells_body()
+  ) %>%
+  gt_theme()
+```
+
+`r if (has_compleasm) "## BUSCO Completeness" else ""`
+
+```{r compleasm_table, eval=has_compleasm, results='asis'}
+busco_colors <- c(
+  "Single-copy"  = "#33a2c4",
+  "Duplicated"   = "#225ea8",
+  "Fragmented"   = "#fdae61",
+  "Interspersed" = "#fee08b",
+  "Missing"      = "#d73027"
+)
+
+make_busco_bar <- function(s, d, f, i, m) {
+  vals <- c(s, d, f, i, m)
+  cols <- unname(busco_colors)
+  total <- sum(vals, na.rm = TRUE)
+  if (is.na(total) || total == 0) return("")
+  bar_w <- 140; bar_h <- 14; x <- 0; rects <- ""
+  for (j in seq_along(vals)) {
+    w <- vals[j] / total * bar_w
+    if (!is.na(w) && w > 0) {
+      rects <- paste0(rects, sprintf(
+        '<rect x="%.1f" y="0" width="%.1f" height="%d" fill="%s"/>', x, w, bar_h, cols[j]))
+      x <- x + w
+    }
+  }
+  sprintf('<svg width="%d" height="%d" style="vertical-align:middle" xmlns="http://www.w3.org/2000/svg">%s</svg>',
+          bar_w, bar_h, rects)
+}
+
+# Build wide-format table: one row per assembly, paired columns for chrs / non-chrs
+busco_df <- comp_df %>%
+  transmute(
+    Assembly = assembly,
+    chrs_S = as.numeric(compleasm_chrs_S),
+    chrs_D = as.numeric(compleasm_chrs_D),
+    chrs_F = as.numeric(compleasm_chrs_F),
+    chrs_I = as.numeric(compleasm_chrs_I),
+    chrs_M = as.numeric(compleasm_chrs_M),
+    non_S  = as.numeric(compleasm_non_chrs_S),
+    non_D  = as.numeric(compleasm_non_chrs_D),
+    non_F  = as.numeric(compleasm_non_chrs_F),
+    non_I  = as.numeric(compleasm_non_chrs_I),
+    non_M  = as.numeric(compleasm_non_chrs_M)
+  ) %>%
+  filter(!is.na(chrs_S)) %>%
+  rowwise() %>%
+  mutate(
+    chrs_bar = make_busco_bar(chrs_S, chrs_D, chrs_F, chrs_I, chrs_M),
+    non_bar  = make_busco_bar(non_S, non_D, non_F, non_I, non_M)
+  ) %>%
+  ungroup() %>%
+  mutate(spacer = "") %>%
+  select(Assembly,
+         chrs_bar, chrs_S, chrs_D, chrs_F, chrs_I, chrs_M,
+         spacer,
+         non_bar, non_S, non_D, non_F, non_I, non_M)
+
+lineage_name <- comp_df$compleasm_lineage[!is.na(comp_df$compleasm_lineage) &
+                                           comp_df$compleasm_lineage != ""][1]
+
+busco_df %>%
+  gt() %>%
+  fmt(columns = c(chrs_bar, non_bar), fns = function(x) lapply(x, html)) %>%
+  fmt_number(columns = c(chrs_S, chrs_D, chrs_F, chrs_I, chrs_M,
+                          non_S, non_D, non_F, non_I, non_M),
+             decimals = 1) %>%
+  cols_label(
+    chrs_bar = "", chrs_S = "% S", chrs_D = "D", chrs_F = "F",
+    chrs_I = "I", chrs_M = "M",
+    spacer = "",
+    non_bar = "", non_S = "% S", non_D = "D", non_F = "F",
+    non_I = "I", non_M = "M"
+  ) %>%
+  tab_spanner(label = "Chromosomes",
+              columns = c(chrs_bar, chrs_S, chrs_D, chrs_F, chrs_I, chrs_M)) %>%
+  tab_spanner(label = "Non-chromosomes",
+              columns = c(non_bar, non_S, non_D, non_F, non_I, non_M)) %>%
+  cols_width(c(chrs_bar, non_bar) ~ px(160)) %>%
+  cols_width(c(chrs_S, chrs_D, chrs_F, chrs_I, chrs_M,
+               non_S, non_D, non_F, non_I, non_M) ~ px(48)) %>%
+  cols_width(spacer ~ px(6)) %>%
+  cols_align(align = "right",
+             columns = c(chrs_S, chrs_D, chrs_F, chrs_I, chrs_M,
+                          non_S, non_D, non_F, non_I, non_M)) %>%
+  tab_header(
+    title = md("**BUSCO Completeness**"),
+    subtitle = md(sprintf("Lineage: **%s**", lineage_name))
+  ) %>%
+  tab_source_note(md(paste0(
+    '<span style="display:inline-block;width:12px;height:12px;background:', busco_colors[1], ';margin-right:3px;vertical-align:middle;"></span>Single-copy &nbsp; ',
+    '<span style="display:inline-block;width:12px;height:12px;background:', busco_colors[2], ';margin-right:3px;vertical-align:middle;"></span>Duplicated &nbsp; ',
+    '<span style="display:inline-block;width:12px;height:12px;background:', busco_colors[3], ';margin-right:3px;vertical-align:middle;"></span>Fragmented &nbsp; ',
+    '<span style="display:inline-block;width:12px;height:12px;background:', busco_colors[4], ';margin-right:3px;vertical-align:middle;"></span>Interspersed &nbsp; ',
+    '<span style="display:inline-block;width:12px;height:12px;background:', busco_colors[5], ';margin-right:3px;vertical-align:middle;"></span>Missing'
+  ))) %>%
+  tab_style(
+    style = css(vertical_align = "middle"),
+    locations = cells_body()
+  ) %>%
+  gt_theme()
+```
+
 ## Summary Table
 
 ```{r overview_table}
@@ -381,46 +591,6 @@ tbl %>%
   tab_spanner(label = "Other", columns = c(Contaminants, rDNA, chrC, chrM))
 ```
 
-## Classification Distribution
-
-```{r classification_bar, fig.width=10, fig.height=max(3, n_asm * 0.8 + 1.5)}
-if (has_per_asm) {
-  clf_data <- all_summary_df %>%
-    group_by(assembly, classification) %>%
-    summarise(total_bp = sum(length, na.rm = TRUE), n_contigs = n(), .groups = "drop") %>%
-    mutate(
-      total_mb = total_bp / 1e6,
-      classification = factor(classification, levels = rev(classification_levels)),
-      assembly = factor(assembly, levels = rev(asm_names))
-    )
-
-  p_clf <- ggplot(clf_data, aes(x = assembly, y = total_mb, fill = classification)) +
-    geom_col_interactive(
-      aes(tooltip = paste0(assembly, "\n",
-                           classification_labels[as.character(classification)], "\n",
-                           sprintf("%.1f Mb (%d contigs)", total_mb, n_contigs))),
-      width = 0.7
-    ) +
-    scale_fill_manual(values = classification_colors, labels = classification_labels,
-                      drop = FALSE, name = NULL) +
-    coord_flip() +
-    labs(x = NULL, y = "Assembly size (Mb)") +
-    theme_minimal(base_size = base_font_pt, base_family = base_family) +
-    axis_theme +
-    theme(legend.position = "bottom",
-          panel.grid.major.y = element_blank())
-  p_clf <- apply_legend_theme(p_clf)
-
-  save_pdf(pdf_classbar, p_clf,
-           width = 7.2, height = max(3, n_asm * 0.8 + 1.5))
-  girafe_styled(ggobj = p_clf,
-                width_svg = 10,
-                height_svg = max(3, n_asm * 0.8 + 1.5))
-} else {
-  cat("Per-assembly contig summary data not available.")
-}
-```
-
 ## Nx Curves
 
 ```{r nx_curves, fig.width=10, fig.height=5}
@@ -455,7 +625,8 @@ if (has_per_asm) {
       mutate(assembly = factor(assembly, levels = asm_names),
              contig_mb = contig_len / 1e6)
 
-    p_nx <- ggplot(nx_df, aes(x = nx_pct, y = contig_mb, color = assembly)) +
+    p_nx <- ggplot(nx_df, aes(x = nx_pct, y = contig_mb,
+                              color = assembly, group = assembly)) +
       geom_step_interactive(
         aes(tooltip = paste0(assembly, "\nNx", nx_pct, " = ",
                              sprintf("%.2f Mb", contig_mb)),
@@ -478,99 +649,10 @@ if (has_per_asm) {
 }
 ```
 
-```{r compleasm_setup, include=FALSE}
-# Check if compleasm data is available in comparison TSV
-has_compleasm <- "compleasm_chrs_S" %in% names(comp_df) &&
-  any(!is.na(comp_df$compleasm_chrs_S) & comp_df$compleasm_chrs_S != "", na.rm = TRUE)
-```
 
-`r if (has_compleasm) "## BUSCO Completeness" else ""`
+# 2. Chromosome Assignment {.tabset}
 
-```{r compleasm_bar, eval=has_compleasm, fig.width=10, fig.height=max(3, n_asm * 1.2 + 1.5)}
-# Standard BUSCO/compleasm color scheme
-busco_colors <- c(
-  "Single-copy"    = "#33a2c4",
-  "Duplicated"     = "#225ea8",
-  "Fragmented"     = "#fdae61",
-  "Interspersed"   = "#fee08b",
-  "Missing"        = "#d73027"
-)
-busco_levels <- names(busco_colors)
-
-# Build long-format data for both chrs and non-chrs
-busco_long <- bind_rows(
-  comp_df %>%
-    transmute(
-      assembly,
-      dataset = "Chromosomes",
-      `Single-copy`  = as.numeric(compleasm_chrs_S),
-      Duplicated     = as.numeric(compleasm_chrs_D),
-      Fragmented     = as.numeric(compleasm_chrs_F),
-      Interspersed   = as.numeric(compleasm_chrs_I),
-      Missing        = as.numeric(compleasm_chrs_M)
-    ),
-  comp_df %>%
-    transmute(
-      assembly,
-      dataset = "Non-chromosomes",
-      `Single-copy`  = as.numeric(compleasm_non_chrs_S),
-      Duplicated     = as.numeric(compleasm_non_chrs_D),
-      Fragmented     = as.numeric(compleasm_non_chrs_F),
-      Interspersed   = as.numeric(compleasm_non_chrs_I),
-      Missing        = as.numeric(compleasm_non_chrs_M)
-    )
-) %>%
-  filter(!is.na(`Single-copy`)) %>%
-  pivot_longer(cols = all_of(busco_levels), names_to = "category", values_to = "pct") %>%
-  mutate(
-    category = factor(category, levels = busco_levels),
-    assembly = factor(assembly, levels = rev(asm_names)),
-    dataset  = factor(dataset, levels = c("Chromosomes", "Non-chromosomes"))
-  )
-
-if (nrow(busco_long) > 0) {
-  p_busco <- ggplot(busco_long,
-                    aes(x = assembly, y = pct, fill = category)) +
-    geom_col_interactive(
-      aes(tooltip = paste0(assembly, " \u2014 ", dataset, "\n",
-                           category, ": ", sprintf("%.1f%%", pct))),
-      width = 0.7, position = "stack"
-    ) +
-    scale_fill_manual(values = busco_colors, drop = FALSE, name = NULL) +
-    coord_flip(ylim = c(0, 100)) +
-    facet_wrap(~ dataset) +
-    labs(x = NULL, y = "BUSCO genes (%)") +
-    scale_y_continuous(expand = c(0, 0)) +
-    theme_minimal(base_size = base_font_pt, base_family = base_family) +
-    axis_theme +
-    theme(legend.position = "bottom",
-          panel.grid.major.y = element_blank(),
-          strip.text = element_text(size = base_font_pt, family = base_family,
-                                    face = "bold"))
-  p_busco <- apply_legend_theme(p_busco)
-
-  pdf_busco <- paste0(params$out_prefix, ".busco_completeness.pdf")
-  save_pdf(pdf_busco, p_busco,
-           width = 7.2, height = max(3, n_asm * 1.2 + 1.5))
-  girafe_styled(ggobj = p_busco,
-                width_svg = 10,
-                height_svg = max(3, n_asm * 1.2 + 1.5))
-}
-```
-
-```{r compleasm_note, eval=has_compleasm, results='asis'}
-lineage_name <- comp_df$compleasm_lineage[!is.na(comp_df$compleasm_lineage) &
-                                           comp_df$compleasm_lineage != ""][1]
-cat(sprintf('<div class="note-box">Lineage: <strong>%s</strong>. ',
-            lineage_name))
-cat("Chromosomes = chrs.fasta (chromosome-assigned contigs); ")
-cat("Non-chromosomes = debris + unclassified + contaminants.</div>\n")
-```
-
-
-# 2. Chromosome Completeness {.tabset}
-
-## Heatmap
+## Overview
 
 ```{r completeness_heatmap, fig.width=10, fig.height=max(3, n_asm * 0.35 + 2)}
 if (has_any_chrom) {
@@ -973,6 +1055,85 @@ if (has_any_chrom) {
 Fill intensity = reference coverage. Red border = off-target synteny. Small numbers = multi-contig.
 </div>
 
+```{r scatter_setup, eval=(has_any_chrom && has_per_asm), include=FALSE}
+scatter_df <- all_summary_df %>%
+  filter(classification == "chrom_assigned") %>%
+  mutate(
+    length_mb = length / 1e6,
+    assembly = factor(assembly, levels = asm_names)
+  )
+if (has_subgenomes && "assigned_subgenome" %in% names(scatter_df)) {
+  scatter_df <- scatter_df %>%
+    mutate(sg = ifelse(is.na(assigned_subgenome) | assigned_subgenome == "NA",
+                       "Other", assigned_subgenome))
+} else {
+  scatter_df$sg <- "All"
+}
+has_scatter_ident <- "seq_identity_vs_ref" %in% names(scatter_df) &&
+                     !all(is.na(scatter_df$seq_identity_vs_ref))
+has_scatter_cov   <- "ref_coverage" %in% names(scatter_df) &&
+                     !all(is.na(scatter_df$ref_coverage))
+```
+
+```{r scatter_identity_header, eval=(has_any_chrom && has_per_asm && exists("has_scatter_ident") && has_scatter_ident), results='asis'}
+cat("## Length vs Identity\n\n")
+```
+
+```{r scatter_identity, eval=(has_any_chrom && has_per_asm && exists("has_scatter_ident") && has_scatter_ident), fig.width=10, fig.height=6}
+si_df <- scatter_df %>% filter(!is.na(seq_identity_vs_ref))
+
+p_si <- ggplot(si_df, aes(x = length_mb, y = seq_identity_vs_ref * 100,
+                           color = assembly)) +
+  geom_point_interactive(
+    aes(tooltip = paste0(assembly, "\n", contig, "\n",
+                         ifelse(!is.na(assigned_ref_id),
+                                paste0("Assigned: ", assigned_ref_id, "\n"), ""),
+                         sprintf("%.1f Mb, %.2f%% identity", length_mb,
+                                 seq_identity_vs_ref * 100))),
+    alpha = 0.6, size = 2
+  ) +
+  { if (has_subgenomes && length(unique(si_df$sg)) > 1) {
+    facet_wrap(~ sg)
+  }} +
+  scale_color_manual(values = asm_colors, name = NULL) +
+  labs(x = "Contig length (Mb)", y = "Sequence identity vs reference (%)") +
+  theme_minimal(base_size = base_font_pt, base_family = base_family) +
+  axis_theme +
+  theme(legend.position = "bottom")
+p_si <- apply_legend_theme(p_si)
+
+girafe_styled(ggobj = p_si, width_svg = 10, height_svg = 6)
+```
+
+```{r scatter_coverage_header, eval=(has_any_chrom && has_per_asm && exists("has_scatter_cov") && has_scatter_cov), results='asis'}
+cat("## Length vs Ref Coverage\n\n")
+```
+
+```{r scatter_coverage, eval=(has_any_chrom && has_per_asm && exists("has_scatter_cov") && has_scatter_cov), fig.width=10, fig.height=6}
+sc_df <- scatter_df %>% filter(!is.na(ref_coverage))
+
+p_sc <- ggplot(sc_df, aes(x = length_mb, y = ref_coverage * 100, color = assembly)) +
+  geom_point_interactive(
+    aes(tooltip = paste0(assembly, "\n", contig, "\n",
+                         ifelse(!is.na(assigned_ref_id),
+                                paste0("Assigned: ", assigned_ref_id, "\n"), ""),
+                         sprintf("%.1f Mb, %.1f%% ref coverage", length_mb,
+                                 ref_coverage * 100))),
+    alpha = 0.6, size = 2
+  ) +
+  { if (has_subgenomes && length(unique(sc_df$sg)) > 1) {
+    facet_wrap(~ sg)
+  }} +
+  scale_color_manual(values = asm_colors, name = NULL) +
+  labs(x = "Contig length (Mb)", y = "Reference coverage (%)") +
+  theme_minimal(base_size = base_font_pt, base_family = base_family) +
+  axis_theme +
+  theme(legend.position = "bottom")
+p_sc <- apply_legend_theme(p_sc)
+
+girafe_styled(ggobj = p_sc, width_svg = 10, height_svg = 6)
+```
+
 ## Completeness Table
 
 ```{r completeness_table}
@@ -1010,7 +1171,7 @@ if (has_any_chrom) {
 ```
 
 
-`r if (has_synteny_data) "# 3. Chromosome Synteny {.tabset}" else ""`
+`r if (has_synteny_data) "# 3. Chromosome Synteny" else ""`
 
 ```{r synteny_setup, eval=has_synteny_data, include=FALSE}
 # =========================================================================
@@ -1428,8 +1589,6 @@ cat("Crossed ribbons indicate inversions.\n")
 cat("</p>\n")
 ```
 
-## Riparian Plot
-
 ```{r synteny_riparian, eval=(has_synteny_data && exists("has_ribbons") && has_ribbons), fig.width=10, fig.height=10}
 # --- Chromosome labels on far left ---
 first_sg <- subgenome_order[1]
@@ -1521,7 +1680,7 @@ p_syn <- p_syn +
     axis.ticks = element_blank(),
     axis.title = element_blank(),
     panel.grid = element_blank(),
-    plot.margin = margin(5, 5, 5, 30)
+    plot.margin = margin(5, 5, 5, 10)
   )
 
 save_pdf(pdf_synteny, p_syn, width = 7.2, height = syn_plot_h)
@@ -1592,17 +1751,21 @@ ident_df <- chrom_df %>%
   mutate(assembly = factor(assembly, levels = rev(asm_quality_order)),
          value = seq_identity_vs_ref * 100)
 
-p_ident <- ggplot(ident_df, aes(x = value, y = assembly, fill = sg)) +
-  geom_density_ridges(alpha = 0.6, scale = 0.9,
+p_ident <- ggplot(ident_df, aes(x = value, y = assembly, fill = sg, color = sg)) +
+  geom_density_ridges(alpha = 0.6, scale = 1.4, linewidth = 0.4,
                       rel_min_height = 0.01,
                       quantile_lines = TRUE, quantiles = 2) +
   { if (has_subgenomes && n_sg_facets > 1) {
     list(
       facet_wrap(~ sg, ncol = n_sg_facets),
-      scale_fill_manual(values = sg_cols_dark, guide = "none")
+      scale_fill_manual(values = sg_cols_light, guide = "none"),
+      scale_color_manual(values = sg_cols_dark, guide = "none")
     )
   } else {
-    scale_fill_manual(values = c("All" = oi[5]), guide = "none")
+    list(
+      scale_fill_manual(values = c("All" = lighten(oi[5], 0.4)), guide = "none"),
+      scale_color_manual(values = c("All" = oi[5]), guide = "none")
+    )
   }} +
   labs(x = "Sequence identity vs reference (%)", y = NULL) +
   theme_minimal(base_size = base_font_pt, base_family = base_family) +
@@ -1622,17 +1785,21 @@ collin_df <- chrom_df %>%
   mutate(assembly = factor(assembly, levels = rev(asm_quality_order)),
          value = collinearity_score * 100)
 
-p_collin <- ggplot(collin_df, aes(x = value, y = assembly, fill = sg)) +
-  geom_density_ridges(alpha = 0.6, scale = 0.9,
+p_collin <- ggplot(collin_df, aes(x = value, y = assembly, fill = sg, color = sg)) +
+  geom_density_ridges(alpha = 0.6, scale = 1.4, linewidth = 0.4,
                       rel_min_height = 0.01,
                       quantile_lines = TRUE, quantiles = 2) +
   { if (has_subgenomes && n_sg_facets > 1) {
     list(
       facet_wrap(~ sg, ncol = n_sg_facets),
-      scale_fill_manual(values = sg_cols_dark, guide = "none")
+      scale_fill_manual(values = sg_cols_light, guide = "none"),
+      scale_color_manual(values = sg_cols_dark, guide = "none")
     )
   } else {
-    scale_fill_manual(values = c("All" = oi[5]), guide = "none")
+    list(
+      scale_fill_manual(values = c("All" = lighten(oi[5], 0.4)), guide = "none"),
+      scale_color_manual(values = c("All" = oi[5]), guide = "none")
+    )
   }} +
   labs(x = "Collinearity (%)", y = NULL) +
   theme_minimal(base_size = base_font_pt, base_family = base_family) +
@@ -1652,17 +1819,21 @@ gc_df <- chrom_df %>%
   mutate(assembly = factor(assembly, levels = rev(asm_quality_order)),
          value = abs(gc_deviation))
 
-p_gc <- ggplot(gc_df, aes(x = value, y = assembly, fill = sg)) +
-  geom_density_ridges(alpha = 0.6, scale = 0.9,
+p_gc <- ggplot(gc_df, aes(x = value, y = assembly, fill = sg, color = sg)) +
+  geom_density_ridges(alpha = 0.6, scale = 1.4, linewidth = 0.4,
                       rel_min_height = 0.01,
                       quantile_lines = TRUE, quantiles = 2) +
   { if (has_subgenomes && n_sg_facets > 1) {
     list(
       facet_wrap(~ sg, ncol = n_sg_facets),
-      scale_fill_manual(values = sg_cols_dark, guide = "none")
+      scale_fill_manual(values = sg_cols_light, guide = "none"),
+      scale_color_manual(values = sg_cols_dark, guide = "none")
     )
   } else {
-    scale_fill_manual(values = c("All" = oi[5]), guide = "none")
+    list(
+      scale_fill_manual(values = c("All" = lighten(oi[5], 0.4)), guide = "none"),
+      scale_color_manual(values = c("All" = oi[5]), guide = "none")
+    )
   }} +
   labs(x = "|GC deviation| (std devs from reference)", y = NULL) +
   theme_minimal(base_size = base_font_pt, base_family = base_family) +
@@ -1673,89 +1844,7 @@ girafe_styled(ggobj = p_gc, height_svg = max(3, n_asm * 0.6 + 1.5))
 ```
 
 
-`r if (has_any_chrom && has_per_asm) "# 5. Contig-level Scatter {.tabset}" else ""`
-
-```{r scatter_setup, eval=(has_any_chrom && has_per_asm), include=FALSE}
-scatter_df <- all_summary_df %>%
-  filter(classification == "chrom_assigned") %>%
-  mutate(
-    length_mb = length / 1e6,
-    assembly = factor(assembly, levels = asm_names)
-  )
-if (has_subgenomes && "assigned_subgenome" %in% names(scatter_df)) {
-  scatter_df <- scatter_df %>%
-    mutate(sg = ifelse(is.na(assigned_subgenome) | assigned_subgenome == "NA",
-                       "Other", assigned_subgenome))
-} else {
-  scatter_df$sg <- "All"
-}
-has_scatter_ident <- "seq_identity_vs_ref" %in% names(scatter_df) &&
-                     !all(is.na(scatter_df$seq_identity_vs_ref))
-has_scatter_cov   <- "ref_coverage" %in% names(scatter_df) &&
-                     !all(is.na(scatter_df$ref_coverage))
-```
-
-```{r scatter_identity_header, eval=(has_any_chrom && has_per_asm && exists("has_scatter_ident") && has_scatter_ident), results='asis'}
-cat("## Length vs Identity\n\n")
-```
-
-```{r scatter_identity, eval=(has_any_chrom && has_per_asm && exists("has_scatter_ident") && has_scatter_ident), fig.width=10, fig.height=6}
-si_df <- scatter_df %>% filter(!is.na(seq_identity_vs_ref))
-
-p_si <- ggplot(si_df, aes(x = length_mb, y = seq_identity_vs_ref * 100,
-                           color = assembly)) +
-  geom_point_interactive(
-    aes(tooltip = paste0(assembly, "\n", contig, "\n",
-                         ifelse(!is.na(assigned_ref_id),
-                                paste0("Assigned: ", assigned_ref_id, "\n"), ""),
-                         sprintf("%.1f Mb, %.2f%% identity", length_mb,
-                                 seq_identity_vs_ref * 100))),
-    alpha = 0.6, size = 2
-  ) +
-  { if (has_subgenomes && length(unique(si_df$sg)) > 1) {
-    facet_wrap(~ sg)
-  }} +
-  scale_color_manual(values = asm_colors, name = NULL) +
-  labs(x = "Contig length (Mb)", y = "Sequence identity vs reference (%)") +
-  theme_minimal(base_size = base_font_pt, base_family = base_family) +
-  axis_theme +
-  theme(legend.position = "bottom")
-p_si <- apply_legend_theme(p_si)
-
-girafe_styled(ggobj = p_si, width_svg = 10, height_svg = 6)
-```
-
-```{r scatter_coverage_header, eval=(has_any_chrom && has_per_asm && exists("has_scatter_cov") && has_scatter_cov), results='asis'}
-cat("## Length vs Ref Coverage\n\n")
-```
-
-```{r scatter_coverage, eval=(has_any_chrom && has_per_asm && exists("has_scatter_cov") && has_scatter_cov), fig.width=10, fig.height=6}
-sc_df <- scatter_df %>% filter(!is.na(ref_coverage))
-
-p_sc <- ggplot(sc_df, aes(x = length_mb, y = ref_coverage * 100, color = assembly)) +
-  geom_point_interactive(
-    aes(tooltip = paste0(assembly, "\n", contig, "\n",
-                         ifelse(!is.na(assigned_ref_id),
-                                paste0("Assigned: ", assigned_ref_id, "\n"), ""),
-                         sprintf("%.1f Mb, %.1f%% ref coverage", length_mb,
-                                 ref_coverage * 100))),
-    alpha = 0.6, size = 2
-  ) +
-  { if (has_subgenomes && length(unique(sc_df$sg)) > 1) {
-    facet_wrap(~ sg)
-  }} +
-  scale_color_manual(values = asm_colors, name = NULL) +
-  labs(x = "Contig length (Mb)", y = "Reference coverage (%)") +
-  theme_minimal(base_size = base_font_pt, base_family = base_family) +
-  axis_theme +
-  theme(legend.position = "bottom")
-p_sc <- apply_legend_theme(p_sc)
-
-girafe_styled(ggobj = p_sc, width_svg = 10, height_svg = 6)
-```
-
-
-`r if (has_any_depth) "# 6. Read Depth" else ""`
+`r if (has_any_depth) "# 5. Read Depth" else ""`
 
 ```{r depth_section, eval=(has_any_depth && has_per_asm), fig.width=10, fig.height=max(3, n_asm * 0.6 + 1.5)}
 depth_df <- all_summary_df %>%
@@ -1776,17 +1865,21 @@ if (nrow(depth_df) > 0) {
 
   n_depth_sg <- length(unique(depth_df$sg))
 
-  p_depth <- ggplot(depth_df, aes(x = depth_mean, y = assembly, fill = sg)) +
-    geom_density_ridges(alpha = 0.6, scale = 0.9,
+  p_depth <- ggplot(depth_df, aes(x = depth_mean, y = assembly, fill = sg, color = sg)) +
+    geom_density_ridges(alpha = 0.6, scale = 1.4, linewidth = 0.4,
                         rel_min_height = 0.01,
                         quantile_lines = TRUE, quantiles = 2) +
     { if (has_subgenomes && n_depth_sg > 1) {
       list(
         facet_wrap(~ sg, ncol = n_depth_sg),
-        scale_fill_manual(values = sg_cols_dark, guide = "none")
+        scale_fill_manual(values = sg_cols_light, guide = "none"),
+        scale_color_manual(values = sg_cols_dark, guide = "none")
       )
     } else {
-      scale_fill_manual(values = c("All" = oi[5]), guide = "none")
+      list(
+        scale_fill_manual(values = c("All" = lighten(oi[5], 0.4)), guide = "none"),
+        scale_color_manual(values = c("All" = oi[5]), guide = "none")
+      )
     }} +
     labs(x = "Mean read depth (chromosome contigs)", y = NULL) +
     theme_minimal(base_size = base_font_pt, base_family = base_family) +
@@ -1800,7 +1893,7 @@ if (nrow(depth_df) > 0) {
 ```
 
 
-`r if (has_per_asm && any(comp_df$n_rdna > 0, na.rm = TRUE)) "# 7. rDNA Comparison {.tabset}" else ""`
+`r if (has_per_asm && any(comp_df$n_rdna > 0, na.rm = TRUE)) "# 6. rDNA Comparison {.tabset}" else ""`
 
 ```{r rdna_setup, eval=(has_per_asm && any(comp_df$n_rdna > 0, na.rm = TRUE)), include=FALSE}
 has_any_rdna <- any(comp_df$n_rdna > 0, na.rm = TRUE)
@@ -1884,7 +1977,7 @@ arr_tbl %>%
 ```
 
 
-`r if (has_per_asm && any(comp_df$chrC_found == "yes" | comp_df$chrM_found == "yes", na.rm = TRUE)) "# 8. Organelle Comparison" else ""`
+`r if (has_per_asm && any(comp_df$chrC_found == "yes" | comp_df$chrM_found == "yes", na.rm = TRUE)) "# 7. Organelle Comparison" else ""`
 
 ```{r organelle_section, eval=(has_per_asm && any(comp_df$chrC_found == "yes" | comp_df$chrM_found == "yes", na.rm = TRUE)), fig.width=10, fig.height=max(3, n_asm * 0.6 + 1.5)}
 # Extract organelle contigs from per-assembly data
@@ -1981,7 +2074,7 @@ if (nrow(org_df) > 0) {
 ```
 
 
-`r if (has_any_contam) "# 9. Contamination Comparison" else ""`
+`r if (has_any_contam) "# 8. Contamination Comparison" else ""`
 
 ```{r contamination, eval=has_any_contam, fig.width=10, fig.height=max(3, n_asm * 0.6 + 1.5)}
 contam_data <- comp_df %>%
