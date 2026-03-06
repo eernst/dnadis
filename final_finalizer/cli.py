@@ -1920,11 +1920,22 @@ def main():
     failures = []
     results = []
 
+    # --- Per-assembly pipeline (executor scope) ---
+    # The executor context is kept as narrow as possible: it covers only
+    # the per-assembly runs and pairwise synteny (which submit SLURM jobs).
+    # TSV writing and comparison report rendering happen *after* the
+    # executor shuts down, so an executorlib shutdown hang cannot block
+    # the final outputs.
+    pairwise_pairs: list[tuple[str, Path]] = []
+
     with create_executor(cluster_config, output_dir=output_dir) as executor:
         if cluster_config.enabled and n_total > 1:
             # Run assemblies concurrently — each run_assembly() is mostly
             # I/O-bound (waiting on SLURM futures), so threads work well.
-            from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
+            from concurrent.futures import (
+                ThreadPoolExecutor as _ThreadPoolExecutor,
+                as_completed as _as_completed,
+            )
 
             logger.info(f"Cluster mode: running {n_total} assemblies concurrently")
 
@@ -1942,7 +1953,7 @@ def main():
                     pool.submit(_run_one, (i, asm)): asm[1]
                     for i, asm in enumerate(assemblies)
                 }
-                for fut in futs:
+                for fut in _as_completed(futs):
                     name = futs[fut]
                     try:
                         results.append(fut.result())
@@ -1965,102 +1976,58 @@ def main():
                     logger.error(f"Assembly '{asm_name}' failed: {e}")
                     failures.append((asm_name, str(e)))
 
-        # --- Cross-assembly comparison (only with ≥2 assemblies) ---
-        if n_total > 1 and results:
-            from final_finalizer.output.comparison import (
-                write_comparison_summary_tsv,
-                write_chromosome_completeness_tsv,
+        # Pairwise assembly-vs-assembly synteny (nucleotide mode only)
+        # Runs inside executor context because it submits SLURM jobs.
+        if n_total > 1 and results and args.synteny_mode == "nucleotide" and len(results) >= 2:
+            from final_finalizer.alignment.pairwise import compute_pairwise_synteny
+            from final_finalizer.utils.resource_estimation import estimate_pairwise_resources
+
+            # Build chain-parsing kwargs once (all plain types, serializable)
+            chain_kwargs = dict(
+                preset=args.preset,
+                kmer=args.kmer,
+                window=args.window,
+                assign_minlen=args.assign_minlen,
+                assign_minmapq=args.assign_minmapq,
+                assign_tp=args.assign_tp,
+                chain_q_gap=args.chain_q_gap,
+                chain_r_gap=args.chain_r_gap,
+                chain_diag_slop=args.chain_diag_slop,
+                assign_min_ident=args.assign_min_ident,
+                assign_chain_topk=args.assign_chain_topk,
+                assign_chain_score=args.assign_chain_score,
+                assign_chain_min_bp=args.assign_chain_min_bp,
+                assign_ref_score=args.assign_ref_score,
             )
-            comparison_tsv = output_dir / "comparison_summary.tsv"
-            completeness_tsv = output_dir / "chromosome_completeness.tsv"
-            write_comparison_summary_tsv(comparison_tsv, results)
-            write_chromosome_completeness_tsv(completeness_tsv, results, ref_ctx.ref_lengths_norm)
-            logger.done(f"Comparison summary: {comparison_tsv}")
-            logger.done(f"Chromosome completeness: {completeness_tsv}")
 
-            # Pairwise assembly-vs-assembly synteny (nucleotide mode only)
-            pairwise_pairs = []
-            if args.synteny_mode == "nucleotide" and len(results) >= 2:
-                from final_finalizer.alignment.pairwise import compute_pairwise_synteny
-                from final_finalizer.utils.resource_estimation import estimate_pairwise_resources
+            use_cluster_pw = cluster_config.enabled
+            any_has_sg = any(r.per_subgenome_chrs for r in results)
+            pairwise_futures = []  # (pair_name, future)
 
-                # Build chain-parsing kwargs once (all plain types, serializable)
-                chain_kwargs = dict(
-                    preset=args.preset,
-                    kmer=args.kmer,
-                    window=args.window,
-                    assign_minlen=args.assign_minlen,
-                    assign_minmapq=args.assign_minmapq,
-                    assign_tp=args.assign_tp,
-                    chain_q_gap=args.chain_q_gap,
-                    chain_r_gap=args.chain_r_gap,
-                    chain_diag_slop=args.chain_diag_slop,
-                    assign_min_ident=args.assign_min_ident,
-                    assign_chain_topk=args.assign_chain_topk,
-                    assign_chain_score=args.assign_chain_score,
-                    assign_chain_min_bp=args.assign_chain_min_bp,
-                    assign_ref_score=args.assign_ref_score,
-                )
+            if any_has_sg:
+                from collections import defaultdict as _defaultdict
 
-                use_cluster_pw = cluster_config.enabled
-                any_has_sg = any(r.per_subgenome_chrs for r in results)
-                pairwise_futures = []  # (pair_name, future)
+                logger.phase("Per-subgenome pairwise synteny (nucleotide mode)")
+                pairwise_dir = output_dir / "pairwise"
+                pairwise_dir.mkdir(exist_ok=True)
 
-                if any_has_sg:
-                    from collections import defaultdict as _defaultdict
+                sg_assemblies = _defaultdict(list)
+                for result in results:
+                    for sg in result.per_subgenome_chrs:
+                        sg_assemblies[sg].append(result)
 
-                    logger.phase("Per-subgenome pairwise synteny (nucleotide mode)")
-                    pairwise_dir = output_dir / "pairwise"
-                    pairwise_dir.mkdir(exist_ok=True)
-
-                    sg_assemblies = _defaultdict(list)
-                    for result in results:
-                        for sg in result.per_subgenome_chrs:
-                            sg_assemblies[sg].append(result)
-
-                    for sg in sorted(sg_assemblies):
-                        sg_results = sg_assemblies[sg]
-                        if len(sg_results) < 2:
-                            continue
-                        sg_dir = pairwise_dir / sg
-                        sg_dir.mkdir(exist_ok=True)
-                        for i in range(len(sg_results) - 1):
-                            left, right = sg_results[i], sg_results[i + 1]
-                            pair_name = f"{left.assembly_name}_vs_{right.assembly_name}"
-                            pair_prefix = sg_dir / pair_name
-                            left_fasta = left.per_subgenome_chrs[sg]
-                            right_fasta = right.per_subgenome_chrs[sg]
-                            macro_tsv = Path(str(pair_prefix) + ".macro_blocks.tsv")
-                            if file_exists_and_valid(macro_tsv):
-                                logger.info(f"Reusing cached pairwise: {macro_tsv}")
-                                pairwise_pairs.append((pair_name, macro_tsv))
-                            else:
-                                res_spec = estimate_pairwise_resources(
-                                    left_fasta, right_fasta, cluster_config,
-                                )
-                                pw_threads = res_spec.cores if use_cluster_pw else args.threads
-                                fut = executor.submit(
-                                    compute_pairwise_synteny,
-                                    left_fasta=left_fasta,
-                                    right_fasta=right_fasta,
-                                    left_name=left.assembly_name,
-                                    right_name=right.assembly_name,
-                                    outprefix=pair_prefix,
-                                    threads=pw_threads,
-                                    resource_spec=res_spec if use_cluster_pw else None,
-                                    **chain_kwargs,
-                                )
-                                pairwise_futures.append((pair_name, fut))
-                else:
-                    logger.phase("Pairwise assembly synteny (nucleotide mode)")
-                    pairwise_dir = output_dir / "pairwise"
-                    pairwise_dir.mkdir(exist_ok=True)
-                    for i in range(len(results) - 1):
-                        left, right = results[i], results[i + 1]
+                for sg in sorted(sg_assemblies):
+                    sg_results = sg_assemblies[sg]
+                    if len(sg_results) < 2:
+                        continue
+                    sg_dir = pairwise_dir / sg
+                    sg_dir.mkdir(exist_ok=True)
+                    for i in range(len(sg_results) - 1):
+                        left, right = sg_results[i], sg_results[i + 1]
                         pair_name = f"{left.assembly_name}_vs_{right.assembly_name}"
-                        pair_prefix = pairwise_dir / pair_name
-                        left_fasta = Path(str(left.outprefix) + ".chrs.fasta")
-                        right_fasta = Path(str(right.outprefix) + ".chrs.fasta")
+                        pair_prefix = sg_dir / pair_name
+                        left_fasta = left.per_subgenome_chrs[sg]
+                        right_fasta = right.per_subgenome_chrs[sg]
                         macro_tsv = Path(str(pair_prefix) + ".macro_blocks.tsv")
                         if file_exists_and_valid(macro_tsv):
                             logger.info(f"Reusing cached pairwise: {macro_tsv}")
@@ -2082,30 +2049,78 @@ def main():
                                 **chain_kwargs,
                             )
                             pairwise_futures.append((pair_name, fut))
+            else:
+                logger.phase("Pairwise assembly synteny (nucleotide mode)")
+                pairwise_dir = output_dir / "pairwise"
+                pairwise_dir.mkdir(exist_ok=True)
+                for i in range(len(results) - 1):
+                    left, right = results[i], results[i + 1]
+                    pair_name = f"{left.assembly_name}_vs_{right.assembly_name}"
+                    pair_prefix = pairwise_dir / pair_name
+                    left_fasta = Path(str(left.outprefix) + ".chrs.fasta")
+                    right_fasta = Path(str(right.outprefix) + ".chrs.fasta")
+                    macro_tsv = Path(str(pair_prefix) + ".macro_blocks.tsv")
+                    if file_exists_and_valid(macro_tsv):
+                        logger.info(f"Reusing cached pairwise: {macro_tsv}")
+                        pairwise_pairs.append((pair_name, macro_tsv))
+                    else:
+                        res_spec = estimate_pairwise_resources(
+                            left_fasta, right_fasta, cluster_config,
+                        )
+                        pw_threads = res_spec.cores if use_cluster_pw else args.threads
+                        fut = executor.submit(
+                            compute_pairwise_synteny,
+                            left_fasta=left_fasta,
+                            right_fasta=right_fasta,
+                            left_name=left.assembly_name,
+                            right_name=right.assembly_name,
+                            outprefix=pair_prefix,
+                            threads=pw_threads,
+                            resource_spec=res_spec if use_cluster_pw else None,
+                            **chain_kwargs,
+                        )
+                        pairwise_futures.append((pair_name, fut))
 
-                # Collect pairwise results
-                for pair_name, fut in pairwise_futures:
-                    try:
-                        macro_tsv = fut.result()
-                        if macro_tsv:
-                            pairwise_pairs.append((pair_name, macro_tsv))
-                    except Exception as e:
-                        logger.error(f"Pairwise '{pair_name}' failed: {e}")
+            # Collect pairwise results
+            for pair_name, fut in pairwise_futures:
+                try:
+                    macro_tsv = fut.result()
+                    if macro_tsv:
+                        pairwise_pairs.append((pair_name, macro_tsv))
+                except Exception as e:
+                    logger.error(f"Pairwise '{pair_name}' failed: {e}")
 
-            if not args.skip_plot:
-                from final_finalizer.output.plotting import run_comparison_report
-                if not run_comparison_report(
-                    comparison_tsv=comparison_tsv,
-                    completeness_tsv=completeness_tsv,
-                    ref_lengths_tsv=ref_ctx.ref_lengths_tsv,
-                    assembly_results=results,
-                    outprefix=output_dir / "comparison",
-                    chr_like_minlen=ref_ctx.chr_like_minlen,
-                    synteny_mode=args.synteny_mode,
-                    reference_name=args.reference_name,
-                    pairwise_pairs=pairwise_pairs,
-                ):
-                    logger.error("Comparison report generation failed.")
+    # --- executor is now closed ---
+
+    # --- Cross-assembly comparison (only with ≥2 assemblies) ---
+    # Runs outside the executor context: TSV writing and Rmd rendering
+    # are local operations that don't need SLURM.
+    if n_total > 1 and results:
+        from final_finalizer.output.comparison import (
+            write_comparison_summary_tsv,
+            write_chromosome_completeness_tsv,
+        )
+        comparison_tsv = output_dir / "comparison_summary.tsv"
+        completeness_tsv = output_dir / "chromosome_completeness.tsv"
+        write_comparison_summary_tsv(comparison_tsv, results)
+        write_chromosome_completeness_tsv(completeness_tsv, results, ref_ctx.ref_lengths_norm)
+        logger.done(f"Comparison summary: {comparison_tsv}")
+        logger.done(f"Chromosome completeness: {completeness_tsv}")
+
+        if not args.skip_plot:
+            from final_finalizer.output.plotting import run_comparison_report
+            if not run_comparison_report(
+                comparison_tsv=comparison_tsv,
+                completeness_tsv=completeness_tsv,
+                ref_lengths_tsv=ref_ctx.ref_lengths_tsv,
+                assembly_results=results,
+                outprefix=output_dir / "comparison",
+                chr_like_minlen=ref_ctx.chr_like_minlen,
+                synteny_mode=args.synteny_mode,
+                reference_name=args.reference_name,
+                pairwise_pairs=pairwise_pairs,
+            ):
+                logger.error("Comparison report generation failed.")
 
     # --- Summary ---
     if n_total > 1:
