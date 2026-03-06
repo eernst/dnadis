@@ -6,6 +6,7 @@ gene completeness metrics based on BUSCO orthologs.
 """
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -135,10 +136,18 @@ def run_compleasm(
 
     logger.info(f"Running compleasm ({lineage}) on {fasta.name}")
 
+    # When using --compleasm-path, prepend its parent directory to PATH so
+    # compleasm can find sibling tools (hmmsearch, miniprot) from the same
+    # conda environment.
+    env = None
+    if compleasm_exe:
+        env = os.environ.copy()
+        env["PATH"] = str(Path(compleasm_exe).resolve().parent) + os.pathsep + env.get("PATH", "")
+
     err_path = output_dir / "compleasm.err"
     try:
         with err_path.open("w") as err_fh:
-            ret = subprocess.run(cmd, capture_output=False, stderr=err_fh, stdout=subprocess.DEVNULL, check=False)
+            ret = subprocess.run(cmd, capture_output=False, stderr=err_fh, stdout=subprocess.DEVNULL, check=False, env=env)
         if ret.returncode != 0:
             logger.warning(f"compleasm failed (exit {ret.returncode}); see {err_path}")
             return None
