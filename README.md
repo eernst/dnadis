@@ -2,7 +2,7 @@
 
 **Genome assembly finalization tool for contig classification and quality control**
 
-`final_finalizer` classifies contigs from a *de novo* genome assembly into biological categories (chromosomes, organelles, rDNA, contaminants, debris, unclassified) using synteny evidence (whole-genome nucleotide alignment or protein-anchored), organelle/rDNA alignments, and taxonomic classification. Beyond classification, it evaluates assembly quality through BUSCO completeness scoring (via compleasm), synteny coverage, and alignment identity metrics. It detects organelles, rDNA loci, and contaminants, and produces rich interactive HTML reports for both individual assemblies and multi-assembly comparisons. In multi-assembly mode, multiple assemblies are processed concurrently against a shared reference, with cross-assembly comparison reports aggregating classification and BUSCO completeness results.
+`final_finalizer` classifies contigs from a *de novo* genome assembly into biological categories (chromosomes, organelles, rDNA, contaminants, debris, unclassified) using synteny evidence (whole-genome nucleotide alignment or protein-anchored), organelle/rDNA alignments, and taxonomic classification. Beyond classification, it evaluates assembly quality through BUSCO completeness scoring (via compleasm), synteny coverage, and alignment identity metrics. It detects organelles, rDNA loci, and contaminants, and produces rich interactive HTML reports for both individual assemblies and multi-assembly comparisons. Multi-assembly mode aggregates individual assessments for easy comparisons between various assemblies of the same individual, between different individuals of the same species, or even between multiple species.
 
 ## Features
 
