@@ -63,6 +63,8 @@ def run_unified_report(
     rdna_arrays_tsv: Optional[Path] = None,
     contaminants_tsv: Optional[Path] = None,
     agp_tsv: Optional[Path] = None,
+    compleasm_chrs_summary: Optional[Path] = None,
+    compleasm_non_chrs_summary: Optional[Path] = None,
     top_n_contaminants: int = 10,
 ) -> bool:
     """Generate unified HTML report with all plots and summary tables.
@@ -108,6 +110,8 @@ def run_unified_report(
     rdna_arrays_str = abs_esc(rdna_arrays_tsv) if rdna_arrays_tsv and rdna_arrays_tsv.exists() else ""
     contam_str = abs_esc(contaminants_tsv) if contaminants_tsv and contaminants_tsv.exists() else ""
     agp_str = abs_esc(agp_tsv) if agp_tsv and agp_tsv.exists() else ""
+    compleasm_chrs_str = abs_esc(compleasm_chrs_summary) if compleasm_chrs_summary and compleasm_chrs_summary.exists() else ""
+    compleasm_non_str = abs_esc(compleasm_non_chrs_summary) if compleasm_non_chrs_summary and compleasm_non_chrs_summary.exists() else ""
 
     filled = (
         tmpl.replace("__SUMMARY__", abs_esc(summary_tsv))
@@ -119,6 +123,8 @@ def run_unified_report(
         .replace("__RDNA_ARRAYS__", rdna_arrays_str)
         .replace("__CONTAMINANTS_TSV__", contam_str)
         .replace("__AGP__", agp_str)
+        .replace("__COMPLEASM_CHRS__", compleasm_chrs_str)
+        .replace("__COMPLEASM_NONCHRS__", compleasm_non_str)
         .replace("__ASMNAME__", str(assembly_name).replace('"', '\\"'))
         .replace("__REFNAME__", str(reference_name).replace('"', '\\"'))
         .replace("__SYNTENY_MODE__", str(synteny_mode))

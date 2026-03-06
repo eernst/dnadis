@@ -1320,6 +1320,10 @@ def run_assembly(
         agp_tsv = Path(str(outprefix) + ".scaffolded.agp") if args.scaffold and scaffolded_seqs else None
         contam_tsv_arg = contaminants_tsv if contaminants_filtered else None
 
+        # Resolve compleasm summary paths for the report
+        compleasm_chrs_sum = compleasm_chrs_result.summary_path if compleasm_chrs_result else None
+        compleasm_non_sum = compleasm_non_chrs_result.summary_path if compleasm_non_chrs_result else None
+
         if not run_unified_report(
             summary_tsv,
             ref_lengths_tsv,
@@ -1336,6 +1340,8 @@ def run_assembly(
             rdna_arrays_tsv=rdna_arrays_tsv_path,
             contaminants_tsv=contam_tsv_arg,
             agp_tsv=agp_tsv,
+            compleasm_chrs_summary=compleasm_chrs_sum,
+            compleasm_non_chrs_summary=compleasm_non_sum,
         ):
             logger.error(
                 "--plot failed: unified report could not be generated. "
