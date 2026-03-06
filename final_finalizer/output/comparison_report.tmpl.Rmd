@@ -1745,7 +1745,7 @@ n_sg_facets <- length(unique(chrom_df$sg))
 cat("## Sequence Identity\n\n")
 ```
 
-```{r quality_identity_plot, eval=(has_any_chrom && has_per_asm && exists("has_identity") && has_identity), fig.width=10, fig.height=max(3, n_asm * 0.6 + 1.5)}
+```{r quality_identity_plot, eval=(has_any_chrom && has_per_asm && exists("has_identity") && has_identity), fig.width=10, fig.height=max(3, n_asm * 0.3 + 1.5)}
 ident_df <- chrom_df %>%
   filter(!is.na(seq_identity_vs_ref)) %>%
   mutate(assembly = factor(assembly, levels = rev(asm_quality_order)),
@@ -1772,14 +1772,14 @@ p_ident <- ggplot(ident_df, aes(x = value, y = assembly, fill = sg, color = sg))
   axis_theme +
   theme(panel.grid.major.y = element_blank())
 
-girafe_styled(ggobj = p_ident, height_svg = max(3, n_asm * 0.6 + 1.5))
+girafe_styled(ggobj = p_ident, height_svg = max(3, n_asm * 0.3 + 1.5))
 ```
 
 ```{r quality_collinearity, eval=(has_any_chrom && has_per_asm && exists("has_collin") && has_collin), results='asis'}
 cat("## Collinearity\n\n")
 ```
 
-```{r quality_collinearity_plot, eval=(has_any_chrom && has_per_asm && exists("has_collin") && has_collin), fig.width=10, fig.height=max(3, n_asm * 0.6 + 1.5)}
+```{r quality_collinearity_plot, eval=(has_any_chrom && has_per_asm && exists("has_collin") && has_collin), fig.width=10, fig.height=max(3, n_asm * 0.3 + 1.5)}
 collin_df <- chrom_df %>%
   filter(!is.na(collinearity_score)) %>%
   mutate(assembly = factor(assembly, levels = rev(asm_quality_order)),
@@ -1806,14 +1806,14 @@ p_collin <- ggplot(collin_df, aes(x = value, y = assembly, fill = sg, color = sg
   axis_theme +
   theme(panel.grid.major.y = element_blank())
 
-girafe_styled(ggobj = p_collin, height_svg = max(3, n_asm * 0.6 + 1.5))
+girafe_styled(ggobj = p_collin, height_svg = max(3, n_asm * 0.3 + 1.5))
 ```
 
 ```{r quality_gc, eval=(has_any_chrom && has_per_asm && exists("has_gc_dev") && has_gc_dev), results='asis'}
 cat("## GC Deviation\n\n")
 ```
 
-```{r quality_gc_plot, eval=(has_any_chrom && has_per_asm && exists("has_gc_dev") && has_gc_dev), fig.width=10, fig.height=max(3, n_asm * 0.6 + 1.5)}
+```{r quality_gc_plot, eval=(has_any_chrom && has_per_asm && exists("has_gc_dev") && has_gc_dev), fig.width=10, fig.height=max(3, n_asm * 0.3 + 1.5)}
 gc_df <- chrom_df %>%
   filter(!is.na(gc_deviation)) %>%
   mutate(assembly = factor(assembly, levels = rev(asm_quality_order)),
@@ -1840,13 +1840,13 @@ p_gc <- ggplot(gc_df, aes(x = value, y = assembly, fill = sg, color = sg)) +
   axis_theme +
   theme(panel.grid.major.y = element_blank())
 
-girafe_styled(ggobj = p_gc, height_svg = max(3, n_asm * 0.6 + 1.5))
+girafe_styled(ggobj = p_gc, height_svg = max(3, n_asm * 0.3 + 1.5))
 ```
 
 
 `r if (has_any_depth) "# 5. Read Depth" else ""`
 
-```{r depth_section, eval=(has_any_depth && has_per_asm), fig.width=10, fig.height=max(3, n_asm * 0.6 + 1.5)}
+```{r depth_section, eval=(has_any_depth && has_per_asm), fig.width=10, fig.height=max(3, n_asm * 0.3 + 1.5)}
 depth_df <- all_summary_df %>%
   filter(classification == "chrom_assigned", !is.na(depth_mean))
 
@@ -1886,7 +1886,7 @@ if (nrow(depth_df) > 0) {
     axis_theme +
     theme(panel.grid.major.y = element_blank())
 
-  girafe_styled(ggobj = p_depth, height_svg = max(3, n_asm * 0.6 + 1.5))
+  girafe_styled(ggobj = p_depth, height_svg = max(3, n_asm * 0.3 + 1.5))
 } else {
   cat("No depth data available for chromosome-assigned contigs.")
 }
