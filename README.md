@@ -201,8 +201,8 @@ The `--reads` option accepts:
 - Pre-aligned BAM/CRAM files (used directly)
 
 Read type to minimap2 preset mapping:
-- `lrhq` → `-x lr:hqae` (PacBio HiFi/Duplex, ONT Q20+; high-quality long reads with error rate < 1%)
-- `r9` → `-x map-ont` (ONT reads, standard accuracy)
+- `lrhq` → `-x lr:hqae` (PacBio HiFi, ONT R10); high-quality long reads with error rate < 1%)
+- `r9` → `-x map-ont` (ONT R9 reads, standard accuracy)
 - `sr` → `-x sr` (Illumina short reads)
 
 **Read downsampling**: If `--depth-target-coverage` is set to a non-zero value (e.g., 20 for 20X coverage), reads are automatically downsampled before alignment using rasusa (for FASTQ) or samtools (for BAM/CRAM). This reduces computational time while maintaining sufficient coverage for depth-based quality assessment. Pre-aligned BAM/CRAM files are not downsampled. Default: 0 (disabled).
