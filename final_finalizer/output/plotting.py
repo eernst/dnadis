@@ -63,6 +63,8 @@ def run_unified_report(
     rdna_arrays_tsv: Optional[Path] = None,
     contaminants_tsv: Optional[Path] = None,
     agp_tsv: Optional[Path] = None,
+    compleasm_chrs_summary: Optional[Path] = None,
+    compleasm_non_chrs_summary: Optional[Path] = None,
     top_n_contaminants: int = 10,
 ) -> bool:
     """Generate unified HTML report with all plots and summary tables.
@@ -108,6 +110,8 @@ def run_unified_report(
     rdna_arrays_str = abs_esc(rdna_arrays_tsv) if rdna_arrays_tsv and rdna_arrays_tsv.exists() else ""
     contam_str = abs_esc(contaminants_tsv) if contaminants_tsv and contaminants_tsv.exists() else ""
     agp_str = abs_esc(agp_tsv) if agp_tsv and agp_tsv.exists() else ""
+    compleasm_chrs_str = abs_esc(compleasm_chrs_summary) if compleasm_chrs_summary and compleasm_chrs_summary.exists() else ""
+    compleasm_non_str = abs_esc(compleasm_non_chrs_summary) if compleasm_non_chrs_summary and compleasm_non_chrs_summary.exists() else ""
 
     filled = (
         tmpl.replace("__SUMMARY__", abs_esc(summary_tsv))
@@ -119,6 +123,8 @@ def run_unified_report(
         .replace("__RDNA_ARRAYS__", rdna_arrays_str)
         .replace("__CONTAMINANTS_TSV__", contam_str)
         .replace("__AGP__", agp_str)
+        .replace("__COMPLEASM_CHRS__", compleasm_chrs_str)
+        .replace("__COMPLEASM_NONCHRS__", compleasm_non_str)
         .replace("__ASMNAME__", str(assembly_name).replace('"', '\\"'))
         .replace("__REFNAME__", str(reference_name).replace('"', '\\"'))
         .replace("__SYNTENY_MODE__", str(synteny_mode))
@@ -134,11 +140,14 @@ def run_unified_report(
     logger.info(f"Rendering unified report: {report_html}")
     try:
         subprocess.run(
-            ["Rscript", "-e", f"rmarkdown::render('{_esc(report_rmd)}')"],
-            check=True,
+            ["Rscript", "-e", f"rmarkdown::render('{_esc(report_rmd)}', quiet = TRUE)"],
+            check=True, capture_output=True, text=True,
         )
     except subprocess.CalledProcessError as e:
         logger.warning(f"Rscript failed with code {e.returncode}; unified report not generated.")
+        if e.stderr:
+            for line in e.stderr.strip().splitlines()[-20:]:
+                logger.warning(f"  R: {line}")
         return False
     else:
         if report_html.exists():
@@ -218,6 +227,12 @@ def run_comparison_report(
         abs_esc(r.macro_blocks_tsv) for r in assembly_results
     )
 
+    # Per-assembly rDNA arrays TSVs (for rDNA comparison section)
+    per_asm_rdna_tsvs = ";".join(
+        abs_esc(r.rdna_arrays_tsv) if r.rdna_arrays_tsv and r.rdna_arrays_tsv.exists() else ""
+        for r in assembly_results
+    )
+
     # Pairwise macro_blocks TSVs and pair labels (for asm→asm ribbons)
     # Names and paths are kept synchronized as (pair_name, tsv_path) tuples
     if pairwise_pairs:
@@ -234,6 +249,7 @@ def run_comparison_report(
         .replace("__PER_ASM_TSVS__", per_asm_tsvs)
         .replace("__ASM_NAMES__", asm_names)
         .replace("__PER_ASM_MACRO_TSVS__", per_asm_macro_tsvs)
+        .replace("__PER_ASM_RDNA_TSVS__", per_asm_rdna_tsvs)
         .replace("__PAIRWISE_MACRO_TSVS__", pw_macro_str)
         .replace("__PAIRWISE_NAMES__", pw_names_str)
         .replace("__REFNAME__", str(reference_name).replace('"', '\\"'))
@@ -248,11 +264,14 @@ def run_comparison_report(
     logger.info(f"Rendering comparison report: {report_html}")
     try:
         subprocess.run(
-            ["Rscript", "-e", f"rmarkdown::render('{_esc(report_rmd)}')"],
-            check=True,
+            ["Rscript", "-e", f"rmarkdown::render('{_esc(report_rmd)}', quiet = TRUE)"],
+            check=True, capture_output=True, text=True,
         )
     except subprocess.CalledProcessError as e:
         logger.warning(f"Rscript failed with code {e.returncode}; comparison report not generated.")
+        if e.stderr:
+            for line in e.stderr.strip().splitlines()[-20:]:
+                logger.warning(f"  R: {line}")
         return False
     else:
         if report_html.exists():

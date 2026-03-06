@@ -10,6 +10,8 @@ params:
   rdna_arrays_tsv: "__RDNA_ARRAYS__"
   contaminants_tsv: "__CONTAMINANTS_TSV__"
   agp_tsv: "__AGP__"
+  compleasm_chrs_summary: "__COMPLEASM_CHRS__"
+  compleasm_non_chrs_summary: "__COMPLEASM_NONCHRS__"
   assembly_name: "__ASMNAME__"
   reference_name: "__REFNAME__"
   synteny_mode: "__SYNTENY_MODE__"
@@ -1812,6 +1814,136 @@ if (nrow(debris_df) > 0) {
 } else {
   htmltools::HTML('<div class="note-box">No unclassified or debris contigs.</div>')
 }
+```
+
+```{r compleasm_setup, include=FALSE}
+# Parse compleasm summary.txt files if provided
+parse_compleasm <- function(path) {
+  if (is.null(path) || !nzchar(path) || !file.exists(path)) return(NULL)
+  txt <- readLines(path, warn = FALSE)
+  lineage <- sub("## lineage:\\s*", "", grep("^## lineage:", txt, value = TRUE)[1])
+  vals <- list()
+  for (code in c("S", "D", "F", "I", "M")) {
+    m <- regmatches(txt, regexpr(paste0(code, ":([0-9.]+)%,\\s*(\\d+)"), txt))
+    m <- m[nzchar(m)]
+    if (length(m) > 0) {
+      parts <- regmatches(m[1], regexec(paste0(code, ":([0-9.]+)%,\\s*(\\d+)"), m[1]))[[1]]
+      vals[[code]] <- list(pct = as.numeric(parts[2]), n = as.integer(parts[3]))
+    } else {
+      vals[[code]] <- list(pct = 0, n = 0L)
+    }
+  }
+  n_match <- regmatches(txt, regexpr("N:\\d+", txt))
+  n_match <- n_match[nzchar(n_match)]
+  n_total <- if (length(n_match) > 0) as.integer(sub("N:", "", n_match[1])) else 0L
+  tibble(
+    lineage = lineage,
+    n_total = n_total,
+    `Single-copy` = vals$S$pct,
+    Duplicated = vals$D$pct,
+    Fragmented = vals$F$pct,
+    Interspersed = vals$I$pct,
+    Missing = vals$M$pct,
+    n_S = vals$S$n, n_D = vals$D$n, n_F = vals$F$n,
+    n_I = vals$I$n, n_M = vals$M$n
+  )
+}
+
+compleasm_chrs <- parse_compleasm(params$compleasm_chrs_summary)
+compleasm_non <- parse_compleasm(params$compleasm_non_chrs_summary)
+has_compleasm <- !is.null(compleasm_chrs) || !is.null(compleasm_non)
+```
+
+`r if (has_compleasm) "# BUSCO Completeness (compleasm)" else ""`
+
+```{r compleasm_table, eval=has_compleasm, results='asis'}
+busco_colors <- c(
+  "Single-copy"  = "#33a2c4",
+  "Duplicated"   = "#225ea8",
+  "Fragmented"   = "#fdae61",
+  "Interspersed" = "#fee08b",
+  "Missing"      = "#d73027"
+)
+
+# Build a 1- or 2-row data frame for gt
+rows <- list()
+if (!is.null(compleasm_chrs)) {
+  rows[[length(rows) + 1]] <- tibble(
+    Dataset = "Chromosomes",
+    S = compleasm_chrs$`Single-copy`, D = compleasm_chrs$Duplicated,
+    Frag = compleasm_chrs$Fragmented, Inter = compleasm_chrs$Interspersed,
+    M = compleasm_chrs$Missing,
+    N = compleasm_chrs$n_total
+  )
+}
+if (!is.null(compleasm_non)) {
+  rows[[length(rows) + 1]] <- tibble(
+    Dataset = "Non-chromosomes",
+    S = compleasm_non$`Single-copy`, D = compleasm_non$Duplicated,
+    Frag = compleasm_non$Fragmented, Inter = compleasm_non$Interspersed,
+    M = compleasm_non$Missing,
+    N = compleasm_non$n_total
+  )
+}
+busco_df <- bind_rows(rows)
+
+# Build the stacked bar as an inline SVG column
+make_busco_bar <- function(s, d, f, i, m) {
+  vals <- c(s, d, f, i, m)
+  cols <- unname(busco_colors)
+  total <- sum(vals)
+  if (total == 0) return("")
+  bar_w <- 220
+  bar_h <- 16
+  x <- 0
+  rects <- ""
+  for (j in seq_along(vals)) {
+    w <- vals[j] / total * bar_w
+    if (w > 0) {
+      rects <- paste0(rects, sprintf(
+        '<rect x="%.1f" y="0" width="%.1f" height="%d" fill="%s"/>',
+        x, w, bar_h, cols[j]))
+      x <- x + w
+    }
+  }
+  sprintf(
+    '<svg width="%d" height="%d" xmlns="http://www.w3.org/2000/svg">%s</svg>',
+    bar_w, bar_h, rects)
+}
+
+busco_df <- busco_df %>%
+  rowwise() %>%
+  mutate(bar = make_busco_bar(S, D, Frag, Inter, M)) %>%
+  ungroup()
+
+lineage_name <- if (!is.null(compleasm_chrs)) compleasm_chrs$lineage else compleasm_non$lineage
+
+busco_df %>%
+  select(Dataset, bar, S, D, Frag, Inter, M, N) %>%
+  gt() %>%
+  fmt(columns = bar, fns = function(x) lapply(x, html)) %>%
+  fmt_number(columns = c(S, D, Frag, Inter, M), decimals = 1, pattern = "{x}%") %>%
+  cols_label(
+    Dataset = "Dataset",
+    bar = "BUSCO Composition",
+    S = "Single %", D = "Dup %", Frag = "Frag %", Inter = "Inter %", M = "Miss %",
+    N = "Total"
+  ) %>%
+  cols_width(bar ~ px(240)) %>%
+  cols_align(align = "center", columns = c(S, D, Frag, Inter, M, N)) %>%
+  tab_header(
+    title = md("**BUSCO Completeness**"),
+    subtitle = md(sprintf("Lineage: **%s** | %d total BUSCOs",
+                          lineage_name, busco_df$N[1]))
+  ) %>%
+  tab_source_note(md(paste0(
+    '<span style="display:inline-block;width:12px;height:12px;background:', busco_colors[1], ';margin-right:3px;vertical-align:middle;"></span>Single-copy &nbsp; ',
+    '<span style="display:inline-block;width:12px;height:12px;background:', busco_colors[2], ';margin-right:3px;vertical-align:middle;"></span>Duplicated &nbsp; ',
+    '<span style="display:inline-block;width:12px;height:12px;background:', busco_colors[3], ';margin-right:3px;vertical-align:middle;"></span>Fragmented &nbsp; ',
+    '<span style="display:inline-block;width:12px;height:12px;background:', busco_colors[4], ';margin-right:3px;vertical-align:middle;"></span>Interspersed &nbsp; ',
+    '<span style="display:inline-block;width:12px;height:12px;background:', busco_colors[5], ';margin-right:3px;vertical-align:middle;"></span>Missing'
+  ))) %>%
+  gt_theme()
 ```
 
 ---

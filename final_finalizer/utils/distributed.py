@@ -154,8 +154,12 @@ class _ExecutorlibWrapper:
     ``submit()``.
     """
 
+    #: Maximum seconds to wait for executorlib to shut down before giving up.
+    SHUTDOWN_TIMEOUT: int = 60
+
     def __init__(self, executor: Any) -> None:
         self._executor = executor
+        self._submit_lock = __import__("threading").Lock()
 
     def submit(
         self,
@@ -167,14 +171,31 @@ class _ExecutorlibWrapper:
     ) -> Any:
         if resource_spec is not None:
             kwargs["resource_dict"] = _resource_spec_to_dict(resource_spec)
-        return self._executor.submit(fn, *args, **kwargs)
+        # executorlib is not thread-safe; serialise concurrent submit() calls
+        # that arrive from the ThreadPoolExecutor in multi-assembly mode.
+        with self._submit_lock:
+            return self._executor.submit(fn, *args, **kwargs)
 
     def __enter__(self) -> _ExecutorlibWrapper:
         self._executor.__enter__()
         return self
 
     def __exit__(self, *exc: Any) -> None:
-        self._executor.__exit__(*exc)
+        import threading
+
+        t = threading.Thread(
+            target=self._executor.__exit__,
+            args=exc,
+            daemon=True,
+        )
+        t.start()
+        t.join(timeout=self.SHUTDOWN_TIMEOUT)
+        if t.is_alive():
+            logger.warning(
+                f"executorlib shutdown did not complete within "
+                f"{self.SHUTDOWN_TIMEOUT}s — proceeding anyway.  "
+                f"This is a known issue with SlurmClusterExecutor cleanup."
+            )
 
 
 # ---------------------------------------------------------------------------

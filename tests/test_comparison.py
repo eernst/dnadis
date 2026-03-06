@@ -1,4 +1,4 @@
-"""Tests for multi-assembly comparison output (Phase 2)."""
+"""Tests for multi-assembly comparison output."""
 from __future__ import annotations
 
 import sys
@@ -12,6 +12,7 @@ from final_finalizer.models import (
     AssemblyResult,
     ChainEvidenceResult,
     ChromRefSummary,
+    CompleasmResult,
     ContigClassification,
     DepthStats,
 )
@@ -424,3 +425,114 @@ class TestWriteChromosomeCompletenessTsv:
         assert data["ref_id"] == "chr1"
         assert data["assembly"] == "asm1"
         assert int(data["n_contigs"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# parse_compleasm_summary
+# ---------------------------------------------------------------------------
+class TestParseCompleasmSummary:
+    def test_parse_valid_summary(self, tmp_path):
+        from final_finalizer.detection.compleasm import parse_compleasm_summary
+
+        summary = tmp_path / "summary.txt"
+        summary.write_text(
+            "## lineage: eukaryota_odb12\n"
+            "S:85.27%, 110\n"
+            "D:6.98%, 9\n"
+            "F:3.88%, 5\n"
+            "I:0.78%, 1\n"
+            "M:3.10%, 4\n"
+            "N:129\n"
+        )
+        result = parse_compleasm_summary(summary)
+        assert result is not None
+        assert result.lineage == "eukaryota_odb12"
+        assert result.n_total == 129
+        assert result.n_single == 110
+        assert result.n_duplicated == 9
+        assert result.n_fragmented == 5
+        assert result.n_interspersed == 1
+        assert result.n_missing == 4
+        assert result.pct_single == pytest.approx(85.27)
+        assert result.pct_duplicated == pytest.approx(6.98)
+        assert result.pct_missing == pytest.approx(3.10)
+        assert result.summary_path == summary
+
+    def test_parse_missing_file(self, tmp_path):
+        from final_finalizer.detection.compleasm import parse_compleasm_summary
+
+        result = parse_compleasm_summary(tmp_path / "nonexistent.txt")
+        assert result is None
+
+    def test_parse_all_missing(self, tmp_path):
+        from final_finalizer.detection.compleasm import parse_compleasm_summary
+
+        summary = tmp_path / "summary.txt"
+        summary.write_text(
+            "## lineage: viridiplantae_odb12\n"
+            "S:0.00%, 0\n"
+            "D:0.00%, 0\n"
+            "F:0.00%, 0\n"
+            "I:0.00%, 0\n"
+            "M:100.00%, 129\n"
+            "N:129\n"
+        )
+        result = parse_compleasm_summary(summary)
+        assert result is not None
+        assert result.n_missing == 129
+        assert result.pct_missing == pytest.approx(100.0)
+        assert result.n_single == 0
+
+
+# ---------------------------------------------------------------------------
+# Compleasm columns in comparison TSV
+# ---------------------------------------------------------------------------
+class TestComparisonWithCompleasm:
+    def _read_tsv_rows(self, path):
+        """Read TSV and return (header, [row_dicts]) preserving empty trailing columns."""
+        lines = path.read_text().rstrip("\n").split("\n")
+        header = lines[0].split("\t")
+        rows = []
+        for line in lines[1:]:
+            # Pad short rows with empty strings to match header length
+            vals = line.split("\t")
+            vals += [""] * (len(header) - len(vals))
+            rows.append(dict(zip(header, vals)))
+        return header, rows
+
+    def test_compleasm_columns_present(self, tmp_path):
+        compleasm = CompleasmResult(
+            lineage="eukaryota_odb12", n_total=129,
+            n_single=110, n_duplicated=9, n_fragmented=5,
+            n_interspersed=1, n_missing=4,
+            pct_single=85.27, pct_duplicated=6.98, pct_fragmented=3.88,
+            pct_interspersed=0.78, pct_missing=3.10,
+            summary_path=tmp_path / "summary.txt",
+        )
+        r = _make_assembly_result("asm1", tmp_path=tmp_path)
+        r.compleasm_chrs = compleasm
+        r.compleasm_non_chrs = None
+
+        out = tmp_path / "comparison.tsv"
+        write_comparison_summary_tsv(out, [r])
+
+        header, rows = self._read_tsv_rows(out)
+        data = rows[0]
+
+        assert "compleasm_lineage" in header
+        assert "compleasm_chrs_S" in header
+        assert "compleasm_non_chrs_S" in header
+        assert data["compleasm_lineage"] == "eukaryota_odb12"
+        assert data["compleasm_chrs_S"] == "85.27"
+        assert data["compleasm_non_chrs_S"] == ""  # None result
+
+    def test_no_compleasm_empty_columns(self, tmp_path):
+        r = _make_assembly_result("asm1", tmp_path=tmp_path)
+        out = tmp_path / "comparison.tsv"
+        write_comparison_summary_tsv(out, [r])
+
+        header, rows = self._read_tsv_rows(out)
+        data = rows[0]
+
+        assert data["compleasm_lineage"] == ""
+        assert data["compleasm_chrs_S"] == ""

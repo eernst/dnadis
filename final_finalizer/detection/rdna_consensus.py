@@ -10,11 +10,11 @@ as a species-specific probe to:
 3. Annotate sub-feature boundaries within each rDNA locus
 4. Improve rDNA contig classification with a better-matched probe
 
-Pipeline phases:
-  Phase 2: Self-alignment → repeat boundary detection → copy extraction
-  Phase 3: Clustering → exemplar/consensus selection
-  Phase 4: Sub-feature annotation on the consensus
-  Phase 5: Re-annotation of all contigs with consensus probe
+Steps (within CLI phase 13):
+  Step 1: Self-alignment → repeat boundary detection → copy extraction
+  Step 2: Clustering → exemplar/consensus selection
+  Step 3: Sub-feature annotation on the consensus
+  Step 4: Re-annotation of all contigs with consensus probe
 """
 from __future__ import annotations
 
@@ -45,8 +45,8 @@ logger = get_logger("rdna_consensus")
 
 
 # ---------------------------------------------------------------------------
-# Phase 2: Extract rDNA-containing regions, self-align, detect repeat period,
-#           extract individual 45S copies
+# Step 1: Extract rDNA-containing regions, self-align, detect repeat period,
+#          extract individual 45S copies
 # ---------------------------------------------------------------------------
 
 def _extract_rdna_regions(
@@ -64,7 +64,7 @@ def _extract_rdna_regions(
 
     Args:
         query_fasta: Query assembly FASTA
-        rdna_hit_intervals: Per-contig BLAST hit intervals from Phase 1
+        rdna_hit_intervals: Per-contig BLAST hit intervals from rDNA detection
         query_lengths: Contig lengths
         output_fasta: Output FASTA path for extracted regions
         flank_bp: Flanking context to add on each side [2000]
@@ -275,7 +275,7 @@ def _extract_individual_copies(
 
 
 # ---------------------------------------------------------------------------
-# Phase 3: Cluster copies and select exemplar/consensus
+# Step 2: Cluster copies and select exemplar/consensus
 # ---------------------------------------------------------------------------
 
 def _parse_cdhit_clusters(clstr_path: Path) -> Dict[int, List[str]]:
@@ -512,7 +512,7 @@ def cluster_and_select_exemplar(
 
 
 # ---------------------------------------------------------------------------
-# Phase 4: Sub-feature annotation using Infernal/Rfam
+# Step 3: Sub-feature annotation using Infernal/Rfam
 # ---------------------------------------------------------------------------
 
 def _find_rfam_cm_database() -> Optional[Path]:
@@ -748,7 +748,7 @@ def annotate_sub_features_infernal(
 
 
 # ---------------------------------------------------------------------------
-# Phase 5: Re-annotation of all contigs with the consensus probe
+# Step 4: Re-annotation of all contigs with the consensus probe
 # ---------------------------------------------------------------------------
 
 def annotate_contigs_with_consensus(
@@ -1119,7 +1119,7 @@ def _detect_arrays(
 
 
 # ---------------------------------------------------------------------------
-# Phase 5b: Reclassify contigs using consensus-based coverage
+# Step 4b: Reclassify contigs using consensus-based coverage
 # ---------------------------------------------------------------------------
 
 def identify_rdna_contigs_from_loci(
@@ -1193,7 +1193,7 @@ def build_rdna_consensus(
     Args:
         query_fasta: Query assembly FASTA
         query_lengths: Contig lengths
-        rdna_hit_intervals: Per-contig BLAST hit intervals from Phase 1
+        rdna_hit_intervals: Per-contig BLAST hit intervals from rDNA detection
         seed_ref_path: Seed rDNA reference FASTA (Arabidopsis or user-provided)
         work_dir: Working directory for all intermediate files
         threads: Number of threads
@@ -1205,13 +1205,13 @@ def build_rdna_consensus(
         Tuple of (RdnaConsensus or None, list of RdnaLocus annotations, list of RdnaArray objects)
     """
     work_dir.mkdir(parents=True, exist_ok=True)
-    logger.phase("rDNA consensus: Phase 2 - Extract rDNA regions and copies")
+    logger.phase("rDNA consensus: Step 1 - Extract rDNA regions and copies")
 
     if not rdna_hit_intervals:
         logger.warning("No rDNA hit intervals available; skipping consensus building")
         return None, [], []
 
-    # Phase 2a: Extract rDNA-containing regions
+    # Step 1a: Extract rDNA-containing regions
     regions_fasta = work_dir / "rdna_regions.fa"
     region_map = _extract_rdna_regions(
         query_fasta=query_fasta,
@@ -1224,7 +1224,7 @@ def build_rdna_consensus(
         logger.warning("No rDNA regions extracted; skipping consensus building")
         return None, [], []
 
-    # Phase 2b: Detect repeat period via self-alignment
+    # Step 1b: Detect repeat period via self-alignment
     repeat_period = _detect_repeat_period(
         regions_fasta=regions_fasta,
         work_dir=work_dir / "self_align",
@@ -1235,7 +1235,7 @@ def build_rdna_consensus(
         logger.warning("Could not determine repeat period; skipping consensus building")
         return None, [], []
 
-    # Phase 2c: Extract individual copies
+    # Step 1c: Extract individual copies
     copies_fasta = work_dir / "rdna_copies.fa"
     n_copies = _extract_individual_copies(
         regions_fasta=regions_fasta,
@@ -1248,8 +1248,8 @@ def build_rdna_consensus(
         logger.warning("No rDNA copies extracted; skipping consensus building")
         return None, [], []
 
-    # Phase 3: Cluster and select exemplar/consensus
-    logger.phase("rDNA consensus: Phase 3 - Cluster copies and build consensus")
+    # Step 2: Cluster and select exemplar/consensus
+    logger.phase("rDNA consensus: Step 2 - Cluster copies and build consensus")
     consensus_seq, method, n_clustered = cluster_and_select_exemplar(
         copies_fasta=copies_fasta,
         work_dir=work_dir / "clustering",
@@ -1263,8 +1263,8 @@ def build_rdna_consensus(
     logger.info(f"Consensus: {len(consensus_seq)} bp, method={method}, "
                 f"{n_copies} copies extracted, {n_clustered} in cluster")
 
-    # Phase 4: Sub-feature annotation using Infernal/Rfam
-    logger.phase("rDNA consensus: Phase 4 - Annotate sub-features (Infernal)")
+    # Step 3: Sub-feature annotation using Infernal/Rfam
+    logger.phase("rDNA consensus: Step 3 - Annotate sub-features (Infernal)")
     sub_features = annotate_sub_features_infernal(
         consensus_seq=consensus_seq,
         work_dir=work_dir / "annotation",
@@ -1291,8 +1291,8 @@ def build_rdna_consensus(
     consensus_out = work_dir / "rdna_consensus.fa"
     write_fasta({"rdna_consensus": consensus_seq}, consensus_out)
 
-    # Phase 5: Re-annotate all contigs
-    logger.phase("rDNA consensus: Phase 5 - Annotate all contigs")
+    # Step 4: Re-annotate all contigs
+    logger.phase("rDNA consensus: Step 4 - Annotate all contigs")
     loci, arrays = annotate_contigs_with_consensus(
         query_fasta=query_fasta,
         query_lengths=query_lengths,

@@ -14,6 +14,7 @@ from final_finalizer.models import (
     AssemblyResult,
     ChromRefSummary,
     ChainEvidenceResult,
+    CompleasmResult,
     ContigClassification,
     DepthStats,
     RdnaArray,
@@ -63,6 +64,8 @@ def build_assembly_result(
     rdna_annotations_tsv: Optional[Path] = None,
     rdna_arrays_tsv: Optional[Path] = None,
     per_subgenome_chrs: Optional[Dict[str, Path]] = None,
+    compleasm_chrs: Optional[CompleasmResult] = None,
+    compleasm_non_chrs: Optional[CompleasmResult] = None,
 ) -> AssemblyResult:
     """Build an AssemblyResult summarizing one assembly's finalization.
 
@@ -258,6 +261,8 @@ def build_assembly_result(
         rdna_annotations_tsv=rdna_annotations_tsv,
         rdna_arrays_tsv=rdna_arrays_tsv,
         per_subgenome_chrs=per_subgenome_chrs or {},
+        compleasm_chrs=compleasm_chrs,
+        compleasm_non_chrs=compleasm_non_chrs,
     )
 
 
@@ -303,6 +308,19 @@ def write_comparison_summary_tsv(
         "debris_bp",
         "unclassified_bp",
         "mean_chrom_depth",
+        "compleasm_lineage",
+        "compleasm_chrs_N",
+        "compleasm_chrs_S",
+        "compleasm_chrs_D",
+        "compleasm_chrs_F",
+        "compleasm_chrs_I",
+        "compleasm_chrs_M",
+        "compleasm_non_chrs_N",
+        "compleasm_non_chrs_S",
+        "compleasm_non_chrs_D",
+        "compleasm_non_chrs_F",
+        "compleasm_non_chrs_I",
+        "compleasm_non_chrs_M",
     ]
 
     def _fmt(val, fmt_str=".4f"):
@@ -348,6 +366,10 @@ def write_comparison_summary_tsv(
                 str(debris_bp),
                 str(unclassified_bp),
                 _fmt(r.mean_chrom_depth, ".2f"),
+                # Compleasm columns
+                r.compleasm_chrs.lineage if r.compleasm_chrs else "",
+                *(r.compleasm_chrs.tsv_fields() if r.compleasm_chrs else [""] * 6),
+                *(r.compleasm_non_chrs.tsv_fields() if r.compleasm_non_chrs else [""] * 6),
             ]
             fh.write("\t".join(row) + "\n")
 

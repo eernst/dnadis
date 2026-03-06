@@ -2,7 +2,7 @@
 
 **Genome assembly finalization tool for contig classification and quality control**
 
-`final_finalizer` classifies contigs from a *de novo* genome assembly into biological categories (chromosomes, organelles, rDNA, contaminants, debris, unclassified) using protein-anchored synteny evidence, organelle/rDNA alignments, and taxonomic classification.
+`final_finalizer` classifies contigs from a *de novo* genome assembly into biological categories (chromosomes, organelles, rDNA, contaminants, debris, unclassified) using synteny evidence (whole-genome nucleotide alignment or protein-anchored), organelle/rDNA alignments, and taxonomic classification. Beyond classification, it evaluates assembly quality through BUSCO completeness scoring (via compleasm), synteny coverage, and alignment identity metrics. It detects organelles, rDNA loci, and contaminants, and produces rich interactive HTML reports for both individual assemblies and multi-assembly comparisons. Multi-assembly mode aggregates individual assessments for easy comparisons between various assemblies of the same individual, between different individuals of the same species, or even between multiple species.
 
 ## Features
 
@@ -19,9 +19,13 @@
 - **Chimera flagging** for contigs with evidence from multiple chromosomes
 - **Orientation determination** for chromosome-assigned contigs
 - **Contig renaming** to reference-based names (e.g., `chr1A`, `chr1A_f1` for fragments, `contig_1` for unassigned)
+- **BUSCO completeness evaluation** (optional) via compleasm, run separately on chromosome-assigned and non-chromosome contigs
 - **Reference-guided scaffolding** (optional) producing chromosome-scale pseudomolecules with AGP output (uses RagTag if available, otherwise built-in scaffolder)
 - **Read depth analysis** (optional) with automated downsampling and caching
-- **Publication-ready visualizations** (PDF plots via R/ggplot2)
+- **Multi-assembly mode**: analyze multiple assemblies concurrently against a shared reference via `--fofn` (file-of-filenames TSV) or `--assembly-dir` (directory scan)
+- **Cross-assembly comparison reports**: interactive HTML tables (via gt) aggregating classification and BUSCO completeness results across all assemblies
+- **Interactive HTML reports** per assembly with chromosome overview, classification summary, read depth, and contaminant table (enabled by default; requires rmarkdown + pandoc)
+- **Distributed SLURM execution** (optional) via executorlib: compute-intensive phases submitted as individual SLURM jobs with automatic resource estimation
 
 ## Installation
 
@@ -45,6 +49,7 @@
 - [RagTag](https://github.com/malonge/RagTag) - improved reference-guided scaffolding (for `--scaffold`; built-in scaffolder used as fallback)
 - [executorlib](https://github.com/pyiron/executorlib) + [mpi4py](https://github.com/mpi4py/mpi4py) - distributed SLURM job submission (required for `--cluster`; `conda install -c conda-forge executorlib mpi4py`)
 - [infernal](http://eddylab.org/infernal/) - structure-based rRNA annotation with Rfam covariance models (for rDNA consensus building; enabled by default, skip with `--skip-rdna-consensus`; bundled Rfam database)
+- [compleasm](https://github.com/huangnengCSU/compleasm) - BUSCO completeness evaluation (requires `--compleasm-lineage`; install in a **separate conda environment** due to dependency conflicts — see below)
 - R with ggplot2, dplyr, readr, stringr, tibble, tidyr, patchwork, ggnewscale, pacman - visualization (enabled by default; skip with `--skip-plot`)
 - rmarkdown + pandoc - unified HTML report generation (enabled by default; skip with `--skip-plot`)
 
@@ -86,6 +91,24 @@ tar -xzf taxdump.tar.gz -C ~/.taxonkit
 
 Without taxonkit, the contaminant table will show species names parsed from scientific names. With taxonkit and the taxonomy database, you get full taxonomic lineage (Domain, Family, Genus, Species) in the contaminant table.
 
+Optional (compleasm for BUSCO completeness evaluation):
+
+Compleasm has dependency conflicts with the main environment (dendropy version clash between compleasm and sepp), so it must be installed in a **separate conda environment**. The pipeline calls it as an external command, so it just needs to be on `PATH`:
+
+```bash
+# Create a separate environment for compleasm
+conda create -n compleasm -c bioconda -c conda-forge compleasm
+
+# Make compleasm available to the pipeline by adding it to PATH before running:
+export PATH="$(conda run -n compleasm bash -c 'echo $CONDA_PREFIX')/bin:$PATH"
+
+# Or activate both environments (compleasm first, then final_finalizer):
+conda activate compleasm
+conda activate --stack final_finalizer
+```
+
+Then use `--compleasm-lineage <lineage>` (e.g., `embryophyta`, `liliopsida`, `eukaryota`) to enable BUSCO evaluation on chromosome-assigned and non-chromosome contigs.
+
 ### Development
 
 To run the test suite:
@@ -124,6 +147,18 @@ Latest tested conda package versions (CI):
 | `-q, --query` | Query assembly FASTA to classify (single-assembly mode) |
 | `-o, --output-dir` | Output directory (reference/ and per-assembly subdirectories created inside) |
 | `--ref-gff3` | Reference GFF3 with protein-coding gene annotations. Required for `--synteny-mode protein`. |
+
+### Multi-assembly mode
+
+`-q/--query` is for single-assembly mode. To process multiple assemblies against the same reference, use one of:
+
+| Argument | Description |
+|----------|-------------|
+| `--fofn` | Tab-separated file-of-filenames with columns: `path`, `name`, and (optionally) `reads`. One assembly per row. |
+| `--assembly-dir` | Directory to scan for FASTA files (`.fasta`, `.fa`, `.fasta.gz`, `.fa.gz`). Assembly names are derived from filenames. |
+| `--assembly-name` | Override the assembly name for the single-assembly (`-q`) case (default: derived from query filename stem). |
+
+`--fofn` and `--assembly-dir` are mutually exclusive and cannot be combined with `-q`. When ≥2 assemblies complete, cross-assembly comparison outputs (`comparison_summary.tsv`, `chromosome_completeness.tsv`, and an interactive comparison HTML report) are written to the top-level output directory.
 
 ### Common options
 
@@ -192,6 +227,17 @@ Read type to minimap2 preset mapping:
 | `--skip-rdna` | Skip rDNA detection |
 | `--skip-contaminants` | Skip contaminant detection |
 
+### BUSCO completeness options
+
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--compleasm-lineage` | BUSCO lineage for compleasm evaluation (e.g., `eukaryota`, `viridiplantae`, `embryophyta`). Required for compleasm to run. | none |
+| `--compleasm-library` | Path to pre-downloaded compleasm lineage files (avoids runtime download) | auto-download |
+| `--compleasm-path` | Path to compleasm executable (e.g., from a separate conda environment). If unset, uses `compleasm` from `PATH`. | none |
+| `--skip-compleasm` | Skip compleasm even if `--compleasm-lineage` is specified | off |
+
+When `--compleasm-lineage` is set, phase 17 runs compleasm on two FASTA subsets: chromosome-assigned contigs (`*.chrs.fasta`) and non-chromosome contigs (`*.non_chrs.fasta`, combining debris + unclassified + contaminants). Both runs are submitted in parallel. Results are included in the per-assembly unified HTML report and in the multi-assembly `comparison_summary.tsv`.
+
 ### Scaffolding options
 
 | Argument | Description | Default |
@@ -216,7 +262,7 @@ When `--scaffold` is enabled, chromosome-assigned contigs are grouped by referen
 conda install -n final_finalizer -c conda-forge executorlib mpi4py
 ```
 
-When `--cluster` is enabled, compute-intensive phases (synteny alignment, BLAST detection, debris detection, contaminant screening, read depth) are submitted as individual SLURM jobs with per-job resource control. In multi-assembly mode, assemblies run concurrently with each submitting its own SLURM jobs. Without `--cluster`, all phases run locally.
+When `--cluster` is enabled, compute-intensive phases (synteny alignment, BLAST detection, debris detection, contaminant screening, read depth, compleasm) are submitted as individual SLURM jobs with per-job resource control. In multi-assembly mode, assemblies run concurrently with each submitting its own SLURM jobs. Without `--cluster`, all phases run locally.
 
 ## Output Files
 
@@ -230,6 +276,7 @@ When `--cluster` is enabled, compute-intensive phases (synteny alignment, BLAST 
 | `*.contaminants.fasta` | Contaminant contigs |
 | `*.debris.fasta` | Assembly debris (fragments, duplicates) |
 | `*.unclassified.fasta` | Contigs that couldn't be classified |
+| `*.non_chrs.fasta` | Combined non-chromosome contigs (debris + unclassified + contaminants; produced when `--compleasm-lineage` is set) |
 | `*.scaffolded.fasta` | Scaffolded chromosome pseudomolecules (if `--scaffold`) |
 | `*.scaffolded.agp` | AGP 2.0 file describing scaffold structure (if `--scaffold`) |
 
@@ -242,7 +289,25 @@ When `--cluster` is enabled, compute-intensive phases (synteny alignment, BLAST 
 | `*.segments.tsv` | Individual synteny segments |
 | `*.macro_blocks.tsv` | Aggregated synteny macro-blocks |
 | `*.ref_lengths.tsv` | Reference chromosome lengths |
+| `*.contaminants.tsv` | Detailed contaminant summary with taxonomic lineage (if contaminants detected) |
+| `*.rdna_annotations.tsv` | rRNA sub-feature annotations in TSV format (produced by default; skip with `--skip-rdna-consensus`) |
+| `*.rdna_arrays.tsv` | rDNA array locations per contig (produced when arrays are detected; skip with `--skip-rdna-consensus`) |
+
+### GFF3 outputs
+
+| File | Description |
+|------|-------------|
 | `*.rdna_annotations.gff3` | Hierarchical rRNA gene annotations with 18S, 5.8S, 25S, ITS1, ITS2 sub-features (produced by default; skip with `--skip-rdna-consensus`) |
+
+### Multi-assembly outputs
+
+Produced in the top-level output directory when ≥2 assemblies complete:
+
+| File | Description |
+|------|-------------|
+| `comparison_summary.tsv` | Per-assembly classification counts and BUSCO completeness scores (S/D/F/I/M) for chromosome and non-chromosome contig sets |
+| `chromosome_completeness.tsv` | Per-reference-chromosome coverage and completeness across all assemblies |
+| `comparison_report.html` | Interactive HTML comparison report with gt tables summarizing classification and BUSCO results across assemblies |
 
 ### Key columns in `contig_summary.tsv`
 
@@ -268,34 +333,37 @@ For complete column documentation for all TSV files, see [docs/output_formats.md
 
 ### Visualization
 
+Enabled by default; skip with `--skip-plot` (requires R with ggplot2 and related packages, plus rmarkdown + pandoc).
+
 | File | Description |
 |------|-------------|
-| `*.unified_report.html` | Self-contained HTML report with all plots (chromosome overview, classification, depth, contaminant table) |
-| `*.chromosome_overview.pdf` | Multi-panel plot showing contig composition, subgenome support, and alignment identity |
-| `*.depth_overview.pdf` | Read depth visualization by classification and chromosome (if `--reads` provided) |
-| `*.contaminants.tsv` | Detailed contaminant summary with taxonomic lineage |
+| `*.unified_report.html` | Self-contained HTML report per assembly with all plots (chromosome overview, classification bar, read depth overview, contaminant table) |
+| `*.chromosome_overview.pdf` | Multi-panel plot showing contig composition, subgenome support, and alignment identity (exported from the unified report) |
+| `*.depth_overview.pdf` | Read depth visualization by classification and chromosome (if `--reads` provided; exported from the unified report) |
 
 ## Classification Pipeline
 
-The tool runs these phases in order:
+Reference preparation runs first: read reference genome, compute GC statistics, prepare organelle/rDNA references, and (in protein mode) extract proteins from GFF3. Then the per-assembly pipeline runs these phases:
 
-1. **Reference preparation** - Read reference genome and compute GC statistics
-2. **Synteny analysis** (mode-dependent):
-   - **Protein mode**: Extract proteins from GFF3 (gffread), align to query assembly (miniprot)
-   - **Nucleotide mode**: Whole-genome alignment with permissive chaining (minimap2)
-3. **Synteny block building** - Chain alignments into synteny blocks; identify chromosome candidates
-4. **Organelle detection** - BLAST non-chromosome contigs against chrC/chrM references
-5. **rDNA detection** - BLAST against rDNA reference
-6. **Chromosome debris detection** - High-coverage, high-identity matches to assembled chromosomes
-7. **Contaminant detection** - Centrifuger taxonomic classification with two-gate filtering (score ≥1000, coverage ≥0.50)
-8. **Debris classification** - Reference-based debris detection for remaining contigs
-9. **Gene count statistics** (if GFF3 provided) - Compute gene proportion metrics
-10. **Orientation determination** - Determine strand for chromosome contigs based on synteny votes
-11. **Contig naming** - Rename contigs to reference-based names (e.g., `chr1A` for full-length, `chr1A_f1` for fragments, `contig_1` for unassigned)
-12. **Final classification** - Assign all contigs to categories with confidence levels
-13. **Reference-guided scaffolding** (optional, `--scaffold`) - Order and orient contigs into chromosome-scale pseudomolecules with AGP output
-14. **Read depth analysis** (optional) - Align reads and compute per-contig depth metrics
-15. **Output generation** - Write classified FASTAs, summary tables, and visualizations
+| Phase | Description |
+|-------|-------------|
+| 1 | **Read query assembly** — parse FASTA, compute contig lengths and GC |
+| 2 | **Synteny analysis** — protein mode (miniprot) or nucleotide mode (minimap2); chain alignments into synteny blocks and identify chromosome candidates |
+| 3 | **Organelle detection** — BLAST against chrC/chrM references (skip with `--skip-organelles`) |
+| 4 | **rDNA detection** — BLAST against rDNA reference (skip with `--skip-rdna`) |
+| 5 | **Chromosome debris detection** — high-coverage, high-identity matches to assembled chromosomes (minimap2) |
+| 6 | **Contaminant detection** — centrifuger taxonomic classification with two-gate filtering (score ≥1000, coverage ≥0.50; requires `--centrifuger-idx`) |
+| 7 | **Debris classification** — reference-based debris detection for remaining contigs |
+| 8 | **Gene count statistics** — compute gene proportion metrics (if GFF3 provided) |
+| 9 | **Orientation determination** — determine strand for chromosome contigs based on synteny votes |
+| 10 | **Telomere detection** — scan contig ends for telomeric repeats (skip with `--skip-telomeres`) |
+| 11 | **Classification** — assign all contigs to categories with confidence levels; rename contigs to reference-based names (e.g., `chr1A`, `chr1A_f1`, `contig_1`) |
+| 12 | **Read depth analysis** — align reads and compute per-contig depth metrics (optional, requires `--reads`) |
+| 13 | **rDNA consensus building** — build species-specific 45S rDNA consensus and annotate rRNA sub-features (skip with `--skip-rdna-consensus`) |
+| 14 | **Reference-guided scaffolding** — order and orient contigs into chromosome-scale pseudomolecules with AGP output (optional, `--scaffold`) |
+| 15 | **Write FASTA outputs** — classified FASTA files (chromosomes, organelles, rDNA, etc.) |
+| 16 | **Write summary TSV** — per-contig classification table, evidence summaries, and visualizations |
+| 17 | **BUSCO completeness evaluation** — compleasm run on `*.chrs.fasta` and `*.non_chrs.fasta` in parallel (optional, requires `--compleasm-lineage`; skip with `--skip-compleasm`) |
 
 ## rDNA Consensus and Annotation
 
@@ -502,6 +570,7 @@ assign_min_ratio = 1.25
     -r TAIR10.fasta \
     -q my_assembly.fasta \
     -o results/ \
+    --synteny-mode protein \
     --ref-gff3 TAIR10.gff3 \
     -t 32
 
@@ -617,6 +686,52 @@ This produces `*.scaffolded.fasta` (chromosome pseudomolecules) and `*.scaffolde
     -t 32
 ```
 
+### With BUSCO completeness evaluation
+
+```bash
+./final_finalizer.py \
+    -r reference.fasta \
+    -q assembly.fasta \
+    -o results/ \
+    --compleasm-lineage embryophyta \
+    -t 32
+```
+
+Compleasm runs on chromosome-assigned contigs and non-chromosome contigs in parallel. Results appear in `*.unified_report.html` and (in multi-assembly runs) in `comparison_summary.tsv`. If compleasm is installed in a separate conda environment, pass the executable path with `--compleasm-path`.
+
+### Multi-assembly mode (file-of-filenames)
+
+Analyze multiple assemblies against a shared reference. The TSV file has columns `path`, `name`, and optionally `reads` (one assembly per row):
+
+```bash
+# assemblies.tsv: path <tab> name [<tab> reads]
+./final_finalizer.py \
+    -r reference.fasta \
+    --ref-gff3 reference.gff3 \
+    --fofn assemblies.tsv \
+    -o multi_output/ \
+    --compleasm-lineage viridiplantae \
+    -t 32
+```
+
+Cross-assembly outputs (`comparison_summary.tsv`, `chromosome_completeness.tsv`, `comparison_report.html`) are written to `multi_output/` once all assemblies complete.
+
+### Multi-assembly mode with SLURM cluster
+
+```bash
+./final_finalizer.py \
+    -r reference.fasta \
+    --ref-gff3 reference.gff3 \
+    --fofn assemblies.tsv \
+    -o multi_output/ \
+    --cluster \
+    --partition cpuq \
+    --max-threads-dist 32 \
+    --max-mem-dist 128
+```
+
+Assemblies run concurrently; each submits its own SLURM jobs for compute-intensive phases.
+
 ## Algorithm Details
 
 ### Synteny Mode Selection
@@ -705,7 +820,7 @@ For polyploid genomes (e.g., wheat with A, B, D subgenomes), final_finalizer dis
 
 **For non-polyploid genomes:** Use `--add-subgenome-suffix A` to add a single subgenome label to the reference. This can be used to "bootstrap" a synthetic hybrid reference chromosome set.
 
-### Debris detection
+### Debris detection algorithm
 
 Two complementary approaches:
 
@@ -739,8 +854,8 @@ If you use this tool, please cite:
 - [centrifuger](https://github.com/mourisl/centrifuger) (if used)
 - [taxonkit](https://github.com/shenwei356/taxonkit) (if used for contaminant visualization)
 - [Infernal](http://eddylab.org/infernal/) and [Rfam](https://rfam.org/) (if rDNA consensus building was used for rRNA annotation):
-  - Nawrocki EP, Eddy SR (2013). Infernal 1.1: 100-fold faster RNA homology searches. Bioinformatics, 29(22):2933-2935. https://doi.org/10.1093/bioinformatics/btt509
-  - Kalvari I, et al. (2021). Rfam 14: expanded coverage of metagenomic, viral and microRNA families. Nucleic Acids Research, 49(D1):D192-D200. https://doi.org/10.1093/nar/gkaa1047
+  - Nawrocki EP, Eddy SR (2013). Infernal 1.1: 100-fold faster RNA homology searches. Bioinformatics, 29(22):2933-2935. <https://doi.org/10.1093/bioinformatics/btt509>
+  - Kalvari I, et al. (2021). Rfam 14: expanded coverage of metagenomic, viral and microRNA families. Nucleic Acids Research, 49(D1):D192-D200. <https://doi.org/10.1093/nar/gkaa1047>
 
 ## License
 

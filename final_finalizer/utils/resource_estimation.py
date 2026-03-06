@@ -69,7 +69,7 @@ def estimate_synteny_resources(
     synteny_mode: str,
     config: ClusterConfig,
 ) -> ResourceSpec:
-    """Estimate resources for Phase 2 synteny alignment."""
+    """Estimate resources for synteny alignment (phase 2)."""
     ref_bp = _estimate_genome_bp_from_filesize(ref_path)
     qry_bp = _estimate_genome_bp_from_filesize(qry_path)
 
@@ -115,7 +115,7 @@ def estimate_debris_resources(
     query_path: Path,
     config: ClusterConfig,
 ) -> ResourceSpec:
-    """Estimate resources for Phase 6 chromosome debris detection."""
+    """Estimate resources for chromosome debris detection (phase 5)."""
     qry_bp = _estimate_genome_bp_from_filesize(query_path)
     mem_gb = max(2.0, qry_bp * 8 / 1e9 + 1.0)
     time_min = _scale_time(30, qry_bp)
@@ -133,7 +133,7 @@ def estimate_contaminant_resources(
     centrifuger_idx: str,
     config: ClusterConfig,
 ) -> ResourceSpec:
-    """Estimate resources for Phase 7 contaminant detection."""
+    """Estimate resources for contaminant detection (phase 6)."""
     # Index size drives memory; try .1.cfr first, fall back to prefix.cfr
     idx_path = Path(centrifuger_idx + ".1.cfr")
     if not idx_path.exists():
@@ -174,12 +174,31 @@ def estimate_pairwise_resources(
     return clamp_resources(spec, config)
 
 
+def estimate_compleasm_resources(
+    fasta_path: Path,
+    config: ClusterConfig,
+) -> ResourceSpec:
+    """Estimate resources for compleasm BUSCO evaluation (phase 17)."""
+    qry_bp = _estimate_genome_bp_from_filesize(fasta_path)
+    # compleasm/miniprot: memory scales modestly with genome size
+    mem_gb = max(4.0, qry_bp * 4 / 1e9 + 2.0)
+    time_min = _scale_time(30, qry_bp)
+
+    spec = ResourceSpec(
+        cores=min(16, config.max_threads),
+        memory_gb=mem_gb,
+        time_minutes=time_min,
+        job_name="compleasm",
+    )
+    return clamp_resources(spec, config)
+
+
 def estimate_depth_resources(
     reads_path: Path,
     assembly_path: Path,
     config: ClusterConfig,
 ) -> ResourceSpec:
-    """Estimate resources for Phase 11.5 read depth analysis."""
+    """Estimate resources for read depth analysis (phase 12)."""
     asm_bp = _estimate_genome_bp_from_filesize(assembly_path)
     reads_bytes = _file_size_bytes(reads_path)
 

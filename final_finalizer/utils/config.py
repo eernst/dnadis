@@ -130,7 +130,7 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
     },
     "full_length_detection": {
         "full_length_ref_coverage": "full_length_ref_coverage",
-        "disable_telomere_detection": "disable_telomere_detection",
+        "skip_telomeres": "skip_telomeres",
         "telomere_motif": "telomere_motif",
         "telomere_window": "telomere_window",
         "telomere_min_repeats": "telomere_min_repeats",
@@ -139,6 +139,12 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
     "scaffolding": {
         "scaffold": "scaffold",
         "scaffold_gap_size": "scaffold_gap_size",
+    },
+    "compleasm": {
+        "compleasm_lineage": "compleasm_lineage",
+        "compleasm_library": "compleasm_library",
+        "compleasm_path": "compleasm_path",
+        "skip_compleasm": "skip_compleasm",
     },
     "multi_assembly": {
         "fofn": "fofn",

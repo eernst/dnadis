@@ -150,6 +150,7 @@ from final_finalizer.detection.rdna import (
 )
 from final_finalizer.detection.debris import detect_chromosome_debris
 from final_finalizer.detection.contaminant import detect_contaminants
+from final_finalizer.detection.compleasm import run_compleasm
 from final_finalizer.classification.classifier import (
     classify_all_contigs,
     classify_debris_and_unclassified,
@@ -379,7 +380,7 @@ def run_assembly(
     ref_lengths = ref_lengths_norm
 
     # --- Phase 1: Reading query FASTA ---
-    logger.phase("Phase 1: Reading query FASTA")
+    logger.phase("Phase 1: Reading query assembly")
 
     # Create output directory if it doesn't exist
     out_dir = outprefix.parent
@@ -713,7 +714,7 @@ def run_assembly(
 
     # Submit organelle detection
     if not args.skip_organelles:
-        logger.phase("Phase 4: Organelle detection")
+        logger.phase("Phase 3: Organelle detection")
         if ref_ctx.chrC_ref or ref_ctx.chrM_ref:
             organelle_future = executor.submit(
                 detect_organelles,
@@ -729,13 +730,13 @@ def run_assembly(
                 resource_spec=blast_spec if use_cluster else None,
             )
     else:
-        logger.info("Phase 4: Skipping organelle detection (--skip-organelles)")
+        logger.info("Phase 3: Skipping organelle detection (--skip-organelles)")
 
     # In cluster mode, submit rDNA in parallel with organelle (exclude_contigs=set()),
     # then reconcile after both finish.  In local mode, wait for organelle first
     # so rDNA can use accurate exclude_contigs.
     if use_cluster and not args.skip_rdna and ref_ctx.rdna_ref:
-        logger.phase("Phase 5: rDNA detection")
+        logger.phase("Phase 4: rDNA detection")
         rdna_future = executor.submit(
             detect_rdna_contigs,
             query_fasta=blast_query_fasta,
@@ -757,7 +758,7 @@ def run_assembly(
 
     # In local mode, submit rDNA now with accurate exclude_contigs
     if not use_cluster and not args.skip_rdna and ref_ctx.rdna_ref:
-        logger.phase("Phase 5: rDNA detection")
+        logger.phase("Phase 4: rDNA detection")
         rdna_future = executor.submit(
             detect_rdna_contigs,
             query_fasta=blast_query_fasta,
@@ -771,7 +772,7 @@ def run_assembly(
         )
 
     if args.skip_rdna:
-        logger.info("Phase 5: Skipping rDNA detection (--skip-rdna)")
+        logger.info("Phase 4: Skipping rDNA detection (--skip-rdna)")
 
     # Collect rDNA results
     if rdna_future is not None:
@@ -786,8 +787,8 @@ def run_assembly(
                 rdna_hits.pop(c, None)
                 rdna_hit_intervals.pop(c, None)
 
-    # --- Phase 6: Chromosome debris detection ---
-    logger.phase("Phase 6: Chromosome debris detection")
+    # --- Phase 5: Chromosome debris detection ---
+    logger.phase("Phase 5: Chromosome debris detection")
     already_classified = already_classified | rdna_contigs
 
     chromosome_debris: Set[str] = set()
@@ -814,11 +815,11 @@ def run_assembly(
         chromosome_debris, chrom_debris_hits = debris_future.result()
         already_classified = already_classified | chromosome_debris
 
-    # --- Phase 7: Contaminant detection ---
+    # --- Phase 6: Contaminant detection ---
     contaminants: Dict[str, Tuple[int, str]] = {}
 
     if not args.skip_contaminants and args.centrifuger_idx:
-        logger.phase("Phase 7: Contaminant detection")
+        logger.phase("Phase 6: Contaminant detection")
         residual_contigs = set(qry_lengths.keys()) - already_classified - chromosome_contigs
         if residual_contigs:
             residual_fasta = work_dir / "residual_for_contaminant_screen.fa"
@@ -844,10 +845,10 @@ def run_assembly(
             )
             contaminants = contam_future.result()
     else:
-        logger.info("Phase 7: Skipping contaminant detection")
+        logger.info("Phase 6: Skipping contaminant detection")
 
-    # --- Phase 8: Debris/unclassified classification ---
-    logger.phase("Phase 8: Debris/unclassified classification")
+    # --- Phase 7: Debris/unclassified classification ---
+    logger.phase("Phase 7: Debris/unclassified classification")
 
     already_classified = already_classified | set(contaminants.keys()) | chromosome_contigs
     remaining_contigs = set(qry_lengths.keys()) - already_classified
@@ -866,8 +867,8 @@ def run_assembly(
     )
     other_debris = additional_debris
 
-    # --- Phase 9: Gene count statistics ---
-    logger.phase("Phase 9: Gene count statistics")
+    # --- Phase 8: Gene count statistics ---
+    logger.phase("Phase 8: Gene count statistics")
     if ref_gff3:
         ref_gene_counts = count_genes_per_ref_chrom(ref_gff3, ref_id_map=ref_orig_to_norm)
         compute_mean_gene_proportion(
@@ -880,8 +881,8 @@ def run_assembly(
         logger.info("No GFF3 available - skipping gene count statistics")
         ref_gene_counts = {}
 
-    # --- Phase 10: Orientation determination ---
-    logger.phase("Phase 10: Orientation determination")
+    # --- Phase 9: Orientation determination ---
+    logger.phase("Phase 9: Orientation determination")
     contig_orientations = determine_contig_orientations(
         macro_block_rows=ev.macro_block_rows,
         best_ref=best_ref,
@@ -889,10 +890,10 @@ def run_assembly(
         query_lengths=qry_lengths,
     )
 
-    # --- Phase 10.5: Telomere detection (optional) ---
+    # --- Phase 10: Telomere detection (optional) ---
     telomere_results = None
-    if not args.disable_telomere_detection:
-        logger.phase("Phase 10.5: Telomere detection")
+    if not args.skip_telomeres:
+        logger.phase("Phase 10: Telomere detection")
         from final_finalizer.detection.telomere import detect_telomeres
         telomere_results = detect_telomeres(
             query_fasta=qry,
@@ -902,9 +903,9 @@ def run_assembly(
             min_repeats=args.telomere_min_repeats,
         )
     else:
-        logger.info("Phase 10.5: Skipping telomere detection (--disable-telomere-detection)")
+        logger.info("Phase 10: Skipping telomere detection (--skip-telomeres)")
 
-    # --- Phase 11: Classify all contigs ---
+    # --- Phase 11: Classification ---
     logger.phase("Phase 11: Classifying all contigs")
 
     # Filter contaminants by coverage threshold (low coverage hits may be false positives)
@@ -957,10 +958,10 @@ def run_assembly(
     for clf in classifications:
         clf.reversed = contig_orientations.get(clf.original_name, False)
 
-    # --- Phase 11.5: Read depth analysis (optional) ---
+    # --- Phase 12: Read depth analysis (optional) ---
     depth_stats: Dict[str, 'DepthStats'] = {}
     if reads and not args.skip_depth:
-        logger.phase("Phase 11.5: Read depth analysis")
+        logger.phase("Phase 12: Read depth analysis")
         from final_finalizer.analysis.read_depth import calculate_depth_metrics
         from final_finalizer.models import DepthStats
 
@@ -999,9 +1000,9 @@ def run_assembly(
         if depth_stats:
             logger.done(f"Depth analysis complete for {len(depth_stats)} contigs")
     elif reads and args.skip_depth:
-        logger.info("Phase 11.5: Skipping depth analysis (--skip-depth)")
+        logger.info("Phase 12: Skipping depth analysis (--skip-depth)")
 
-    # --- Phase 11.7: rDNA consensus building (optional) ---
+    # --- Phase 13: rDNA consensus building (optional) ---
     rdna_consensus_obj = None
     rdna_loci = []
     rdna_arrays = []
@@ -1009,7 +1010,7 @@ def run_assembly(
     rdna_arrays_tsv_path = None
     rdna_ref = ref_ctx.rdna_ref
     if not args.skip_rdna_consensus and not args.skip_rdna and rdna_hit_intervals:
-        logger.phase("Phase 11.7: Building rDNA consensus from query assembly")
+        logger.phase("Phase 13: Building rDNA consensus from query assembly")
         from final_finalizer.detection.rdna_consensus import build_rdna_consensus
 
         # Build classification lookup for annotation
@@ -1106,13 +1107,13 @@ def run_assembly(
         else:
             logger.warning("rDNA consensus building did not produce a result")
     elif not args.skip_rdna_consensus and args.skip_rdna:
-        logger.info("Phase 11.7: Skipping rDNA consensus (--skip-rdna)")
+        logger.info("Phase 13: Skipping rDNA consensus (--skip-rdna)")
 
-    # --- Phase 12: Scaffolding (optional) ---
+    # --- Phase 14: Scaffolding (optional) ---
     scaffolded_seqs: Dict[str, str] = {}
     scaffold_confidences: Optional[Dict[str, tuple]] = None
     if args.scaffold:
-        logger.phase("Phase 12: Reference-guided scaffolding")
+        logger.phase("Phase 14: Reference-guided scaffolding")
         from final_finalizer.output.scaffolding import scaffold_chromosomes, write_agp, orientations_from_agp
 
         scaffolded_seqs, agp_lines, scaffold_confidences = scaffold_chromosomes(
@@ -1149,10 +1150,10 @@ def run_assembly(
                 if clf.original_name in agp_orients:
                     clf.reversed = agp_orients[clf.original_name]
     else:
-        logger.info("Phase 12: Skipping scaffolding (use --scaffold to enable)")
+        logger.info("Phase 14: Skipping scaffolding (use --scaffold to enable)")
 
-    # --- Phase 12.5: Write FASTA outputs ---
-    logger.phase("Phase 12.5: Writing FASTA outputs")
+    # --- Phase 15: Write FASTA outputs ---
+    logger.phase("Phase 15: Writing FASTA outputs")
     write_classified_fastas(
         query_fasta=qry,
         classifications=classifications,
@@ -1165,8 +1166,8 @@ def run_assembly(
     chrs_fasta = Path(str(outprefix) + ".chrs.fasta")
     per_sg_chrs = write_per_subgenome_chrs_fastas(chrs_fasta, outprefix)
 
-    # --- Phase 13: Write summary TSV ---
-    logger.phase("Phase 13: Writing summary TSV")
+    # --- Phase 16: Write summary TSV ---
+    logger.phase("Phase 16: Writing summary TSV")
     summary_tsv = Path(str(outprefix) + ".contig_summary.tsv")
 
     write_contig_summary_tsv(
@@ -1218,6 +1219,74 @@ def run_assembly(
     for cat, count in sorted(clf_counts.items()):
         logger.info(f"       {cat}: {count}")
 
+    # --- Phase 17: Compleasm (BUSCO) evaluation ---
+    compleasm_chrs_result = None
+    compleasm_non_chrs_result = None
+
+    can_compleasm = args.compleasm_lineage and not args.skip_compleasm
+    if can_compleasm:
+        import shutil
+        logger.phase("Phase 17: Compleasm (BUSCO completeness) evaluation")
+
+        chrs_fasta = Path(str(outprefix) + ".chrs.fasta")
+
+        # Build non_chrs.fasta by concatenating all non-chromosome FASTAs
+        non_chrs_fasta = Path(str(outprefix) + ".non_chrs.fasta")
+        non_chr_suffixes = [".debris.fasta", ".unclassified.fasta", ".contaminants.fasta"]
+        if not file_exists_and_valid(non_chrs_fasta):
+            with non_chrs_fasta.open("wb") as out_fh:
+                for suffix in non_chr_suffixes:
+                    src = Path(str(outprefix) + suffix)
+                    if file_exists_and_valid(src):
+                        with src.open("rb") as in_fh:
+                            shutil.copyfileobj(in_fh, out_fh)
+            if not file_exists_and_valid(non_chrs_fasta):
+                logger.info("No non-chromosome contigs for compleasm")
+
+        compleasm_threads = args.threads
+
+        if use_cluster:
+            from final_finalizer.utils.resource_estimation import estimate_compleasm_resources
+            compleasm_spec = estimate_compleasm_resources(chrs_fasta, cluster_config)
+            compleasm_threads = _job_threads(compleasm_spec)
+        else:
+            compleasm_spec = ResourceSpec()
+
+        # Submit both compleasm runs in parallel
+        compleasm_chrs_future = executor.submit(
+            run_compleasm,
+            fasta=chrs_fasta,
+            output_dir=work_dir / "compleasm_chrs",
+            lineage=args.compleasm_lineage,
+            threads=compleasm_threads,
+            library_path=args.compleasm_library,
+            compleasm_exe=args.compleasm_path,
+            resource_spec=compleasm_spec if use_cluster else None,
+        )
+        compleasm_non_chrs_future = executor.submit(
+            run_compleasm,
+            fasta=non_chrs_fasta,
+            output_dir=work_dir / "compleasm_non_chrs",
+            lineage=args.compleasm_lineage,
+            threads=compleasm_threads,
+            library_path=args.compleasm_library,
+            compleasm_exe=args.compleasm_path,
+            resource_spec=compleasm_spec if use_cluster else None,
+        )
+
+        compleasm_chrs_result = compleasm_chrs_future.result()
+        compleasm_non_chrs_result = compleasm_non_chrs_future.result()
+
+        if compleasm_chrs_result:
+            logger.done(f"Compleasm chrs:     {compleasm_chrs_result.summary_line()}")
+        if compleasm_non_chrs_result:
+            logger.done(f"Compleasm non-chrs: {compleasm_non_chrs_result.summary_line()}")
+    else:
+        if args.compleasm_lineage:
+            logger.info("Phase 17: Skipping compleasm (--skip-compleasm)")
+        else:
+            logger.info("Phase 17: Skipping compleasm (no --compleasm-lineage specified)")
+
     # Build assembly result for cross-assembly comparison
     from final_finalizer.output.comparison import build_assembly_result
     result = build_assembly_result(
@@ -1243,11 +1312,17 @@ def run_assembly(
         rdna_annotations_tsv=rdna_annotations_tsv,
         rdna_arrays_tsv=rdna_arrays_tsv_path,
         per_subgenome_chrs=per_sg_chrs,
+        compleasm_chrs=compleasm_chrs_result,
+        compleasm_non_chrs=compleasm_non_chrs_result,
     )
 
     if not args.skip_plot:
         agp_tsv = Path(str(outprefix) + ".scaffolded.agp") if args.scaffold and scaffolded_seqs else None
         contam_tsv_arg = contaminants_tsv if contaminants_filtered else None
+
+        # Resolve compleasm summary paths for the report
+        compleasm_chrs_sum = compleasm_chrs_result.summary_path if compleasm_chrs_result else None
+        compleasm_non_sum = compleasm_non_chrs_result.summary_path if compleasm_non_chrs_result else None
 
         if not run_unified_report(
             summary_tsv,
@@ -1265,6 +1340,8 @@ def run_assembly(
             rdna_arrays_tsv=rdna_arrays_tsv_path,
             contaminants_tsv=contam_tsv_arg,
             agp_tsv=agp_tsv,
+            compleasm_chrs_summary=compleasm_chrs_sum,
+            compleasm_non_chrs_summary=compleasm_non_sum,
         ):
             logger.error(
                 "--plot failed: unified report could not be generated. "
@@ -1308,6 +1385,7 @@ def main():
             chr_debris_min_identity=0.90, contaminant_min_score=1000, contaminant_min_coverage=0.50,
             debris_min_cov=0.50, debris_min_protein_hits=2, preset="asm20", kmer=None, window=None, aln_minlen=10000,
             scaffold=False, scaffold_gap_size=100,
+            compleasm_lineage=None, compleasm_library=None, compleasm_path=None, skip_compleasm=False,
             fofn=None, assembly_dir=None,
             cluster=False, max_threads_dist=64, max_mem_dist=128.0,
             max_time_dist=720, partition="cpuq", qos="",
@@ -1659,8 +1737,8 @@ def main():
         help="Reference span coverage threshold for full-length classification [0.70]",
     )
     fl_grp.add_argument(
-        "--disable-telomere-detection", action="store_true",
-        help="Disable telomere detection (enabled by default)",
+        "--skip-telomeres", action="store_true",
+        help="Skip telomere detection (enabled by default)",
     )
     fl_grp.add_argument(
         "--telomere-motif", type=str, default="TTTAGGG",
@@ -1731,6 +1809,27 @@ def main():
     scaffold_grp.add_argument(
         "--scaffold-gap-size", type=int, default=100,
         help="Number of Ns between contigs in scaffolded output [100]",
+    )
+
+    # =========================================================================
+    # Compleasm (BUSCO completeness) options
+    # =========================================================================
+    compleasm_grp = p.add_argument_group("Compleasm (BUSCO) options")
+    compleasm_grp.add_argument(
+        "--compleasm-lineage", type=str, default=None,
+        help="BUSCO lineage for compleasm evaluation (e.g., eukaryota, viridiplantae, embryophyta). Required for compleasm to run.",
+    )
+    compleasm_grp.add_argument(
+        "--compleasm-library", type=str, default=None,
+        help="Path to pre-downloaded compleasm lineage files [auto-download]",
+    )
+    compleasm_grp.add_argument(
+        "--compleasm-path", type=str, default=None,
+        help="Path to compleasm executable (e.g., from a separate conda env). If not set, uses compleasm from PATH.",
+    )
+    compleasm_grp.add_argument(
+        "--skip-compleasm", action="store_true",
+        help="Skip compleasm even if --compleasm-lineage is specified",
     )
 
     args = p.parse_args()
@@ -1821,11 +1920,22 @@ def main():
     failures = []
     results = []
 
+    # --- Per-assembly pipeline (executor scope) ---
+    # The executor context is kept as narrow as possible: it covers only
+    # the per-assembly runs and pairwise synteny (which submit SLURM jobs).
+    # TSV writing and comparison report rendering happen *after* the
+    # executor shuts down, so an executorlib shutdown hang cannot block
+    # the final outputs.
+    pairwise_pairs: list[tuple[str, Path]] = []
+
     with create_executor(cluster_config, output_dir=output_dir) as executor:
         if cluster_config.enabled and n_total > 1:
             # Run assemblies concurrently — each run_assembly() is mostly
             # I/O-bound (waiting on SLURM futures), so threads work well.
-            from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
+            from concurrent.futures import (
+                ThreadPoolExecutor as _ThreadPoolExecutor,
+                as_completed as _as_completed,
+            )
 
             logger.info(f"Cluster mode: running {n_total} assemblies concurrently")
 
@@ -1843,7 +1953,7 @@ def main():
                     pool.submit(_run_one, (i, asm)): asm[1]
                     for i, asm in enumerate(assemblies)
                 }
-                for fut in futs:
+                for fut in _as_completed(futs):
                     name = futs[fut]
                     try:
                         results.append(fut.result())
@@ -1866,102 +1976,58 @@ def main():
                     logger.error(f"Assembly '{asm_name}' failed: {e}")
                     failures.append((asm_name, str(e)))
 
-        # --- Cross-assembly comparison (only with ≥2 assemblies) ---
-        if n_total > 1 and results:
-            from final_finalizer.output.comparison import (
-                write_comparison_summary_tsv,
-                write_chromosome_completeness_tsv,
+        # Pairwise assembly-vs-assembly synteny (nucleotide mode only)
+        # Runs inside executor context because it submits SLURM jobs.
+        if n_total > 1 and results and args.synteny_mode == "nucleotide" and len(results) >= 2:
+            from final_finalizer.alignment.pairwise import compute_pairwise_synteny
+            from final_finalizer.utils.resource_estimation import estimate_pairwise_resources
+
+            # Build chain-parsing kwargs once (all plain types, serializable)
+            chain_kwargs = dict(
+                preset=args.preset,
+                kmer=args.kmer,
+                window=args.window,
+                assign_minlen=args.assign_minlen,
+                assign_minmapq=args.assign_minmapq,
+                assign_tp=args.assign_tp,
+                chain_q_gap=args.chain_q_gap,
+                chain_r_gap=args.chain_r_gap,
+                chain_diag_slop=args.chain_diag_slop,
+                assign_min_ident=args.assign_min_ident,
+                assign_chain_topk=args.assign_chain_topk,
+                assign_chain_score=args.assign_chain_score,
+                assign_chain_min_bp=args.assign_chain_min_bp,
+                assign_ref_score=args.assign_ref_score,
             )
-            comparison_tsv = output_dir / "comparison_summary.tsv"
-            completeness_tsv = output_dir / "chromosome_completeness.tsv"
-            write_comparison_summary_tsv(comparison_tsv, results)
-            write_chromosome_completeness_tsv(completeness_tsv, results, ref_ctx.ref_lengths_norm)
-            logger.done(f"Comparison summary: {comparison_tsv}")
-            logger.done(f"Chromosome completeness: {completeness_tsv}")
 
-            # Pairwise assembly-vs-assembly synteny (nucleotide mode only)
-            pairwise_pairs = []
-            if args.synteny_mode == "nucleotide" and len(results) >= 2:
-                from final_finalizer.alignment.pairwise import compute_pairwise_synteny
-                from final_finalizer.utils.resource_estimation import estimate_pairwise_resources
+            use_cluster_pw = cluster_config.enabled
+            any_has_sg = any(r.per_subgenome_chrs for r in results)
+            pairwise_futures = []  # (pair_name, future)
 
-                # Build chain-parsing kwargs once (all plain types, serializable)
-                chain_kwargs = dict(
-                    preset=args.preset,
-                    kmer=args.kmer,
-                    window=args.window,
-                    assign_minlen=args.assign_minlen,
-                    assign_minmapq=args.assign_minmapq,
-                    assign_tp=args.assign_tp,
-                    chain_q_gap=args.chain_q_gap,
-                    chain_r_gap=args.chain_r_gap,
-                    chain_diag_slop=args.chain_diag_slop,
-                    assign_min_ident=args.assign_min_ident,
-                    assign_chain_topk=args.assign_chain_topk,
-                    assign_chain_score=args.assign_chain_score,
-                    assign_chain_min_bp=args.assign_chain_min_bp,
-                    assign_ref_score=args.assign_ref_score,
-                )
+            if any_has_sg:
+                from collections import defaultdict as _defaultdict
 
-                use_cluster_pw = cluster_config.enabled
-                any_has_sg = any(r.per_subgenome_chrs for r in results)
-                pairwise_futures = []  # (pair_name, future)
+                logger.phase("Per-subgenome pairwise synteny (nucleotide mode)")
+                pairwise_dir = output_dir / "pairwise"
+                pairwise_dir.mkdir(exist_ok=True)
 
-                if any_has_sg:
-                    from collections import defaultdict as _defaultdict
+                sg_assemblies = _defaultdict(list)
+                for result in results:
+                    for sg in result.per_subgenome_chrs:
+                        sg_assemblies[sg].append(result)
 
-                    logger.phase("Per-subgenome pairwise synteny (nucleotide mode)")
-                    pairwise_dir = output_dir / "pairwise"
-                    pairwise_dir.mkdir(exist_ok=True)
-
-                    sg_assemblies = _defaultdict(list)
-                    for result in results:
-                        for sg in result.per_subgenome_chrs:
-                            sg_assemblies[sg].append(result)
-
-                    for sg in sorted(sg_assemblies):
-                        sg_results = sg_assemblies[sg]
-                        if len(sg_results) < 2:
-                            continue
-                        sg_dir = pairwise_dir / sg
-                        sg_dir.mkdir(exist_ok=True)
-                        for i in range(len(sg_results) - 1):
-                            left, right = sg_results[i], sg_results[i + 1]
-                            pair_name = f"{left.assembly_name}_vs_{right.assembly_name}"
-                            pair_prefix = sg_dir / pair_name
-                            left_fasta = left.per_subgenome_chrs[sg]
-                            right_fasta = right.per_subgenome_chrs[sg]
-                            macro_tsv = Path(str(pair_prefix) + ".macro_blocks.tsv")
-                            if file_exists_and_valid(macro_tsv):
-                                logger.info(f"Reusing cached pairwise: {macro_tsv}")
-                                pairwise_pairs.append((pair_name, macro_tsv))
-                            else:
-                                res_spec = estimate_pairwise_resources(
-                                    left_fasta, right_fasta, cluster_config,
-                                )
-                                pw_threads = res_spec.cores if use_cluster_pw else args.threads
-                                fut = executor.submit(
-                                    compute_pairwise_synteny,
-                                    left_fasta=left_fasta,
-                                    right_fasta=right_fasta,
-                                    left_name=left.assembly_name,
-                                    right_name=right.assembly_name,
-                                    outprefix=pair_prefix,
-                                    threads=pw_threads,
-                                    resource_spec=res_spec if use_cluster_pw else None,
-                                    **chain_kwargs,
-                                )
-                                pairwise_futures.append((pair_name, fut))
-                else:
-                    logger.phase("Pairwise assembly synteny (nucleotide mode)")
-                    pairwise_dir = output_dir / "pairwise"
-                    pairwise_dir.mkdir(exist_ok=True)
-                    for i in range(len(results) - 1):
-                        left, right = results[i], results[i + 1]
+                for sg in sorted(sg_assemblies):
+                    sg_results = sg_assemblies[sg]
+                    if len(sg_results) < 2:
+                        continue
+                    sg_dir = pairwise_dir / sg
+                    sg_dir.mkdir(exist_ok=True)
+                    for i in range(len(sg_results) - 1):
+                        left, right = sg_results[i], sg_results[i + 1]
                         pair_name = f"{left.assembly_name}_vs_{right.assembly_name}"
-                        pair_prefix = pairwise_dir / pair_name
-                        left_fasta = Path(str(left.outprefix) + ".chrs.fasta")
-                        right_fasta = Path(str(right.outprefix) + ".chrs.fasta")
+                        pair_prefix = sg_dir / pair_name
+                        left_fasta = left.per_subgenome_chrs[sg]
+                        right_fasta = right.per_subgenome_chrs[sg]
                         macro_tsv = Path(str(pair_prefix) + ".macro_blocks.tsv")
                         if file_exists_and_valid(macro_tsv):
                             logger.info(f"Reusing cached pairwise: {macro_tsv}")
@@ -1983,30 +2049,78 @@ def main():
                                 **chain_kwargs,
                             )
                             pairwise_futures.append((pair_name, fut))
+            else:
+                logger.phase("Pairwise assembly synteny (nucleotide mode)")
+                pairwise_dir = output_dir / "pairwise"
+                pairwise_dir.mkdir(exist_ok=True)
+                for i in range(len(results) - 1):
+                    left, right = results[i], results[i + 1]
+                    pair_name = f"{left.assembly_name}_vs_{right.assembly_name}"
+                    pair_prefix = pairwise_dir / pair_name
+                    left_fasta = Path(str(left.outprefix) + ".chrs.fasta")
+                    right_fasta = Path(str(right.outprefix) + ".chrs.fasta")
+                    macro_tsv = Path(str(pair_prefix) + ".macro_blocks.tsv")
+                    if file_exists_and_valid(macro_tsv):
+                        logger.info(f"Reusing cached pairwise: {macro_tsv}")
+                        pairwise_pairs.append((pair_name, macro_tsv))
+                    else:
+                        res_spec = estimate_pairwise_resources(
+                            left_fasta, right_fasta, cluster_config,
+                        )
+                        pw_threads = res_spec.cores if use_cluster_pw else args.threads
+                        fut = executor.submit(
+                            compute_pairwise_synteny,
+                            left_fasta=left_fasta,
+                            right_fasta=right_fasta,
+                            left_name=left.assembly_name,
+                            right_name=right.assembly_name,
+                            outprefix=pair_prefix,
+                            threads=pw_threads,
+                            resource_spec=res_spec if use_cluster_pw else None,
+                            **chain_kwargs,
+                        )
+                        pairwise_futures.append((pair_name, fut))
 
-                # Collect pairwise results
-                for pair_name, fut in pairwise_futures:
-                    try:
-                        macro_tsv = fut.result()
-                        if macro_tsv:
-                            pairwise_pairs.append((pair_name, macro_tsv))
-                    except Exception as e:
-                        logger.error(f"Pairwise '{pair_name}' failed: {e}")
+            # Collect pairwise results
+            for pair_name, fut in pairwise_futures:
+                try:
+                    macro_tsv = fut.result()
+                    if macro_tsv:
+                        pairwise_pairs.append((pair_name, macro_tsv))
+                except Exception as e:
+                    logger.error(f"Pairwise '{pair_name}' failed: {e}")
 
-            if not args.skip_plot:
-                from final_finalizer.output.plotting import run_comparison_report
-                if not run_comparison_report(
-                    comparison_tsv=comparison_tsv,
-                    completeness_tsv=completeness_tsv,
-                    ref_lengths_tsv=ref_ctx.ref_lengths_tsv,
-                    assembly_results=results,
-                    outprefix=output_dir / "comparison",
-                    chr_like_minlen=ref_ctx.chr_like_minlen,
-                    synteny_mode=args.synteny_mode,
-                    reference_name=args.reference_name,
-                    pairwise_pairs=pairwise_pairs,
-                ):
-                    logger.error("Comparison report generation failed.")
+    # --- executor is now closed ---
+
+    # --- Cross-assembly comparison (only with ≥2 assemblies) ---
+    # Runs outside the executor context: TSV writing and Rmd rendering
+    # are local operations that don't need SLURM.
+    if n_total > 1 and results:
+        from final_finalizer.output.comparison import (
+            write_comparison_summary_tsv,
+            write_chromosome_completeness_tsv,
+        )
+        comparison_tsv = output_dir / "comparison_summary.tsv"
+        completeness_tsv = output_dir / "chromosome_completeness.tsv"
+        write_comparison_summary_tsv(comparison_tsv, results)
+        write_chromosome_completeness_tsv(completeness_tsv, results, ref_ctx.ref_lengths_norm)
+        logger.done(f"Comparison summary: {comparison_tsv}")
+        logger.done(f"Chromosome completeness: {completeness_tsv}")
+
+        if not args.skip_plot:
+            from final_finalizer.output.plotting import run_comparison_report
+            if not run_comparison_report(
+                comparison_tsv=comparison_tsv,
+                completeness_tsv=completeness_tsv,
+                ref_lengths_tsv=ref_ctx.ref_lengths_tsv,
+                assembly_results=results,
+                outprefix=output_dir / "comparison",
+                chr_like_minlen=ref_ctx.chr_like_minlen,
+                synteny_mode=args.synteny_mode,
+                reference_name=args.reference_name,
+                pairwise_pairs=pairwise_pairs,
+            ):
+                logger.error("Comparison report generation failed.")
 
     # --- Summary ---
     if n_total > 1:
