@@ -523,7 +523,7 @@ busco_long <- bind_rows(
   filter(!is.na(`Single-copy`)) %>%
   pivot_longer(cols = all_of(busco_levels), names_to = "category", values_to = "pct") %>%
   mutate(
-    category = factor(category, levels = rev(busco_levels)),
+    category = factor(category, levels = busco_levels),
     assembly = factor(assembly, levels = rev(asm_names)),
     dataset  = factor(dataset, levels = c("Chromosomes", "Non-chromosomes"))
   )
@@ -537,10 +537,10 @@ if (nrow(busco_long) > 0) {
       width = 0.7, position = "stack"
     ) +
     scale_fill_manual(values = busco_colors, drop = FALSE, name = NULL) +
-    coord_flip() +
+    coord_flip(ylim = c(0, 100)) +
     facet_wrap(~ dataset) +
     labs(x = NULL, y = "BUSCO genes (%)") +
-    scale_y_continuous(limits = c(0, 100), expand = c(0, 0)) +
+    scale_y_continuous(expand = c(0, 0)) +
     theme_minimal(base_size = base_font_pt, base_family = base_family) +
     axis_theme +
     theme(legend.position = "bottom",
