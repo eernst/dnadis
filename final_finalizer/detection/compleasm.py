@@ -83,6 +83,7 @@ def run_compleasm(
     lineage: str,
     threads: int,
     library_path: Optional[str] = None,
+    compleasm_exe: Optional[str] = None,
     resource_spec=None,
 ) -> Optional[CompleasmResult]:
     """Run compleasm on a FASTA file and return parsed results.
@@ -93,12 +94,19 @@ def run_compleasm(
         lineage: BUSCO lineage name (e.g., "eukaryota", "viridiplantae").
         threads: Number of threads.
         library_path: Path to pre-downloaded lineage files (optional).
+        compleasm_exe: Path to compleasm executable (e.g., from a separate
+            conda environment). If None, uses ``compleasm`` from PATH.
         resource_spec: ResourceSpec for SLURM submission (unused locally).
 
     Returns:
         CompleasmResult or None if compleasm is unavailable or fails.
     """
-    if not have_exe("compleasm"):
+    exe = compleasm_exe or "compleasm"
+    if compleasm_exe:
+        if not Path(compleasm_exe).is_file():
+            logger.warning(f"compleasm not found at {compleasm_exe}, skipping BUSCO evaluation")
+            return None
+    elif not have_exe("compleasm"):
         logger.warning("compleasm not found in PATH, skipping BUSCO evaluation")
         return None
 
@@ -116,7 +124,7 @@ def run_compleasm(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     cmd = [
-        "compleasm", "run",
+        exe, "run",
         "-a", str(fasta),
         "-o", str(output_dir),
         "-l", lineage,

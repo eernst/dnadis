@@ -1260,6 +1260,7 @@ def run_assembly(
             lineage=args.compleasm_lineage,
             threads=compleasm_threads,
             library_path=args.compleasm_library,
+            compleasm_exe=args.compleasm_path,
             resource_spec=compleasm_spec if use_cluster else None,
         )
         compleasm_non_chrs_future = executor.submit(
@@ -1269,6 +1270,7 @@ def run_assembly(
             lineage=args.compleasm_lineage,
             threads=compleasm_threads,
             library_path=args.compleasm_library,
+            compleasm_exe=args.compleasm_path,
             resource_spec=compleasm_spec if use_cluster else None,
         )
 
@@ -1377,7 +1379,7 @@ def main():
             chr_debris_min_identity=0.90, contaminant_min_score=1000, contaminant_min_coverage=0.50,
             debris_min_cov=0.50, debris_min_protein_hits=2, preset="asm20", kmer=None, window=None, aln_minlen=10000,
             scaffold=False, scaffold_gap_size=100,
-            compleasm_lineage=None, compleasm_library=None, skip_compleasm=False,
+            compleasm_lineage=None, compleasm_library=None, compleasm_path=None, skip_compleasm=False,
             fofn=None, assembly_dir=None,
             cluster=False, max_threads_dist=64, max_mem_dist=128.0,
             max_time_dist=720, partition="cpuq", qos="",
@@ -1814,6 +1816,10 @@ def main():
     compleasm_grp.add_argument(
         "--compleasm-library", type=str, default=None,
         help="Path to pre-downloaded compleasm lineage files [auto-download]",
+    )
+    compleasm_grp.add_argument(
+        "--compleasm-path", type=str, default=None,
+        help="Path to compleasm executable (e.g., from a separate conda env). If not set, uses compleasm from PATH.",
     )
     compleasm_grp.add_argument(
         "--skip-compleasm", action="store_true",

@@ -143,6 +143,7 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
     "compleasm": {
         "compleasm_lineage": "compleasm_lineage",
         "compleasm_library": "compleasm_library",
+        "compleasm_path": "compleasm_path",
         "skip_compleasm": "skip_compleasm",
     },
     "multi_assembly": {
