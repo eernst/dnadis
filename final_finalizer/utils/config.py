@@ -44,6 +44,9 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
         "chr_like_minlen": "chr_like_minlen",
         "add_subgenome_suffix": "add_subgenome_suffix",
         "ref_id_pattern": "ref_id_pattern",
+        "assembly_name": "assembly_name",
+        "reference_name": "reference_name",
+        "comparison_name": "comparison_name",
     },
     "read_depth": {
         "reads": "reads",

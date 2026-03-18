@@ -2039,7 +2039,7 @@ org_gt_df <- org_wide %>%
       } else {
         formatC(chrM_bp, format = "d", big.mark = ",")
       }
-      bar_cell(pct, oi[3], val_text)
+      bar_cell(pct, oi[4], val_text)
     } else "\u2014",
     chrC_contig = chrC_contigs,
     chrM_contig = chrM_contigs

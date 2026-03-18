@@ -1435,6 +1435,7 @@ def main():
     common.add_argument("--skip-plot", action="store_true", help="Skip unified HTML report generation")
     common.add_argument("--assembly-name", type=str, default="", metavar="NAME", help="Assembly name for plot subtitles (default: omitted)")
     common.add_argument("--reference-name", type=str, default="", metavar="NAME", help="Reference name for plot subtitles (default: omitted)")
+    common.add_argument("--comparison-name", type=str, default="comparison", metavar="NAME", help="Prefix for multi-assembly comparison output files (default: comparison)")
     common.add_argument("-v", "--verbose", action="store_true", help="Enable verbose (DEBUG level) logging")
     common.add_argument("--quiet", action="store_true", help="Suppress INFO messages (only show warnings and errors)")
     common.add_argument("--log-file", type=str, default=None, metavar="PATH", help="Also write logs to this file")
@@ -2184,8 +2185,9 @@ def main():
             write_comparison_summary_tsv,
             write_chromosome_completeness_tsv,
         )
-        comparison_tsv = output_dir / "comparison_summary.tsv"
-        completeness_tsv = output_dir / "chromosome_completeness.tsv"
+        cmp_name = args.comparison_name
+        comparison_tsv = output_dir / f"{cmp_name}_summary.tsv"
+        completeness_tsv = output_dir / f"{cmp_name}_chromosome_completeness.tsv"
         write_comparison_summary_tsv(comparison_tsv, results)
         write_chromosome_completeness_tsv(completeness_tsv, results, ref_ctx.ref_lengths_norm)
         logger.done(f"Comparison summary: {comparison_tsv}")
@@ -2198,7 +2200,7 @@ def main():
                 completeness_tsv=completeness_tsv,
                 ref_lengths_tsv=ref_ctx.ref_lengths_tsv,
                 assembly_results=results,
-                outprefix=output_dir / "comparison",
+                outprefix=output_dir / cmp_name,
                 chr_like_minlen=ref_ctx.chr_like_minlen,
                 synteny_mode=args.synteny_mode,
                 reference_name=args.reference_name,
