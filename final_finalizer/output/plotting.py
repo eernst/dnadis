@@ -233,6 +233,12 @@ def run_comparison_report(
         for r in assembly_results
     )
 
+    # Per-assembly contaminants TSVs (for contamination Top Taxa section)
+    per_asm_contam_tsvs = ";".join(
+        abs_esc(r.contaminants_tsv) if r.contaminants_tsv and r.contaminants_tsv.exists() else ""
+        for r in assembly_results
+    )
+
     # Pairwise macro_blocks TSVs and pair labels (for asm→asm ribbons)
     # Names and paths are kept synchronized as (pair_name, tsv_path) tuples
     if pairwise_pairs:
@@ -250,6 +256,7 @@ def run_comparison_report(
         .replace("__ASM_NAMES__", asm_names)
         .replace("__PER_ASM_MACRO_TSVS__", per_asm_macro_tsvs)
         .replace("__PER_ASM_RDNA_TSVS__", per_asm_rdna_tsvs)
+        .replace("__PER_ASM_CONTAM_TSVS__", per_asm_contam_tsvs)
         .replace("__PAIRWISE_MACRO_TSVS__", pw_macro_str)
         .replace("__PAIRWISE_NAMES__", pw_names_str)
         .replace("__REFNAME__", str(reference_name).replace('"', '\\"'))

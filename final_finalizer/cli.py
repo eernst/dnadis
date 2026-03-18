@@ -2090,6 +2090,90 @@ def main():
                 except Exception as e:
                     logger.error(f"Pairwise '{pair_name}' failed: {e}")
 
+            # --- Rescue pairwise alignments for non-adjacent assemblies ---
+            # When an intermediate assembly lacks a chromosome that its
+            # neighbors share, no ribbon can be drawn.  Rescue alignments
+            # bridge the gap so the Rmd can draw spanning ribbons.
+            rescue_futures: list[tuple[str, Any]] = []
+
+            def _submit_rescue_pairs(ordered_results, rescue_dir, get_fasta, log_suffix=""):
+                """Detect and submit rescue pairwise alignments for one result list."""
+                asm_chroms = {
+                    r.assembly_name: {
+                        cc.assigned_ref_id for cc in r.classifications
+                        if cc.classification == "chrom_assigned" and cc.assigned_ref_id
+                    }
+                    for r in ordered_results
+                }
+                rescue_needed: set[tuple[int, int]] = set()
+                for i in range(len(ordered_results)):
+                    for ref_id in asm_chroms.get(ordered_results[i].assembly_name, ()):
+                        if i > 0 and ref_id not in asm_chroms.get(ordered_results[i - 1].assembly_name, ()):
+                            for j in range(i - 2, -1, -1):
+                                if ref_id in asm_chroms.get(ordered_results[j].assembly_name, ()):
+                                    rescue_needed.add((j, i))
+                                    break
+                if not rescue_needed:
+                    return
+                rescue_dir.mkdir(parents=True, exist_ok=True)
+                n_submitted = 0
+                for j, i in sorted(rescue_needed):
+                    left, right = ordered_results[j], ordered_results[i]
+                    pair_name = f"rescue:{left.assembly_name}_vs_{right.assembly_name}"
+                    pair_prefix = rescue_dir / f"{left.assembly_name}_vs_{right.assembly_name}"
+                    left_fasta, right_fasta = get_fasta(left), get_fasta(right)
+                    macro_tsv = Path(str(pair_prefix) + ".macro_blocks.tsv")
+                    if file_exists_and_valid(macro_tsv):
+                        logger.info(f"Reusing cached rescue pairwise: {macro_tsv}")
+                        pairwise_pairs.append((pair_name, macro_tsv))
+                    else:
+                        res_spec = estimate_pairwise_resources(
+                            left_fasta, right_fasta, cluster_config,
+                        )
+                        pw_threads = res_spec.cores if use_cluster_pw else args.threads
+                        fut = executor.submit(
+                            compute_pairwise_synteny,
+                            left_fasta=left_fasta,
+                            right_fasta=right_fasta,
+                            left_name=left.assembly_name,
+                            right_name=right.assembly_name,
+                            outprefix=pair_prefix,
+                            threads=pw_threads,
+                            resource_spec=res_spec if use_cluster_pw else None,
+                            **chain_kwargs,
+                        )
+                        rescue_futures.append((pair_name, fut))
+                        n_submitted += 1
+                if n_submitted > 0:
+                    logger.info(f"Submitted {n_submitted} rescue pairwise alignment(s){log_suffix}")
+
+            if any_has_sg:
+                for sg in sorted(sg_assemblies):
+                    sg_results = sg_assemblies[sg]
+                    if len(sg_results) >= 3:
+                        _submit_rescue_pairs(
+                            sg_results,
+                            pairwise_dir / sg / "rescue",
+                            get_fasta=lambda r, _sg=sg: r.per_subgenome_chrs[_sg],
+                            log_suffix=f" for subgenome {sg}",
+                        )
+            else:
+                if len(results) >= 3:
+                    _submit_rescue_pairs(
+                        results,
+                        pairwise_dir / "rescue",
+                        get_fasta=lambda r: Path(str(r.outprefix) + ".chrs.fasta"),
+                    )
+
+            # Collect rescue pairwise results
+            for pair_name, fut in rescue_futures:
+                try:
+                    macro_tsv = fut.result()
+                    if macro_tsv:
+                        pairwise_pairs.append((pair_name, macro_tsv))
+                except Exception as e:
+                    logger.error(f"Rescue pairwise '{pair_name}' failed: {e}")
+
     # --- executor is now closed ---
 
     # --- Cross-assembly comparison (only with ≥2 assemblies) ---
