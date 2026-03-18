@@ -2,6 +2,7 @@
 """Plotting functions using R/ggplot2."""
 from __future__ import annotations
 
+import functools
 import subprocess
 from pathlib import Path
 from typing import List, Optional
@@ -10,7 +11,13 @@ from final_finalizer.utils.logging_config import get_logger
 
 logger = get_logger("plotting")
 
+# --- Module-level constants ---
+_REPORTS_DIR = Path(__file__).resolve().parent / "reports"
+_COMMON_R = _REPORTS_DIR / "common.R"
+_COMMON_CSS = _REPORTS_DIR / "common.css"
 
+
+@functools.lru_cache(maxsize=None)
 def have_rscript() -> bool:
     try:
         subprocess.run(["Rscript", "--version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
@@ -29,6 +36,12 @@ def _esc(s) -> str:
     return str(s).replace("\\", "/")
 
 
+def _abs_esc(p: Path) -> str:
+    """Resolve path to absolute and escape for R."""
+    return _esc(p.resolve())
+
+
+@functools.lru_cache(maxsize=None)
 def _have_rmarkdown() -> bool:
     """Check if rmarkdown and pandoc are available for rendering .Rmd files."""
     try:
@@ -47,7 +60,24 @@ def _have_rmarkdown() -> bool:
         return False
 
 
-def run_unified_report(
+def _check_r_dependencies() -> bool:
+    """Return True if Rscript and rmarkdown+pandoc are available."""
+    if not have_rscript():
+        logger.error(
+            "--plot requires Rscript in PATH. "
+            "Install with: conda install -c conda-forge r-base"
+        )
+        return False
+    if not _have_rmarkdown():
+        logger.error(
+            "--plot requires rmarkdown and pandoc. "
+            "Install with: conda install -c conda-forge r-rmarkdown pandoc"
+        )
+        return False
+    return True
+
+
+def run_assembly_report(
     summary_tsv: Path,
     ref_lengths_tsv: Path,
     segments_tsv: Path,
@@ -76,49 +106,33 @@ def run_unified_report(
 
     Returns True if the report was generated successfully.
     """
-    if not have_rscript():
-        logger.error(
-            "--plot requires Rscript in PATH. "
-            "Install with: conda install -c conda-forge r-base"
-        )
+    if not _check_r_dependencies():
         return False
 
-    if not _have_rmarkdown():
-        logger.error(
-            "--plot requires rmarkdown and pandoc. "
-            "Install with: conda install -c conda-forge r-rmarkdown pandoc"
-        )
-        return False
-
-    tmpl_path = Path(__file__).resolve().with_name("unified_report.tmpl.Rmd")
+    tmpl_path = _REPORTS_DIR / "assembly_report.tmpl.Rmd"
     if not tmpl_path.exists():
         logger.warning(f"Missing Rmd template: {tmpl_path}")
         return False
 
-    report_rmd = Path(str(outprefix) + ".unified_report.Rmd").resolve()
-    report_html = Path(str(outprefix) + ".unified_report.html").resolve()
+    report_rmd = Path(str(outprefix) + ".assembly_report.Rmd").resolve()
+    report_html = Path(str(outprefix) + ".assembly_report.html").resolve()
 
     tmpl = _read_text(tmpl_path)
 
-    # rmarkdown::render() changes cwd to the Rmd directory, so all paths
-    # must be absolute to avoid "file not found" errors.
-    def abs_esc(p: Path) -> str:
-        return _esc(p.resolve())
-
     # Optional TSV paths (absolute, empty string if missing)
-    rdna_str = abs_esc(rdna_annotations_tsv) if rdna_annotations_tsv and rdna_annotations_tsv.exists() else ""
-    rdna_arrays_str = abs_esc(rdna_arrays_tsv) if rdna_arrays_tsv and rdna_arrays_tsv.exists() else ""
-    contam_str = abs_esc(contaminants_tsv) if contaminants_tsv and contaminants_tsv.exists() else ""
-    agp_str = abs_esc(agp_tsv) if agp_tsv and agp_tsv.exists() else ""
-    compleasm_chrs_str = abs_esc(compleasm_chrs_summary) if compleasm_chrs_summary and compleasm_chrs_summary.exists() else ""
-    compleasm_non_str = abs_esc(compleasm_non_chrs_summary) if compleasm_non_chrs_summary and compleasm_non_chrs_summary.exists() else ""
+    rdna_str = _abs_esc(rdna_annotations_tsv) if rdna_annotations_tsv and rdna_annotations_tsv.exists() else ""
+    rdna_arrays_str = _abs_esc(rdna_arrays_tsv) if rdna_arrays_tsv and rdna_arrays_tsv.exists() else ""
+    contam_str = _abs_esc(contaminants_tsv) if contaminants_tsv and contaminants_tsv.exists() else ""
+    agp_str = _abs_esc(agp_tsv) if agp_tsv and agp_tsv.exists() else ""
+    compleasm_chrs_str = _abs_esc(compleasm_chrs_summary) if compleasm_chrs_summary and compleasm_chrs_summary.exists() else ""
+    compleasm_non_str = _abs_esc(compleasm_non_chrs_summary) if compleasm_non_chrs_summary and compleasm_non_chrs_summary.exists() else ""
 
     filled = (
-        tmpl.replace("__SUMMARY__", abs_esc(summary_tsv))
-        .replace("__REF__", abs_esc(ref_lengths_tsv))
-        .replace("__SEGMENTS__", abs_esc(segments_tsv))
-        .replace("__EVIDENCE__", abs_esc(chain_summary_tsv))
-        .replace("__MACRO__", abs_esc(macro_blocks_tsv))
+        tmpl.replace("__SUMMARY__", _abs_esc(summary_tsv))
+        .replace("__REF__", _abs_esc(ref_lengths_tsv))
+        .replace("__SEGMENTS__", _abs_esc(segments_tsv))
+        .replace("__EVIDENCE__", _abs_esc(chain_summary_tsv))
+        .replace("__MACRO__", _abs_esc(macro_blocks_tsv))
         .replace("__RDNA_ANNOTATIONS__", rdna_str)
         .replace("__RDNA_ARRAYS__", rdna_arrays_str)
         .replace("__CONTAMINANTS_TSV__", contam_str)
@@ -130,28 +144,30 @@ def run_unified_report(
         .replace("__SYNTENY_MODE__", str(synteny_mode))
         .replace("__CHRLIKE__", str(int(chr_like_minlen)))
         .replace("__SUFFIX__", str(plot_title_suffix).replace('"', '\\"'))
-        .replace("__OUTPREFIX__", abs_esc(outprefix))
+        .replace("__OUTPREFIX__", _abs_esc(outprefix))
         .replace("__TOP_N__", str(int(top_n_contaminants)))
+        .replace("__COMMON_R__", _esc(_COMMON_R))
+        .replace("__COMMON_CSS__", _esc(_COMMON_CSS))
     )
 
     with report_rmd.open("w", encoding="utf-8") as fh:
         fh.write(filled)
 
-    logger.info(f"Rendering unified report: {report_html}")
+    logger.info(f"Rendering assembly report: {report_html}")
     try:
         subprocess.run(
             ["Rscript", "-e", f"rmarkdown::render('{_esc(report_rmd)}', quiet = TRUE)"],
             check=True, capture_output=True, text=True,
         )
     except subprocess.CalledProcessError as e:
-        logger.warning(f"Rscript failed with code {e.returncode}; unified report not generated.")
+        logger.warning(f"Rscript failed with code {e.returncode}; assembly report not generated.")
         if e.stderr:
             for line in e.stderr.strip().splitlines()[-20:]:
                 logger.warning(f"  R: {line}")
         return False
     else:
         if report_html.exists():
-            logger.done(f"Unified report written to: {report_html}")
+            logger.done(f"Assembly report written to: {report_html}")
             return True
         return False
 
@@ -169,7 +185,7 @@ def run_comparison_report(
 ) -> bool:
     """Generate cross-assembly comparison HTML report.
 
-    Follows the same pattern as :func:`run_unified_report`: loads the
+    Follows the same pattern as :func:`run_assembly_report`: loads the
     ``comparison_report.tmpl.Rmd`` template, substitutes placeholders,
     and calls ``rmarkdown::render()``.
 
@@ -189,21 +205,10 @@ def run_comparison_report(
     Returns:
         True if the report was generated successfully.
     """
-    if not have_rscript():
-        logger.error(
-            "--plot requires Rscript in PATH. "
-            "Install with: conda install -c conda-forge r-base"
-        )
+    if not _check_r_dependencies():
         return False
 
-    if not _have_rmarkdown():
-        logger.error(
-            "--plot requires rmarkdown and pandoc. "
-            "Install with: conda install -c conda-forge r-rmarkdown pandoc"
-        )
-        return False
-
-    tmpl_path = Path(__file__).resolve().with_name("comparison_report.tmpl.Rmd")
+    tmpl_path = _REPORTS_DIR / "comparison_report.tmpl.Rmd"
     if not tmpl_path.exists():
         logger.warning(f"Missing Rmd template: {tmpl_path}")
         return False
@@ -213,45 +218,42 @@ def run_comparison_report(
 
     tmpl = _read_text(tmpl_path)
 
-    def abs_esc(p: Path) -> str:
-        return _esc(p.resolve())
-
     # Build semicolon-separated lists of per-assembly TSV paths and names
     per_asm_tsvs = ";".join(
-        abs_esc(r.summary_tsv) for r in assembly_results
+        _abs_esc(r.summary_tsv) for r in assembly_results
     )
     asm_names = ";".join(r.assembly_name for r in assembly_results)
 
     # Per-assembly macro_blocks TSVs (for ref→asm ribbons in synteny plot)
     per_asm_macro_tsvs = ";".join(
-        abs_esc(r.macro_blocks_tsv) for r in assembly_results
+        _abs_esc(r.macro_blocks_tsv) for r in assembly_results
     )
 
     # Per-assembly rDNA arrays TSVs (for rDNA comparison section)
     per_asm_rdna_tsvs = ";".join(
-        abs_esc(r.rdna_arrays_tsv) if r.rdna_arrays_tsv and r.rdna_arrays_tsv.exists() else ""
+        _abs_esc(r.rdna_arrays_tsv) if r.rdna_arrays_tsv and r.rdna_arrays_tsv.exists() else ""
         for r in assembly_results
     )
 
     # Per-assembly contaminants TSVs (for contamination Top Taxa section)
     per_asm_contam_tsvs = ";".join(
-        abs_esc(r.contaminants_tsv) if r.contaminants_tsv and r.contaminants_tsv.exists() else ""
+        _abs_esc(r.contaminants_tsv) if r.contaminants_tsv and r.contaminants_tsv.exists() else ""
         for r in assembly_results
     )
 
     # Pairwise macro_blocks TSVs and pair labels (for asm→asm ribbons)
     # Names and paths are kept synchronized as (pair_name, tsv_path) tuples
     if pairwise_pairs:
-        pw_macro_str = ";".join(abs_esc(tsv) for _name, tsv in pairwise_pairs)
+        pw_macro_str = ";".join(_abs_esc(tsv) for _name, tsv in pairwise_pairs)
         pw_names_str = ";".join(name for name, _tsv in pairwise_pairs)
     else:
         pw_macro_str = ""
         pw_names_str = ""
 
     filled = (
-        tmpl.replace("__COMPARISON_TSV__", abs_esc(comparison_tsv))
-        .replace("__COMPLETENESS_TSV__", abs_esc(completeness_tsv))
-        .replace("__REF_LENGTHS_TSV__", abs_esc(ref_lengths_tsv))
+        tmpl.replace("__COMPARISON_TSV__", _abs_esc(comparison_tsv))
+        .replace("__COMPLETENESS_TSV__", _abs_esc(completeness_tsv))
+        .replace("__REF_LENGTHS_TSV__", _abs_esc(ref_lengths_tsv))
         .replace("__PER_ASM_TSVS__", per_asm_tsvs)
         .replace("__ASM_NAMES__", asm_names)
         .replace("__PER_ASM_MACRO_TSVS__", per_asm_macro_tsvs)
@@ -262,7 +264,9 @@ def run_comparison_report(
         .replace("__REFNAME__", str(reference_name).replace('"', '\\"'))
         .replace("__SYNTENY_MODE__", str(synteny_mode))
         .replace("__CHRLIKE__", str(int(chr_like_minlen)))
-        .replace("__OUTPREFIX__", abs_esc(outprefix))
+        .replace("__OUTPREFIX__", _abs_esc(outprefix))
+        .replace("__COMMON_R__", _esc(_COMMON_R))
+        .replace("__COMMON_CSS__", _esc(_COMMON_CSS))
     )
 
     with report_rmd.open("w", encoding="utf-8") as fh:

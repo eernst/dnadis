@@ -170,7 +170,7 @@ from final_finalizer.output.tsv_output import (
     write_rdna_annotations_tsv,
     write_rdna_arrays_tsv,
 )
-from final_finalizer.output.plotting import run_unified_report
+from final_finalizer.output.plotting import run_assembly_report
 from final_finalizer.models import AssemblyResult, ReferenceContext
 
 
@@ -1324,7 +1324,7 @@ def run_assembly(
         compleasm_chrs_sum = compleasm_chrs_result.summary_path if compleasm_chrs_result else None
         compleasm_non_sum = compleasm_non_chrs_result.summary_path if compleasm_non_chrs_result else None
 
-        if not run_unified_report(
+        if not run_assembly_report(
             summary_tsv,
             ref_lengths_tsv,
             segments_tsv,
