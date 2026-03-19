@@ -116,7 +116,7 @@ class LocalExecutor:
 # executorlib helpers
 # ---------------------------------------------------------------------------
 def _resource_spec_to_dict(spec: ResourceSpec) -> dict:
-    """Convert a :class:`ResourceSpec` to the dict format executorlib expects.
+    """Convert a :class:`ResourceSpec` to the dict format executorlib/pysqa expects.
 
     executorlib uses ``cores`` to decide between MPI (``cache_parallel.py``)
     and single-process (``cache_serial.py``) execution.  Since our submitted
@@ -125,25 +125,34 @@ def _resource_spec_to_dict(spec: ResourceSpec) -> dict:
     backend and use ``threads_per_core`` to request the actual CPU count.
     pysqa multiplies ``cores × threads_per_core`` for ``--cpus-per-task``.
 
-    SLURM directives (memory, time, partition, qos, job-name) are passed via
-    ``slurm_cmd_args`` so they are recognized by executorlib's validator
-    (v1.9+) while still reaching sbatch.
+    Keys passed through to the pysqa SLURM template:
+    - ``cores × threads_per_core`` → ``#SBATCH --cpus-per-task``
+    - ``memory_max`` → ``#SBATCH --mem`` (GB, integer)
+    - ``run_time_max`` → ``#SBATCH --time`` (seconds)
+    - ``partition`` → ``#SBATCH --partition``
+    - ``qos`` → ``#SBATCH --qos`` (requires :func:`_patch_pysqa_template`)
+    - ``job_name`` → ``#SBATCH --job-name``
+
+    Note: executorlib v1.9+ warns about keys not in its ``ResourceDictValidation``
+    dataclass (``memory_max``, ``run_time_max``, ``partition``, ``qos``,
+    ``job_name``).  These warnings are harmless — the keys pass through to
+    pysqa which uses them in its SLURM template.  The ``slurm_cmd_args`` key
+    that executorlib's validator accepts is stripped by the file-based spawner
+    (``file/spawner_pysqa.py``) and cannot be used as a replacement.
     """
-    slurm_args = [
-        f"--mem={math.ceil(spec.memory_gb)}G",
-        f"--time={spec.time_minutes}",
-    ]
-    if spec.partition:
-        slurm_args.append(f"--partition={spec.partition}")
-    if spec.qos:
-        slurm_args.append(f"--qos={spec.qos}")
-    if spec.job_name:
-        slurm_args.append(f"--job-name={spec.job_name}")
-    return {
-        "cores": 1,                     # 1 process → cache_serial.py (no MPI)
-        "threads_per_core": spec.cores,  # pysqa: 1 × N → --cpus-per-task=N
-        "slurm_cmd_args": slurm_args,
+    d: dict = {
+        "cores": 1,                              # 1 process → cache_serial.py (no MPI)
+        "threads_per_core": spec.cores,           # pysqa: 1 × N → --cpus-per-task=N
+        "memory_max": math.ceil(spec.memory_gb),  # pysqa renders --mem={{memory_max}}G
+        "run_time_max": spec.time_minutes * 60,   # pysqa expects seconds
     }
+    if spec.partition:
+        d["partition"] = spec.partition
+    if spec.qos:
+        d["qos"] = spec.qos
+    if spec.job_name:
+        d["job_name"] = spec.job_name
+    return d
 
 
 class _ExecutorlibWrapper:
@@ -194,6 +203,35 @@ class _ExecutorlibWrapper:
                 f"{self.SHUTDOWN_TIMEOUT}s — proceeding anyway.  "
                 f"This is a known issue with SlurmClusterExecutor cleanup."
             )
+
+
+# ---------------------------------------------------------------------------
+# pysqa template patching
+# ---------------------------------------------------------------------------
+_QOS_DIRECTIVE = """\
+{%- if qos %}
+#SBATCH --qos={{qos}}
+{%- endif %}"""
+
+
+def _patch_pysqa_template() -> None:
+    """Add ``--qos`` support to pysqa's built-in SLURM template.
+
+    The default pysqa SLURM template does not include a ``--qos`` directive.
+    This function injects a conditional ``#SBATCH --qos={{qos}}`` line so that
+    the QoS value from :class:`ResourceSpec` flows through to ``sbatch``.
+
+    Safe to call multiple times — patches only once.
+    """
+    try:
+        from pysqa.wrapper import slurm as _slurm_mod  # type: ignore[import-untyped]
+    except ImportError:
+        return  # pysqa not installed; executor init will fail with its own error
+    if "qos" not in _slurm_mod.template:
+        _slurm_mod.template = _slurm_mod.template.replace(
+            "#SBATCH --cpus-per-task={{cores}}",
+            _QOS_DIRECTIVE + "\n#SBATCH --cpus-per-task={{cores}}",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -298,6 +336,7 @@ def create_executor(
         )
         raise SystemExit(1)
 
+    _patch_pysqa_template()
     _patch_sbatch_retry()
 
     # Use a fresh, per-run cache directory to avoid stale results from
