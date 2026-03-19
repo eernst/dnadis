@@ -1,10 +1,56 @@
 # TODO
 
-## Improve Chromosome Synteny plot
+## Implement subcommands
 
-* [ ] Ribbons are not drawn between all chrom-assigned contigs and their nearest neighbor to the left. There seem to be two potential cases/causes:
-  1. In some cases, the assembly neighbor to the immediate left does not have an assigned contig for a particular chromosome, and thus there is no underlying synteny information to draw ribbons from. This happens because we don't perform all-vs-all alignments or "rescue" these cases by doing a supplementary alignment of that individual chromosome with no partner to the immediate left to the nearest assembly to the left that does possess the query chromosome. Example: Ref.T chr10. Let's consider implementing one of these resolutions.
+* [ ] There are an overwhelming number of command line options available, some of which only apply to one or the other synteny mode. Look into the potential benefit of splitting these two modes of operation into subcommands, opening up the possibility of partitioning other use cases in the same way.
+
+* [ ] We should implement a "clean" subcommand that can clean up residual executorlib_cache directories and any other intermediates (introduce a --keep-intermediates flag for the other subcommands to retain them in the first place). Consider whether we need to retain anything in the *_classification output subdirectory by default.
+
+## Plotting improvements
+
+### 1. Assembly Overview
+
+#### Assembly Comparison Summary table
+
+* [x] Combine "Chr assigned", "Chr unassigned", and "Chimeric" columns a single composite "assigned/unassigned/chimeric" column (splitting the header into three lines to fit a narrower width) and join the values with a " / ".
+
+* [x] Ensure that we are only showing chrC for organisms that have a plastid genome, i.e. plants, algae, etc.
+
+### 2. Chromosome Assignment
+
+#### Overview
+
+* [x] Use identity rather than reference coverage for fill intensity.
+
+* [x] Use dark reference color for the small numbers for greater visibility.
+
+#### Completeness Table
+
+* [x] Introduce separate tabs for each reference (sub)genome, for example, for the A+P+T reference, we'd have Completeness Tbl. A, Completeness Tbl. P, Completeness Tbl. T as separate tabs and tables.
+
+* [x] Naturally sort the chromosome order in the tables.
+
+### 3. Synteny
+
+* [x] Ribbons are not drawn between all chrom-assigned contigs and their nearest neighbor to the left. There seem to be two potential cases/causes:
+  1. ~~In some cases, the assembly neighbor to the immediate left does not have an assigned contig for a particular chromosome, and thus there is no underlying synteny information to draw ribbons from. This happens because we don't perform all-vs-all alignments or "rescue" these cases by doing a supplementary alignment of that individual chromosome with no partner to the immediate left to the nearest assembly to the left that does possess the query chromosome. Example: Ref.T chr10.~~ Resolved: rescue pairwise alignments now bridge non-adjacent assemblies that share a chromosome.
   2. Almost no ribbons are drawn between la0028 and its neighbor la0077. We need to investigate this case.
+
+### 8. Contamination Comparison
+
+* [x] Top Taxa tables: show binomial (genus + species) in the species table, add percentage labels in bars, hover tooltips showing full name and per-taxon assembly lists, ellipsis clipping for long names.
+
+* [ ] Add a top contaminants pie chart and top 5 table beneath it
+
+### Rename sections
+
+* [ ] Drop the "Comparison" suffix from all sections titles
+
+* [ ] Chromosome Synteny -> Macro Synteny
+
+* [ ] Organelle -> Organelles
+
+* [ ] Contamination -> Contaminants
 
 ## Better handling of unidentified contaminants
 
@@ -15,15 +61,27 @@
 
 * [x] Add compleasm runs on segregated datasets - the chromosome-assigned contigs and all other debris
 
-* [ ] Add BUSCO runs on segregated datasets - the chromosome-assigned contigs and all other debris
-
-* [ ] Aggregate compleasm and BUSCO results for the multiassembly comparison report as a gt table
+* [ ] Aggregate compleasm results for the multiassembly comparison report as a gt table
 
   * [ ] Show classification category output numerically in the table row for each assembly
 
   * [x] Add compleasm S/D/F/I/M columns to `comparison_summary.tsv` (numeric counts + percentages)
 
   * [x] Plot in the comparison Rmd as a horizontal 100% stacked bar with the default BUSCO/compleasm color scheme
+
+## Report infrastructure
+
+* [x] Factor shared R setup (packages, fonts, theming, OI palette, classification colors, helpers) into `output/reports/common.R` and shared CSS into `output/reports/common.css`, sourced by both report templates.
+
+* [x] Rename `unified_report` to `assembly_report` for clarity; move templates into `output/reports/` subdirectory.
+
+* [x] Replace all hardcoded bar colors and CSS gradients with `bar_cell()` helper using Okabe-Ito palette.
+
+* [x] Add `--comparison-name` CLI argument and register all `--*-name` args in TOML config schema.
+
+## Performance
+
+* [ ] Add bgzip and indexing by default of pipeline outputs (FASTA, GFF3).
 
 ## Mammalian, other non-plant genome support
 

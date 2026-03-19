@@ -12,7 +12,7 @@ from final_finalizer.output.tsv_output import (
 )
 from final_finalizer.output.plotting import (
     have_rscript,
-    run_unified_report,
+    run_assembly_report,
 )
 
 __all__ = [
@@ -24,5 +24,5 @@ __all__ = [
     "compute_summary",
     "build_segment_support_from_rows",
     "have_rscript",
-    "run_unified_report",
+    "run_assembly_report",
 ]

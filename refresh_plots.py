@@ -18,8 +18,10 @@ from pathlib import Path
 
 # Map generated R script suffix → template filename
 SCRIPT_TO_TEMPLATE = {
-    "unified_report": "unified_report.tmpl.Rmd",
+    "assembly_report": "assembly_report.tmpl.Rmd",
     "comparison_report": "comparison_report.tmpl.Rmd",
+    # Legacy name for backward compat with existing output dirs
+    "unified_report": "assembly_report.tmpl.Rmd",
 }
 
 # Regex to find all __PLACEHOLDER__ tokens in a template
@@ -40,8 +42,10 @@ PLACEHOLDER_TSV = {
 
 # Output file suffixes per script type
 SCRIPT_OUTPUT_SUFFIXES = {
-    "unified_report": (None, ".unified_report.html"),
+    "assembly_report": (None, ".assembly_report.html"),
     "comparison_report": (None, ".comparison_report.html"),
+    # Legacy name for backward compat with existing output dirs
+    "unified_report": (None, ".unified_report.html"),
 }
 
 
@@ -151,9 +155,15 @@ def build_placeholder_values(
     if "__OUTHTML__" in template_text and html_suffix:
         values["__OUTHTML__"] = esc(str(prefix) + html_suffix)
 
-    # Output prefix placeholder (used by unified_report.tmpl.Rmd)
+    # Output prefix placeholder
     if "__OUTPREFIX__" in template_text:
         values["__OUTPREFIX__"] = esc(prefix)
+
+    # Shared R and CSS files (resolved relative to template directory)
+    if "__COMMON_R__" in template_text and template_dir:
+        values["__COMMON_R__"] = esc(template_dir / "common.R")
+    if "__COMMON_CSS__" in template_text and template_dir:
+        values["__COMMON_CSS__"] = esc(template_dir / "common.css")
 
     # Non-path placeholders: extract from generated script (PLOTHTML, CHRLIKE, SUFFIX, TOP_N)
     non_path = extract_non_path_placeholders(template_text, generated_text)
@@ -301,8 +311,8 @@ def main():
     parser.add_argument(
         "--template-dir",
         type=Path,
-        default=Path(__file__).resolve().parent / "final_finalizer" / "output",
-        help="Path to directory containing .tmpl.R files (default: auto-detect from script location)",
+        default=Path(__file__).resolve().parent / "final_finalizer" / "output" / "reports",
+        help="Path to directory containing .tmpl.Rmd files (default: auto-detect from script location)",
     )
     parser.add_argument(
         "--dry-run", "-n",

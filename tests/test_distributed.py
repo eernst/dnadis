@@ -18,7 +18,6 @@ from final_finalizer.utils.distributed import (
     LocalFuture,
     ResourceSpec,
     _ExecutorlibWrapper,
-    _patch_pysqa_template,
     _patch_sbatch_retry,
     _resource_spec_to_dict,
     clamp_resources,
@@ -149,21 +148,23 @@ class TestResourceSpecToDict:
         d = _resource_spec_to_dict(spec)
         assert d["cores"] == 1  # always 1 → serial backend (no MPI)
         assert d["threads_per_core"] == 8  # pysqa: 1×8 → --cpus-per-task=8
-        assert d["memory_max"] == 17  # ceil(16.5) → integer GB for SLURM
-        assert d["run_time_max"] == 1800  # 30 * 60 seconds
-        assert d["partition"] == "cpuq"
-        assert d["qos"] == "default"
+        args = d["slurm_cmd_args"]
+        assert "--mem=17G" in args  # ceil(16.5) → integer GB
+        assert "--time=30" in args  # minutes
+        assert "--partition=cpuq" in args
+        assert "--qos=default" in args
 
     def test_empty_partition_and_qos_omitted(self):
         spec = ResourceSpec(cores=4, partition="", qos="")
         d = _resource_spec_to_dict(spec)
-        assert "partition" not in d
-        assert "qos" not in d
+        args = d["slurm_cmd_args"]
+        assert not any(a.startswith("--partition=") for a in args)
+        assert not any(a.startswith("--qos=") for a in args)
 
     def test_memory_ceiled_to_integer(self):
         spec = ResourceSpec(memory_gb=7.281214928)
         d = _resource_spec_to_dict(spec)
-        assert d["memory_max"] == 8  # ceil → integer GB for SLURM
+        assert "--mem=8G" in d["slurm_cmd_args"]  # ceil → integer GB
 
 
 class TestCreateExecutor:
@@ -185,41 +186,6 @@ class TestCreateExecutor:
         with patch.dict("sys.modules", {"mpi4py": None}):
             with pytest.raises(SystemExit):
                 create_executor(cfg)
-
-
-@pytest.mark.skipif(
-    not importlib.util.find_spec("pysqa"),
-    reason="pysqa not installed",
-)
-class TestPatchPysqaTemplate:
-    def test_adds_qos_directive(self):
-        """Patching inserts --qos into the pysqa SLURM template."""
-        from pysqa.wrapper import slurm as _slurm_mod
-
-        original = _slurm_mod.template
-        try:
-            # Reset to a template without qos
-            _slurm_mod.template = original.replace(
-                "{%- if qos %}\n#SBATCH --qos={{qos}}\n{%- endif %}\n", ""
-            )
-            assert "qos" not in _slurm_mod.template
-            _patch_pysqa_template()
-            assert "#SBATCH --qos={{qos}}" in _slurm_mod.template
-        finally:
-            _slurm_mod.template = original
-
-    def test_idempotent(self):
-        """Calling _patch_pysqa_template twice doesn't duplicate the directive."""
-        from pysqa.wrapper import slurm as _slurm_mod
-
-        original = _slurm_mod.template
-        try:
-            _patch_pysqa_template()
-            after_first = _slurm_mod.template
-            _patch_pysqa_template()
-            assert _slurm_mod.template == after_first
-        finally:
-            _slurm_mod.template = original
 
 
 @pytest.mark.skipif(

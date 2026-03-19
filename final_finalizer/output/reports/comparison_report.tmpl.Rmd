@@ -8,6 +8,7 @@ params:
   assembly_names: "__ASM_NAMES__"
   per_assembly_macro_blocks_tsvs: "__PER_ASM_MACRO_TSVS__"
   per_assembly_rdna_arrays_tsvs: "__PER_ASM_RDNA_TSVS__"
+  per_assembly_contaminants_tsvs: "__PER_ASM_CONTAM_TSVS__"
   pairwise_macro_blocks_tsvs: "__PAIRWISE_MACRO_TSVS__"
   pairwise_names: "__PAIRWISE_NAMES__"
   reference_name: "__REFNAME__"
@@ -17,6 +18,7 @@ params:
 output:
   html_document:
     self_contained: true
+    css: "__COMMON_CSS__"
     toc: true
     toc_float:
       collapsed: false
@@ -24,204 +26,27 @@ output:
     theme: flatly
 ---
 
-```{css, echo=FALSE}
-body {
-  font-family: "Helvetica Neue", Helvetica, "Liberation Sans", Arial, sans-serif;
-  font-size: 13px;
-  max-width: 1300px;
-  margin: auto;
-}
-h1.title { font-size: 24px; margin-bottom: 4px; }
-h1 { font-size: 20px; border-bottom: 2px solid #2c3e50; padding-bottom: 4px; }
-h2 { font-size: 16px; }
-.gt_table { font-size: 11px !important; }
-.gt_col_heading { font-size: 10px !important; font-weight: bold !important; }
-.widget-container { margin: 16px 0; }
-.note-box {
-  background: #f8f9fa; border-left: 4px solid #6c757d;
-  padding: 10px 14px; margin: 12px 0; font-size: 12px; color: #495057;
-}
-.section-intro { font-size: 13px; color: #555; margin-bottom: 12px; }
-```
-
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE,
                       fig.width = 10, dpi = 150)
 
-if (!requireNamespace("pacman", quietly = TRUE))
-  install.packages("pacman", repos = "https://cloud.r-project.org")
-library(pacman)
-pacman::p_load(readr, dplyr, stringr, tidyr, tibble,
-               ggplot2, ggnewscale, patchwork, grid,
-               ggiraph, htmlwidgets, ggrepel,
-               ggokabeito, colorspace,
-               gt, gtExtras, scales,
-               showtext, sysfonts, knitr,
-               ggridges)
+source("__COMMON_R__")
+pacman::p_load(ggridges)
 
 # ---------------------------------------------------------------------------
-# Font setup (shared across all plots)
+# Comparison-report-specific helpers
 # ---------------------------------------------------------------------------
-.resolve_font <- function(family) {
-  slug <- tolower(gsub(" ", "", family))
-  path <- systemfonts::match_fonts(family)$path
-  if (nzchar(path) && grepl(slug, tolower(gsub("[- ]", "", basename(path)))))
-    return(path)
-  NULL
-}
-base_family <- "sans"
-for (.fam in c("Helvetica Neue", "Helvetica", "Liberation Sans")) {
-  .r <- .resolve_font(.fam)
-  if (!is.null(.r)) {
-    sysfonts::font_add(.fam,
-      regular    = .r,
-      bold       = systemfonts::match_fonts(.fam, weight = "bold")$path,
-      italic     = systemfonts::match_fonts(.fam, italic = TRUE)$path,
-      bolditalic = systemfonts::match_fonts(.fam, italic = TRUE, weight = "bold")$path
-    )
-    base_family <- .fam
-    break
-  }
-}
-showtext_auto()
-
-# ---------------------------------------------------------------------------
-# Shared theming
-# ---------------------------------------------------------------------------
-base_font_pt <- 8
-axis_title_margin_pt <- 4
-axis_text_margin_pt <- 4
-
-axis_theme <- theme(
-  axis.title.x = element_text(size = base_font_pt, family = base_family,
-                               margin = margin(t = axis_title_margin_pt)),
-  axis.title.y = element_text(size = base_font_pt, family = base_family,
-                               margin = margin(r = axis_title_margin_pt)),
-  axis.text.x = element_text(size = base_font_pt, family = base_family,
-                               margin = margin(t = axis_text_margin_pt)),
-  axis.text.y = element_text(size = base_font_pt, family = base_family)
-)
-
-apply_legend_theme <- function(p, text_pt = base_font_pt, key_pt = base_font_pt,
-                               tight = TRUE) {
-  base <- theme(
-    legend.title = element_text(size = text_pt, family = base_family),
-    legend.text  = element_text(size = text_pt, family = base_family),
-    legend.key.height = grid::unit(key_pt, "pt"),
-    legend.key.width  = grid::unit(key_pt, "pt"),
-    legend.direction = "horizontal",
-    legend.box = "horizontal"
-  )
-  if (tight) {
-    base <- base + theme(
-      legend.box.margin = margin(0, 0, 0, 0),
-      legend.margin = margin(0, 0, 0, 0),
-      legend.spacing.y = grid::unit(0, "pt"),
-      legend.spacing.x = grid::unit(2, "pt")
-    )
-  }
-  p + base
-}
-
-# ---------------------------------------------------------------------------
-# Okabe-Ito palette and classification colors
-# ---------------------------------------------------------------------------
-oi <- palette_okabe_ito()
-
-classification_colors <- c(
-  "chrom_assigned"     = oi[5],
-  "chrom_unassigned"   = oi[2],
-  "organelle_complete" = oi[3],
-  "organelle_debris"   = oi[4],
-  "rDNA"               = oi[1],
-  "contaminant"        = oi[7],
-  "chrom_debris"       = lighten(oi[5], amount = 0.5),
-  "debris"             = oi[9],
-  "unclassified"       = oi[8]
-)
-
-classification_labels <- c(
-  "chrom_assigned"     = "Chromosome (assigned)",
-  "chrom_unassigned"   = "Chromosome (unassigned)",
-  "organelle_complete" = "Organelle (complete)",
-  "organelle_debris"   = "Organelle (debris)",
-  "rDNA"               = "rDNA",
-  "contaminant"        = "Contaminant",
-  "chrom_debris"       = "Chromosome debris",
-  "debris"             = "Debris",
-  "unclassified"       = "Unclassified"
-)
-
-classification_levels <- c(
-  "chrom_assigned", "chrom_unassigned", "organelle_complete", "organelle_debris",
-  "rDNA", "contaminant", "chrom_debris", "debris", "unclassified"
-)
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-save_pdf <- function(path, plot, width = 7.2, height = 5, dpi = 300) {
-  dev <- if (capabilities("cairo")) cairo_pdf else "pdf"
-  invisible(ggsave(path, plot, width = width, height = height, dpi = dpi, device = dev))
-}
-
-girafe_styled <- function(ggobj, width_svg = 10, height_svg = 6.9) {
-  g <- ggiraph::girafe(ggobj = ggobj, width_svg = width_svg, height_svg = height_svg)
-  ggiraph::girafe_options(g,
-    ggiraph::opts_tooltip(css = paste0(
-      "font-family: ", base_family, "; font-size: 9pt; ",
-      "background: white; padding: 6px; border: 1px solid #666;"
-    )),
-    ggiraph::opts_hover(css = "opacity: 0.8;"),
-    ggiraph::opts_toolbar(saveaspng = FALSE)
-  )
-}
-
-gt_theme <- function(gt_obj) {
-  gt_obj %>%
-    tab_options(
-      table.font.size = px(11),
-      column_labels.font.weight = "bold",
-      column_labels.border.top.style = "none",
-      column_labels.border.bottom.width = px(2),
-      column_labels.border.bottom.color = "#333",
-      table.border.top.style = "none",
-      table.border.bottom.style = "none",
-      table_body.border.bottom.color = "#999",
-      data_row.padding = px(4),
-      heading.border.bottom.style = "none"
-    ) %>%
-    opt_row_striping(row_striping = FALSE)
-}
-
-fmt_mb <- function(x) sprintf("%.1f", x / 1e6)
 fmt_pct <- function(x) ifelse(is.na(x), "\u2014", sprintf("%.1f%%", x * 100))
 
 # Assembly color palette (one color per assembly)
 asm_pal <- c(oi[5], oi[1], oi[3], oi[6], oi[7], oi[4], oi[2], oi[8], oi[9])
 
 # ---------------------------------------------------------------------------
-# Subgenome detection and color setup (from unified report)
+# Subgenome detection and color setup
 # ---------------------------------------------------------------------------
 ref_lengths <- read_tsv(params$ref_lengths_tsv, show_col_types = FALSE,
                         col_types = cols(subgenome = col_character()))
-
-sg_levels <- ref_lengths %>%
-  distinct(subgenome) %>% pull(subgenome) %>% as.character()
-sg_levels <- sg_levels[grepl("^[A-Z]$", sg_levels)]
-sg_levels <- sort(sg_levels)
-n_sg <- length(sg_levels)
-if (n_sg > 8) { sg_levels <- sg_levels[1:8]; n_sg <- 8 }
-has_subgenomes <- (n_sg >= 2)
-
-pal_sg_dark  <- c(oi[5], oi[1], oi[3], oi[6], oi[7], oi[4], oi[2], oi[8])
-pal_sg_light <- lighten(pal_sg_dark, amount = 0.5)
-plot_levels  <- if (has_subgenomes) sg_levels else c("G")
-
-sg_cols_dark  <- setNames(pal_sg_dark[seq_along(plot_levels)],  plot_levels)
-sg_cols_light <- setNames(pal_sg_light[seq_along(plot_levels)], plot_levels)
-col_dark  <- c(sg_cols_dark,  "NA" = pal_sg_dark[1])
-col_light <- c(sg_cols_light, "NA" = pal_sg_light[1])
+list2env(setup_subgenomes(ref_lengths), envir = environment())
 
 # ---------------------------------------------------------------------------
 # Load data
@@ -295,8 +120,12 @@ for (i in seq_along(pairwise_macro_paths)) {
                    col_types = cols(subgenome = col_character()))
     if (nrow(df) > 0 && i <= length(pairwise_pair_names)) {
       df$pair_name <- pairwise_pair_names[i]
+      # Detect rescue pairs (prefixed with "rescue:")
+      raw_name <- pairwise_pair_names[i]
+      df$is_rescue <- startsWith(raw_name, "rescue:")
+      clean_name <- sub("^rescue:", "", raw_name)
       # Extract left and right assembly names from pair name
-      parts <- strsplit(pairwise_pair_names[i], "_vs_", fixed = TRUE)[[1]]
+      parts <- strsplit(clean_name, "_vs_", fixed = TRUE)[[1]]
       if (length(parts) >= 2) {
         df$left_assembly <- parts[1]
         df$right_assembly <- paste(parts[-1], collapse = "_vs_")
@@ -332,6 +161,26 @@ for (i in seq_along(rdna_arrays_paths)) {
 }
 all_rdna_arrays_df <- if (length(rdna_arrays_list) > 0) bind_rows(rdna_arrays_list) else NULL
 has_rdna_arrays <- !is.null(all_rdna_arrays_df) && nrow(all_rdna_arrays_df) > 0
+
+# ---------------------------------------------------------------------------
+# Load per-assembly contaminants TSVs (for Top Taxa section)
+# ---------------------------------------------------------------------------
+contam_tsv_paths <- if (nzchar(params$per_assembly_contaminants_tsvs))
+  strsplit(params$per_assembly_contaminants_tsvs, ";")[[1]] else character(0)
+
+contam_detail_list <- list()
+for (i in seq_along(contam_tsv_paths)) {
+  p <- contam_tsv_paths[i]
+  if (nzchar(p) && file.exists(p)) {
+    df <- read_tsv(p, show_col_types = FALSE)
+    if (nrow(df) > 0) {
+      df$assembly <- asm_name_list[i]
+      contam_detail_list[[i]] <- df
+    }
+  }
+}
+all_contam_detail_df <- if (length(contam_detail_list) > 0) bind_rows(contam_detail_list) else NULL
+has_contam_detail <- !is.null(all_contam_detail_df) && nrow(all_contam_detail_df) > 0
 ```
 
 ---
@@ -558,6 +407,11 @@ busco_df %>%
 ## Summary Table
 
 ```{r overview_table}
+# Detect whether reference has a plastid (chrC/chrPt) sequence
+ref_has_plastid <- any(grepl("^chr[C]$|^chrPt$", ref_lengths$ref_id))
+any_asm_has_chrC <- any(comp_df$chrC_found == "yes", na.rm = TRUE)
+show_chrC <- ref_has_plastid || any_asm_has_chrC
+
 tbl <- comp_df %>%
   transmute(
     Assembly = assembly,
@@ -566,13 +420,13 @@ tbl <- comp_df %>%
     N50 = round(n50 / 1e6, 2),
     L50 = l50,
     `Largest (Mb)` = round(largest_contig / 1e6, 1),
-    `Chr assigned` = n_chrom_assigned,
-    `Chr unassigned` = n_chrom_unassigned,
+    `Asgn / Unasgn / Chim` = paste(n_chrom_assigned, "/",
+                                     n_chrom_unassigned, "/",
+                                     n_chimeric),
     `Full-length` = n_full_length,
     `Both telo` = n_both_telomeres,
     `Mean ref cov` = ifelse(is.na(mean_ref_coverage), "\u2014",
                             sprintf("%.1f%%", mean_ref_coverage * 100)),
-    Chimeric = n_chimeric,
     `Mean identity` = ifelse(is.na(mean_identity), "\u2014",
                              sprintf("%.2f%%", mean_identity * 100)),
     Contaminants = n_contaminants,
@@ -581,14 +435,24 @@ tbl <- comp_df %>%
     chrM = ifelse(chrM_found == "yes", "\u2713", "\u2014")
   )
 
-tbl %>%
+gt_obj <- tbl %>%
   gt() %>%
   gt_theme() %>%
   tab_header(title = "Assembly Comparison Summary") %>%
   cols_align(align = "right", columns = where(is.numeric)) %>%
   tab_spanner(label = "Contiguity", columns = c(Contigs, `Size (Mb)`, N50, L50, `Largest (Mb)`)) %>%
-  tab_spanner(label = "Chromosomes", columns = c(`Chr assigned`, `Chr unassigned`, `Full-length`, `Both telo`, `Mean ref cov`, Chimeric, `Mean identity`)) %>%
-  tab_spanner(label = "Other", columns = c(Contaminants, rDNA, chrC, chrM))
+  tab_spanner(label = "Chromosomes", columns = c(`Asgn / Unasgn / Chim`, `Full-length`, `Both telo`, `Mean ref cov`, `Mean identity`))
+
+# Conditionally include chrC in "Other" spanner
+if (show_chrC) {
+  gt_obj <- gt_obj %>%
+    tab_spanner(label = "Other", columns = c(Contaminants, rDNA, chrC, chrM))
+} else {
+  gt_obj <- gt_obj %>%
+    cols_hide(columns = chrC) %>%
+    tab_spanner(label = "Other", columns = c(Contaminants, rDNA, chrM))
+}
+gt_obj
 ```
 
 ## Nx Curves
@@ -676,7 +540,9 @@ if (has_any_chrom) {
       ref_id = factor(ref_id, levels = ref_order),
       assembly = factor(assembly, levels = asm_names),
       best_ref_coverage = as.numeric(best_ref_coverage),
-      coverage_pct = ifelse(is.na(best_ref_coverage), 0, best_ref_coverage * 100)
+      coverage_pct = ifelse(is.na(best_ref_coverage), 0, best_ref_coverage * 100),
+      mean_identity = as.numeric(mean_identity),
+      identity_pct = ifelse(is.na(mean_identity), 0, mean_identity * 100)
     )
 
   # Join subgenome info from ref_lengths
@@ -686,16 +552,17 @@ if (has_any_chrom) {
 
   # --- Compute per-cell fill color using per-subgenome gradient ---
   # For each subgenome, gradient from white (0%) to dark subgenome color (100%)
-  compute_sg_fill <- function(coverage, sg_val) {
+  # Fill intensity is based on mean identity (not reference coverage)
+  compute_sg_fill <- function(identity, sg_val) {
     sg_key <- if (sg_val %in% names(sg_cols_dark)) sg_val else "NA"
     dark_col <- sg_cols_dark[sg_key]
-    if (is.na(coverage) || coverage <= 0) return("#f0f0f0")
-    frac <- min(coverage / 100, 1)
+    if (is.na(identity) || identity <= 0) return("#f0f0f0")
+    frac <- min(identity / 100, 1)
     ramp <- colorRampPalette(c("white", dark_col))(101)
     ramp[round(frac * 100) + 1]
   }
 
-  hm_data$cell_fill <- mapply(compute_sg_fill, hm_data$coverage_pct, hm_data$sg)
+  hm_data$cell_fill <- mapply(compute_sg_fill, hm_data$identity_pct, hm_data$sg)
 
   # --- Off-target coverage computation ---
   # For each (assembly, ref_chromosome), find blocks from contigs NOT assigned to that ref_id
@@ -784,6 +651,7 @@ if (has_any_chrom) {
         "Contigs: ", n_contigs, "\n",
         "Assigned bp: ", scales::comma(total_assigned_bp), "\n",
         "Best ref coverage: ", fmt_pct(best_ref_coverage), "\n",
+        "Mean identity: ", fmt_pct(mean_identity), "\n",
         "Full-length: ", is_full_length, "\n",
         "Telomeres: ", case_when(
           shape_status == "telo_both" ~ "both",
@@ -973,11 +841,26 @@ if (has_any_chrom) {
   }
 
   # 3. Multi-contig count labels (small number inside pill)
+  # Adaptive color: white on dark fills, dark subgenome color on light fills
   if (nrow(multi_df) > 0) {
+    multi_df <- multi_df %>%
+      mutate(
+        label_color = mapply(function(fill, sg_val) {
+          if (is.na(fill) || fill == "#f0f0f0") return("#333333")
+          rgb_vals <- col2rgb(fill)
+          luminance <- (0.299 * rgb_vals[1] + 0.587 * rgb_vals[2] + 0.114 * rgb_vals[3]) / 255
+          if (luminance > 0.55) {
+            sg_key <- if (sg_val %in% names(sg_cols_dark)) sg_val else "NA"
+            sg_cols_dark[sg_key]
+          } else {
+            "white"
+          }
+        }, cell_fill, sg)
+      )
     p_hm <- p_hm +
       geom_text(data = multi_df,
                 aes(x = x_center, y = y_center, label = multi_label),
-                size = base_font_pt / .pt * 0.8, color = "white",
+                size = base_font_pt / .pt * 0.8, color = multi_df$label_color,
                 fontface = "bold", family = base_family)
   }
 
@@ -1019,7 +902,7 @@ if (has_any_chrom) {
     coord_cartesian(clip = "off") +
     labs(caption = paste0(
       "Pill = telomeres, rect = full-length, zigzag = incomplete, ",
-      "grey = unassigned. Fill intensity = ref coverage.",
+      "grey = unassigned. Fill intensity = mean identity.",
       if (has_off_target) " Red border = off-target synteny." else ""
     )) +
     theme_void(base_size = base_font_pt, base_family = base_family) +
@@ -1134,40 +1017,72 @@ p_sc <- apply_legend_theme(p_sc)
 girafe_styled(ggobj = p_sc, width_svg = 10, height_svg = 6)
 ```
 
-## Completeness Table
-
-```{r completeness_table}
+```{r completeness_table_setup, include=FALSE}
+# Prepare completeness table data with subgenome info and natural sort
 if (has_any_chrom) {
-  tbl_data <- compl_df %>%
-    mutate(best_ref_coverage = as.numeric(best_ref_coverage)) %>%
-    select(ref_id, assembly, n_contigs, total_assigned_bp,
-           best_ref_coverage, is_full_length, has_both_telomeres) %>%
+  compl_tbl_base <- compl_df %>%
+    mutate(best_ref_coverage = as.numeric(best_ref_coverage),
+           mean_identity = as.numeric(mean_identity)) %>%
+    left_join(ref_lengths %>% select(ref_id, subgenome), by = "ref_id") %>%
+    filter(!grepl("^chr[CM]$|^chrPt$|^chrMt$", ref_id)) %>%
     mutate(
+      sg = if (has_subgenomes) subgenome else "G",
+      chrom_num = as.numeric(str_extract(ref_id, "\\d+")),
       `Assigned (Mb)` = round(total_assigned_bp / 1e6, 1),
       `Ref cov (%)` = ifelse(is.na(best_ref_coverage), "\u2014",
                              sprintf("%.1f", best_ref_coverage * 100)),
+      `Identity (%)` = ifelse(is.na(mean_identity), "\u2014",
+                              sprintf("%.2f", mean_identity * 100)),
       `Full-length` = ifelse(is_full_length == "yes", "\u2713", ""),
       `Both telo` = ifelse(has_both_telomeres == "yes", "\u2713", "")
     ) %>%
-    select(ref_id, assembly, n_contigs, `Assigned (Mb)`, `Ref cov (%)`,
-           `Full-length`, `Both telo`)
+    arrange(sg, chrom_num) %>%
+    mutate(ref_id = factor(ref_id, levels = unique(ref_id)))
 
-  tbl_data %>%
-    gt(groupname_col = "ref_id") %>%
-    gt_theme() %>%
-    tab_header(title = "Chromosome Completeness by Reference") %>%
-    cols_label(
-      assembly = "Assembly", n_contigs = "Contigs",
-      `Assigned (Mb)` = "Assigned (Mb)",
-      `Ref cov (%)` = "Ref cov (%)",
-      `Full-length` = "Full-length",
-      `Both telo` = "Both telo"
-    ) %>%
-    cols_align(align = "right", columns = c(n_contigs, `Assigned (Mb)`, `Ref cov (%)`)) %>%
-    cols_align(align = "center", columns = c(`Full-length`, `Both telo`))
-} else {
-  cat("No chromosome-assigned contigs found in any assembly.")
+  compl_sg_levels <- if (has_subgenomes) sort(unique(compl_tbl_base$sg)) else "G"
+
+  make_compl_gt <- function(df, title) {
+    df %>%
+      select(ref_id, assembly, n_contigs, `Assigned (Mb)`, `Ref cov (%)`,
+             `Identity (%)`, `Full-length`, `Both telo`) %>%
+      gt(groupname_col = "ref_id") %>%
+      gt_theme() %>%
+      tab_header(title = title) %>%
+      cols_label(
+        assembly = "Assembly", n_contigs = "Contigs",
+        `Assigned (Mb)` = "Assigned (Mb)",
+        `Ref cov (%)` = "Ref cov (%)",
+        `Identity (%)` = "Identity (%)",
+        `Full-length` = "Full-length",
+        `Both telo` = "Both telo"
+      ) %>%
+      cols_align(align = "right", columns = c(n_contigs, `Assigned (Mb)`,
+                                               `Ref cov (%)`, `Identity (%)`)) %>%
+      cols_align(align = "center", columns = c(`Full-length`, `Both telo`))
+  }
 }
+```
+
+`r if (has_any_chrom && has_subgenomes && length(compl_sg_levels) >= 2) "## Completeness Table {.tabset}" else "## Completeness Table"`
+
+```{r completeness_table_single, eval=(has_any_chrom && !(has_subgenomes && length(compl_sg_levels) >= 2))}
+make_compl_gt(compl_tbl_base, "Chromosome Completeness by Reference")
+```
+
+```{r completeness_table_tabset, eval=(has_any_chrom && has_subgenomes && length(compl_sg_levels) >= 2), results='asis'}
+for (sg_val in compl_sg_levels) {
+  cat(sprintf("\n### Subgenome %s\n\n", sg_val))
+  sg_df <- compl_tbl_base %>% filter(sg == sg_val)
+  gt_out <- make_compl_gt(sg_df,
+    sprintf("Chromosome Completeness \u2014 Subgenome %s", sg_val))
+  # Render gt to HTML and emit inline
+  cat(as.character(as_raw_html(gt_out)))
+  cat("\n\n")
+}
+```
+
+```{r completeness_table_none, eval=(!has_any_chrom)}
+cat("No chromosome-assigned contigs found in any assembly.")
 ```
 
 
@@ -1563,9 +1478,105 @@ for (gap_i in seq_along(gap_zones)) {
   }
 }
 
+# --- Rescue ribbons: span across non-adjacent assemblies ---
+# When an intermediate assembly lacks a chromosome, rescue pairwise alignments
+# bridge the gap.  Rescue pairs are tagged with is_rescue == TRUE.
+rescue_macro_df <- if (!is.null(pairwise_macro_df) && "is_rescue" %in% names(pairwise_macro_df)) {
+  pairwise_macro_df %>% filter(is_rescue)
+} else { NULL }
+
+if (!is.null(rescue_macro_df) && nrow(rescue_macro_df) > 0) {
+  rescue_pairs <- rescue_macro_df %>%
+    distinct(left_assembly, right_assembly)
+
+  for (rp_i in seq_len(nrow(rescue_pairs))) {
+    r_left_asm  <- rescue_pairs$left_assembly[rp_i]
+    r_right_asm <- rescue_pairs$right_assembly[rp_i]
+
+    # Filter once per pair outside the subgenome loop
+    pair_df <- rescue_macro_df %>%
+      filter(left_assembly == r_left_asm, right_assembly == r_right_asm,
+             qspan_bp >= min_span)
+    if (nrow(pair_df) == 0) next
+
+    for (sg in subgenome_order) {
+      left_col_name  <- if (n_subgenomes > 1) paste0(r_left_asm, ".", sg) else r_left_asm
+      right_col_name <- if (n_subgenomes > 1) paste0(r_right_asm, ".", sg) else r_right_asm
+
+      # Look up x-coordinates; skip if either column is missing
+      if (!(left_col_name %in% names(all_col_centers)) ||
+          !(right_col_name %in% names(all_col_centers))) next
+      left_x  <- all_col_centers[[left_col_name]]
+      right_x <- all_col_centers[[right_col_name]]
+      gz_rescue <- c(left_x + 0.2, right_x - 0.2)
+
+      macro_src <- if (n_subgenomes > 1) filter(pair_df, subgenome == sg) else pair_df
+      if (nrow(macro_src) == 0) next
+
+      for (b in seq_len(nrow(macro_src))) {
+        blk <- macro_src[b, ]
+
+        lp <- pill_lookup %>% filter(column == left_col_name, contig == blk$ref_id)
+        rp <- pill_lookup %>% filter(column == right_col_name, contig == blk$contig)
+        if (nrow(lp) == 0 || nrow(rp) == 0) next
+
+        left_len  <- lp$contig_len[1]
+        left_y    <- lp$y_top[1]
+        left_h    <- lp$pill_height[1]
+        right_len <- rp$contig_len[1]
+        right_y   <- rp$y_top[1]
+        right_h   <- rp$pill_height[1]
+
+        cid <- as.character(lp$chrom_id[1])
+
+        l_start <- max(0, as.numeric(blk$ref_start))
+        l_end   <- min(left_len, as.numeric(blk$ref_end))
+        r_start <- max(0, as.numeric(blk$qstart))
+        r_end   <- min(right_len, as.numeric(blk$qend))
+        if (l_end <= l_start || r_end <= r_start) next
+
+        ly_top <- pos_to_y(l_start, left_len, left_y, left_h)
+        ly_bot <- pos_to_y(l_end, left_len, left_y, left_h)
+        ry_top <- pos_to_y(r_start, right_len, right_y, right_h)
+        ry_bot <- pos_to_y(r_end, right_len, right_y, right_h)
+
+        strand_val <- blk$strand
+        if (strand_val == "-") {
+          tmp <- ry_top; ry_top <- ry_bot; ry_bot <- tmp
+        }
+
+        ident_val <- as.numeric(blk$identity)
+        alpha_ribbon <- 0.8 + 0.15 * min(1, ident_val)
+
+        left_key  <- lp$contig[1]
+        right_key <- rp$contig[1]
+        tooltip <- sprintf(
+          "%s \u2192 %s\n%.2f Mb\nIdentity: %.1f%%\nStrand: %s",
+          left_key, right_key,
+          as.numeric(blk$union_bp) / 1e6,
+          ident_val * 100, strand_val
+        )
+
+        ribbon_idx <- ribbon_idx + 1
+        ribbon_polys[[ribbon_idx]] <- make_ribbon(
+          gz_rescue[1], gz_rescue[2], ly_top, ly_bot, ry_top, ry_bot,
+          chrom_id_val = cid, alpha_val = alpha_ribbon,
+          tooltip_text = tooltip, subgenome_val = sg,
+          data_id_val = cid
+        ) %>% mutate(group_id = ribbon_idx, is_rescue = TRUE)
+      }
+    }
+  }
+}
+
 has_ribbons <- length(ribbon_polys) > 0
 if (has_ribbons) {
   all_ribbons <- bind_rows(ribbon_polys)
+  # Ensure is_rescue column exists; fill NA (standard ribbons) with FALSE
+  if (!"is_rescue" %in% names(all_ribbons)) all_ribbons$is_rescue <- FALSE
+  all_ribbons$is_rescue[is.na(all_ribbons$is_rescue)] <- FALSE
+  # Sort so rescue ribbons are drawn first (behind standard ribbons)
+  all_ribbons <- all_ribbons %>% arrange(desc(is_rescue), group_id)
 } else {
   all_ribbons <- NULL
 }
@@ -1919,10 +1930,7 @@ rdna_tbl %>%
   mutate(
     `Total (Mb)` = {
       pct <- if (max_rdna_mb > 0) min(100, rdna_mb / max_rdna_mb * 100) else 0
-      paste0('<div style="background: linear-gradient(to right, rgba(70,130,180,0.3) ',
-             round(pct, 1), '%, transparent ', round(pct, 1),
-             '%); padding: 2px 6px; border-radius: 2px; white-space: nowrap;">',
-             sprintf("%.2f", rdna_mb), '</div>')
+      bar_cell(pct, oi[1], sprintf("%.2f", rdna_mb), alpha = 0.3)
     }
   ) %>%
   ungroup() %>%
@@ -2016,18 +2024,13 @@ chrM_use_kb <- max_chrM_bp >= 1e6
 chrM_col_label <- if (chrM_use_kb) "Size (Kb)" else "Size (bp)"
 
 # Chloroplast color: green-tinted, Mitochondria: red-tinted
-chrC_rgba <- "rgba(76,153,0,0.25)"
-chrM_rgba <- "rgba(180,70,70,0.25)"
 
 org_gt_df <- org_wide %>%
   rowwise() %>%
   mutate(
     chrC_size = if (chrC_bp > 0) {
       pct <- min(100, chrC_bp / max_chrC_bp * 100)
-      paste0('<div style="background: linear-gradient(to right, ', chrC_rgba, ' ',
-             round(pct, 1), '%, transparent ', round(pct, 1),
-             '%); padding: 2px 6px; border-radius: 2px; white-space: nowrap;">',
-             formatC(chrC_bp, format = "d", big.mark = ","), '</div>')
+      bar_cell(pct, oi[3], formatC(chrC_bp, format = "d", big.mark = ","))
     } else "\u2014",
     chrM_size = if (chrM_bp > 0) {
       pct <- min(100, chrM_bp / max_chrM_bp * 100)
@@ -2036,10 +2039,7 @@ org_gt_df <- org_wide %>%
       } else {
         formatC(chrM_bp, format = "d", big.mark = ",")
       }
-      paste0('<div style="background: linear-gradient(to right, ', chrM_rgba, ' ',
-             round(pct, 1), '%, transparent ', round(pct, 1),
-             '%); padding: 2px 6px; border-radius: 2px; white-space: nowrap;">',
-             val_text, '</div>')
+      bar_cell(pct, oi[4], val_text)
     } else "\u2014",
     chrC_contig = chrC_contigs,
     chrM_contig = chrM_contigs
@@ -2050,26 +2050,47 @@ org_gt_df <- org_wide %>%
 # Dynamic column labels
 chrC_size_label <- "Size (bp)"
 
-org_gt_df %>%
-  gt() %>%
-  fmt(columns = c(chrC_size, chrM_size), fns = function(x) lapply(x, html)) %>%
-  cols_label(
-    chrC_contig = "Contig", chrC_size = chrC_size_label,
-    chrM_contig = "Contig", chrM_size = chrM_col_label
-  ) %>%
-  cols_width(chrC_size ~ px(140), chrM_size ~ px(140)) %>%
-  tab_spanner(label = "Chloroplast", columns = c(chrC_contig, chrC_size)) %>%
-  tab_spanner(label = "Mitochondria", columns = c(chrM_contig, chrM_size)) %>%
-  tab_style(
-    style = css(vertical_align = "middle"),
-    locations = cells_body()
-  ) %>%
-  tab_header(title = md("**Organelle Summary**")) %>%
-  gt_theme()
+# Detect plastid visibility (reuse from overview table if available)
+show_chrC_org <- exists("show_chrC") && show_chrC
+
+if (show_chrC_org) {
+  org_gt_df %>%
+    gt() %>%
+    fmt(columns = c(chrC_size, chrM_size), fns = function(x) lapply(x, html)) %>%
+    cols_label(
+      chrC_contig = "Contig", chrC_size = chrC_size_label,
+      chrM_contig = "Contig", chrM_size = chrM_col_label
+    ) %>%
+    cols_width(chrC_size ~ px(140), chrM_size ~ px(140)) %>%
+    tab_spanner(label = "Chloroplast", columns = c(chrC_contig, chrC_size)) %>%
+    tab_spanner(label = "Mitochondria", columns = c(chrM_contig, chrM_size)) %>%
+    tab_style(
+      style = css(vertical_align = "middle"),
+      locations = cells_body()
+    ) %>%
+    tab_header(title = md("**Organelle Summary**")) %>%
+    gt_theme()
+} else {
+  org_gt_df %>%
+    select(Assembly, chrM_contig, chrM_size) %>%
+    gt() %>%
+    fmt(columns = chrM_size, fns = function(x) lapply(x, html)) %>%
+    cols_label(chrM_contig = "Contig", chrM_size = chrM_col_label) %>%
+    cols_width(chrM_size ~ px(140)) %>%
+    tab_spanner(label = "Mitochondria", columns = c(chrM_contig, chrM_size)) %>%
+    tab_style(
+      style = css(vertical_align = "middle"),
+      locations = cells_body()
+    ) %>%
+    tab_header(title = md("**Organelle Summary**")) %>%
+    gt_theme()
+}
 ```
 
 
-`r if (has_any_contam) "# 8. Contamination Comparison" else ""`
+`r if (has_any_contam) "# 8. Contamination Comparison {.tabset}" else ""`
+
+`r if (has_any_contam) "## Summary" else ""`
 
 ```{r contamination, eval=has_any_contam}
 contam_tbl <- comp_df %>%
@@ -2088,10 +2109,7 @@ contam_tbl %>%
   mutate(
     `Total (Mb)` = {
       pct <- if (max_contam_mb > 0) min(100, contam_mb / max_contam_mb * 100) else 0
-      paste0('<div style="background: linear-gradient(to right, rgba(180,70,70,0.25) ',
-             round(pct, 1), '%, transparent ', round(pct, 1),
-             '%); padding: 2px 6px; border-radius: 2px; white-space: nowrap;">',
-             sprintf("%.2f", contam_mb), '</div>')
+      bar_cell(pct, oi[7], sprintf("%.2f", contam_mb))
     }
   ) %>%
   ungroup() %>%
@@ -2106,6 +2124,115 @@ contam_tbl %>%
   ) %>%
   tab_header(title = md("**Contamination Summary**")) %>%
   gt_theme()
+```
+
+`r if (has_any_contam && has_contam_detail) "## Top Taxa" else ""`
+
+```{r top_taxa, eval=(has_any_contam && has_contam_detail), results='asis'}
+# --- Top genera by prevalence across assemblies ---
+genus_prevalence <- all_contam_detail_df %>%
+  filter(nzchar(genus) & !is.na(genus)) %>%
+  distinct(assembly, genus) %>%
+  group_by(genus) %>%
+  summarise(n_assemblies = n(),
+            asm_list = paste(sort(assembly), collapse = "\n"),
+            .groups = "drop") %>%
+  mutate(pct = n_assemblies / n_asm * 100) %>%
+  arrange(desc(n_assemblies), genus) %>%
+  head(10)
+
+genus_asm_tips <- genus_prevalence$asm_list
+
+genus_gt <- genus_prevalence %>%
+  transmute(Genus = genus, Assemblies = n_assemblies, Prevalence = pct) %>%
+  gt() %>%
+  text_transform(
+    locations = cells_body(columns = Genus),
+    fn = function(x) sprintf(
+      '<span title="%s" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;max-width:120px"><i>%s</i> spp.</span>',
+      x, x)
+  ) %>%
+  gt_plt_bar_pct(column = Prevalence, scaled = TRUE,
+                 labels = TRUE, fill = oi[7], background = "#e8e8e8") %>%
+  text_transform(
+    locations = cells_body(columns = Assemblies),
+    fn = function(x) mapply(
+      function(v, tip) sprintf('<span title="%s">%s</span>', gsub('"', '&quot;', tip), v),
+      x, genus_asm_tips[seq_along(x)], SIMPLIFY = TRUE)
+  ) %>%
+  text_transform(
+    locations = cells_body(columns = Prevalence),
+    fn = function(x) mapply(
+      function(v, tip) sprintf('<span title="%s" style="display:block">%s</span>', gsub('"', '&quot;', tip), v),
+      x, genus_asm_tips[seq_along(x)], SIMPLIFY = TRUE)
+  ) %>%
+  cols_label(Prevalence = "% assemblies") %>%
+  cols_align(align = "right", columns = Assemblies) %>%
+  cols_width(Genus ~ px(120), Assemblies ~ px(65), Prevalence ~ px(150)) %>%
+  tab_header(title = md("**Top Genera**")) %>%
+  tab_style(
+    style = css(vertical_align = "middle"),
+    locations = cells_body()
+  ) %>%
+  gt_theme()
+
+# --- Top species by prevalence across assemblies ---
+species_prevalence <- all_contam_detail_df %>%
+  filter(nzchar(species) & !is.na(species)) %>%
+  mutate(binomial = paste(genus, species)) %>%
+  distinct(assembly, binomial) %>%
+  group_by(binomial) %>%
+  summarise(n_assemblies = n(),
+            asm_list = paste(sort(assembly), collapse = "\n"),
+            .groups = "drop") %>%
+  mutate(pct = n_assemblies / n_asm * 100) %>%
+  arrange(desc(n_assemblies), binomial) %>%
+  head(10)
+
+species_asm_tips <- species_prevalence$asm_list
+
+species_gt <- species_prevalence %>%
+  transmute(Species = binomial, Assemblies = n_assemblies, Prevalence = pct) %>%
+  gt() %>%
+  text_transform(
+    locations = cells_body(columns = Species),
+    fn = function(x) sprintf(
+      '<span title="%s" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;max-width:200px"><i>%s</i></span>',
+      x, x)
+  ) %>%
+  gt_plt_bar_pct(column = Prevalence, scaled = TRUE,
+                 labels = TRUE, fill = oi[7], background = "#e8e8e8") %>%
+  text_transform(
+    locations = cells_body(columns = Assemblies),
+    fn = function(x) mapply(
+      function(v, tip) sprintf('<span title="%s">%s</span>', gsub('"', '&quot;', tip), v),
+      x, species_asm_tips[seq_along(x)], SIMPLIFY = TRUE)
+  ) %>%
+  text_transform(
+    locations = cells_body(columns = Prevalence),
+    fn = function(x) mapply(
+      function(v, tip) sprintf('<span title="%s" style="display:block">%s</span>', gsub('"', '&quot;', tip), v),
+      x, species_asm_tips[seq_along(x)], SIMPLIFY = TRUE)
+  ) %>%
+  cols_label(Prevalence = "% assemblies") %>%
+  cols_align(align = "right", columns = Assemblies) %>%
+  cols_width(Species ~ px(200), Assemblies ~ px(65), Prevalence ~ px(150)) %>%
+  tab_header(title = md("**Top Species**")) %>%
+  tab_style(
+    style = css(vertical_align = "middle"),
+    locations = cells_body()
+  ) %>%
+  gt_theme()
+
+# Render side by side using a two-column HTML layout
+cat('<div style="display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap;">\n')
+cat('<div style="flex: 1; min-width: 300px;">\n')
+cat(as.character(as_raw_html(genus_gt)))
+cat('\n</div>\n')
+cat('<div style="flex: 1; min-width: 300px;">\n')
+cat(as.character(as_raw_html(species_gt)))
+cat('\n</div>\n')
+cat('</div>\n')
 ```
 
 
