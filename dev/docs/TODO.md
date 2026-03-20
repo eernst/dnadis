@@ -1,5 +1,9 @@
 # TODO
 
+## Consider snakemake
+
+* [ ] executorlib is pretty flaky - moving to snakemake could simplify installation (as it handles conda dependencies in a more user-transparent fashion), simplify SLURM cluster execution, and support more platforms.
+
 ## Implement subcommands
 
 * [ ] There are an overwhelming number of command line options available, some of which only apply to one or the other synteny mode. Look into the potential benefit of splitting these two modes of operation into subcommands, opening up the possibility of partitioning other use cases in the same way.
@@ -7,6 +11,8 @@
 * [ ] We should implement a "clean" subcommand that can clean up residual executorlib_cache directories and any other intermediates (introduce a --keep-intermediates flag for the other subcommands to retain them in the first place). Consider whether we need to retain anything in the *_classification output subdirectory by default.
 
 ## Plotting improvements
+
+* [ ] Add branding to the top of the report index/nav at left
 
 ### 1. Assembly Overview
 
@@ -32,15 +38,15 @@
 
 ### 3. Synteny
 
-* [x] Ribbons are not drawn between all chrom-assigned contigs and their nearest neighbor to the left. There seem to be two potential cases/causes:
-  1. ~~In some cases, the assembly neighbor to the immediate left does not have an assigned contig for a particular chromosome, and thus there is no underlying synteny information to draw ribbons from. This happens because we don't perform all-vs-all alignments or "rescue" these cases by doing a supplementary alignment of that individual chromosome with no partner to the immediate left to the nearest assembly to the left that does possess the query chromosome. Example: Ref.T chr10.~~ Resolved: rescue pairwise alignments now bridge non-adjacent assemblies that share a chromosome.
-  2. Almost no ribbons are drawn between la0028 and its neighbor la0077. We need to investigate this case.
+* [ ] Our current layout is cramped. Need to make a few modifications:
+  * [ ] Split the separate references into their own tabs titled by the reference, e.g. riparian plots for "Subgenome A", "Subgenome P", and "Subgenome T" would each be displayed in separate tabs, and separate PDFs should be produced for each.
+  * [ ] Transpose the plots so that the chromosomes are on the x-axis and the assemblies are on the y-axis. The chrs should be naturally ordered from e.g. chr1...chr21, left to right.
+
+* [ ] Currently, no ribbons are drawn for chromosome fragments (those with the _f# suffix). We need to handle these cases as well.
 
 ### 8. Contamination Comparison
 
 * [x] Top Taxa tables: show binomial (genus + species) in the species table, add percentage labels in bars, hover tooltips showing full name and per-taxon assembly lists, ellipsis clipping for long names.
-
-* [ ] Add a top contaminants pie chart and top 5 table beneath it
 
 ### Rename sections
 

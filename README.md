@@ -47,7 +47,7 @@
 - [centrifuger](https://github.com/mourisl/centrifuger) - contaminant detection
 - [taxonkit](https://github.com/shenwei356/taxonkit) + NCBI taxonomy database - taxonomic lineage for contaminant table (see below)
 - [RagTag](https://github.com/malonge/RagTag) - improved reference-guided scaffolding (for `--scaffold`; built-in scaffolder used as fallback)
-- [executorlib](https://github.com/pyiron/executorlib) + [mpi4py](https://github.com/mpi4py/mpi4py) - distributed SLURM job submission (required for `--cluster`; `conda install -c conda-forge executorlib mpi4py`)
+- [executorlib](https://github.com/pyiron/executorlib) + [pysqa](https://github.com/pyiron/pysqa) + [mpi4py](https://github.com/mpi4py/mpi4py) - distributed SLURM job submission (required for `--cluster`; pysqa is an optional executorlib dependency not pulled in by default)
 - [infernal](http://eddylab.org/infernal/) - structure-based rRNA annotation with Rfam covariance models (for rDNA consensus building; enabled by default, skip with `--skip-rdna-consensus`; bundled Rfam database)
 - [compleasm](https://github.com/huangnengCSU/compleasm) - BUSCO completeness evaluation (requires `--compleasm-lineage`; install in a **separate conda environment** due to dependency conflicts — see below)
 - R with ggplot2, dplyr, readr, stringr, tibble, tidyr, patchwork, ggnewscale, pacman - visualization (enabled by default; skip with `--skip-plot`)
@@ -55,59 +55,52 @@
 
 ### Conda environment
 
+**Minimal** — core classification pipeline with interactive HTML reports:
+
 ```bash
-conda create -n final_finalizer \
-    -c conda-forge -c bioconda \
+conda create -n final_finalizer -c conda-forge -c bioconda \
     python=3.11 intervaltree \
-    miniprot gffread blast mm2plus centrifuger infernal \
+    miniprot gffread blast mm2plus \
     r-base r-ggplot2 r-dplyr r-readr r-stringr r-tibble r-tidyr \
     r-patchwork r-ggnewscale r-pacman r-ggiraph r-htmlwidgets r-scales \
-    r-gt r-svglite r-xml2 r-rmarkdown libxml2 xz pandoc \
+    r-gt r-gtextras r-svglite r-xml2 r-rmarkdown r-ggridges \
+    r-colorspace r-ggokabeito r-ggrepel r-showtext r-sysfonts \
+    libxml2 xz pandoc
 conda activate final_finalizer
 ```
 
-Optional (read depth analysis):
+**Full** — all features including reports, contaminant screening, read depth, rDNA annotation, SLURM distribution, and taxonomic lineage:
+
 ```bash
-conda install -n final_finalizer -c bioconda samtools mosdepth rasusa
+conda create -n final_finalizer -c conda-forge -c bioconda \
+    python=3.11 intervaltree \
+    miniprot gffread blast mm2plus \
+    samtools mosdepth rasusa \
+    centrifuger taxonkit infernal \
+    executorlib pysqa mpi4py \
+    r-base r-ggplot2 r-dplyr r-readr r-stringr r-tibble r-tidyr \
+    r-patchwork r-ggnewscale r-pacman r-ggiraph r-htmlwidgets r-scales \
+    r-gt r-gtextras r-svglite r-xml2 r-rmarkdown r-ggridges \
+    r-colorspace r-ggokabeito r-ggrepel r-showtext r-sysfonts \
+    libxml2 xz pandoc
+conda activate final_finalizer
 ```
 
-Optional (taxonkit for contaminant table taxonomic lineage):
-
-For full Domain → Family → Genus → Species breakdown in the contaminant table, install taxonkit and the NCBI taxonomy database:
+**Compleasm** (BUSCO completeness evaluation) — must be in a **separate conda environment** due to dependency conflicts (dendropy version clash):
 
 ```bash
-# Install taxonkit
-conda install -n final_finalizer -c bioconda taxonkit
-
-# Download and set up NCBI taxonomy database
-# Option 1: Let taxonkit download it (requires ~1.5GB)
-taxonkit download --data-dir ~/.taxonkit
-
-# Option 2: Manual download
-wget -c ftp://ftp.ncbi.nih.gov/pub/taxonomy/taxdump.tar.gz
-mkdir -p ~/.taxonkit
-tar -xzf taxdump.tar.gz -C ~/.taxonkit
-```
-
-Without taxonkit, the contaminant table will show species names parsed from scientific names. With taxonkit and the taxonomy database, you get full taxonomic lineage (Domain, Family, Genus, Species) in the contaminant table.
-
-Optional (compleasm for BUSCO completeness evaluation):
-
-Compleasm has dependency conflicts with the main environment (dendropy version clash between compleasm and sepp), so it must be installed in a **separate conda environment**. The pipeline calls it as an external command, so it just needs to be on `PATH`:
-
-```bash
-# Create a separate environment for compleasm
 conda create -n compleasm -c bioconda -c conda-forge compleasm
-
-# Make compleasm available to the pipeline by adding it to PATH before running:
-export PATH="$(conda run -n compleasm bash -c 'echo $CONDA_PREFIX')/bin:$PATH"
-
-# Or activate both environments (compleasm first, then final_finalizer):
-conda activate compleasm
-conda activate --stack final_finalizer
 ```
 
-Then use `--compleasm-lineage <lineage>` (e.g., `embryophyta`, `liliopsida`, `eukaryota`) to enable BUSCO evaluation on chromosome-assigned and non-chromosome contigs.
+The pipeline auto-detects the `compleasm` conda environment, or you can pass `--compleasm-path /path/to/compleasm` explicitly. Use `--compleasm-lineage <lineage>` (e.g., `embryophyta`, `liliopsida`, `eukaryota`) to enable BUSCO evaluation.
+
+**Taxonkit** — for full taxonomic lineage (Domain → Family → Genus → Species) in the contaminant table, download the NCBI taxonomy database after installing taxonkit:
+
+```bash
+taxonkit download --data-dir ~/.taxonkit
+```
+
+Without taxonkit or the database, contaminant tables show species names only.
 
 ### Development
 
@@ -233,7 +226,7 @@ Read type to minimap2 preset mapping:
 |----------|-------------|---------|
 | `--compleasm-lineage` | BUSCO lineage for compleasm evaluation (e.g., `eukaryota`, `viridiplantae`, `embryophyta`). Required for compleasm to run. | none |
 | `--compleasm-library` | Path to pre-downloaded compleasm lineage files (avoids runtime download) | auto-download |
-| `--compleasm-path` | Path to compleasm executable (e.g., from a separate conda environment). If unset, uses `compleasm` from `PATH`. | none |
+| `--compleasm-path` | Path to compleasm executable. If unset, auto-detects from a `compleasm` conda environment or `PATH`. | auto-detect |
 | `--skip-compleasm` | Skip compleasm even if `--compleasm-lineage` is specified | off |
 
 When `--compleasm-lineage` is set, phase 17 runs compleasm on two FASTA subsets: chromosome-assigned contigs (`*.chrs.fasta`) and non-chromosome contigs (`*.non_chrs.fasta`, combining debris + unclassified + contaminants). Both runs are submitted in parallel. Results are included in the per-assembly unified HTML report and in the multi-assembly `comparison_summary.tsv`.
@@ -697,7 +690,7 @@ This produces `*.scaffolded.fasta` (chromosome pseudomolecules) and `*.scaffolde
     -t 32
 ```
 
-Compleasm runs on chromosome-assigned contigs and non-chromosome contigs in parallel. Results appear in `*.unified_report.html` and (in multi-assembly runs) in `comparison_summary.tsv`. If compleasm is installed in a separate conda environment, pass the executable path with `--compleasm-path`.
+Compleasm runs on chromosome-assigned contigs and non-chromosome contigs in parallel. Results appear in `*.assembly_report.html` and (in multi-assembly runs) in `comparison_summary.tsv`. The pipeline auto-detects compleasm from a `compleasm` conda environment, or you can pass `--compleasm-path` explicitly.
 
 ### Multi-assembly mode (file-of-filenames)
 
