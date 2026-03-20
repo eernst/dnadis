@@ -48,16 +48,23 @@ def _estimate_genome_bp_from_filesize(path: Path) -> int:
         return int(size * 0.5)
 
 
+# Global safety multiplier for wall-time estimates.  Under-requesting causes
+# SLURM TIMEOUT kills which hang the coordinator (executorlib futures never
+# resolve), so we deliberately over-request.  Over-requesting only wastes
+# scheduler priority, not actual compute time — jobs exit as soon as they finish.
+_TIME_SAFETY_FACTOR = 3
+
+
 def _scale_time(base_minutes: int, genome_bp: int, scale_bp: int = 500_000_000) -> int:
-    """Scale wall-time linearly with genome size.
+    """Scale wall-time linearly with genome size, then apply safety factor.
 
     *base_minutes* is for a genome of *scale_bp* bases.
-    Minimum returned is *base_minutes*.
+    Minimum returned is *base_minutes* × ``_TIME_SAFETY_FACTOR``.
     """
     if genome_bp <= 0:
-        return base_minutes
+        return base_minutes * _TIME_SAFETY_FACTOR
     factor = max(1.0, genome_bp / scale_bp)
-    return max(base_minutes, int(math.ceil(base_minutes * factor)))
+    return max(base_minutes, int(math.ceil(base_minutes * factor * _TIME_SAFETY_FACTOR)))
 
 
 # ---------------------------------------------------------------------------
@@ -144,7 +151,7 @@ def estimate_contaminant_resources(
     spec = ResourceSpec(
         cores=min(16, config.max_threads),
         memory_gb=mem_gb,
-        time_minutes=30,
+        time_minutes=30 * _TIME_SAFETY_FACTOR,
         job_name="contaminant",
     )
     return clamp_resources(spec, config)

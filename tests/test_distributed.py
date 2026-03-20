@@ -327,19 +327,23 @@ class TestFileHelpers:
 
 class TestScaleTime:
     def test_base_case(self):
-        # genome == scale_bp → factor == 1 → returns base
-        assert _scale_time(60, 500_000_000) == 60
+        # genome == scale_bp → factor == 1 → returns base × safety
+        from final_finalizer.utils.resource_estimation import _TIME_SAFETY_FACTOR as SF
+        assert _scale_time(60, 500_000_000) == 60 * SF
 
     def test_scales_up(self):
-        # 2x genome → at least 2x time
-        assert _scale_time(60, 1_000_000_000) == 120
+        # 2x genome → at least 2x base × safety
+        from final_finalizer.utils.resource_estimation import _TIME_SAFETY_FACTOR as SF
+        assert _scale_time(60, 1_000_000_000) == 120 * SF
 
     def test_minimum(self):
-        # Small genome → still returns base_minutes
-        assert _scale_time(60, 1000) == 60
+        # Small genome → still returns base_minutes × safety
+        from final_finalizer.utils.resource_estimation import _TIME_SAFETY_FACTOR as SF
+        assert _scale_time(60, 1000) == 60 * SF
 
     def test_zero_bp(self):
-        assert _scale_time(60, 0) == 60
+        from final_finalizer.utils.resource_estimation import _TIME_SAFETY_FACTOR as SF
+        assert _scale_time(60, 0) == 60 * SF
 
 
 class TestEstimateSyntenyResources:
