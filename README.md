@@ -47,7 +47,7 @@
 - [centrifuger](https://github.com/mourisl/centrifuger) - contaminant detection
 - [taxonkit](https://github.com/shenwei356/taxonkit) + NCBI taxonomy database - taxonomic lineage for contaminant table (see below)
 - [RagTag](https://github.com/malonge/RagTag) - improved reference-guided scaffolding (for `--scaffold`; built-in scaffolder used as fallback)
-- [executorlib](https://github.com/pyiron/executorlib) + [pysqa](https://github.com/pyiron/pysqa) + [mpi4py](https://github.com/mpi4py/mpi4py) - distributed SLURM job submission (required for `--cluster`; pysqa is an optional executorlib dependency not pulled in by default)
+- [executorlib](https://github.com/pyiron/executorlib) + [pysqa](https://github.com/pyiron/pysqa) + [h5py](https://github.com/h5py/h5py) - distributed SLURM job submission (required for `--cluster`; pysqa and h5py are optional executorlib dependencies not pulled in by default)
 - [infernal](http://eddylab.org/infernal/) - structure-based rRNA annotation with Rfam covariance models (for rDNA consensus building; enabled by default, skip with `--skip-rdna-consensus`; bundled Rfam database)
 - [compleasm](https://github.com/huangnengCSU/compleasm) - BUSCO completeness evaluation (requires `--compleasm-lineage`; install in a **separate conda environment** due to dependency conflicts — see below)
 - R with ggplot2, dplyr, readr, stringr, tibble, tidyr, patchwork, ggnewscale, pacman - visualization (enabled by default; skip with `--skip-plot`)
@@ -77,7 +77,7 @@ conda create -n final_finalizer -c conda-forge -c bioconda \
     miniprot gffread blast mm2plus \
     samtools mosdepth rasusa \
     centrifuger taxonkit infernal \
-    executorlib pysqa mpi4py \
+    executorlib pysqa h5py \
     r-base r-ggplot2 r-dplyr r-readr r-stringr r-tibble r-tidyr \
     r-patchwork r-ggnewscale r-pacman r-ggiraph r-htmlwidgets r-scales \
     r-gt r-gtextras r-svglite r-xml2 r-rmarkdown r-ggridges \

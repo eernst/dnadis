@@ -229,7 +229,7 @@ The rDNA consensus module (`rdna_consensus.py`) uses internal "Step 1-4" numberi
 
 **TOML configuration**: `config.py` provides schema-based config file support. CLI arguments override config file values.
 
-**Distributed computing** (`--cluster`): Optional SLURM job submission via [executorlib](https://github.com/pyiron/executorlib). When `--cluster` is set, compute-intensive phases (synteny alignment, BLAST detection, debris detection, contaminant screening, read depth, compleasm) are submitted as individual SLURM jobs with per-job resource control. The coordinator process orchestrates submission and waits on futures. Two levels of parallelism: intra-assembly (independent phases like organelle + rDNA BLAST run as parallel SLURM jobs) and inter-assembly (multiple `run_assembly()` calls run concurrently via ThreadPoolExecutor, each submitting its own SLURM jobs). When `--cluster` is not set, `LocalExecutor` provides synchronous execution with zero overhead — behavior is identical to the non-distributed code path. If `--cluster` is set but executorlib or mpi4py is not installed, the tool exits with a clear error message and install instructions. Resource estimation (`resource_estimation.py`) sizes each job based on input file sizes and caps against `--max-threads-dist`, `--max-mem-dist`, `--max-time-dist`.
+**Distributed computing** (`--cluster`): Optional SLURM job submission via [executorlib](https://github.com/pyiron/executorlib). When `--cluster` is set, compute-intensive phases (synteny alignment, BLAST detection, debris detection, contaminant screening, read depth, compleasm) are submitted as individual SLURM jobs with per-job resource control. The coordinator process orchestrates submission and waits on futures. Two levels of parallelism: intra-assembly (independent phases like organelle + rDNA BLAST run as parallel SLURM jobs) and inter-assembly (multiple `run_assembly()` calls run concurrently via ThreadPoolExecutor, each submitting its own SLURM jobs). When `--cluster` is not set, `LocalExecutor` provides synchronous execution with zero overhead — behavior is identical to the non-distributed code path. If `--cluster` is set but executorlib (or its optional dependencies pysqa/h5py) is not installed, the tool exits with a clear error message and install instructions. Resource estimation (`resource_estimation.py`) sizes each job based on input file sizes and caps against `--max-threads-dist`, `--max-mem-dist`, `--max-time-dist`.
 
 ### Critical Security Notes
 
@@ -300,7 +300,7 @@ Tests are in `tests/` directory (7 test files, ~165 tests):
 
 **Python packages**:
 - intervaltree - efficient overlap detection
-- executorlib + mpi4py (optional) - SLURM job submission for `--cluster` mode (`conda install -c conda-forge executorlib mpi4py`)
+- executorlib + pysqa + h5py (optional) - SLURM job submission for `--cluster` mode (`conda install -c conda-forge executorlib pysqa h5py`)
 
 All external tools are called via subprocess with proper error handling. Use `utils/io_utils.py:have_exe()` to check availability before calling.
 

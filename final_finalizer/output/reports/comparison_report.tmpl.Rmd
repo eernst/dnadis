@@ -913,12 +913,12 @@ if (has_any_chrom) {
 
 <div class="note-box">
 <b>Legend</b>:&ensp;
-<svg width="14" height="24" style="vertical-align:middle"><rect x="1" y="1" width="12" height="22" rx="6" fill="#8cc5e3" stroke="#2a6496" stroke-width="0.8"/></svg>&thinsp;Both telomeres&emsp;
-<svg width="14" height="24" style="vertical-align:middle"><path d="M1,7 C1,1 13,1 13,7 L13,23 L1,23 Z" fill="#8cc5e3" stroke="#2a6496" stroke-width="0.8"/></svg>&thinsp;5&#x2032; telomere&emsp;
-<svg width="14" height="24" style="vertical-align:middle"><path d="M1,1 L13,1 L13,17 C13,23 1,23 1,17 Z" fill="#8cc5e3" stroke="#2a6496" stroke-width="0.8"/></svg>&thinsp;3&#x2032; telomere&emsp;
-<svg width="14" height="20" style="vertical-align:middle"><rect x="1" y="1" width="12" height="18" fill="#8cc5e3" stroke="#2a6496" stroke-width="0.8"/></svg>&thinsp;Full-length&emsp;
-<svg width="14" height="20" style="vertical-align:middle"><path d="M1,4 L4,1 L7,4 L10,1 L13,4 L13,16 L10,19 L7,16 L4,19 L1,16 Z" fill="#8cc5e3" stroke="#2a6496" stroke-width="0.8"/></svg>&thinsp;Incomplete&emsp;
-<svg width="14" height="20" style="vertical-align:middle"><rect x="1" y="1" width="12" height="18" fill="#f0f0f0" stroke="none"/></svg>&thinsp;Unassigned<br>
+<svg width="14" height="24" style="vertical-align:middle"><rect x="1" y="1" width="12" height="22" rx="6" fill="#8cc5e3" stroke="#2a6496" stroke-width="0.8"/></svg>&ensp;Both telomeres&emsp;
+<svg width="14" height="24" style="vertical-align:middle"><path d="M1,7 C1,1 13,1 13,7 L13,23 L1,23 Z" fill="#8cc5e3" stroke="#2a6496" stroke-width="0.8"/></svg>&ensp;5&#x2032; telomere&emsp;
+<svg width="14" height="24" style="vertical-align:middle"><path d="M1,1 L13,1 L13,17 C13,23 1,23 1,17 Z" fill="#8cc5e3" stroke="#2a6496" stroke-width="0.8"/></svg>&ensp;3&#x2032; telomere&emsp;
+<svg width="14" height="20" style="vertical-align:middle"><rect x="1" y="1" width="12" height="18" fill="#8cc5e3" stroke="#2a6496" stroke-width="0.8"/></svg>&ensp;Full-length&emsp;
+<svg width="14" height="20" style="vertical-align:middle"><path d="M1,4 L4,1 L7,4 L10,1 L13,4 L13,16 L10,19 L7,16 L4,19 L1,16 Z" fill="#8cc5e3" stroke="#2a6496" stroke-width="0.8"/></svg>&ensp;Incomplete&emsp;
+<svg width="14" height="20" style="vertical-align:middle"><rect x="1" y="1" width="12" height="18" fill="#f0f0f0" stroke="none"/></svg>&ensp;Unassigned<br>
 Fill intensity = reference coverage. Red border = off-target synteny. Small numbers = multi-contig.
 </div>
 
@@ -1222,7 +1222,7 @@ build_synteny_plot <- function(sg) {
   )
   chrom_labels <- sg_chr %>%
     arrange(chrom_num) %>%
-    transmute(chrom_num, label = chrom_id) %>%
+    transmute(chrom_num, label = str_replace(ref_id, "^[Cc]hr", "")) %>%
     distinct()
 
   # --- Build pill data ---
@@ -1537,7 +1537,7 @@ build_synteny_plot <- function(sg) {
     scale_y_reverse(
       breaks = as.numeric(row_centers),
       labels = names(row_centers),
-      expand = expansion(add = c(0.25, 0.25))
+      expand = expansion(add = c(0.2, 0.2))
     )
 
   # Theme
@@ -1545,16 +1545,14 @@ build_synteny_plot <- function(sg) {
     theme_minimal(base_size = base_font_pt, base_family = base_family) +
     theme(
       axis.text.x.bottom = element_text(size = base_font_pt, face = "bold",
-                                       family = base_family, angle = 45, hjust = 1,
-                                       margin = margin(t = 2)),
+                                       family = base_family, margin = margin(t = 2)),
       axis.text.x.top = element_text(size = base_font_pt, face = "bold",
-                                      family = base_family, angle = 45, hjust = 0,
-                                      margin = margin(b = 2)),
+                                      family = base_family, margin = margin(b = 2)),
       axis.text.y = element_text(size = base_font_pt, family = base_family, hjust = 1),
       axis.ticks = element_blank(),
       axis.title = element_blank(),
       panel.grid = element_blank(),
-      plot.margin = margin(2, 5, 2, 5)
+      plot.margin = margin(5, 5, 2, 5)
     )
 
   list(plot = p, width = plot_w, height = plot_h, has_ribbons = has_ribbons)
