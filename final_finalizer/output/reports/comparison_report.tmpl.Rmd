@@ -1212,14 +1212,43 @@ build_synteny_plot <- function(sg) {
   row_centers <- setNames(seq_len(n_rows) * row_spacing, row_names)
 
   # --- X-axis layout: one column per chromosome ---
-  # Pill width proportional to ref chromosome length, scaled to fit page
+  # Pill width proportional to contig length.  Column width is the max total
+  # pill width across all assemblies (handles multi-copy chromosomes like
+  # chr2A_c1 + chr2A_c2 which need more horizontal space).
   max_ref_len <- max(sg_chr$ref_len)
-  x_scale <- max_ref_len / (0.8 * 1.0)  # pill_width up to 0.8 per unit x-spacing
-  col_spacing_x <- 1.0
-  chrom_x <- setNames(
-    seq_along(sg_chrom_nums) * col_spacing_x,
-    as.character(sg_chrom_nums)
-  )
+  x_scale <- max_ref_len / 0.8  # ref pill up to 0.8 units for the largest chrom
+
+  # Pre-compute per-chromosome column width: max of ref_len and the widest
+  # assembly (sum of contig lengths + inter-pill gaps for all contigs assigned
+  # to that ref_id)
+  pill_gap <- 0.06  # gap between adjacent pills within the same column
+  col_widths <- numeric(length(sg_chrom_nums))
+  for (cn_i in seq_along(sg_chrom_nums)) {
+    cn <- sg_chrom_nums[cn_i]
+    ref_row <- sg_chr %>% filter(chrom_num == cn)
+    rid <- ref_row$ref_id[1]
+    ref_w <- ref_row$ref_len[1] / x_scale
+    max_asm_w <- ref_w
+    for (asm in sg_asms) {
+      asm_contigs <- asm_lookup_df %>%
+        filter(assembly == asm, assigned_ref_id == rid)
+      n_ctg <- nrow(asm_contigs)
+      total_w <- sum(asm_contigs$length) / x_scale +
+                 max(0, n_ctg - 1) * pill_gap
+      max_asm_w <- max(max_asm_w, total_w)
+    }
+    col_widths[cn_i] <- max_asm_w
+  }
+  # Add padding between columns (0.2 units minimum gap)
+  col_gap <- 0.2
+  chrom_x <- numeric(length(sg_chrom_nums))
+  chrom_x[1] <- col_widths[1] / 2
+  for (cn_i in seq_along(sg_chrom_nums)[-1]) {
+    chrom_x[cn_i] <- chrom_x[cn_i - 1] + col_widths[cn_i - 1] / 2 +
+                      col_gap + col_widths[cn_i] / 2
+  }
+  names(chrom_x) <- as.character(sg_chrom_nums)
+
   chrom_labels <- sg_chr %>%
     arrange(chrom_num) %>%
     transmute(chrom_num, label = str_replace(ref_id, "^[Cc]hr", "")) %>%
@@ -1239,7 +1268,7 @@ build_synteny_plot <- function(sg) {
     cid <- ref_row$chrom_id[1]
     pill_w <- ref_len / x_scale
 
-    # Reference pill
+    # Reference pill — centered on column
     y_ref <- row_centers[["Reference"]]
     pills_list[[length(pills_list) + 1]] <- tibble(
       row_name = "Reference", is_ref = TRUE,
@@ -1250,7 +1279,7 @@ build_synteny_plot <- function(sg) {
       tooltip = sprintf("Reference\n%s\n%.2f Mb", rid, ref_len / 1e6)
     )
 
-    # Assembly pills — stack multiple contigs horizontally within the column
+    # Assembly pills — stack left-to-right, centered on column
     for (asm in sg_asms) {
       y_asm <- row_centers[[asm]]
       lk <- asm_lookup_df %>%
@@ -1258,8 +1287,12 @@ build_synteny_plot <- function(sg) {
         arrange(desc(length))
       if (nrow(lk) == 0) next
 
-      x_cursor <- x_pos - pill_w / 2  # start at left edge of ref pill
-      for (ci in seq_len(nrow(lk))) {
+      # Total width of all contigs + gaps for centering
+      n_ctg <- nrow(lk)
+      total_w <- sum(lk$length) / x_scale + max(0, n_ctg - 1) * pill_gap
+      x_cursor <- x_pos - total_w / 2  # center the composite
+
+      for (ci in seq_len(n_ctg)) {
         ctg <- lk[ci, ]
         ctg_w <- ctg$length / x_scale
         pills_list[[length(pills_list) + 1]] <- tibble(
@@ -1272,7 +1305,7 @@ build_synteny_plot <- function(sg) {
           y_center = y_asm, pill_width = ctg_w,
           tooltip = sprintf("%s\n%s\n%.2f Mb", asm, ctg$contig, ctg$length / 1e6)
         )
-        x_cursor <- x_cursor + ctg_w
+        x_cursor <- x_cursor + ctg_w + pill_gap
       }
     }
   }
@@ -1523,7 +1556,7 @@ build_synteny_plot <- function(sg) {
   }
 
   # X-axis: chromosome labels
-  chrom_breaks <- chrom_labels$chrom_num * col_spacing_x
+  chrom_breaks <- chrom_x[as.character(chrom_labels$chrom_num)]
   p <- p +
     scale_x_continuous(
       breaks = chrom_breaks,

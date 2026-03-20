@@ -2,7 +2,7 @@
 
 ## Consider snakemake
 
-* [ ] executorlib is pretty flaky - moving to snakemake could simplify installation (as it handles conda dependencies in a more user-transparent fashion), simplify SLURM cluster execution, and support more platforms.
+* [ ] executorlib is pretty flaky - moving to snakemake could simplify installation (as it handles conda dependencies in a more user-transparent fashion), simplify SLURM cluster execution, possibly make the pipeline more robust, and support more platforms. Need to look at pros/cons, but pretty sure this needs to happen. If it does, we'll want to use final_finalizer.py as a CLI convenience wrapper around snakemake (and retain our current flags). This will be a big refactor.
 
 ## Implement subcommands
 
@@ -38,11 +38,13 @@
 
 ### 3. Synteny
 
-* [ ] Our current layout is cramped. Need to make a few modifications:
-  * [ ] Split the separate references into their own tabs titled by the reference, e.g. riparian plots for "Subgenome A", "Subgenome P", and "Subgenome T" would each be displayed in separate tabs, and separate PDFs should be produced for each.
-  * [ ] Transpose the plots so that the chromosomes are on the x-axis and the assemblies are on the y-axis. The chrs should be naturally ordered from e.g. chr1...chr21, left to right.
+* [x] Our current layout is cramped. Need to make a few modifications:
+  * [x] Split the separate references into their own tabs titled by the reference, e.g. riparian plots for "Subgenome A", "Subgenome P", and "Subgenome T" would each be displayed in separate tabs, and separate PDFs should be produced for each.
+  * [x] Transpose the plots so that the chromosomes are on the x-axis and the assemblies are on the y-axis. The chrs should be naturally ordered from e.g. chr1...chr21, left to right.
 
 * [ ] Currently, no ribbons are drawn for chromosome fragments (those with the _f# suffix). We need to handle these cases as well.
+
+* [ ] Multiple query subgenomes mapping to the same reference (e.g. chr2A_c1, chr2A_c2) are currently laid out side-by-side in the plot (good), but overlap (bad) making it hard to distinguish the multiple pills, and making the ribbons hard to read. Can we detect this situation (where any of the query assemblies have multiple subgenomes mapped to a single reference) and introduce extra horizontal space between the chromosome columns in that specific plot, so that the multiple query chromosomes won't overlap? We should also horizontally shift the centers of them so that the center of the composite (chr2A_c1, chr2A_c2) would align with another query assembly above or below with just one homologous query chromosome. In actuality, we should be horizontally centering all pills on each reference column, but if there are multiple pills in the same ref column, the composition of the multiple pills should be centered.
 
 ### 8. Contamination Comparison
 

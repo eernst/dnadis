@@ -18,7 +18,7 @@
 - **Debris detection** for assembly fragments (chromosome debris, organelle debris)
 - **Chimera flagging** for contigs with evidence from multiple chromosomes
 - **Orientation determination** for chromosome-assigned contigs
-- **Contig renaming** to reference-based names (e.g., `chr1A`, `chr1A_f1` for fragments, `contig_1` for unassigned)
+- **Contig renaming** to reference-based names following the scheme `chr<ref>(_<subgenome>)?(_c<copy>|_f<frag>)?` — for example: `chr1A` (full-length, single copy), `chr1A_B` (full-length, query subgenome B), `chr1A_f1`/`chr1A_f2` (chromosome fragments by descending length), `chr1A_c1`/`chr1A_c2` (rare duplicate full-length copies), `chr1A_B_f1` (fragment from subgenome B); non-chromosome contigs are named `contig_1`, `contig_2`, etc. by descending length (see [Contig Naming Scheme](#contig-naming-scheme))
 - **BUSCO completeness evaluation** (optional) via compleasm, run separately on chromosome-assigned and non-chromosome contigs
 - **Reference-guided scaffolding** (optional) producing chromosome-scale pseudomolecules with AGP output (uses RagTag if available, otherwise built-in scaffolder)
 - **Read depth analysis** (optional) with automated downsampling and caching
@@ -26,6 +26,27 @@
 - **Cross-assembly comparison reports**: interactive HTML tables (via gt) aggregating classification and BUSCO completeness results across all assemblies
 - **Interactive HTML reports** per assembly with chromosome overview, classification summary, read depth, and contaminant table (enabled by default; requires rmarkdown + pandoc)
 - **Distributed SLURM execution** (optional) via executorlib: compute-intensive phases submitted as individual SLURM jobs with automatic resource estimation
+
+## Contig Naming Scheme
+
+Chromosome-assigned contigs are renamed using the pattern `chr<ref>(_<subgenome>)?(_c<copy>|_f<frag>)?`, where `<ref>` is the reference chromosome identifier (e.g., `1A`, `3B`). Non-chromosome contigs are named `contig_1`, `contig_2`, etc., ordered by descending length.
+
+### Chromosome name suffixes
+
+| Suffix | Meaning | Example |
+|--------|---------|---------|
+| _(none)_ | Single full-length contig assigned to this reference chromosome | `chr1A` |
+| `_B`, `_C`, … | Query subgenome label — the query assembly carries multiple homeologous copies that map to the same reference chromosome and can be resolved into distinct subgenomes | `chr1A_B` |
+| `_c1`, `_c2`, … | Multiple full-length copies of the same (subgenome, reference chromosome) pair, ordered by descending length — unusual; indicates the assembler produced duplicate complete copies | `chr1A_c1`, `chr1A_c2` |
+| `_f1`, `_f2`, … | Chromosome fragments (contigs not classified as full-length), ordered by descending length | `chr1A_f1`, `chr1A_f2` |
+
+Suffixes compose left-to-right: subgenome first, then copy/fragment. For example, `chr1A_B_f1` is the longest fragment of chr1A from query subgenome B.
+
+A contig is classified as **full-length** when its syntenic coverage of the reference chromosome meets `--full-length-ref-coverage` (default: 0.85) and/or it has telomeres at both ends. The `_f` suffix therefore flags genuine assembly fragmentation rather than short contigs of arbitrary origin.
+
+Subgenome labels (`_B`, `_C`, …) are inferred by clustering query contigs that all map to the same reference chromosome by sequence-identity similarity. The label letters are assigned in order of cluster size (largest cluster = A, or inherits the reference subgenome letter when the reference already carries one, e.g., `chr1A` → `chr1A_B` means the new subgenome differs from subgenome A).
+
+The authoritative implementation is `final_finalizer/classification/classifier.py:generate_contig_names()`. See [Output Formats](docs/output_formats.md#contig_summarytsv) for the corresponding `contig` TSV column.
 
 ## Installation
 

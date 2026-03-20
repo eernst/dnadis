@@ -757,14 +757,16 @@ def generate_contig_names(
 ) -> Dict[str, str]:
     """Generate new contig names with full-length/fragment distinction.
 
-    Naming scheme: chr<ref>(_<query_subgenome>)?(_f<frag>|_c<copy>)?
+    Naming scheme: chr<ref>(_<query_subgenome>)?(_c<copy>|_f<frag>)?
 
-    Examples:
-    - chr1A: Full-length chr1A, single copy, primary subgenome
-    - chr1A_B: Full-length chr1A, query subgenome B
-    - chr1A_f1: Fragment 1 of chr1A
-    - chr1A_B_f1: Fragment 1 of chr1A, query subgenome B
-    - chr1A_c1, chr1A_c2: Multiple full-length copies (unusual)
+    Suffixes compose left-to-right; subgenome comes before copy/fragment:
+    - chr1A:           Full-length chr1A, single copy, no resolved subgenome
+    - chr1A_B:         Full-length chr1A, query subgenome B
+    - chr1A_c1/c2:     Multiple full-length copies of the same chromosome (unusual)
+    - chr1A_f1/f2:     Chromosome fragments, ordered by descending length
+    - chr1A_B_f1:      Longest fragment of chr1A from query subgenome B
+
+    Non-chromosome contigs are named contig_1, contig_2, … by descending length.
 
     Args:
         classifications: List of ContigClassification with is_full_length and query_subgenome set
