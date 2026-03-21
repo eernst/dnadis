@@ -1311,13 +1311,14 @@ def run_assembly(
         contaminants_tsv_path=contaminants_tsv if contaminants_filtered else None,
         rdna_annotations_tsv=rdna_annotations_tsv,
         rdna_arrays_tsv=rdna_arrays_tsv_path,
+        agp_tsv=Path(str(outprefix) + ".scaffolded.agp") if args.scaffold and scaffolded_seqs else None,
         per_subgenome_chrs=per_sg_chrs,
         compleasm_chrs=compleasm_chrs_result,
         compleasm_non_chrs=compleasm_non_chrs_result,
     )
 
     if not args.skip_plot:
-        agp_tsv = Path(str(outprefix) + ".scaffolded.agp") if args.scaffold and scaffolded_seqs else None
+        agp_tsv = result.agp_tsv
         contam_tsv_arg = contaminants_tsv if contaminants_filtered else None
 
         # Resolve compleasm summary paths for the report

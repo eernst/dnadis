@@ -9,6 +9,7 @@ params:
   per_assembly_macro_blocks_tsvs: "__PER_ASM_MACRO_TSVS__"
   per_assembly_rdna_arrays_tsvs: "__PER_ASM_RDNA_TSVS__"
   per_assembly_contaminants_tsvs: "__PER_ASM_CONTAM_TSVS__"
+  per_assembly_agp_tsvs: "__PER_ASM_AGP_TSVS__"
   pairwise_macro_blocks_tsvs: "__PAIRWISE_MACRO_TSVS__"
   pairwise_names: "__PAIRWISE_NAMES__"
   reference_name: "__REFNAME__"
@@ -180,6 +181,39 @@ for (i in seq_along(contam_tsv_paths)) {
 }
 all_contam_detail_df <- if (length(contam_detail_list) > 0) bind_rows(contam_detail_list) else NULL
 has_contam_detail <- !is.null(all_contam_detail_df) && nrow(all_contam_detail_df) > 0
+
+# ---------------------------------------------------------------------------
+# Load per-assembly AGP files (for scaffold join indicators in synteny plot)
+# ---------------------------------------------------------------------------
+agp_paths <- if (nzchar(params$per_assembly_agp_tsvs))
+  strsplit(params$per_assembly_agp_tsvs, ";")[[1]] else character(0)
+
+# Parse AGP into a single dataframe with scaffold component and gap info
+agp_list <- list()
+for (i in seq_along(agp_paths)) {
+  p <- agp_paths[i]
+  if (nzchar(p) && file.exists(p)) {
+    raw <- read_tsv(p, comment = "#", col_names = FALSE, show_col_types = FALSE)
+    if (nrow(raw) >= 6) {
+      # W rows = components, U/N rows = gaps
+      df <- raw %>%
+        transmute(
+          scaffold = X1,
+          start = as.numeric(X2),
+          end = as.numeric(X3),
+          part_num = as.integer(X4),
+          type = X5,
+          component = if_else(X5 == "W", X6, NA_character_),
+          comp_start = if_else(X5 == "W", as.numeric(X7), NA_real_),
+          comp_end = if_else(X5 == "W", as.numeric(X8), NA_real_),
+          strand = if_else(X5 == "W", X9, NA_character_)
+        )
+      df$assembly <- asm_name_list[i]
+      agp_list[[i]] <- df
+    }
+  }
+}
+all_agp_df <- if (length(agp_list) > 0) bind_rows(agp_list) else NULL
 ```
 
 ---
@@ -1230,11 +1264,20 @@ build_synteny_plot <- function(sg) {
     ref_w <- ref_row$ref_len[1] / x_scale
     max_asm_w <- ref_w
     for (asm in sg_asms) {
-      asm_contigs <- asm_lookup_df %>%
-        filter(assembly == asm, assigned_ref_id == rid)
-      n_ctg <- nrow(asm_contigs)
-      total_w <- sum(asm_contigs$length) / x_scale +
-                 max(0, n_ctg - 1) * pill_gap
+      # Check for scaffold — use scaffold length instead of fragment sum
+      asm_agp_w <- NULL
+      if (!is.null(all_agp_df)) {
+        asm_agp_w <- all_agp_df %>% filter(assembly == asm, scaffold == rid)
+      }
+      if (!is.null(asm_agp_w) && nrow(asm_agp_w) > 1) {
+        total_w <- max(asm_agp_w$end) / x_scale
+      } else {
+        asm_contigs <- asm_lookup_df %>%
+          filter(assembly == asm, assigned_ref_id == rid)
+        n_ctg <- nrow(asm_contigs)
+        total_w <- sum(asm_contigs$length) / x_scale +
+                   max(0, n_ctg - 1) * pill_gap
+      }
       max_asm_w <- max(max_asm_w, total_w)
     }
     col_widths[cn_i] <- max_asm_w
@@ -1256,6 +1299,7 @@ build_synteny_plot <- function(sg) {
 
   # --- Build pill data ---
   pills_list <- list()
+  join_indicators <- list()  # red vertical lines at scaffold gaps
   pill_lw <- 1.6
 
   for (cn_i in seq_along(sg_chrom_nums)) {
@@ -1279,7 +1323,7 @@ build_synteny_plot <- function(sg) {
       tooltip = sprintf("Reference\n%s\n%.2f Mb", rid, ref_len / 1e6)
     )
 
-    # Assembly pills — stack left-to-right, centered on column
+    # Assembly pills
     for (asm in sg_asms) {
       y_asm <- row_centers[[asm]]
       lk <- asm_lookup_df %>%
@@ -1287,28 +1331,73 @@ build_synteny_plot <- function(sg) {
         arrange(desc(length))
       if (nrow(lk) == 0) next
 
-      # Total width of all contigs + gaps for centering
-      n_ctg <- nrow(lk)
-      total_w <- sum(lk$length) / x_scale + max(0, n_ctg - 1) * pill_gap
-      x_cursor <- x_pos - total_w / 2  # center the composite
+      # Check if this assembly has an AGP with a scaffold for this chromosome
+      # The scaffold name in the AGP = the renamed contig (e.g., "chr9P")
+      # which is the ref_id when there's a single full-length contig, or
+      # the base name when fragments were scaffolded
+      asm_agp <- NULL
+      if (!is.null(all_agp_df)) {
+        asm_agp <- all_agp_df %>% filter(assembly == asm, scaffold == rid)
+      }
+      has_scaffold <- !is.null(asm_agp) && nrow(asm_agp) > 1
 
-      for (ci in seq_len(n_ctg)) {
-        ctg <- lk[ci, ]
-        ctg_w <- ctg$length / x_scale
+      if (has_scaffold) {
+        # Scaffold mode: one pill spanning the full scaffold length
+        scaffold_len <- max(asm_agp$end)
+        scaffold_w <- scaffold_len / x_scale
+        n_components <- sum(asm_agp$type == "W")
+        component_names <- paste(
+          asm_agp %>% filter(type == "W") %>% pull(component),
+          collapse = ", ")
         pills_list[[length(pills_list) + 1]] <- tibble(
           row_name = asm, is_ref = FALSE,
           ref_id = rid, chrom_id = cid, chrom_num = cn, subgenome = sg,
-          contig = ctg$contig, contig_len = ctg$length,
-          reversed = ctg$reversed,
-          x_center = x_cursor + ctg_w / 2,
-          x_left = x_cursor, x_right = x_cursor + ctg_w,
-          y_center = y_asm, pill_width = ctg_w,
-          tooltip = sprintf("%s\n%s\n%.2f Mb", asm, ctg$contig, ctg$length / 1e6)
+          contig = rid, contig_len = scaffold_len, reversed = FALSE,
+          x_center = x_pos, x_left = x_pos - scaffold_w/2,
+          x_right = x_pos + scaffold_w/2,
+          y_center = y_asm, pill_width = scaffold_w,
+          tooltip = sprintf("%s\n%s (scaffold, %d components)\n%.2f Mb\n%s",
+                            asm, rid, n_components, scaffold_len / 1e6,
+                            component_names)
         )
-        x_cursor <- x_cursor + ctg_w + pill_gap
+
+        # Gap positions → red join indicators
+        gaps <- asm_agp %>% filter(type %in% c("U", "N"))
+        if (nrow(gaps) > 0) {
+          for (gi in seq_len(nrow(gaps))) {
+            gap_mid <- (gaps$start[gi] + gaps$end[gi]) / 2
+            gap_x <- x_pos - scaffold_w/2 + (gap_mid / scaffold_len) * scaffold_w
+            join_indicators[[length(join_indicators) + 1]] <- tibble(
+              x = gap_x, y_center = y_asm, row_name = asm
+            )
+          }
+        }
+      } else {
+        # Fragment mode: stack left-to-right, centered on column
+        n_ctg <- nrow(lk)
+        total_w <- sum(lk$length) / x_scale + max(0, n_ctg - 1) * pill_gap
+        x_cursor <- x_pos - total_w / 2
+
+        for (ci in seq_len(n_ctg)) {
+          ctg <- lk[ci, ]
+          ctg_w <- ctg$length / x_scale
+          pills_list[[length(pills_list) + 1]] <- tibble(
+            row_name = asm, is_ref = FALSE,
+            ref_id = rid, chrom_id = cid, chrom_num = cn, subgenome = sg,
+            contig = ctg$contig, contig_len = ctg$length,
+            reversed = ctg$reversed,
+            x_center = x_cursor + ctg_w / 2,
+            x_left = x_cursor, x_right = x_cursor + ctg_w,
+            y_center = y_asm, pill_width = ctg_w,
+            tooltip = sprintf("%s\n%s\n%.2f Mb", asm, ctg$contig, ctg$length / 1e6)
+          )
+          x_cursor <- x_cursor + ctg_w + pill_gap
+        }
       }
     }
   }
+
+  all_join_indicators <- if (length(join_indicators) > 0) bind_rows(join_indicators) else NULL
 
   all_pills <- bind_rows(pills_list)
   if (nrow(all_pills) == 0) return(NULL)
@@ -1552,6 +1641,18 @@ build_synteny_plot <- function(sg) {
         aes(x = x_left, xend = x_right, y = y_center, yend = y_center,
             tooltip = tooltip, data_id = chrom_id),
         linewidth = pill_lw, lineend = "round", color = "grey78"
+      )
+  }
+
+  # Scaffold join indicators (red vertical lines at gap positions)
+  if (!is.null(all_join_indicators) && nrow(all_join_indicators) > 0) {
+    join_half_h <- pill_lw * 0.02  # match pill visual height
+    p <- p +
+      geom_segment(
+        data = all_join_indicators,
+        aes(x = x, xend = x,
+            y = y_center - join_half_h, yend = y_center + join_half_h),
+        linewidth = 0.4, color = "red"
       )
   }
 
