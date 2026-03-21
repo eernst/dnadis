@@ -1434,7 +1434,7 @@ def main():
     common.add_argument("-t", "--threads", type=_positive_int, default=8, help="Threads for minimap2/miniprot [8]")
     common.add_argument("--skip-plot", action="store_true", help="Skip unified HTML report generation")
     common.add_argument("--assembly-name", type=str, default="", metavar="NAME", help="Assembly name for plot subtitles (default: omitted)")
-    common.add_argument("--reference-name", type=str, default="", metavar="NAME", help="Reference name for plot subtitles (default: omitted)")
+    common.add_argument("--reference-name", type=str, default="", metavar="NAME", help="Reference name for plot subtitles (default: derived from reference filename)")
     common.add_argument("--comparison-name", type=str, default="comparison", metavar="NAME", help="Prefix for multi-assembly comparison output files (default: comparison)")
     common.add_argument("-v", "--verbose", action="store_true", help="Enable verbose (DEBUG level) logging")
     common.add_argument("--quiet", action="store_true", help="Suppress INFO messages (only show warnings and errors)")
@@ -1910,6 +1910,11 @@ def main():
         from final_finalizer.utils.multi_assembly import _strip_fasta_extension
         name = args.assembly_name if args.assembly_name else _strip_fasta_extension(args.query.name)
         assemblies = [(args.query, name, args.reads)]
+
+    # --- Default reference name from FASTA filename if not provided ---
+    if not args.reference_name:
+        from final_finalizer.utils.multi_assembly import _strip_fasta_extension
+        args.reference_name = _strip_fasta_extension(args.ref.name)
 
     # --- Shared reference preparation ---
     ref_outprefix = output_dir / "reference" / "reference"

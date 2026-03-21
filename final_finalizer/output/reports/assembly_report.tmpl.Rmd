@@ -1273,30 +1273,6 @@ has_array_loci <- nrow(array_df) > 0
 has_other_rdna_ann <- nrow(other_df) > 0
 ```
 
-```{r rdna_summary_tab, eval=has_rdna, results='asis'}
-cat('\n## rDNA Summary\n')
-```
-
-```{r rdna_table, eval=has_rdna}
-rdna_show <- rdna_df %>%
-  mutate(length_kb = length / 1e3,
-         identity_pct = if ("best_identity" %in% names(.)) best_identity * 100 else NA_real_,
-         conf_html = sapply(classification_confidence, conf_badge))
-
-sel <- c("contig", "original_name", "length_kb", "identity_pct", "conf_html")
-labels <- list(contig = "contig", original_name = "original_name", length_kb = "Length (kb)",
-               identity_pct = "Identity %", conf_html = "Confidence")
-
-rdna_show %>%
-  select(all_of(sel)) %>%
-  gt() %>%
-  cols_label(.list = labels) %>%
-  fmt_number(columns = length_kb, decimals = 1) %>%
-  fmt_number(columns = any_of("identity_pct"), decimals = 1) %>%
-  fmt(columns = conf_html, fns = function(x) x) %>%
-  tab_header(title = md("**rDNA Summary**")) %>% gt_theme()
-```
-
 ```{r rdna_arrays_tab, eval=has_rdna_arrays, results='asis'}
 cat('\n## 45S rDNA Arrays\n')
 ```
@@ -1354,6 +1330,30 @@ arrays_tbl %>%
   tab_header(title = md("**45S rDNA Arrays**"),
     subtitle = md(paste0(nrow(arrays_show), " tandem repeat arrays detected"))) %>%
   gt_theme()
+```
+
+```{r rdna_summary_tab, eval=has_rdna, results='asis'}
+cat('\n## rDNA Summary\n')
+```
+
+```{r rdna_table, eval=has_rdna}
+rdna_show <- rdna_df %>%
+  mutate(length_kb = length / 1e3,
+         identity_pct = if ("best_identity" %in% names(.)) best_identity * 100 else NA_real_,
+         conf_html = sapply(classification_confidence, conf_badge))
+
+sel <- c("contig", "original_name", "length_kb", "identity_pct", "conf_html")
+labels <- list(contig = "contig", original_name = "original_name", length_kb = "Length (kb)",
+               identity_pct = "Identity %", conf_html = "Confidence")
+
+rdna_show %>%
+  select(all_of(sel)) %>%
+  gt() %>%
+  cols_label(.list = labels) %>%
+  fmt_number(columns = length_kb, decimals = 1) %>%
+  fmt_number(columns = any_of("identity_pct"), decimals = 1) %>%
+  fmt(columns = conf_html, fns = function(x) x) %>%
+  tab_header(title = md("**rDNA Summary**")) %>% gt_theme()
 ```
 
 ```{r rdna_other_tab, eval=has_rdna_ann && has_other_rdna_ann, results='asis'}

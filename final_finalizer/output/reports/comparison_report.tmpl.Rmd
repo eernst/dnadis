@@ -1221,7 +1221,7 @@ build_synteny_plot <- function(sg) {
   # Pre-compute per-chromosome column width: max of ref_len and the widest
   # assembly (sum of contig lengths + inter-pill gaps for all contigs assigned
   # to that ref_id)
-  pill_gap <- 0.06  # gap between adjacent pills within the same column
+  pill_gap <- 0.40  # gap between adjacent pills within the same column
   col_widths <- numeric(length(sg_chrom_nums))
   for (cn_i in seq_along(sg_chrom_nums)) {
     cn <- sg_chrom_nums[cn_i]
@@ -1256,7 +1256,7 @@ build_synteny_plot <- function(sg) {
 
   # --- Build pill data ---
   pills_list <- list()
-  pill_lw <- 2.0
+  pill_lw <- 1.6
 
   for (cn_i in seq_along(sg_chrom_nums)) {
     cn <- sg_chrom_nums[cn_i]
