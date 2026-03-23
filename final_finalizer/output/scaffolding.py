@@ -468,6 +468,31 @@ def _extract_ragtag_scaffold_seq(
     return None
 
 
+def _emit_trivial_scaffold(
+    scaffold_name: str,
+    contig: str,
+    query_seqs: Dict[str, str],
+    contig_orientations: Dict[str, bool],
+    all_scaffolded: Dict[str, str],
+    all_agp: List[str],
+    log_label: str = "trivial scaffold",
+) -> None:
+    """Emit a single-contig scaffold: orient, write to dict, append AGP line."""
+    seq = query_seqs.get(contig, "")
+    if not seq:
+        return
+    if contig_orientations.get(contig, False):
+        seq = reverse_complement(seq)
+        orientation = "-"
+    else:
+        orientation = "+"
+    all_scaffolded[scaffold_name] = seq
+    all_agp.append(_agp_component_line(
+        scaffold_name, 1, len(seq), 1, contig, 1, len(seq), orientation,
+    ))
+    logger.info(f"{scaffold_name}: {log_label} {contig}")
+
+
 # ---------------------------------------------------------------------------
 # Main scaffolding function
 # ---------------------------------------------------------------------------
@@ -582,54 +607,48 @@ def scaffold_chromosomes(
         ]
 
         if t2t_contigs:
-            n_other = len(contig_names) - len(t2t_contigs)
+            t2t_set = set(t2t_contigs)
 
             for t2t_contig in t2t_contigs:
-                # Use clf.new_name when multiple T2T copies, base scaffold_name when single
-                if len(t2t_contigs) == 1:
-                    t2t_name = scaffold_name
-                else:
-                    t2t_name = clf_lookup[t2t_contig].new_name or scaffold_name
+                t2t_name = clf_lookup[t2t_contig].new_name or scaffold_name
+                _emit_trivial_scaffold(
+                    t2t_name, t2t_contig, query_seqs, contig_orientations,
+                    all_scaffolded, all_agp, log_label="T2T",
+                )
 
-                if n_other > 0:
-                    logger.info(
-                        f"{t2t_name}: T2T contig {t2t_contig}, "
-                        f"dropping {n_other} other contig(s) from scaffold"
-                    )
-                else:
-                    logger.info(f"{t2t_name}: T2T contig {t2t_contig}, trivial scaffold")
+            # Emit non-T2T chrom_assigned contigs as their own trivial
+            # scaffolds — these are separate chromosomal copies that should
+            # not be dropped just because a T2T copy exists in the same group.
+            non_t2t_chrom = [
+                c for c in chrom_assigned_in_group if c not in t2t_set
+            ]
+            n_debris = len(contig_names) - len(chrom_assigned_in_group)
+            if n_debris > 0:
+                logger.info(
+                    f"{scaffold_name}: dropping {n_debris} debris contig(s) "
+                    f"(T2T copy exists)"
+                )
+            for contig in non_t2t_chrom:
+                clf = clf_lookup.get(contig)
+                ctg_name = (clf.new_name if clf and clf.new_name else scaffold_name)
+                _emit_trivial_scaffold(
+                    ctg_name, contig, query_seqs, contig_orientations,
+                    all_scaffolded, all_agp, log_label="non-T2T chrom copy",
+                )
 
-                seq = query_seqs.get(t2t_contig, "")
-                if seq:
-                    if contig_orientations.get(t2t_contig, False):
-                        seq = reverse_complement(seq)
-                        orientation = "-"
-                    else:
-                        orientation = "+"
-                    all_scaffolded[t2t_name] = seq
-                    all_agp.append(_agp_component_line(
-                        t2t_name, 1, len(seq), 1,
-                        t2t_contig, 1, len(seq), orientation,
-                    ))
+            continue  # T2T + copies emitted; skip multi-contig scaffolding
 
-            continue  # Skip scaffolding — T2T contigs cover the chromosome
-
-        # Single-contig group: emit trivial AGP without invoking RagTag
+        # Single-contig group: emit trivial AGP without invoking RagTag.
+        # Uses clf.new_name to preserve fragment/copy suffixes (e.g. chr14A_f1)
+        # so that pairwise FASTA headers match contig_summary names.
         if len(contig_names) == 1:
             contig = contig_names[0]
-            seq = query_seqs.get(contig, "")
-            if seq:
-                if contig_orientations.get(contig, False):
-                    seq = reverse_complement(seq)
-                    orientation = "-"
-                else:
-                    orientation = "+"
-                all_scaffolded[scaffold_name] = seq
-                all_agp.append(_agp_component_line(
-                    scaffold_name, 1, len(seq), 1,
-                    contig, 1, len(seq), orientation,
-                ))
-                logger.info(f"{scaffold_name}: single contig {contig}, trivial scaffold")
+            clf = clf_lookup.get(contig)
+            trivial_name = (clf.new_name if clf and clf.new_name else scaffold_name)
+            _emit_trivial_scaffold(
+                trivial_name, contig, query_seqs, contig_orientations,
+                all_scaffolded, all_agp, log_label="single contig",
+            )
             continue
 
         # Multi-contig group: scaffold

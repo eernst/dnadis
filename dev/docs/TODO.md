@@ -66,14 +66,18 @@
 
 * [ ] I'm seeing frequent cases of what look like bacterial contaminant genomes in plant assemblies failing to be identified as contaminants with some potential knock-on effects in reporting and analysis - are they being bundled into non-chromosomes for the compleasm evals? We should consider whether we can flag these as unknown contaminants, provided they have no alignment-based similarity to the chromosome-assigned contigs.
 
+## Query subgenome segmentation
+
+* [ ] Implement and document Gaussian mixture model segmentation of query subgenomes on the basis of reference alignment identity
+
 ## compleasm evals
 [compleasm](https://github.com/huangnengCSU/compleasm) support added in phase 17 (`--compleasm-lineage`). Runs on `chrs.fasta` and `non_chrs.fasta` (debris + unclassified + contaminants). Results included in `comparison_summary.tsv`.
 
 * [x] Add compleasm runs on segregated datasets - the chromosome-assigned contigs and all other debris
 
-* [ ] Aggregate compleasm results for the multiassembly comparison report as a gt table
+* [x] Aggregate compleasm results for the multiassembly comparison report as a gt table
 
-  * [ ] Show classification category output numerically in the table row for each assembly
+  * [x] Show classification category output numerically in the table row for each assembly
 
   * [x] Add compleasm S/D/F/I/M columns to `comparison_summary.tsv` (numeric counts + percentages)
 
@@ -92,6 +96,10 @@
 ## Performance
 
 * [ ] Add bgzip and indexing by default of pipeline outputs (FASTA, GFF3).
+
+## Testing
+
+* [ ] Need to develop test cases for classification, especially for complicated karyotypes and assembly issues involving multiple query subgenomes mapping to the same reference, segmentation of those query subgenomes, fragments vs complete, and the handling of contigs pre- and post-scaffolding.
 
 ## Mammalian, other non-plant genome support
 
