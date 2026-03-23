@@ -11,6 +11,9 @@ Contains functions for:
 """
 from __future__ import annotations
 
+import math
+import statistics
+
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
@@ -351,21 +354,33 @@ def classify_full_length(
     has_5p_telomere: bool,
     has_3p_telomere: bool,
     full_length_threshold: float = 0.70,
+    length_ratio: Optional[float] = None,
+    length_ratio_threshold: float = 0.80,
 ) -> Tuple[bool, str]:
-    """Classify a contig as full-length or fragment based on telomeres and coverage.
+    """Classify a contig as full-length or fragment based on telomeres, coverage,
+    and contig-to-reference length ratio.
 
     Classification logic (in priority order):
     1. Both telomeres present -> full_length (high confidence)
-    2. One telomere + coverage >= threshold -> full_length (medium confidence)
-    3. One telomere + coverage < threshold -> fragment (medium confidence)
-    4. No telomeres + coverage >= threshold -> full_length (low confidence)
-    5. No telomeres + coverage < threshold -> fragment (low confidence)
+    2. Length ratio >= threshold + one telomere -> full_length (medium confidence)
+    3. Length ratio >= threshold + no telomeres -> full_length (low confidence)
+    4. One telomere + coverage >= threshold -> full_length (medium confidence)
+    5. One telomere + coverage < threshold -> fragment (medium confidence)
+    6. No telomeres + coverage >= threshold -> full_length (low confidence)
+    7. No telomeres + coverage < threshold -> fragment (low confidence)
+
+    The length ratio check (steps 2-3) catches contigs that are clearly
+    chromosome-scale but have low alignment-based ref_coverage due to
+    cross-species divergence reducing alignment coverage.
 
     Args:
         ref_coverage: Fraction of reference chromosome spanned (0.0-1.0)
         has_5p_telomere: Telomere detected at 5' end
         has_3p_telomere: Telomere detected at 3' end
         full_length_threshold: Reference coverage threshold for full-length (default 0.70)
+        length_ratio: Contig length / reference chromosome length (optional)
+        length_ratio_threshold: Length ratio above which the contig is considered
+            chromosome-scale regardless of alignment coverage (default 0.80)
 
     Returns:
         Tuple of (is_full_length, confidence)
@@ -375,7 +390,16 @@ def classify_full_length(
     if n_telomeres == 2:
         # Both telomeres = assembly-complete, high confidence
         return True, "high"
-    elif n_telomeres == 1:
+
+    # Length ratio rescue: contig is chromosome-scale even if alignment
+    # coverage is low (e.g. cross-species with ~60% nucleotide identity)
+    if length_ratio is not None and length_ratio >= length_ratio_threshold:
+        if n_telomeres == 1:
+            return True, "medium"
+        else:
+            return True, "low"
+
+    if n_telomeres == 1:
         # One telomere - coverage determines classification
         if ref_coverage >= full_length_threshold:
             return True, "medium"
@@ -614,6 +638,238 @@ def detect_rearrangement_candidates(
 
 
 # ----------------------------
+# 1D Gaussian Mixture Model
+# ----------------------------
+_SQRT_2PI = math.sqrt(2 * math.pi)
+
+
+def _norm_pdf(x: float, mu: float, sigma: float) -> float:
+    """Gaussian PDF with numerical guards for degenerate cases.
+
+    Returns large/small sentinel values instead of inf/0 to keep
+    downstream sum/log arithmetic well-behaved.
+    """
+    if sigma < 1e-12:
+        return 1e300 if abs(x - mu) < 1e-12 else 1e-300
+    return math.exp(-0.5 * ((x - mu) / sigma) ** 2) / (sigma * _SQRT_2PI)
+
+
+def _gmm_1d_em(
+    data: List[float],
+    k: int,
+    max_iter: int = 100,
+    tol: float = 1e-6,
+) -> Tuple[List[float], List[float], List[float], float]:
+    """Fit a 1D Gaussian Mixture Model using Expectation-Maximisation.
+
+    Args:
+        data: List of observed values.
+        k: Number of mixture components.
+        max_iter: Maximum EM iterations.
+        tol: Convergence tolerance on log-likelihood.
+
+    Returns:
+        (weights, means, stds, log_likelihood) for each component.
+    """
+    n = len(data)
+    if n == 0 or k < 1:
+        return [], [], [], float("-inf")
+
+    sorted_data = sorted(data)
+
+    # Initialise means by quantile-based seeding (deterministic)
+    means = [sorted_data[int((i + 0.5) * n / k)] for i in range(k)]
+    stds = [max(1e-8, (sorted_data[-1] - sorted_data[0]) / (2 * k))] * k
+    weights = [1.0 / k] * k
+
+    prev_ll = float("-inf")
+
+    for _iteration in range(max_iter):
+        # E-step: compute responsibilities
+        resp = []
+        log_likelihood = 0.0
+        for x in data:
+            probs = [weights[j] * _norm_pdf(x, means[j], stds[j]) for j in range(k)]
+            total = sum(probs)
+            if total < 1e-300:
+                total = 1e-300
+            log_likelihood += math.log(total)
+            resp.append([p / total for p in probs])
+
+        # Check convergence
+        if abs(log_likelihood - prev_ll) < tol:
+            break
+        prev_ll = log_likelihood
+
+        # M-step: update parameters
+        for j in range(k):
+            nj = sum(resp[i][j] for i in range(n))
+            if nj < 1e-10:
+                continue
+            weights[j] = nj / n
+            means[j] = sum(resp[i][j] * data[i] for i in range(n)) / nj
+            var_j = sum(resp[i][j] * (data[i] - means[j]) ** 2 for i in range(n)) / nj
+            stds[j] = max(1e-8, math.sqrt(var_j))
+
+    return weights, means, stds, log_likelihood
+
+
+def _gmm_1d_bic(
+    data: List[float],
+    max_k: int = 3,
+) -> Tuple[int, List[float], List[float], List[float], List[int]]:
+    """Select the best number of components for a 1D GMM using BIC.
+
+    Tests k=1..max_k and returns the model with the lowest BIC.
+
+    Args:
+        data: List of observed values.
+        max_k: Maximum number of components to try.
+
+    Returns:
+        (best_k, weights, means, stds, labels) where labels[i] is the
+        cluster index (0-based) for data[i].
+    """
+    n = len(data)
+    if n < 2:
+        return 1, [1.0], [data[0] if data else 0.0], [1e-8], [0] * n
+
+    best_bic = float("inf")
+    best_result: Tuple[int, List[float], List[float], List[float]] = (
+        1, [1.0], [0.0], [1.0]
+    )
+
+    for k in range(1, min(max_k, n) + 1):
+        weights, means, stds, ll = _gmm_1d_em(data, k)
+        if not weights:
+            continue
+        num_params = 3 * k - 1
+        bic = -2 * ll + num_params * math.log(n)
+        if bic < best_bic:
+            best_bic = bic
+            best_result = (k, weights, means, stds)
+
+    best_k, weights, means, stds = best_result
+
+    # Assign each data point to the most likely component
+    labels = []
+    for x in data:
+        probs = [weights[j] * _norm_pdf(x, means[j], stds[j]) for j in range(best_k)]
+        labels.append(max(range(best_k), key=lambda j: probs[j]))
+
+    return best_k, weights, means, stds, labels
+
+
+def _select_subgenome_k(
+    all_idents: List[float],
+    ref_to_clfs: Dict[str, List['ContigClassification']],
+    ref_ids: List[str],
+    qr_best_chain_ident: Dict[Tuple[str, str], float],
+    min_consistency: float = 0.70,
+) -> Tuple[int, List[float], List[float]]:
+    """Select the number of query subgenomes using GMM + paired validation.
+
+    Strategy:
+    1. Fit GMMs for k=1..3 and pick best by BIC as a starting candidate.
+    2. If BIC picks k=1, also try k=2: validate the k=2 split using
+       per-chromosome consistency (for chromosomes with exactly 2 copies,
+       what fraction have their copies landing in different clusters?).
+       Accept k=2 if consistency >= min_consistency.
+
+    Paired validation is the sole gatekeeper — no minimum separation
+    threshold is imposed.  If 70%+ of chromosomes consistently place
+    their copies in different clusters, the split is accepted regardless
+    of how small the identity gap is.  This avoids rejecting valid
+    segmentations for closely related ancestral subgenomes.
+
+    Args:
+        all_idents: All identity values from multi-copy chromosomes.
+        ref_to_clfs: Dict mapping ref_id -> list of ContigClassifications.
+        ref_ids: Reference chromosome IDs in this subgenome group.
+        qr_best_chain_ident: Dict of (contig, ref_id) -> best chain identity.
+        min_consistency: Minimum fraction of 2-copy chromosomes that must
+            have their copies in different clusters (default 0.70).
+
+    Returns:
+        (best_k, sorted_means, sorted_stds) with means sorted descending.
+    """
+    def _assign_labels(data, means_sorted):
+        """Assign each value to the nearest cluster mean."""
+        k = len(means_sorted)
+        return [min(range(k), key=lambda j: abs(x - means_sorted[j])) for x in data]
+
+    def _validate_k_by_pairing(sorted_means, k):
+        """Check if a k-cluster split is consistent across chromosomes.
+
+        For chromosomes with exactly k copies, verify that each copy
+        lands in a different cluster (i.e., the clusters correspond to
+        distinct subgenomes, not random variation).
+        """
+        if k < 2:
+            return True
+
+        n_testable = 0
+        n_consistent = 0
+        for ref_id in ref_ids:
+            ref_clfs = ref_to_clfs[ref_id]
+            if len(ref_clfs) != k:
+                continue
+            n_testable += 1
+            copy_idents = [
+                qr_best_chain_ident.get((clf.original_name, ref_id), 0.0)
+                for clf in ref_clfs
+            ]
+            labels = _assign_labels(copy_idents, sorted_means)
+            if len(set(labels)) == k:
+                n_consistent += 1
+
+        if n_testable < 3:
+            return False
+        return (n_consistent / n_testable) >= min_consistency
+
+    def _sort_components(means, stds, k):
+        """Sort GMM components by mean descending (primary = highest identity)."""
+        order = sorted(range(k), key=lambda j: means[j], reverse=True)
+        return [means[j] for j in order], [stds[j] for j in order]
+
+    # Fit all candidate GMMs once (avoids redundant k=2 refit in rescue path)
+    fits: Dict[int, Tuple[List[float], List[float], List[float], float]] = {}
+    for k in range(1, min(4, len(all_idents) + 1)):
+        w, m, s, ll = _gmm_1d_em(all_idents, k)
+        if w:
+            fits[k] = (w, m, s, ll)
+
+    # BIC selection
+    best_bic = float("inf")
+    bic_k = 1
+    for k, (w, m, s, ll) in fits.items():
+        num_params = 3 * k - 1
+        bic = -2 * ll + num_params * math.log(len(all_idents))
+        if bic < best_bic:
+            best_bic = bic
+            bic_k = k
+
+    # Validate BIC result via paired consistency
+    if bic_k > 1 and bic_k in fits:
+        _, bic_means, bic_stds, _ = fits[bic_k]
+        sorted_means, sorted_stds = _sort_components(bic_means, bic_stds, bic_k)
+        if _validate_k_by_pairing(sorted_means, bic_k):
+            return bic_k, sorted_means, sorted_stds
+
+    # Rescue: try k=2 with paired validation (BIC may be too conservative)
+    if 2 in fits:
+        _, means_2, stds_2, _ = fits[2]
+        sorted_means, sorted_stds = _sort_components(means_2, stds_2, 2)
+        if _validate_k_by_pairing(sorted_means, 2):
+            return 2, sorted_means, sorted_stds
+
+    # Fall back to k=1
+    mean_val = statistics.mean(all_idents)
+    std_val = statistics.stdev(all_idents) if len(all_idents) > 1 else 0.0
+    return 1, [mean_val], [std_val]
+
+
+# ----------------------------
 # Query subgenome inference
 # ----------------------------
 def infer_query_subgenomes(
@@ -623,23 +879,24 @@ def infer_query_subgenomes(
 ) -> None:
     """Infer query subgenomes when multiple contigs map to the same reference.
 
-    Uses identity-based clustering with adaptive threshold computed per reference
-    subgenome. For each reference subgenome (A, T, P, etc.), we:
-    1. Find the best (highest identity) contig per reference chromosome
-    2. Compute std_dev from those "primary representative" identities
-    3. Use k * std_dev as the gap threshold for detecting secondary query subgenomes
-
-    This approach ensures we compare apples to apples - the threshold is based on
-    the variation among primary copies within the same reference subgenome, not
-    mixing different reference subgenomes that may have different baseline identities.
+    Uses a two-stage approach:
+    1. **Global GMM + paired validation**: Collect alignment identities from
+       all multi-copy reference chromosomes within each reference subgenome,
+       fit a 1-D Gaussian Mixture Model.  Model selection uses BIC as a
+       first pass, then validates (or rescues) via per-chromosome pairing:
+       for chromosomes with exactly k copies, each copy should land in a
+       different cluster.  This leverages the biological structure (paired
+       subgenomic copies) to detect subgenomes even when the marginal
+       identity distributions overlap substantially.
+    2. **Per-chromosome assignment**: Use the global cluster means to assign
+       each contig to a query subgenome.  Single-copy chromosomes are left
+       unsuffixed (group 1).
 
     Args:
         classifications: List of ContigClassification objects (modified in place)
         qr_best_chain_ident: Dict of (contig, ref_id) -> best chain identity
-        subgenome_k: Multiplier for std_dev threshold (default 1.0)
+        subgenome_k: Not used by GMM (kept for API compatibility)
     """
-    import statistics
-
     # Collect identities for all chromosome-assigned contigs
     chrom_clfs = [c for c in classifications if c.classification == "chrom_assigned" and c.assigned_ref_id]
 
@@ -657,93 +914,112 @@ def infer_query_subgenomes(
     for clf in chrom_clfs:
         ref_to_clfs[clf.assigned_ref_id].append(clf)
 
-    # Group reference chromosomes by reference subgenome (A, T, P, etc.)
-    # and find the best (highest identity) contig per reference chromosome
-    ref_subgenome_to_best_idents: Dict[Optional[str], List[float]] = defaultdict(list)
-    for ref_id, ref_clfs in ref_to_clfs.items():
-        # Get the best identity for this reference chromosome
-        best_ident = max(
-            qr_best_chain_ident.get((clf.original_name, ref_id), 0.0)
-            for clf in ref_clfs
+    # Identify multi-copy reference chromosomes (those needing subgenome splitting)
+    multi_copy_refs = {rid for rid, clfs in ref_to_clfs.items() if len(clfs) > 1}
+
+    # Group multi-copy chromosomes by reference subgenome (A, T, P, …)
+    ref_sg_to_multi_refs: Dict[Optional[str], List[str]] = defaultdict(list)
+    for ref_id in multi_copy_refs:
+        _, ref_sg = split_chrom_subgenome(ref_id)
+        ref_sg_to_multi_refs[ref_sg].append(ref_id)
+
+    # Per reference subgenome: run global GMM on all multi-copy identities
+    # Maps ref_subgenome -> (best_k, ordered_cluster_means)
+    # Cluster ordering: sorted by mean identity descending so cluster 0 = primary
+    ref_sg_gmm: Dict[Optional[str], Tuple[int, List[float]]] = {}
+
+    for ref_sg, ref_ids in ref_sg_to_multi_refs.items():
+        # Collect all identities from multi-copy chromosomes in this ref subgenome
+        all_idents = []
+        for ref_id in ref_ids:
+            for clf in ref_to_clfs[ref_id]:
+                ident = qr_best_chain_ident.get((clf.original_name, ref_id), 0.0)
+                if ident > 0:
+                    all_idents.append(ident)
+
+        if len(all_idents) < 4:
+            # Too few data points for meaningful clustering
+            ref_sg_gmm[ref_sg] = (1, [])
+            logger.info(
+                f"Subgenome clustering ({ref_sg or 'default'}): "
+                f"n={len(all_idents)}, too few for GMM, skipping"
+            )
+            continue
+
+        # Fit candidate GMMs (k=1..3)
+        best_k, sorted_means, sorted_stds = _select_subgenome_k(
+            all_idents, ref_to_clfs, ref_ids, qr_best_chain_ident,
         )
-        if best_ident > 0:
-            # Extract reference subgenome from ref_id (e.g., "chr1A" -> "A")
-            _, ref_subgenome = split_chrom_subgenome(ref_id)
-            ref_subgenome_to_best_idents[ref_subgenome].append(best_ident)
 
-    # Compute threshold per reference subgenome
-    ref_subgenome_thresholds: Dict[Optional[str], float] = {}
-    for ref_subgenome, best_idents in ref_subgenome_to_best_idents.items():
-        if len(best_idents) < 2:
-            # Can't compute std_dev with < 2 values, use a default
-            ref_subgenome_thresholds[ref_subgenome] = 0.05  # 5% default threshold
-            continue
+        ref_sg_gmm[ref_sg] = (best_k, sorted_means)
 
-        try:
-            std_dev = statistics.stdev(best_idents)
-            mean_ident = statistics.mean(best_idents)
-        except statistics.StatisticsError:
-            ref_subgenome_thresholds[ref_subgenome] = 0.05
-            continue
-
-        # Scale minimum gap with divergence: the gap must be at least half the
-        # total divergence from the reference to call a separate haplotype.
-        # At 95% identity: 2.5% floor; at 77%: 11.5%; at 60%: 20%
-        min_gap = max(0.02, 0.50 * (1.0 - mean_ident))
-
-        if std_dev < 0.001:
-            # Very small std_dev - use identity-scaled minimum
-            ref_subgenome_thresholds[ref_subgenome] = min_gap
+        if best_k == 1:
+            logger.info(
+                f"Subgenome clustering ({ref_sg or 'default'}): "
+                f"n={len(all_idents)}, best_k=1, "
+                f"mean={sorted_means[0]:.4f}, std={sorted_stds[0]:.4f} — "
+                f"single subgenome"
+            )
         else:
-            ref_subgenome_thresholds[ref_subgenome] = max(min_gap, subgenome_k * std_dev)
+            cluster_desc = ", ".join(
+                f"k{i+1}: mean={sorted_means[i]:.4f} std={sorted_stds[i]:.4f}"
+                for i in range(best_k)
+            )
+            logger.info(
+                f"Subgenome clustering ({ref_sg or 'default'}): "
+                f"n={len(all_idents)}, best_k={best_k}, {cluster_desc}"
+            )
 
-        logger.info(
-            f"Subgenome clustering ({ref_subgenome or 'default'}): "
-            f"n={len(best_idents)}, mean_ident={mean_ident:.4f}, "
-            f"std_dev={std_dev:.4f}, min_gap={min_gap:.4f}, "
-            f"threshold={ref_subgenome_thresholds[ref_subgenome]:.4f}"
-        )
-
-    # Cluster contigs per reference chromosome using reference-subgenome-specific thresholds
+    # Assign per-chromosome subgenome labels
     for ref_id, ref_clfs in ref_to_clfs.items():
         if len(ref_clfs) <= 1:
-            # Single contig - no subgenome suffix needed
+            # Single contig — no subgenome suffix
             ref_clfs[0].query_subgenome = None
             ref_clfs[0].query_subgenome_grp = 1
             continue
 
-        # Get the threshold for this reference subgenome
-        _, ref_subgenome = split_chrom_subgenome(ref_id)
-        threshold = ref_subgenome_thresholds.get(ref_subgenome, 0.05)
+        _, ref_sg = split_chrom_subgenome(ref_id)
+        gmm_k, sorted_means = ref_sg_gmm.get(ref_sg, (1, []))
 
-        # Sort by identity descending
+        if gmm_k <= 1 or not sorted_means:
+            # No subgenome split detected — assign all to group 1
+            for clf in ref_clfs:
+                clf.query_subgenome = None
+                clf.query_subgenome_grp = 1
+            continue
+
+        # Sort contigs by identity descending
         ref_clfs.sort(
             key=lambda c: qr_best_chain_ident.get((c.original_name, ref_id), 0.0),
-            reverse=True
+            reverse=True,
         )
 
-        # Greedy clustering: start new cluster when identity gap > threshold
-        cluster_id = 1
-        prev_ident = qr_best_chain_ident.get((ref_clfs[0].original_name, ref_id), 0.0)
-        ref_clfs[0].query_subgenome_grp = cluster_id
-        ref_clfs[0].query_subgenome = None  # Primary subgenome has no suffix
+        # Assign each contig to the nearest GMM cluster (by mean)
+        assignments: List[int] = []  # 0-based cluster per contig
+        for clf in ref_clfs:
+            ident = qr_best_chain_ident.get((clf.original_name, ref_id), 0.0)
+            best_cluster = min(
+                range(gmm_k),
+                key=lambda j: abs(ident - sorted_means[j]),
+            )
+            assignments.append(best_cluster)
 
-        for i in range(1, len(ref_clfs)):
-            curr_ident = qr_best_chain_ident.get((ref_clfs[i].original_name, ref_id), 0.0)
-            gap = prev_ident - curr_ident
+        # Rescue: if this chromosome has exactly k copies but they all
+        # landed in the same cluster, rank-assign instead (highest
+        # identity → primary, next → B, etc.).  This is safe because
+        # the global split is already validated across chromosomes;
+        # these are borderline cases where the per-chromosome gap is
+        # smaller than the distance between cluster means.
+        if len(ref_clfs) == gmm_k and len(set(assignments)) == 1:
+            # ref_clfs is sorted by identity descending above
+            assignments = list(range(gmm_k))
 
-            if gap > threshold:
-                # Identity gap too large - new subgenome cluster
-                cluster_id += 1
-
-            ref_clfs[i].query_subgenome_grp = cluster_id
-            # Assign letter suffix for non-primary clusters (B, C, D, ...)
-            if cluster_id > 1:
-                ref_clfs[i].query_subgenome = chr(ord('A') + cluster_id - 1)
+        for clf, cluster in zip(ref_clfs, assignments):
+            clf.query_subgenome_grp = cluster + 1  # 1-based
+            if cluster == 0:
+                clf.query_subgenome = None  # Primary — no suffix
             else:
-                ref_clfs[i].query_subgenome = None
-
-            prev_ident = curr_ident
+                clf.query_subgenome = chr(ord('A') + cluster)  # B, C, …
 
 
 # ----------------------------
@@ -757,14 +1033,16 @@ def generate_contig_names(
 ) -> Dict[str, str]:
     """Generate new contig names with full-length/fragment distinction.
 
-    Naming scheme: chr<ref>(_<query_subgenome>)?(_f<frag>|_c<copy>)?
+    Naming scheme: chr<ref>(_<query_subgenome>)?(_c<copy>|_f<frag>)?
 
-    Examples:
-    - chr1A: Full-length chr1A, single copy, primary subgenome
-    - chr1A_B: Full-length chr1A, query subgenome B
-    - chr1A_f1: Fragment 1 of chr1A
-    - chr1A_B_f1: Fragment 1 of chr1A, query subgenome B
-    - chr1A_c1, chr1A_c2: Multiple full-length copies (unusual)
+    Suffixes compose left-to-right; subgenome comes before copy/fragment:
+    - chr1A:           Full-length chr1A, single copy, no resolved subgenome
+    - chr1A_B:         Full-length chr1A, query subgenome B
+    - chr1A_c1/c2:     Multiple full-length copies of the same chromosome (unusual)
+    - chr1A_f1/f2:     Chromosome fragments, ordered by descending length
+    - chr1A_B_f1:      Longest fragment of chr1A from query subgenome B
+
+    Non-chromosome contigs are named contig_1, contig_2, … by descending length.
 
     Args:
         classifications: List of ContigClassification with is_full_length and query_subgenome set
@@ -1020,11 +1298,15 @@ def classify_all_contigs(
         is_full = False
         fl_confidence = "low"
         if ref_cov is not None:
+            # Compute length ratio for cross-species divergence rescue
+            _ref_len = ref_lengths.get(ref_id, 0) if ref_lengths else 0
+            _length_ratio = (contig_len / _ref_len) if _ref_len > 0 else None
             is_full, fl_confidence = classify_full_length(
                 ref_coverage=ref_cov,
                 has_5p_telomere=has_5p,
                 has_3p_telomere=has_3p,
                 full_length_threshold=full_length_threshold,
+                length_ratio=_length_ratio,
             )
         else:
             # No ref_lengths available - default to fragment with low confidence

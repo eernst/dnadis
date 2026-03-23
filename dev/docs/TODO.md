@@ -1,5 +1,9 @@
 # TODO
 
+## Consider snakemake
+
+* [ ] executorlib is pretty flaky - moving to snakemake could simplify installation (as it handles conda dependencies in a more user-transparent fashion), simplify SLURM cluster execution, possibly make the pipeline more robust, and support more platforms. Need to look at pros/cons, but pretty sure this needs to happen. If it does, we'll want to use final_finalizer.py as a convenience wrapper around snakemake (and retain our current flags). This will be a big refactor.
+
 ## Implement subcommands
 
 * [ ] There are an overwhelming number of command line options available, some of which only apply to one or the other synteny mode. Look into the potential benefit of splitting these two modes of operation into subcommands, opening up the possibility of partitioning other use cases in the same way.
@@ -7,6 +11,8 @@
 * [ ] We should implement a "clean" subcommand that can clean up residual executorlib_cache directories and any other intermediates (introduce a --keep-intermediates flag for the other subcommands to retain them in the first place). Consider whether we need to retain anything in the *_classification output subdirectory by default.
 
 ## Plotting improvements
+
+* [ ] Add branding to the top of the report index/nav at left
 
 ### 1. Assembly Overview
 
@@ -32,38 +38,46 @@
 
 ### 3. Synteny
 
-* [x] Ribbons are not drawn between all chrom-assigned contigs and their nearest neighbor to the left. There seem to be two potential cases/causes:
-  1. ~~In some cases, the assembly neighbor to the immediate left does not have an assigned contig for a particular chromosome, and thus there is no underlying synteny information to draw ribbons from. This happens because we don't perform all-vs-all alignments or "rescue" these cases by doing a supplementary alignment of that individual chromosome with no partner to the immediate left to the nearest assembly to the left that does possess the query chromosome. Example: Ref.T chr10.~~ Resolved: rescue pairwise alignments now bridge non-adjacent assemblies that share a chromosome.
-  2. Almost no ribbons are drawn between la0028 and its neighbor la0077. We need to investigate this case.
+* [x] Our current layout is cramped. Need to make a few modifications:
+  * [x] Split the separate references into their own tabs titled by the reference, e.g. riparian plots for "Subgenome A", "Subgenome P", and "Subgenome T" would each be displayed in separate tabs, and separate PDFs should be produced for each.
+  * [x] Transpose the plots so that the chromosomes are on the x-axis and the assemblies are on the y-axis. The chrs should be naturally ordered from e.g. chr1...chr21, left to right.
+
+* [x] Currently, no ribbons are drawn for chromosome fragments (those with the _f# suffix). We need to handle these cases as well. — Resolved: fragments are `chrom_assigned` contigs and flow through the same pill + ribbon pipeline. They have macro_blocks, get pills, and get ribbons.
+
+* [x] Multiple query subgenomes mapping to the same reference (e.g. chr2A_c1, chr2A_c2) are currently laid out side-by-side in the plot (good), but overlap (bad) making it hard to distinguish the multiple pills, and making the ribbons hard to read. Can we detect this situation (where any of the query assemblies have multiple subgenomes mapped to a single reference) and introduce extra horizontal space between the chromosome columns in that specific plot, so that the multiple query chromosomes won't overlap? We should also horizontally shift the centers of them so that the center of the composite (chr2A_c1, chr2A_c2) would align with another query assembly above or below with just one homologous query chromosome. In actuality, we should be horizontally centering all pills on each reference column, but if there are multiple pills in the same ref column, the composition of the multiple pills should be centered.
+
+* [ ] We might actually need to do all vs all alignments within the set of contigs across all assemblies assigned to each reference subgenome. This would allow for more complete syntenic relationship tracking and plotting over rearrangements, potentially.
 
 ### 8. Contamination Comparison
 
 * [x] Top Taxa tables: show binomial (genus + species) in the species table, add percentage labels in bars, hover tooltips showing full name and per-taxon assembly lists, ellipsis clipping for long names.
 
-* [ ] Add a top contaminants pie chart and top 5 table beneath it
-
 ### Rename sections
 
-* [ ] Drop the "Comparison" suffix from all sections titles
+* [x] Drop the "Comparison" suffix from all sections titles
 
-* [ ] Chromosome Synteny -> Macro Synteny
+* [x] Chromosome Synteny -> Macro Synteny
 
-* [ ] Organelle -> Organelles
+* [x] Organelle -> Organelles
 
-* [ ] Contamination -> Contaminants
+* [x] Contamination -> Contaminants
 
 ## Better handling of unidentified contaminants
 
 * [ ] I'm seeing frequent cases of what look like bacterial contaminant genomes in plant assemblies failing to be identified as contaminants with some potential knock-on effects in reporting and analysis - are they being bundled into non-chromosomes for the compleasm evals? We should consider whether we can flag these as unknown contaminants, provided they have no alignment-based similarity to the chromosome-assigned contigs.
+
+## Query subgenome segmentation
+
+* [x] Implement and document Gaussian mixture model segmentation of query subgenomes on the basis of reference alignment identity
 
 ## compleasm evals
 [compleasm](https://github.com/huangnengCSU/compleasm) support added in phase 17 (`--compleasm-lineage`). Runs on `chrs.fasta` and `non_chrs.fasta` (debris + unclassified + contaminants). Results included in `comparison_summary.tsv`.
 
 * [x] Add compleasm runs on segregated datasets - the chromosome-assigned contigs and all other debris
 
-* [ ] Aggregate compleasm results for the multiassembly comparison report as a gt table
+* [x] Aggregate compleasm results for the multiassembly comparison report as a gt table
 
-  * [ ] Show classification category output numerically in the table row for each assembly
+  * [x] Show classification category output numerically in the table row for each assembly
 
   * [x] Add compleasm S/D/F/I/M columns to `comparison_summary.tsv` (numeric counts + percentages)
 
@@ -82,6 +96,10 @@
 ## Performance
 
 * [ ] Add bgzip and indexing by default of pipeline outputs (FASTA, GFF3).
+
+## Testing
+
+* [ ] Need to develop test cases for classification, especially for complicated karyotypes and assembly issues involving multiple query subgenomes mapping to the same reference, segmentation of those query subgenomes, fragments vs complete, and the handling of contigs pre- and post-scaffolding.
 
 ## Mammalian, other non-plant genome support
 

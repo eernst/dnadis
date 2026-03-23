@@ -18,7 +18,7 @@
 - **Debris detection** for assembly fragments (chromosome debris, organelle debris)
 - **Chimera flagging** for contigs with evidence from multiple chromosomes
 - **Orientation determination** for chromosome-assigned contigs
-- **Contig renaming** to reference-based names (e.g., `chr1A`, `chr1A_f1` for fragments, `contig_1` for unassigned)
+- **Contig renaming** to reference-based names following the scheme `chr<ref>(_<subgenome>)?(_c<copy>|_f<frag>)?` — for example: `chr1A` (full-length, single copy), `chr1A_B` (full-length, query subgenome B), `chr1A_f1`/`chr1A_f2` (chromosome fragments by descending length), `chr1A_c1`/`chr1A_c2` (rare duplicate full-length copies), `chr1A_B_f1` (fragment from subgenome B); non-chromosome contigs are named `contig_1`, `contig_2`, etc. by descending length (see [Contig Naming Scheme](#contig-naming-scheme))
 - **BUSCO completeness evaluation** (optional) via compleasm, run separately on chromosome-assigned and non-chromosome contigs
 - **Reference-guided scaffolding** (optional) producing chromosome-scale pseudomolecules with AGP output (uses RagTag if available, otherwise built-in scaffolder)
 - **Read depth analysis** (optional) with automated downsampling and caching
@@ -26,6 +26,55 @@
 - **Cross-assembly comparison reports**: interactive HTML tables (via gt) aggregating classification and BUSCO completeness results across all assemblies
 - **Interactive HTML reports** per assembly with chromosome overview, classification summary, read depth, and contaminant table (enabled by default; requires rmarkdown + pandoc)
 - **Distributed SLURM execution** (optional) via executorlib: compute-intensive phases submitted as individual SLURM jobs with automatic resource estimation
+
+## Contig Naming Scheme
+
+Chromosome-assigned contigs are renamed using the pattern `chr<ref>(_<subgenome>)?(_c<copy>|_f<frag>)?`, where `<ref>` is the reference chromosome identifier (e.g., `1A`, `3B`). Non-chromosome contigs are named `contig_1`, `contig_2`, etc., ordered by descending length.
+
+### Chromosome name suffixes
+
+| Suffix | Meaning | Example |
+|--------|---------|---------|
+| _(none)_ | Single full-length contig assigned to this reference chromosome | `chr1A` |
+| `_B`, `_C`, … | Query subgenome label — the query assembly carries multiple homeologous copies that map to the same reference chromosome and can be resolved into distinct subgenomes | `chr1A_B` |
+| `_c1`, `_c2`, … | Multiple full-length copies of the same (subgenome, reference chromosome) pair, ordered by descending length — unusual; indicates the assembler produced duplicate complete copies | `chr1A_c1`, `chr1A_c2` |
+| `_f1`, `_f2`, … | Chromosome fragments (contigs not classified as full-length), ordered by descending length | `chr1A_f1`, `chr1A_f2` |
+
+Suffixes compose left-to-right: subgenome first, then copy/fragment. For example, `chr1A_B_f1` is the longest fragment of chr1A from query subgenome B.
+
+A contig is classified as **full-length** when its syntenic coverage of the reference chromosome meets `--full-length-ref-coverage` (default: 0.85) and/or it has telomeres at both ends. The `_f` suffix therefore flags genuine assembly fragmentation rather than short contigs of arbitrary origin.
+
+Subgenome labels (`_B`, `_C`, …) are inferred by clustering query contigs that all map to the same reference chromosome by sequence-identity similarity. The label letters are assigned in order of cluster size (largest cluster = A, or inherits the reference subgenome letter when the reference already carries one, e.g., `chr1A` → `chr1A_B` means the new subgenome differs from subgenome A).
+
+The authoritative implementation is `final_finalizer/classification/classifier.py:generate_contig_names()`. See [Output Formats](docs/output_formats.md#contig_summarytsv) for the corresponding `contig` TSV column.
+
+## Query Subgenome Segmentation
+
+When multiple contigs from the query assembly map to the same reference chromosome — as is expected for polyploid genomes where two or more homeologous chromosome sets are present — `final_finalizer` automatically attempts to assign each contig to a distinct query subgenome. The result appears in the contig name as a subgenome suffix (`_B`, `_C`, …) or, when segmentation is not possible, as a copy suffix (`_c1`, `_c2`, …).
+
+### How it works
+
+Subgenome assignment is based on the observation that homeologous chromosomes from different ancestral subgenomes typically align to the same reference chromosome at detectably different sequence identity levels. The tool clusters contigs using a 1-D Gaussian Mixture Model (GMM) fitted to alignment identities collected across all multi-copy reference chromosomes within each reference subgenome:
+
+1. **Global identity clustering**: Alignment identities from all multi-copy reference chromosomes are pooled and fitted with a GMM. The number of components is selected by BIC (Bayesian Information Criterion). Fitting across multiple chromosomes simultaneously provides more signal than fitting each chromosome independently.
+2. **Paired validation**: For chromosomes with exactly _k_ copies, each copy should land in a different cluster. The model is accepted if at least 70% of testable chromosomes satisfy this pairing requirement. If BIC initially selects a model that fails paired validation, the tool attempts rescue by testing alternative component counts.
+3. **Per-chromosome assignment**: Once global cluster means are established, each contig is assigned to the nearest cluster. Chromosomes where all copies land in the same cluster despite rescue attempts are rank-assigned by identity (highest identity = primary subgenome).
+
+No user configuration is required. The feature runs automatically whenever multiple contigs map to the same reference chromosome.
+
+### Limitations and expectations
+
+**Identity divergence requirement**: The method relies on a detectable difference in alignment identity between subgenomes. Separation is validated by per-chromosome pairing consistency (each chromosome's copies should land in different clusters), not by a fixed identity threshold. Even small identity gaps can be detected if the pattern is consistent across chromosomes. Subgenomes that are nearly equidistant from the reference (e.g., two closely related diploid progenitors) may not produce a consistent pairing signal, and contigs will be labeled `_c1`/`_c2` instead.
+
+**Nucleotide mode with divergent references**: In nucleotide mode (`--synteny-mode nucleotide`, the default) using a cross-species reference at ~60% identity, alignment coverage is lower and identity estimates are noisier than in within-species comparisons. Subgenome segmentation is less reliable in this setting; protein mode (`--synteny-mode protein`) is generally more robust for distantly related references.
+
+**Haplotype-collapsed assemblies**: Assemblers that produce a single primary assembly (e.g., in primary/alternate mode) collapse both haplotypes of each chromosome into one contig. There is nothing to segment — the tool correctly reports a single copy with no subgenome suffix. This is expected behavior.
+
+**Haplotype-phased assemblies**: Assemblies that retain both haplotypes as separate contigs (e.g., from phased assembly workflows) may include two copies of each chromosome that differ only at heterozygous positions. If both haplotypes are provided in a single query FASTA, they typically align to the reference at nearly identical identity levels and may not be separable by the GMM. The tool will label them `_c1`/`_c2` (unsegmented copies) rather than `_B` (distinct subgenome). This is the correct outcome: the two copies represent haplotypes of the same subgenome, not distinct homeologous subgenomes.
+
+**Minimum data requirement**: Clustering requires at least 4 multi-copy reference chromosomes to attempt model fitting, and at least 3 chromosomes with exactly _k_ copies for paired validation. Assemblies with very few assigned chromosomes may not trigger subgenome segmentation.
+
+**Most effective use case**: Subgenome segmentation is most informative for allopolyploids, where the query carries two or more homeologous chromosome sets derived from different ancestral species, each at a distinct evolutionary distance from the reference. In these cases, the identity gap between subgenomes is driven by real evolutionary divergence and is usually large enough for reliable clustering.
 
 ## Installation
 
@@ -47,7 +96,7 @@
 - [centrifuger](https://github.com/mourisl/centrifuger) - contaminant detection
 - [taxonkit](https://github.com/shenwei356/taxonkit) + NCBI taxonomy database - taxonomic lineage for contaminant table (see below)
 - [RagTag](https://github.com/malonge/RagTag) - improved reference-guided scaffolding (for `--scaffold`; built-in scaffolder used as fallback)
-- [executorlib](https://github.com/pyiron/executorlib) + [mpi4py](https://github.com/mpi4py/mpi4py) - distributed SLURM job submission (required for `--cluster`; `conda install -c conda-forge executorlib mpi4py`)
+- [executorlib](https://github.com/pyiron/executorlib) + [pysqa](https://github.com/pyiron/pysqa) + [h5py](https://github.com/h5py/h5py) - distributed SLURM job submission (required for `--cluster`; pysqa and h5py are optional executorlib dependencies not pulled in by default)
 - [infernal](http://eddylab.org/infernal/) - structure-based rRNA annotation with Rfam covariance models (for rDNA consensus building; enabled by default, skip with `--skip-rdna-consensus`; bundled Rfam database)
 - [compleasm](https://github.com/huangnengCSU/compleasm) - BUSCO completeness evaluation (requires `--compleasm-lineage`; install in a **separate conda environment** due to dependency conflicts — see below)
 - R with ggplot2, dplyr, readr, stringr, tibble, tidyr, patchwork, ggnewscale, pacman - visualization (enabled by default; skip with `--skip-plot`)
@@ -55,59 +104,52 @@
 
 ### Conda environment
 
+**Minimal** — core classification pipeline with interactive HTML reports:
+
 ```bash
-conda create -n final_finalizer \
-    -c conda-forge -c bioconda \
+conda create -n final_finalizer -c conda-forge -c bioconda \
     python=3.11 intervaltree \
-    miniprot gffread blast mm2plus centrifuger infernal \
+    miniprot gffread blast mm2plus \
     r-base r-ggplot2 r-dplyr r-readr r-stringr r-tibble r-tidyr \
     r-patchwork r-ggnewscale r-pacman r-ggiraph r-htmlwidgets r-scales \
-    r-gt r-svglite r-xml2 r-rmarkdown libxml2 xz pandoc \
+    r-gt r-gtextras r-svglite r-xml2 r-rmarkdown r-ggridges \
+    r-colorspace r-ggokabeito r-ggrepel r-showtext r-sysfonts \
+    libxml2 xz pandoc
 conda activate final_finalizer
 ```
 
-Optional (read depth analysis):
+**Full** — all features including reports, contaminant screening, read depth, rDNA annotation, SLURM distribution, and taxonomic lineage:
+
 ```bash
-conda install -n final_finalizer -c bioconda samtools mosdepth rasusa
+conda create -n final_finalizer -c conda-forge -c bioconda \
+    python=3.11 intervaltree \
+    miniprot gffread blast mm2plus \
+    samtools mosdepth rasusa \
+    centrifuger taxonkit infernal \
+    executorlib pysqa h5py \
+    r-base r-ggplot2 r-dplyr r-readr r-stringr r-tibble r-tidyr \
+    r-patchwork r-ggnewscale r-pacman r-ggiraph r-htmlwidgets r-scales \
+    r-gt r-gtextras r-svglite r-xml2 r-rmarkdown r-ggridges \
+    r-colorspace r-ggokabeito r-ggrepel r-showtext r-sysfonts \
+    libxml2 xz pandoc
+conda activate final_finalizer
 ```
 
-Optional (taxonkit for contaminant table taxonomic lineage):
-
-For full Domain → Family → Genus → Species breakdown in the contaminant table, install taxonkit and the NCBI taxonomy database:
+**Compleasm** (BUSCO completeness evaluation) — must be in a **separate conda environment** due to dependency conflicts (dendropy version clash):
 
 ```bash
-# Install taxonkit
-conda install -n final_finalizer -c bioconda taxonkit
-
-# Download and set up NCBI taxonomy database
-# Option 1: Let taxonkit download it (requires ~1.5GB)
-taxonkit download --data-dir ~/.taxonkit
-
-# Option 2: Manual download
-wget -c ftp://ftp.ncbi.nih.gov/pub/taxonomy/taxdump.tar.gz
-mkdir -p ~/.taxonkit
-tar -xzf taxdump.tar.gz -C ~/.taxonkit
-```
-
-Without taxonkit, the contaminant table will show species names parsed from scientific names. With taxonkit and the taxonomy database, you get full taxonomic lineage (Domain, Family, Genus, Species) in the contaminant table.
-
-Optional (compleasm for BUSCO completeness evaluation):
-
-Compleasm has dependency conflicts with the main environment (dendropy version clash between compleasm and sepp), so it must be installed in a **separate conda environment**. The pipeline calls it as an external command, so it just needs to be on `PATH`:
-
-```bash
-# Create a separate environment for compleasm
 conda create -n compleasm -c bioconda -c conda-forge compleasm
-
-# Make compleasm available to the pipeline by adding it to PATH before running:
-export PATH="$(conda run -n compleasm bash -c 'echo $CONDA_PREFIX')/bin:$PATH"
-
-# Or activate both environments (compleasm first, then final_finalizer):
-conda activate compleasm
-conda activate --stack final_finalizer
 ```
 
-Then use `--compleasm-lineage <lineage>` (e.g., `embryophyta`, `liliopsida`, `eukaryota`) to enable BUSCO evaluation on chromosome-assigned and non-chromosome contigs.
+The pipeline auto-detects the `compleasm` conda environment, or you can pass `--compleasm-path /path/to/compleasm` explicitly. Use `--compleasm-lineage <lineage>` (e.g., `embryophyta`, `liliopsida`, `eukaryota`) to enable BUSCO evaluation.
+
+**Taxonkit** — for full taxonomic lineage (Domain → Family → Genus → Species) in the contaminant table, download the NCBI taxonomy database after installing taxonkit:
+
+```bash
+taxonkit download --data-dir ~/.taxonkit
+```
+
+Without taxonkit or the database, contaminant tables show species names only.
 
 ### Development
 
@@ -233,7 +275,7 @@ Read type to minimap2 preset mapping:
 |----------|-------------|---------|
 | `--compleasm-lineage` | BUSCO lineage for compleasm evaluation (e.g., `eukaryota`, `viridiplantae`, `embryophyta`). Required for compleasm to run. | none |
 | `--compleasm-library` | Path to pre-downloaded compleasm lineage files (avoids runtime download) | auto-download |
-| `--compleasm-path` | Path to compleasm executable (e.g., from a separate conda environment). If unset, uses `compleasm` from `PATH`. | none |
+| `--compleasm-path` | Path to compleasm executable. If unset, auto-detects from a `compleasm` conda environment or `PATH`. | auto-detect |
 | `--skip-compleasm` | Skip compleasm even if `--compleasm-lineage` is specified | off |
 
 When `--compleasm-lineage` is set, phase 17 runs compleasm on two FASTA subsets: chromosome-assigned contigs (`*.chrs.fasta`) and non-chromosome contigs (`*.non_chrs.fasta`, combining debris + unclassified + contaminants). Both runs are submitted in parallel. Results are included in the per-assembly unified HTML report and in the multi-assembly `comparison_summary.tsv`.
@@ -697,7 +739,7 @@ This produces `*.scaffolded.fasta` (chromosome pseudomolecules) and `*.scaffolde
     -t 32
 ```
 
-Compleasm runs on chromosome-assigned contigs and non-chromosome contigs in parallel. Results appear in `*.unified_report.html` and (in multi-assembly runs) in `comparison_summary.tsv`. If compleasm is installed in a separate conda environment, pass the executable path with `--compleasm-path`.
+Compleasm runs on chromosome-assigned contigs and non-chromosome contigs in parallel. Results appear in `*.assembly_report.html` and (in multi-assembly runs) in `comparison_summary.tsv`. The pipeline auto-detects compleasm from a `compleasm` conda environment, or you can pass `--compleasm-path` explicitly.
 
 ### Multi-assembly mode (file-of-filenames)
 

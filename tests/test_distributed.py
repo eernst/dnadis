@@ -214,14 +214,6 @@ class TestCreateExecutor:
             with pytest.raises(SystemExit):
                 create_executor(cfg)
 
-    def test_enabled_without_mpi4py_raises(self):
-        """When mpi4py is not installed, exits with error."""
-        cfg = ClusterConfig(enabled=True)
-        with patch.dict("sys.modules", {"mpi4py": None}):
-            with pytest.raises(SystemExit):
-                create_executor(cfg)
-
-
 @pytest.mark.skipif(
     not importlib.util.find_spec("executorlib"),
     reason="executorlib not installed",

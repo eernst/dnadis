@@ -1299,3 +1299,315 @@ def test_detect_arrays_strand_majority():
     arrays = _detect_arrays(loci, min_tandem_copies=3, max_tandem_gap=50000)
     assert len(arrays) == 1
     assert arrays[0].strand == "+"
+
+
+# ===================================================================
+# GMM 1D and subgenome inference tests
+# ===================================================================
+
+def test_gmm_1d_em_single_component():
+    """GMM with k=1 should recover mean and std of a single Gaussian."""
+    from final_finalizer.classification.classifier import _gmm_1d_em
+
+    data = [0.60, 0.62, 0.58, 0.61, 0.59, 0.63, 0.60, 0.61]
+    weights, means, stds, ll = _gmm_1d_em(data, k=1)
+
+    assert len(weights) == 1
+    assert abs(weights[0] - 1.0) < 1e-6
+    assert abs(means[0] - 0.605) < 0.01
+    assert stds[0] > 0
+
+
+def test_gmm_1d_em_two_components():
+    """GMM with k=2 should separate two distinct clusters."""
+    from final_finalizer.classification.classifier import _gmm_1d_em
+
+    low = [0.58, 0.59, 0.60, 0.61, 0.62]
+    high = [0.70, 0.71, 0.72, 0.73, 0.74]
+    data = low + high
+
+    weights, means, stds, ll = _gmm_1d_em(data, k=2)
+
+    assert len(means) == 2
+    sorted_means = sorted(means)
+    assert sorted_means[0] < 0.65
+    assert sorted_means[1] > 0.65
+
+
+def test_gmm_1d_bic_selects_k1_for_unimodal():
+    """BIC should select k=1 for unimodal data."""
+    from final_finalizer.classification.classifier import _gmm_1d_bic
+
+    data = [0.60 + i * 0.005 for i in range(20)]
+    best_k, weights, means, stds, labels = _gmm_1d_bic(data, max_k=3)
+
+    assert best_k == 1
+    assert all(l == 0 for l in labels)
+
+
+def test_gmm_1d_bic_selects_k2_for_bimodal():
+    """BIC should select k=2 for clearly bimodal data."""
+    from final_finalizer.classification.classifier import _gmm_1d_bic
+
+    # Two well-separated clusters (mimics real subgenome identity distributions)
+    low = [0.58, 0.59, 0.60, 0.60, 0.61, 0.61, 0.62, 0.58, 0.59, 0.60,
+           0.61, 0.62, 0.59, 0.60, 0.61, 0.60, 0.59, 0.61]
+    high = [0.68, 0.69, 0.70, 0.70, 0.71, 0.72, 0.69, 0.70, 0.71, 0.68,
+            0.69, 0.70, 0.71, 0.72, 0.70, 0.69, 0.71, 0.70]
+    data = low + high
+
+    best_k, weights, means, stds, labels = _gmm_1d_bic(data, max_k=3)
+
+    assert best_k == 2
+    # Each data point should be assigned to one of two clusters
+    assert set(labels) == {0, 1}
+
+
+def test_gmm_1d_bic_handles_small_data():
+    """BIC should return k=1 for very small datasets."""
+    from final_finalizer.classification.classifier import _gmm_1d_bic
+
+    best_k, weights, means, stds, labels = _gmm_1d_bic([0.65], max_k=3)
+    assert best_k == 1
+
+    best_k, weights, means, stds, labels = _gmm_1d_bic([0.60, 0.70], max_k=3)
+    assert best_k in (1, 2)  # Either is reasonable for n=2
+
+
+def test_infer_query_subgenomes_single_contig_per_ref():
+    """Single contig per ref chromosome -> no subgenome suffix."""
+    from final_finalizer.classification.classifier import infer_query_subgenomes
+    from final_finalizer.models import ContigClassification
+
+    clfs = [
+        ContigClassification(
+            original_name="ctg1", new_name="", classification="chrom_assigned",
+            reversed=False, contaminant_taxid=None, contaminant_sci=None,
+            assigned_ref_id="chr1A", ref_gene_proportion=0.5, contig_len=10_000_000,
+        ),
+        ContigClassification(
+            original_name="ctg2", new_name="", classification="chrom_assigned",
+            reversed=False, contaminant_taxid=None, contaminant_sci=None,
+            assigned_ref_id="chr2A", ref_gene_proportion=0.5, contig_len=10_000_000,
+        ),
+    ]
+    idents = {("ctg1", "chr1A"): 0.65, ("ctg2", "chr2A"): 0.68}
+
+    infer_query_subgenomes(clfs, idents)
+
+    assert clfs[0].query_subgenome is None
+    assert clfs[0].query_subgenome_grp == 1
+    assert clfs[1].query_subgenome is None
+    assert clfs[1].query_subgenome_grp == 1
+
+
+def test_infer_query_subgenomes_two_subgenomes():
+    """Two copies per chromosome with bimodal identities -> subgenome split."""
+    from final_finalizer.classification.classifier import infer_query_subgenomes
+    from final_finalizer.models import ContigClassification
+
+    # Simulate an allotetraploid: each ref chromosome has 2 contigs,
+    # one at ~0.69 identity (primary) and one at ~0.60 (secondary).
+    clfs = []
+    idents = {}
+    for i in range(1, 11):
+        ref_id = f"chr{i}A"
+        # Primary (higher identity)
+        prim = ContigClassification(
+            original_name=f"ctg_{i}_high", new_name="",
+            classification="chrom_assigned", reversed=False,
+            contaminant_taxid=None, contaminant_sci=None,
+            assigned_ref_id=ref_id, ref_gene_proportion=0.5,
+            contig_len=10_000_000,
+        )
+        # Secondary (lower identity)
+        sec = ContigClassification(
+            original_name=f"ctg_{i}_low", new_name="",
+            classification="chrom_assigned", reversed=False,
+            contaminant_taxid=None, contaminant_sci=None,
+            assigned_ref_id=ref_id, ref_gene_proportion=0.4,
+            contig_len=9_000_000,
+        )
+        clfs.extend([prim, sec])
+        idents[(f"ctg_{i}_high", ref_id)] = 0.68 + (i % 3) * 0.01
+        idents[(f"ctg_{i}_low", ref_id)] = 0.59 + (i % 3) * 0.01
+
+    infer_query_subgenomes(clfs, idents)
+
+    # Check that contigs were split into two subgenomes
+    for i in range(1, 11):
+        high_clf = next(c for c in clfs if c.original_name == f"ctg_{i}_high")
+        low_clf = next(c for c in clfs if c.original_name == f"ctg_{i}_low")
+        assert high_clf.query_subgenome_grp != low_clf.query_subgenome_grp, (
+            f"chr{i}A: high and low should be in different subgenome groups"
+        )
+        # Primary (higher identity) should have no suffix
+        assert high_clf.query_subgenome is None
+        # Secondary should have a letter suffix
+        assert low_clf.query_subgenome is not None
+
+
+def test_infer_query_subgenomes_no_split_similar_identities():
+    """Two copies with very similar identities -> no subgenome split."""
+    from final_finalizer.classification.classifier import infer_query_subgenomes
+    from final_finalizer.models import ContigClassification
+
+    clfs = []
+    idents = {}
+    for i in range(1, 11):
+        ref_id = f"chr{i}A"
+        c1 = ContigClassification(
+            original_name=f"ctg_{i}_a", new_name="",
+            classification="chrom_assigned", reversed=False,
+            contaminant_taxid=None, contaminant_sci=None,
+            assigned_ref_id=ref_id, ref_gene_proportion=0.5,
+            contig_len=10_000_000,
+        )
+        c2 = ContigClassification(
+            original_name=f"ctg_{i}_b", new_name="",
+            classification="chrom_assigned", reversed=False,
+            contaminant_taxid=None, contaminant_sci=None,
+            assigned_ref_id=ref_id, ref_gene_proportion=0.5,
+            contig_len=10_000_000,
+        )
+        clfs.extend([c1, c2])
+        # Very similar identities — should NOT split
+        idents[(f"ctg_{i}_a", ref_id)] = 0.65 + (i % 5) * 0.005
+        idents[(f"ctg_{i}_b", ref_id)] = 0.64 + (i % 5) * 0.005
+
+    infer_query_subgenomes(clfs, idents)
+
+    # All should be in the same group (no subgenome split)
+    for clf in clfs:
+        assert clf.query_subgenome is None, (
+            f"{clf.original_name}: expected no subgenome suffix, "
+            f"got {clf.query_subgenome}"
+        )
+
+
+def test_infer_query_subgenomes_sets_identity():
+    """Verify seq_identity_vs_ref is set for all contigs."""
+    from final_finalizer.classification.classifier import infer_query_subgenomes
+    from final_finalizer.models import ContigClassification
+
+    clf = ContigClassification(
+        original_name="ctg1", new_name="", classification="chrom_assigned",
+        reversed=False, contaminant_taxid=None, contaminant_sci=None,
+        assigned_ref_id="chr1A", ref_gene_proportion=0.5, contig_len=10_000_000,
+    )
+    idents = {("ctg1", "chr1A"): 0.72}
+
+    infer_query_subgenomes([clf], idents)
+
+    assert clf.seq_identity_vs_ref == 0.72
+
+
+def test_infer_query_subgenomes_mixed_single_and_multi():
+    """Mixture of single-copy and multi-copy chromosomes."""
+    from final_finalizer.classification.classifier import infer_query_subgenomes
+    from final_finalizer.models import ContigClassification
+
+    clfs = []
+    idents = {}
+    # 8 chromosomes with 2 copies (bimodal)
+    for i in range(1, 9):
+        ref_id = f"chr{i}A"
+        for label, id_offset in [("high", 0.10), ("low", 0.0)]:
+            clf = ContigClassification(
+                original_name=f"ctg_{i}_{label}", new_name="",
+                classification="chrom_assigned", reversed=False,
+                contaminant_taxid=None, contaminant_sci=None,
+                assigned_ref_id=ref_id, ref_gene_proportion=0.5,
+                contig_len=10_000_000,
+            )
+            clfs.append(clf)
+            idents[(f"ctg_{i}_{label}", ref_id)] = 0.59 + id_offset
+
+    # 3 chromosomes with single copy
+    for i in range(9, 12):
+        ref_id = f"chr{i}A"
+        clf = ContigClassification(
+            original_name=f"ctg_{i}_only", new_name="",
+            classification="chrom_assigned", reversed=False,
+            contaminant_taxid=None, contaminant_sci=None,
+            assigned_ref_id=ref_id, ref_gene_proportion=0.5,
+            contig_len=10_000_000,
+        )
+        clfs.append(clf)
+        idents[(f"ctg_{i}_only", ref_id)] = 0.65
+
+    infer_query_subgenomes(clfs, idents)
+
+    # Multi-copy chromosomes should be split
+    for i in range(1, 9):
+        high = next(c for c in clfs if c.original_name == f"ctg_{i}_high")
+        low = next(c for c in clfs if c.original_name == f"ctg_{i}_low")
+        assert high.query_subgenome_grp != low.query_subgenome_grp, (
+            f"chr{i}A: expected different groups"
+        )
+
+    # Single-copy chromosomes should have group 1, no suffix
+    for i in range(9, 12):
+        only = next(c for c in clfs if c.original_name == f"ctg_{i}_only")
+        assert only.query_subgenome is None
+        assert only.query_subgenome_grp == 1
+
+
+def test_infer_query_subgenomes_allotriploid():
+    """Allotriploid: 2 query subgenomes map to ref subgenome A, 1 maps to P.
+
+    The A channel should detect k=2 (bimodal identities) while the P channel
+    should stay at k=1 (single-copy per chromosome).
+    """
+    from final_finalizer.classification.classifier import infer_query_subgenomes
+    from final_finalizer.models import ContigClassification
+
+    clfs = []
+    idents = {}
+
+    # 8 chromosomes in ref subgenome A, each with 2 query copies (bimodal)
+    for i in range(1, 9):
+        ref_id = f"chr{i}A"
+        for label, id_offset in [("high", 0.10), ("low", 0.0)]:
+            clf = ContigClassification(
+                original_name=f"ctg_A{i}_{label}", new_name="",
+                classification="chrom_assigned", reversed=False,
+                contaminant_taxid=None, contaminant_sci=None,
+                assigned_ref_id=ref_id, ref_gene_proportion=0.5,
+                contig_len=10_000_000,
+            )
+            clfs.append(clf)
+            idents[(f"ctg_A{i}_{label}", ref_id)] = 0.59 + id_offset
+
+    # 6 chromosomes in ref subgenome P, each with 1 query copy
+    for i in range(1, 7):
+        ref_id = f"chr{i}P"
+        clf = ContigClassification(
+            original_name=f"ctg_P{i}", new_name="",
+            classification="chrom_assigned", reversed=False,
+            contaminant_taxid=None, contaminant_sci=None,
+            assigned_ref_id=ref_id, ref_gene_proportion=0.5,
+            contig_len=10_000_000,
+        )
+        clfs.append(clf)
+        idents[(f"ctg_P{i}", ref_id)] = 0.75 + (i % 3) * 0.01
+
+    infer_query_subgenomes(clfs, idents)
+
+    # A-subgenome chromosomes should be split into two query subgenomes
+    for i in range(1, 9):
+        high = next(c for c in clfs if c.original_name == f"ctg_A{i}_high")
+        low = next(c for c in clfs if c.original_name == f"ctg_A{i}_low")
+        assert high.query_subgenome_grp != low.query_subgenome_grp, (
+            f"chr{i}A: expected different subgenome groups"
+        )
+        assert high.query_subgenome is None  # primary
+        assert low.query_subgenome is not None  # secondary (e.g. "B")
+
+    # P-subgenome chromosomes should NOT be split (single copy each)
+    for i in range(1, 7):
+        p_clf = next(c for c in clfs if c.original_name == f"ctg_P{i}")
+        assert p_clf.query_subgenome is None, (
+            f"chr{i}P: expected no subgenome suffix, got {p_clf.query_subgenome}"
+        )
+        assert p_clf.query_subgenome_grp == 1

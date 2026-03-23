@@ -532,6 +532,7 @@ class AssemblyResult:
     contaminants_tsv: Optional[Path] = None
     rdna_annotations_tsv: Optional[Path] = None
     rdna_arrays_tsv: Optional[Path] = None
+    agp_tsv: Optional[Path] = None
 
     # Per-subgenome chrs.fasta paths (polyploid references)
     per_subgenome_chrs: Dict[str, Path] = field(default_factory=dict)

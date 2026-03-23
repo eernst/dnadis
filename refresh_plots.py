@@ -137,14 +137,25 @@ def build_placeholder_values(
     """Build placeholder → value mapping from TSVs in run_dir and the generated script."""
     values: dict[str, str] = {}
 
-    # Path-based placeholders: resolve from prefix + known TSV suffixes
+    # Extract all placeholder values from the previously generated script
+    # (used as fallback when files aren't at the expected prefix-relative path)
+    prev_values = extract_non_path_placeholders(template_text, generated_text)
+
+    # Path-based placeholders: resolve from prefix + known TSV suffixes.
+    # Search order: (1) {prefix}{suffix}, (2) shared reference directory
+    # {output_dir}/reference/reference{suffix}, (3) previously generated
+    # script, (4) empty string (optional file).
+    ref_prefix = prefix.parent.parent / "reference" / "reference"
     for placeholder, tsv_suffix in PLACEHOLDER_TSV.items():
         if placeholder in template_text:
             tsv_path = Path(str(prefix) + tsv_suffix)
-            # For optional TSVs, use empty string if file doesn't exist
-            # (R templates handle missing files gracefully)
+            ref_path = Path(str(ref_prefix) + tsv_suffix)
             if tsv_path.exists():
                 values[placeholder] = esc(tsv_path)
+            elif ref_path.exists():
+                values[placeholder] = esc(ref_path)
+            elif placeholder in prev_values and prev_values[placeholder] and not prev_values[placeholder].startswith("__"):
+                values[placeholder] = prev_values[placeholder]
             else:
                 values[placeholder] = ""
 
@@ -165,9 +176,10 @@ def build_placeholder_values(
     if "__COMMON_CSS__" in template_text and template_dir:
         values["__COMMON_CSS__"] = esc(template_dir / "common.css")
 
-    # Non-path placeholders: extract from generated script (PLOTHTML, CHRLIKE, SUFFIX, TOP_N)
-    non_path = extract_non_path_placeholders(template_text, generated_text)
-    values.update(non_path)
+    # Non-path placeholders: use values already extracted from generated script
+    for k, v in prev_values.items():
+        if k not in values:
+            values[k] = v
 
     # Cross-reference shared placeholders from sibling scripts in the same run
     # folder.  This is necessary because some scripts (e.g., the unified report)

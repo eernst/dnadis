@@ -241,6 +241,12 @@ def run_comparison_report(
         for r in assembly_results
     )
 
+    # Per-assembly AGP files (for scaffold join indicators in synteny plot)
+    per_asm_agp_tsvs = ";".join(
+        _abs_esc(r.agp_tsv) if r.agp_tsv and r.agp_tsv.exists() else ""
+        for r in assembly_results
+    )
+
     # Pairwise macro_blocks TSVs and pair labels (for asm→asm ribbons)
     # Names and paths are kept synchronized as (pair_name, tsv_path) tuples
     if pairwise_pairs:
@@ -259,6 +265,7 @@ def run_comparison_report(
         .replace("__PER_ASM_MACRO_TSVS__", per_asm_macro_tsvs)
         .replace("__PER_ASM_RDNA_TSVS__", per_asm_rdna_tsvs)
         .replace("__PER_ASM_CONTAM_TSVS__", per_asm_contam_tsvs)
+        .replace("__PER_ASM_AGP_TSVS__", per_asm_agp_tsvs)
         .replace("__PAIRWISE_MACRO_TSVS__", pw_macro_str)
         .replace("__PAIRWISE_NAMES__", pw_names_str)
         .replace("__REFNAME__", str(reference_name).replace('"', '\\"'))

@@ -481,7 +481,7 @@ mm_per_unit <- plot_area_mm / y_range
 pill_yw_fit <- 0.40 / (1 + log(max_n))
 pill_cap <- 1.8 / mm_per_unit; pill_min <- 0.8 / mm_per_unit
 pill_yw <- max(pill_min, min(pill_cap, pill_yw_fit))
-telo_size <- max(0.8, pill_yw * mm_per_unit)
+telo_size <- max(0.8, pill_yw * mm_per_unit * 1.375)
 pill_dy <- pill_yw * 1.15
 
 # Slot positions
@@ -491,6 +491,7 @@ df_slots <- df_plot %>%
   left_join(y_tbl, by = "chrom_id") %>%
   filter(!is.na(y_index)) %>%
   group_by(chrom_id) %>%
+  mutate(contig = factor(contig, levels = str_sort(unique(contig), numeric = TRUE))) %>%
   arrange(assigned_subgenome, desc(contig_len), contig, .by_group = TRUE) %>%
   mutate(n_in_bin = n(), slot = row_number(),
          y_offset = (slot - (n_in_bin + 1) / 2) * pill_dy,
@@ -658,15 +659,21 @@ p_comp <- ggplot() +
     linewidth = 0.4, alpha = 0.9, show.legend = FALSE) +
   scale_color_manual(values = col_light, guide = "none", drop = FALSE) +
   ggnewscale::new_scale_color() +
-  # Telomere indicators
-  ggiraph::geom_point_interactive(
+  # Telomere indicators (short horizontal segments with round lineend)
+  ggiraph::geom_segment_interactive(
     data = df_slots[df_slots$has_5p_telo, ],
-    aes(x = 0, y = y_plot, tooltip = paste0(original_name, "\n5' telomere detected")),
-    color = "grey75", size = telo_size, show.legend = FALSE) +
-  ggiraph::geom_point_interactive(
+    aes(x = -0.02, xend = 0.02,
+        y = y_plot, yend = y_plot,
+        tooltip = paste0(original_name, "\n5' telomere detected")),
+    lineend = "round", linewidth = telo_size,
+    color = "grey75", show.legend = FALSE) +
+  ggiraph::geom_segment_interactive(
     data = df_slots[df_slots$has_3p_telo, ],
-    aes(x = contig_len_mb, y = y_plot, tooltip = paste0(original_name, "\n3' telomere detected")),
-    color = "grey75", size = telo_size, show.legend = FALSE) +
+    aes(x = contig_len_mb - 0.02, xend = contig_len_mb + 0.02,
+        y = y_plot, yend = y_plot,
+        tooltip = paste0(original_name, "\n3' telomere detected")),
+    lineend = "round", linewidth = telo_size,
+    color = "grey75", show.legend = FALSE) +
   # Pill backgrounds
   geom_rect(data = df_slots,
     aes(xmin = 0, xmax = contig_len_mb, ymin = y_plot - pill_yw/2, ymax = y_plot + pill_yw/2),
@@ -877,7 +884,46 @@ save_pdf(pdf_chrom_overview, full_plot_chrom, width = 7.2, height = fig_height_i
 ```
 
 ```{r chrom_overview_widget, eval=has_chrom_assigned && has_segments}
-girafe_styled(full_plot_chrom, width_svg = 10, height_svg = fig_height_in * 10 / 7.2)
+g_chrom <- ggiraph::girafe(ggobj = full_plot_chrom,
+                           width_svg = 7.2,
+                           height_svg = fig_height_in)
+ggiraph::girafe_options(g_chrom,
+  ggiraph::opts_sizing(rescale = TRUE, width = 1),
+  ggiraph::opts_tooltip(css = paste0(
+    "font-family: ", base_family, "; font-size: 9pt; ",
+    "background: white; padding: 6px; border: 1px solid #666;"
+  )),
+  ggiraph::opts_hover(css = "opacity: 0.8;"),
+  ggiraph::opts_toolbar(saveaspng = FALSE)
+)
+```
+
+```{r subgenome_tab_heading, eval=has_subgenomes && has_evidence && !is.null(evidence_df), results='asis'}
+cat('\n## Subgenome Composition\n')
+```
+
+```{r subgenome_table, eval=has_subgenomes && has_evidence && !is.null(evidence_df)}
+subg_df <- chr_df %>%
+  filter(!is.na(assigned_subgenome) & assigned_subgenome != "NA") %>%
+  group_by(query_subgenome = assigned_subgenome) %>%
+  summarise(n_contigs = n(), total_mb = sum(length / 1e6, na.rm = TRUE),
+    mean_identity = if ("seq_identity_vs_ref" %in% names(.)) mean(seq_identity_vs_ref, na.rm = TRUE) * 100
+                    else if ("best_identity" %in% names(.)) mean(best_identity, na.rm = TRUE) * 100
+                    else NA_real_,
+    mean_collinearity = if (has_collinearity) mean(collinearity_score, na.rm = TRUE) else NA_real_,
+    .groups = "drop")
+
+if (nrow(subg_df) > 1) {
+  sel <- c("query_subgenome", "n_contigs", "total_mb", "mean_identity")
+  labels <- list(query_subgenome = "Subgenome", n_contigs = "Contigs",
+                 total_mb = "Total Mb", mean_identity = "Mean Identity %")
+  if (has_collinearity) { sel <- c(sel, "mean_collinearity"); labels$mean_collinearity <- "Mean Collinearity" }
+  subg_df %>% select(all_of(sel)) %>% gt() %>% cols_label(.list = labels) %>%
+    fmt_number(columns = total_mb, decimals = 1) %>%
+    fmt_number(columns = mean_identity, decimals = 1) %>%
+    fmt_number(columns = any_of("mean_collinearity"), decimals = 2) %>%
+    tab_header(title = md("**Subgenome Composition**")) %>% gt_theme()
+}
 ```
 
 ```{r chr_tab_heading, eval=has_chrom_assigned, results='asis'}
@@ -901,7 +947,7 @@ chr_tbl <- chr_df %>%
   )
 
 sel_cols <- c("contig", "original_name", "assigned_ref_id", "length_mb")
-col_labels <- list(contig = "contig", original_name = "original_name", assigned_ref_id = "Ref Chromosome", length_mb = "Length (Mb)")
+col_labels <- list(contig = "Contig", original_name = "Original Name", assigned_ref_id = "Ref Chromosome", length_mb = "Length (Mb)")
 
 if (has_subgenomes) { sel_cols <- c(sel_cols, "subgenome_col"); col_labels$subgenome_col <- "Subgenome" }
 sel_cols <- c(sel_cols, "ref_cov_pct"); col_labels$ref_cov_pct <- "Ref Cov %"
@@ -963,35 +1009,6 @@ ref_cov %>%
 ```
 
 
-```{r subgenome_tab_heading, eval=has_subgenomes && has_evidence && !is.null(evidence_df), results='asis'}
-cat('\n## Subgenome Composition\n')
-```
-
-```{r subgenome_table, eval=has_subgenomes && has_evidence && !is.null(evidence_df)}
-subg_df <- chr_df %>%
-  filter(!is.na(assigned_subgenome) & assigned_subgenome != "NA") %>%
-  group_by(query_subgenome = assigned_subgenome) %>%
-  summarise(n_contigs = n(), total_mb = sum(length / 1e6, na.rm = TRUE),
-    mean_identity = if ("seq_identity_vs_ref" %in% names(.)) mean(seq_identity_vs_ref, na.rm = TRUE) * 100
-                    else if ("best_identity" %in% names(.)) mean(best_identity, na.rm = TRUE) * 100
-                    else NA_real_,
-    mean_collinearity = if (has_collinearity) mean(collinearity_score, na.rm = TRUE) else NA_real_,
-    .groups = "drop")
-
-if (nrow(subg_df) > 1) {
-  sel <- c("query_subgenome", "n_contigs", "total_mb", "mean_identity")
-  labels <- list(query_subgenome = "Subgenome", n_contigs = "Contigs",
-                 total_mb = "Total Mb", mean_identity = "Mean Identity %")
-  if (has_collinearity) { sel <- c(sel, "mean_collinearity"); labels$mean_collinearity <- "Mean Collinearity" }
-  subg_df %>% select(all_of(sel)) %>% gt() %>% cols_label(.list = labels) %>%
-    fmt_number(columns = total_mb, decimals = 1) %>%
-    fmt_number(columns = mean_identity, decimals = 1) %>%
-    fmt_number(columns = any_of("mean_collinearity"), decimals = 2) %>%
-    tab_header(title = md("**Subgenome Composition**")) %>% gt_theme()
-}
-```
-
-
 # 3. Evidence Quality
 
 ```{r evidence_placeholder, eval=!has_evidence || is.null(evidence_df), results='asis'}
@@ -1014,7 +1031,7 @@ ev_df <- summary_df %>%
   arrange(version_sort_key(assigned_ref_id), assigned_ref_id, desc(length_mb))
 
 sel <- c("contig", "original_name", "length_mb", "assigned_ref_id", "syn_score", "span_frac", "gene_pct")
-labels <- list(contig = "contig", original_name = "original_name", length_mb = "Length (Mb)", assigned_ref_id = "Best Ref",
+labels <- list(contig = "Contig", original_name = "Original Name", length_mb = "Length (Mb)", assigned_ref_id = "Best Ref",
                syn_score = "Synteny Score", span_frac = "Span Frac", gene_pct = "Gene %")
 if (has_collinearity) { sel <- c(sel, "collin"); labels$collin <- "Collinearity" }
 sel <- c(sel, "s_ratio", "gc_dev", "conf_html")
@@ -1262,7 +1279,7 @@ rdna_ann_show <- rdna_ann_df %>%
     select(-array_id) %>%
     rename_with(~ case_when(. == "contig" ~ "contig", . == "original_name" ~ "original_name", TRUE ~ .)) %>%
     gt() %>%
-    cols_label(contig = "contig", original_name = "original_name") %>%
+    cols_label(contig = "Contig", original_name = "Original Name") %>%
     tab_header(title = md(paste0("**", title, "**")), subtitle = md(subtitle)) %>%
     tab_options(table.font.size = px(10)) %>% gt_theme()
 }
@@ -1271,30 +1288,6 @@ array_df <- rdna_ann_show %>% filter(!is.na(array_id) & nzchar(array_id))
 other_df <- rdna_ann_show %>% filter(is.na(array_id) | !nzchar(array_id))
 has_array_loci <- nrow(array_df) > 0
 has_other_rdna_ann <- nrow(other_df) > 0
-```
-
-```{r rdna_summary_tab, eval=has_rdna, results='asis'}
-cat('\n## rDNA Summary\n')
-```
-
-```{r rdna_table, eval=has_rdna}
-rdna_show <- rdna_df %>%
-  mutate(length_kb = length / 1e3,
-         identity_pct = if ("best_identity" %in% names(.)) best_identity * 100 else NA_real_,
-         conf_html = sapply(classification_confidence, conf_badge))
-
-sel <- c("contig", "original_name", "length_kb", "identity_pct", "conf_html")
-labels <- list(contig = "contig", original_name = "original_name", length_kb = "Length (kb)",
-               identity_pct = "Identity %", conf_html = "Confidence")
-
-rdna_show %>%
-  select(all_of(sel)) %>%
-  gt() %>%
-  cols_label(.list = labels) %>%
-  fmt_number(columns = length_kb, decimals = 1) %>%
-  fmt_number(columns = any_of("identity_pct"), decimals = 1) %>%
-  fmt(columns = conf_html, fns = function(x) x) %>%
-  tab_header(title = md("**rDNA Summary**")) %>% gt_theme()
 ```
 
 ```{r rdna_arrays_tab, eval=has_rdna_arrays, results='asis'}
@@ -1337,11 +1330,11 @@ arrays_tbl <- arrays_show %>%
   )
 
 arrays_tbl %>%
-  select(array_id, contig, coords, span_bar, span_text,
+  select(array_id, contig, original_name, coords, span_bar, span_text,
          copies_text, id_dist, id_text) %>%
   gt() %>%
   cols_label(
-    array_id = "Array", contig = "Contig",
+    array_id = "Array", contig = "Contig", original_name = "Original Name",
     coords = "Coordinates",
     span_bar = "", span_text = "Span",
     copies_text = "Copies (F/P/Fr)",
@@ -1354,6 +1347,30 @@ arrays_tbl %>%
   tab_header(title = md("**45S rDNA Arrays**"),
     subtitle = md(paste0(nrow(arrays_show), " tandem repeat arrays detected"))) %>%
   gt_theme()
+```
+
+```{r rdna_summary_tab, eval=has_rdna, results='asis'}
+cat('\n## rDNA Summary\n')
+```
+
+```{r rdna_table, eval=has_rdna}
+rdna_show <- rdna_df %>%
+  mutate(length_kb = length / 1e3,
+         identity_pct = if ("best_identity" %in% names(.)) best_identity * 100 else NA_real_,
+         conf_html = sapply(classification_confidence, conf_badge))
+
+sel <- c("contig", "original_name", "length_kb", "identity_pct", "conf_html")
+labels <- list(contig = "Contig", original_name = "Original Name", length_kb = "Length (kb)",
+               identity_pct = "Identity %", conf_html = "Confidence")
+
+rdna_show %>%
+  select(all_of(sel)) %>%
+  gt() %>%
+  cols_label(.list = labels) %>%
+  fmt_number(columns = length_kb, decimals = 1) %>%
+  fmt_number(columns = any_of("identity_pct"), decimals = 1) %>%
+  fmt(columns = conf_html, fns = function(x) x) %>%
+  tab_header(title = md("**rDNA Summary**")) %>% gt_theme()
 ```
 
 ```{r rdna_other_tab, eval=has_rdna_ann && has_other_rdna_ann, results='asis'}
@@ -1391,7 +1408,7 @@ has_org_debris <- nrow(org_debris) > 0
 
 .render_org_gt <- function(df, title) {
   sel <- c("contig", "original_name", "type", "length_kb")
-  labels <- list(contig = "contig", original_name = "original_name", type = "Type", length_kb = "Length (kb)")
+  labels <- list(contig = "Contig", original_name = "Original Name", type = "Type", length_kb = "Length (kb)")
   if (has_depth) { sel <- c(sel, "depth_val"); labels$depth_val <- "Depth" }
   df %>% select(all_of(sel)) %>% gt() %>% cols_label(.list = labels) %>%
     fmt_number(columns = length_kb, decimals = 1) %>%
@@ -1613,7 +1630,7 @@ if (nrow(debris_df) > 0) {
   debris_df %>% head(50) %>%
     select(contig, original_name, length_mb, classification, best_ref, aligned_bp, reason) %>%
     gt() %>%
-    cols_label(contig = "contig", original_name = "original_name", length_mb = "Length (Mb)", classification = "Category",
+    cols_label(contig = "Contig", original_name = "Original Name", length_mb = "Length (Mb)", classification = "Category",
                best_ref = "Best Ref Hit", aligned_bp = "Aligned Bp", reason = "Reason") %>%
     fmt_number(columns = length_mb, decimals = 2) %>%
     fmt_number(columns = any_of("aligned_bp"), decimals = 0) %>%

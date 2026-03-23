@@ -206,9 +206,12 @@ def split_chrom_subgenome(
             chrom_id = "Chr" + chrom_id[3:]
         return chrom_id, "NA"
 
-    # Strip fragment/copy suffixes (e.g. chr6A_f1 -> chr6A, chr1A_c2 -> chr1A)
-    # so that fragments are still recognized as belonging to their chromosome.
+    # Strip query subgenome + fragment/copy suffixes so that contigs like
+    # chr6A_B_f1 or chr1A_c2 are recognized as belonging to their base chromosome.
+    # Naming scheme: chr<ref>(_<query_sg>)?(_c<copy>|_f<frag>)?
+    # Strip right-to-left: first _f1/_c2, then _B/_C (single uppercase letter).
     base_id = re.sub(r"_[fc]\d+$", "", norm_id)
+    base_id = re.sub(r"_[A-Z]$", "", base_id)
 
     active_patterns = patterns if patterns is not None else get_ref_id_patterns()
     for pat in active_patterns:

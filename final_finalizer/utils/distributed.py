@@ -318,20 +318,12 @@ def create_executor(
     if not config.enabled:
         return LocalExecutor()
 
-    missing: list[str] = []
     try:
         from executorlib import SlurmClusterExecutor  # type: ignore[import-untyped]
     except ImportError:
-        missing.append("executorlib")
-    try:
-        import mpi4py  # noqa: F401  # type: ignore[import-untyped]
-    except ImportError:
-        missing.append("mpi4py")
-
-    if missing:
         logger.error(
-            f"--cluster requires packages that are not installed: {', '.join(missing)}\n"
-            "Install with:  conda install -c conda-forge executorlib mpi4py\n"
+            "--cluster requires executorlib (and its optional dependencies pysqa, h5py).\n"
+            "Install with:  conda install -c conda-forge executorlib pysqa h5py\n"
             "Or run without --cluster for local execution."
         )
         raise SystemExit(1)
