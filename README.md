@@ -104,6 +104,15 @@ No user configuration is required. The feature runs automatically whenever multi
 
 ### Conda environment
 
+An `environment.yml` is provided for the full installation:
+
+```bash
+conda env create -f environment.yml
+conda activate final_finalizer
+```
+
+Alternatively, create the environment manually:
+
 **Minimal** — core classification pipeline with interactive HTML reports:
 
 ```bash
@@ -114,7 +123,7 @@ conda create -n final_finalizer -c conda-forge -c bioconda \
     r-patchwork r-ggnewscale r-pacman r-ggiraph r-htmlwidgets r-scales \
     r-gt r-gtextras r-svglite r-xml2 r-rmarkdown r-ggridges \
     r-colorspace r-ggokabeito r-ggrepel r-showtext r-sysfonts \
-    libxml2 xz pandoc
+    r-systemfonts freetype libxml2 xz pandoc
 conda activate final_finalizer
 ```
 
@@ -131,7 +140,7 @@ conda create -n final_finalizer -c conda-forge -c bioconda \
     r-patchwork r-ggnewscale r-pacman r-ggiraph r-htmlwidgets r-scales \
     r-gt r-gtextras r-svglite r-xml2 r-rmarkdown r-ggridges \
     r-colorspace r-ggokabeito r-ggrepel r-showtext r-sysfonts \
-    libxml2 xz pandoc
+    r-systemfonts freetype libxml2 xz pandoc
 conda activate final_finalizer
 ```
 

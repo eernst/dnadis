@@ -1180,16 +1180,35 @@ if (!is.null(pairwise_macro_df) && nrow(asm_lookup_df) > 0) {
 # from the per-assembly macro_blocks (ref→asm).  Used to determine which reference
 # chromosome a pairwise synteny block originates from, enabling reference-origin
 # coloring through translocations.
+#
+# Per-assembly macro_blocks have coordinates on the ORIGINAL (unoriented) contig.
+# Pairwise macro_blocks use the ORIENTED contig (from chrs.fasta).  For reversed
+# contigs, we must flip: oriented_pos = contig_len - original_pos.
 ref_origin_lookup <- NULL
 if (!is.null(per_asm_macro_df) && nrow(per_asm_macro_df) > 0 &&
-    "contig_new" %in% names(per_asm_macro_df)) {
+    "contig_new" %in% names(per_asm_macro_df) && nrow(asm_lookup_df) > 0) {
+  # Get orientation and length per (assembly, contig)
+  orient_map <- asm_lookup_df %>%
+    distinct(assembly, contig, .keep_all = TRUE) %>%
+    select(assembly, contig_new = contig, reversed, orient_len = length)
+
   ref_origin_lookup <- per_asm_macro_df %>%
     filter(!is.na(chrom_id) & nzchar(chrom_id)) %>%
+    mutate(
+      orig_qstart = as.numeric(qstart),
+      orig_qend = as.numeric(qend)
+    ) %>%
+    inner_join(orient_map, by = c("assembly", "contig_new")) %>%
+    mutate(
+      orient_len = as.numeric(orient_len),
+      # Flip coordinates for reversed contigs so they match the oriented FASTA
+      qstart = ifelse(reversed, orient_len - orig_qend,   orig_qstart),
+      qend   = ifelse(reversed, orient_len - orig_qstart, orig_qend)
+    ) %>%
     transmute(
       assembly,
       contig = contig_new,
-      qstart = as.numeric(qstart),
-      qend = as.numeric(qend),
+      qstart, qend,
       ref_chrom_id = chrom_id,
       union_bp = as.numeric(union_bp)
     ) %>%
