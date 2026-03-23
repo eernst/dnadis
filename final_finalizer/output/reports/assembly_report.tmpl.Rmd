@@ -897,6 +897,34 @@ ggiraph::girafe_options(g_chrom,
 )
 ```
 
+```{r subgenome_tab_heading, eval=has_subgenomes && has_evidence && !is.null(evidence_df), results='asis'}
+cat('\n## Subgenome Composition\n')
+```
+
+```{r subgenome_table, eval=has_subgenomes && has_evidence && !is.null(evidence_df)}
+subg_df <- chr_df %>%
+  filter(!is.na(assigned_subgenome) & assigned_subgenome != "NA") %>%
+  group_by(query_subgenome = assigned_subgenome) %>%
+  summarise(n_contigs = n(), total_mb = sum(length / 1e6, na.rm = TRUE),
+    mean_identity = if ("seq_identity_vs_ref" %in% names(.)) mean(seq_identity_vs_ref, na.rm = TRUE) * 100
+                    else if ("best_identity" %in% names(.)) mean(best_identity, na.rm = TRUE) * 100
+                    else NA_real_,
+    mean_collinearity = if (has_collinearity) mean(collinearity_score, na.rm = TRUE) else NA_real_,
+    .groups = "drop")
+
+if (nrow(subg_df) > 1) {
+  sel <- c("query_subgenome", "n_contigs", "total_mb", "mean_identity")
+  labels <- list(query_subgenome = "Subgenome", n_contigs = "Contigs",
+                 total_mb = "Total Mb", mean_identity = "Mean Identity %")
+  if (has_collinearity) { sel <- c(sel, "mean_collinearity"); labels$mean_collinearity <- "Mean Collinearity" }
+  subg_df %>% select(all_of(sel)) %>% gt() %>% cols_label(.list = labels) %>%
+    fmt_number(columns = total_mb, decimals = 1) %>%
+    fmt_number(columns = mean_identity, decimals = 1) %>%
+    fmt_number(columns = any_of("mean_collinearity"), decimals = 2) %>%
+    tab_header(title = md("**Subgenome Composition**")) %>% gt_theme()
+}
+```
+
 ```{r chr_tab_heading, eval=has_chrom_assigned, results='asis'}
 cat('\n## Per-Chromosome Summary\n')
 ```
@@ -977,35 +1005,6 @@ ref_cov %>%
   fmt(columns = bar, fns = function(x) x) %>%
   tab_header(title = md("**Reference Coverage Summary**")) %>%
   gt_theme()
-```
-
-
-```{r subgenome_tab_heading, eval=has_subgenomes && has_evidence && !is.null(evidence_df), results='asis'}
-cat('\n## Subgenome Composition\n')
-```
-
-```{r subgenome_table, eval=has_subgenomes && has_evidence && !is.null(evidence_df)}
-subg_df <- chr_df %>%
-  filter(!is.na(assigned_subgenome) & assigned_subgenome != "NA") %>%
-  group_by(query_subgenome = assigned_subgenome) %>%
-  summarise(n_contigs = n(), total_mb = sum(length / 1e6, na.rm = TRUE),
-    mean_identity = if ("seq_identity_vs_ref" %in% names(.)) mean(seq_identity_vs_ref, na.rm = TRUE) * 100
-                    else if ("best_identity" %in% names(.)) mean(best_identity, na.rm = TRUE) * 100
-                    else NA_real_,
-    mean_collinearity = if (has_collinearity) mean(collinearity_score, na.rm = TRUE) else NA_real_,
-    .groups = "drop")
-
-if (nrow(subg_df) > 1) {
-  sel <- c("query_subgenome", "n_contigs", "total_mb", "mean_identity")
-  labels <- list(query_subgenome = "Subgenome", n_contigs = "Contigs",
-                 total_mb = "Total Mb", mean_identity = "Mean Identity %")
-  if (has_collinearity) { sel <- c(sel, "mean_collinearity"); labels$mean_collinearity <- "Mean Collinearity" }
-  subg_df %>% select(all_of(sel)) %>% gt() %>% cols_label(.list = labels) %>%
-    fmt_number(columns = total_mb, decimals = 1) %>%
-    fmt_number(columns = mean_identity, decimals = 1) %>%
-    fmt_number(columns = any_of("mean_collinearity"), decimals = 2) %>%
-    tab_header(title = md("**Subgenome Composition**")) %>% gt_theme()
-}
 ```
 
 
