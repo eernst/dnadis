@@ -2,7 +2,7 @@
 
 ## Consider snakemake
 
-* [ ] executorlib is pretty flaky - moving to snakemake could simplify installation (as it handles conda dependencies in a more user-transparent fashion), simplify SLURM cluster execution, possibly make the pipeline more robust, and support more platforms. Need to look at pros/cons, but pretty sure this needs to happen. If it does, we'll want to use final_finalizer.py as a CLI convenience wrapper around snakemake (and retain our current flags). This will be a big refactor.
+* [ ] executorlib is pretty flaky - moving to snakemake could simplify installation (as it handles conda dependencies in a more user-transparent fashion), simplify SLURM cluster execution, possibly make the pipeline more robust, and support more platforms. Need to look at pros/cons, but pretty sure this needs to happen. If it does, we'll want to use final_finalizer.py as a convenience wrapper around snakemake (and retain our current flags). This will be a big refactor.
 
 ## Implement subcommands
 
@@ -44,7 +44,7 @@
 
 * [x] Currently, no ribbons are drawn for chromosome fragments (those with the _f# suffix). We need to handle these cases as well. — Resolved: fragments are `chrom_assigned` contigs and flow through the same pill + ribbon pipeline. They have macro_blocks, get pills, and get ribbons.
 
-* [ ] Multiple query subgenomes mapping to the same reference (e.g. chr2A_c1, chr2A_c2) are currently laid out side-by-side in the plot (good), but overlap (bad) making it hard to distinguish the multiple pills, and making the ribbons hard to read. Can we detect this situation (where any of the query assemblies have multiple subgenomes mapped to a single reference) and introduce extra horizontal space between the chromosome columns in that specific plot, so that the multiple query chromosomes won't overlap? We should also horizontally shift the centers of them so that the center of the composite (chr2A_c1, chr2A_c2) would align with another query assembly above or below with just one homologous query chromosome. In actuality, we should be horizontally centering all pills on each reference column, but if there are multiple pills in the same ref column, the composition of the multiple pills should be centered.
+* [x] Multiple query subgenomes mapping to the same reference (e.g. chr2A_c1, chr2A_c2) are currently laid out side-by-side in the plot (good), but overlap (bad) making it hard to distinguish the multiple pills, and making the ribbons hard to read. Can we detect this situation (where any of the query assemblies have multiple subgenomes mapped to a single reference) and introduce extra horizontal space between the chromosome columns in that specific plot, so that the multiple query chromosomes won't overlap? We should also horizontally shift the centers of them so that the center of the composite (chr2A_c1, chr2A_c2) would align with another query assembly above or below with just one homologous query chromosome. In actuality, we should be horizontally centering all pills on each reference column, but if there are multiple pills in the same ref column, the composition of the multiple pills should be centered.
 
 * [ ] We might actually need to do all vs all alignments within the set of contigs across all assemblies assigned to each reference subgenome. This would allow for more complete syntenic relationship tracking and plotting over rearrangements, potentially.
 
@@ -54,13 +54,13 @@
 
 ### Rename sections
 
-* [ ] Drop the "Comparison" suffix from all sections titles
+* [x] Drop the "Comparison" suffix from all sections titles
 
-* [ ] Chromosome Synteny -> Macro Synteny
+* [x] Chromosome Synteny -> Macro Synteny
 
-* [ ] Organelle -> Organelles
+* [x] Organelle -> Organelles
 
-* [ ] Contamination -> Contaminants
+* [x] Contamination -> Contaminants
 
 ## Better handling of unidentified contaminants
 
@@ -68,7 +68,7 @@
 
 ## Query subgenome segmentation
 
-* [ ] Implement and document Gaussian mixture model segmentation of query subgenomes on the basis of reference alignment identity
+* [x] Implement and document Gaussian mixture model segmentation of query subgenomes on the basis of reference alignment identity
 
 ## compleasm evals
 [compleasm](https://github.com/huangnengCSU/compleasm) support added in phase 17 (`--compleasm-lineage`). Runs on `chrs.fasta` and `non_chrs.fasta` (debris + unclassified + contaminants). Results included in `comparison_summary.tsv`.

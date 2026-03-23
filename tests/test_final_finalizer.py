@@ -1408,7 +1408,6 @@ def test_infer_query_subgenomes_two_subgenomes():
 
     # Simulate an allotetraploid: each ref chromosome has 2 contigs,
     # one at ~0.69 identity (primary) and one at ~0.60 (secondary).
-    # This mimics the la9524 case.
     clfs = []
     idents = {}
     for i in range(1, 11):
@@ -1552,3 +1551,63 @@ def test_infer_query_subgenomes_mixed_single_and_multi():
         only = next(c for c in clfs if c.original_name == f"ctg_{i}_only")
         assert only.query_subgenome is None
         assert only.query_subgenome_grp == 1
+
+
+def test_infer_query_subgenomes_allotriploid():
+    """Allotriploid: 2 query subgenomes map to ref subgenome A, 1 maps to P.
+
+    The A channel should detect k=2 (bimodal identities) while the P channel
+    should stay at k=1 (single-copy per chromosome).
+    """
+    from final_finalizer.classification.classifier import infer_query_subgenomes
+    from final_finalizer.models import ContigClassification
+
+    clfs = []
+    idents = {}
+
+    # 8 chromosomes in ref subgenome A, each with 2 query copies (bimodal)
+    for i in range(1, 9):
+        ref_id = f"chr{i}A"
+        for label, id_offset in [("high", 0.10), ("low", 0.0)]:
+            clf = ContigClassification(
+                original_name=f"ctg_A{i}_{label}", new_name="",
+                classification="chrom_assigned", reversed=False,
+                contaminant_taxid=None, contaminant_sci=None,
+                assigned_ref_id=ref_id, ref_gene_proportion=0.5,
+                contig_len=10_000_000,
+            )
+            clfs.append(clf)
+            idents[(f"ctg_A{i}_{label}", ref_id)] = 0.59 + id_offset
+
+    # 6 chromosomes in ref subgenome P, each with 1 query copy
+    for i in range(1, 7):
+        ref_id = f"chr{i}P"
+        clf = ContigClassification(
+            original_name=f"ctg_P{i}", new_name="",
+            classification="chrom_assigned", reversed=False,
+            contaminant_taxid=None, contaminant_sci=None,
+            assigned_ref_id=ref_id, ref_gene_proportion=0.5,
+            contig_len=10_000_000,
+        )
+        clfs.append(clf)
+        idents[(f"ctg_P{i}", ref_id)] = 0.75 + (i % 3) * 0.01
+
+    infer_query_subgenomes(clfs, idents)
+
+    # A-subgenome chromosomes should be split into two query subgenomes
+    for i in range(1, 9):
+        high = next(c for c in clfs if c.original_name == f"ctg_A{i}_high")
+        low = next(c for c in clfs if c.original_name == f"ctg_A{i}_low")
+        assert high.query_subgenome_grp != low.query_subgenome_grp, (
+            f"chr{i}A: expected different subgenome groups"
+        )
+        assert high.query_subgenome is None  # primary
+        assert low.query_subgenome is not None  # secondary (e.g. "B")
+
+    # P-subgenome chromosomes should NOT be split (single copy each)
+    for i in range(1, 7):
+        p_clf = next(c for c in clfs if c.original_name == f"ctg_P{i}")
+        assert p_clf.query_subgenome is None, (
+            f"chr{i}P: expected no subgenome suffix, got {p_clf.query_subgenome}"
+        )
+        assert p_clf.query_subgenome_grp == 1

@@ -1119,11 +1119,11 @@ if (has_named_subgenomes) {
 }
 ```
 
-`r if (has_synteny_data && exists("n_subgenomes_pre") && n_subgenomes_pre > 1) "# 3. Chromosome Synteny {.tabset}" else if (has_synteny_data) "# 3. Chromosome Synteny" else ""`
+`r if (has_synteny_data && exists("n_subgenomes_pre") && n_subgenomes_pre > 1) "# 3. Macro Synteny {.tabset}" else if (has_synteny_data) "# 3. Macro Synteny" else ""`
 
 ```{r synteny_setup, eval=has_synteny_data, include=FALSE}
 # =========================================================================
-# Section 3: Chromosome Synteny Riparian Plot (transposed layout)
+# Section 3: Macro Synteny Riparian Plot (transposed layout)
 #
 # X-axis: chromosomes (chr1..chrN), naturally sorted left to right
 # Y-axis: rows — Reference at top, then assemblies in FOFN order
@@ -1173,6 +1173,46 @@ if (!is.null(pairwise_macro_df) && nrow(asm_lookup_df) > 0) {
     left_join(right_map, by = c("right_assembly", "contig" = "original_name")) %>%
     mutate(contig = coalesce(new_contig, contig)) %>%
     select(-new_contig)
+}
+
+# --- Reference-origin lookup for pairwise ribbon coloring ---
+# For each assembly contig, build sorted intervals of (qstart, qend, ref_chrom_id)
+# from the per-assembly macro_blocks (ref→asm).  Used to determine which reference
+# chromosome a pairwise synteny block originates from, enabling reference-origin
+# coloring through translocations.
+ref_origin_lookup <- NULL
+if (!is.null(per_asm_macro_df) && nrow(per_asm_macro_df) > 0 &&
+    "contig_new" %in% names(per_asm_macro_df)) {
+  ref_origin_lookup <- per_asm_macro_df %>%
+    filter(!is.na(chrom_id) & nzchar(chrom_id)) %>%
+    transmute(
+      assembly,
+      contig = contig_new,
+      qstart = as.numeric(qstart),
+      qend = as.numeric(qend),
+      ref_chrom_id = chrom_id,
+      union_bp = as.numeric(union_bp)
+    ) %>%
+    arrange(assembly, contig, qstart)
+}
+
+# Helper: look up reference chromosome origin for a query region
+lookup_ref_origin <- function(asm, ctg, q_start, q_end) {
+  if (is.null(ref_origin_lookup)) return(NA_character_)
+  # Find per-assembly blocks that overlap [q_start, q_end] on this contig
+  hits <- ref_origin_lookup %>%
+    filter(assembly == asm, contig == ctg,
+           qend > q_start, qstart < q_end)
+  if (nrow(hits) == 0) return(NA_character_)
+  # Return the chrom_id with the most overlapping bp
+  hits %>%
+    mutate(overlap = pmin(qend, q_end) - pmax(qstart, q_start)) %>%
+    filter(overlap > 0) %>%
+    group_by(ref_chrom_id) %>%
+    summarise(total_overlap = sum(overlap), .groups = "drop") %>%
+    slice_max(total_overlap, n = 1) %>%
+    pull(ref_chrom_id) %>%
+    first()
 }
 
 # --- Nuclear chromosomes sorted by (subgenome, chrom_num) ---
@@ -1328,7 +1368,8 @@ build_synteny_plot <- function(sg) {
       y_asm <- row_centers[[asm]]
       lk <- asm_lookup_df %>%
         filter(assembly == asm, assigned_ref_id == rid) %>%
-        arrange(desc(length))
+        mutate(contig = factor(contig, levels = str_sort(contig, numeric = TRUE))) %>%
+        arrange(contig)
       if (nrow(lk) == 0) next
 
       # Check if this assembly has an AGP with a scaffold for this chromosome
@@ -1497,7 +1538,19 @@ build_synteny_plot <- function(sg) {
 
       top_len <- tp$contig_len[1]; top_xl <- tp$x_left[1]; top_w <- tp$pill_width[1]
       bot_len <- bp$contig_len[1]; bot_xl <- bp$x_left[1]; bot_w <- bp$pill_width[1]
-      cid <- as.character(tp$chrom_id[1])
+      # Color ribbons by reference chromosome origin.  For ref→asm,
+      # use the reference pill's chrom_id directly.  For asm→asm pairwise,
+      # look up the reference origin of the block by intersecting the
+      # bottom contig's coordinates with per-assembly macro_blocks.
+      # This preserves reference chromosome color through translocations.
+      if (gm$top_is_ref) {
+        cid <- as.character(tp$chrom_id[1])
+      } else {
+        ref_cid <- lookup_ref_origin(
+          gm$bot_asm, as.character(bp$contig[1]),
+          as.numeric(blk$qstart), as.numeric(blk$qend))
+        cid <- if (!is.na(ref_cid)) ref_cid else as.character(bp$chrom_id[1])
+      }
 
       l_start <- as.numeric(blk$ref_start); l_end <- as.numeric(blk$ref_end)
       r_start <- as.numeric(blk$qstart);    r_end <- as.numeric(blk$qend)
@@ -1542,6 +1595,10 @@ build_synteny_plot <- function(sg) {
   }
 
   # --- Rescue ribbons ---
+  # Only draw rescue ribbons when intermediate assemblies genuinely lack
+  # the chromosome in this subgenome tab.  A rescue pair from one
+  # subgenome chain should not produce flow-through ribbons in another
+  # subgenome tab where the intermediate assemblies DO have contigs.
   if (!is.null(rescue_macro_df) && nrow(rescue_macro_df) > 0) {
     rescue_pairs <- rescue_macro_df %>%
       distinct(left_assembly, right_assembly)
@@ -1554,6 +1611,13 @@ build_synteny_plot <- function(sg) {
                qspan_bp >= min_span)
       if (n_subgenomes > 1) pair_df <- pair_df %>% filter(subgenome == sg)
       if (nrow(pair_df) == 0) next
+
+      # Pre-compute intermediate rows between this rescue pair
+      top_idx <- which(row_names == r_top_asm)
+      bot_idx <- which(row_names == r_bot_asm)
+      mid_rows <- if (length(top_idx) == 1 && length(bot_idx) == 1 && bot_idx - top_idx > 1) {
+        row_names[(top_idx + 1):(bot_idx - 1)]
+      } else { character(0) }
       gz_rescue <- c(row_centers[[r_top_asm]] + 0.03,
                      row_centers[[r_bot_asm]] - 0.03)
       for (b in seq_len(nrow(pair_df))) {
@@ -1563,7 +1627,20 @@ build_synteny_plot <- function(sg) {
         if (nrow(tp) == 0 || nrow(bp) == 0) next
         top_len <- tp$contig_len[1]; top_xl <- tp$x_left[1]; top_w <- tp$pill_width[1]
         bot_len <- bp$contig_len[1]; bot_xl <- bp$x_left[1]; bot_w <- bp$pill_width[1]
-        cid <- as.character(tp$chrom_id[1])
+        ref_cid <- lookup_ref_origin(
+          r_bot_asm, as.character(bp$contig[1]),
+          as.numeric(blk$qstart), as.numeric(blk$qend))
+        cid <- if (!is.na(ref_cid)) ref_cid else as.character(bp$chrom_id[1])
+
+        # Skip this block if all intermediate rows have a pill for the
+        # same chromosome — adjacent ribbons already connect them.
+        if (length(mid_rows) > 0) {
+          mid_covered <- all(vapply(mid_rows, function(mr) {
+            nrow(pill_lookup %>% filter(row_name == mr, chrom_id == cid)) > 0
+          }, logical(1)))
+          if (mid_covered) next
+        }
+
         l_start <- max(0, as.numeric(blk$ref_start))
         l_end   <- min(top_len, as.numeric(blk$ref_end))
         r_start <- max(0, as.numeric(blk$qstart))
@@ -1754,7 +1831,7 @@ cat("Synteny data available but no ribbon connections could be built. ",
 ```
 
 
-`r if (has_any_chrom && has_per_asm) "# 4. Quality Comparison {.tabset}" else ""`
+`r if (has_any_chrom && has_per_asm) "# 4. Quality {.tabset}" else ""`
 
 ```{r quality_section, eval=(has_any_chrom && has_per_asm)}
 chrom_df <- all_summary_df %>%
@@ -1941,7 +2018,7 @@ if (nrow(depth_df) > 0) {
 ```
 
 
-`r if (has_per_asm && any(comp_df$n_rdna > 0, na.rm = TRUE)) "# 6. rDNA Comparison {.tabset}" else ""`
+`r if (has_per_asm && any(comp_df$n_rdna > 0, na.rm = TRUE)) "# 6. rDNA {.tabset}" else ""`
 
 ```{r rdna_setup, eval=(has_per_asm && any(comp_df$n_rdna > 0, na.rm = TRUE)), include=FALSE}
 has_any_rdna <- any(comp_df$n_rdna > 0, na.rm = TRUE)
@@ -1989,11 +2066,20 @@ cat("## Array Detail\n\n")
 ```
 
 ```{r rdna_arrays_table, eval=(has_per_asm && exists("has_any_rdna") && has_any_rdna && has_rdna_arrays)}
+# Map original contig names to new (renamed) names via per-assembly summaries
+name_map <- all_summary_df %>%
+  distinct(assembly, original_name, .keep_all = TRUE) %>%
+  select(assembly, original_name, new_name = contig)
+
 arr_tbl <- all_rdna_arrays_df %>%
+  rename(original_name = contig) %>%
+  left_join(name_map, by = c("assembly", "original_name")) %>%
+  mutate(contig = if_else(!is.na(new_name), new_name, original_name)) %>%
   transmute(
     Assembly = assembly,
     `Array ID` = array_id,
     Contig = contig,
+    `Original Name` = original_name,
     `N copies` = n_total,
     Strand = strand,
     `Span (kb)` = span_kb
@@ -2007,7 +2093,7 @@ arr_tbl %>%
 ```
 
 
-`r if (has_per_asm && any(comp_df$chrC_found == "yes" | comp_df$chrM_found == "yes", na.rm = TRUE)) "# 7. Organelle Comparison" else ""`
+`r if (has_per_asm && any(comp_df$chrC_found == "yes" | comp_df$chrM_found == "yes", na.rm = TRUE)) "# 7. Organelles" else ""`
 
 ```{r organelle_section, eval=(has_per_asm && any(comp_df$chrC_found == "yes" | comp_df$chrM_found == "yes", na.rm = TRUE))}
 # Extract organelle contigs from per-assembly data
@@ -2124,7 +2210,7 @@ if (show_chrC_org) {
 ```
 
 
-`r if (has_any_contam) "# 8. Contamination Comparison {.tabset}" else ""`
+`r if (has_any_contam) "# 8. Contaminants {.tabset}" else ""`
 
 `r if (has_any_contam) "## Summary" else ""`
 

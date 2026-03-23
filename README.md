@@ -48,6 +48,34 @@ Subgenome labels (`_B`, `_C`, …) are inferred by clustering query contigs that
 
 The authoritative implementation is `final_finalizer/classification/classifier.py:generate_contig_names()`. See [Output Formats](docs/output_formats.md#contig_summarytsv) for the corresponding `contig` TSV column.
 
+## Query Subgenome Segmentation
+
+When multiple contigs from the query assembly map to the same reference chromosome — as is expected for polyploid genomes where two or more homeologous chromosome sets are present — `final_finalizer` automatically attempts to assign each contig to a distinct query subgenome. The result appears in the contig name as a subgenome suffix (`_B`, `_C`, …) or, when segmentation is not possible, as a copy suffix (`_c1`, `_c2`, …).
+
+### How it works
+
+Subgenome assignment is based on the observation that homeologous chromosomes from different ancestral subgenomes typically align to the same reference chromosome at detectably different sequence identity levels. The tool clusters contigs using a 1-D Gaussian Mixture Model (GMM) fitted to alignment identities collected across all multi-copy reference chromosomes within each reference subgenome:
+
+1. **Global identity clustering**: Alignment identities from all multi-copy reference chromosomes are pooled and fitted with a GMM. The number of components is selected by BIC (Bayesian Information Criterion). Fitting across multiple chromosomes simultaneously provides more signal than fitting each chromosome independently.
+2. **Paired validation**: For chromosomes with exactly _k_ copies, each copy should land in a different cluster. The model is accepted if at least 70% of testable chromosomes satisfy this pairing requirement. If BIC initially selects a model that fails paired validation, the tool attempts rescue by testing alternative component counts.
+3. **Per-chromosome assignment**: Once global cluster means are established, each contig is assigned to the nearest cluster. Chromosomes where all copies land in the same cluster despite rescue attempts are rank-assigned by identity (highest identity = primary subgenome).
+
+No user configuration is required. The feature runs automatically whenever multiple contigs map to the same reference chromosome.
+
+### Limitations and expectations
+
+**Identity divergence requirement**: The method relies on a detectable difference in alignment identity between subgenomes. Separation is validated by per-chromosome pairing consistency (each chromosome's copies should land in different clusters), not by a fixed identity threshold. Even small identity gaps can be detected if the pattern is consistent across chromosomes. Subgenomes that are nearly equidistant from the reference (e.g., two closely related diploid progenitors) may not produce a consistent pairing signal, and contigs will be labeled `_c1`/`_c2` instead.
+
+**Nucleotide mode with divergent references**: In nucleotide mode (`--synteny-mode nucleotide`, the default) using a cross-species reference at ~60% identity, alignment coverage is lower and identity estimates are noisier than in within-species comparisons. Subgenome segmentation is less reliable in this setting; protein mode (`--synteny-mode protein`) is generally more robust for distantly related references.
+
+**Haplotype-collapsed assemblies**: Assemblers that produce a single primary assembly (e.g., in primary/alternate mode) collapse both haplotypes of each chromosome into one contig. There is nothing to segment — the tool correctly reports a single copy with no subgenome suffix. This is expected behavior.
+
+**Haplotype-phased assemblies**: Assemblies that retain both haplotypes as separate contigs (e.g., from phased assembly workflows) may include two copies of each chromosome that differ only at heterozygous positions. If both haplotypes are provided in a single query FASTA, they typically align to the reference at nearly identical identity levels and may not be separable by the GMM. The tool will label them `_c1`/`_c2` (unsegmented copies) rather than `_B` (distinct subgenome). This is the correct outcome: the two copies represent haplotypes of the same subgenome, not distinct homeologous subgenomes.
+
+**Minimum data requirement**: Clustering requires at least 4 multi-copy reference chromosomes to attempt model fitting, and at least 3 chromosomes with exactly _k_ copies for paired validation. Assemblies with very few assigned chromosomes may not trigger subgenome segmentation.
+
+**Most effective use case**: Subgenome segmentation is most informative for allopolyploids, where the query carries two or more homeologous chromosome sets derived from different ancestral species, each at a distinct evolutionary distance from the reference. In these cases, the identity gap between subgenomes is driven by real evolutionary divergence and is usually large enough for reliable clustering.
+
 ## Installation
 
 ### Dependencies

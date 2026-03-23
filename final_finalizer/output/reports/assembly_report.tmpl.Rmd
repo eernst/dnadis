@@ -491,6 +491,7 @@ df_slots <- df_plot %>%
   left_join(y_tbl, by = "chrom_id") %>%
   filter(!is.na(y_index)) %>%
   group_by(chrom_id) %>%
+  mutate(contig = factor(contig, levels = str_sort(unique(contig), numeric = TRUE))) %>%
   arrange(assigned_subgenome, desc(contig_len), contig, .by_group = TRUE) %>%
   mutate(n_in_bin = n(), slot = row_number(),
          y_offset = (slot - (n_in_bin + 1) / 2) * pill_dy,
@@ -946,7 +947,7 @@ chr_tbl <- chr_df %>%
   )
 
 sel_cols <- c("contig", "original_name", "assigned_ref_id", "length_mb")
-col_labels <- list(contig = "contig", original_name = "original_name", assigned_ref_id = "Ref Chromosome", length_mb = "Length (Mb)")
+col_labels <- list(contig = "Contig", original_name = "Original Name", assigned_ref_id = "Ref Chromosome", length_mb = "Length (Mb)")
 
 if (has_subgenomes) { sel_cols <- c(sel_cols, "subgenome_col"); col_labels$subgenome_col <- "Subgenome" }
 sel_cols <- c(sel_cols, "ref_cov_pct"); col_labels$ref_cov_pct <- "Ref Cov %"
@@ -1030,7 +1031,7 @@ ev_df <- summary_df %>%
   arrange(version_sort_key(assigned_ref_id), assigned_ref_id, desc(length_mb))
 
 sel <- c("contig", "original_name", "length_mb", "assigned_ref_id", "syn_score", "span_frac", "gene_pct")
-labels <- list(contig = "contig", original_name = "original_name", length_mb = "Length (Mb)", assigned_ref_id = "Best Ref",
+labels <- list(contig = "Contig", original_name = "Original Name", length_mb = "Length (Mb)", assigned_ref_id = "Best Ref",
                syn_score = "Synteny Score", span_frac = "Span Frac", gene_pct = "Gene %")
 if (has_collinearity) { sel <- c(sel, "collin"); labels$collin <- "Collinearity" }
 sel <- c(sel, "s_ratio", "gc_dev", "conf_html")
@@ -1278,7 +1279,7 @@ rdna_ann_show <- rdna_ann_df %>%
     select(-array_id) %>%
     rename_with(~ case_when(. == "contig" ~ "contig", . == "original_name" ~ "original_name", TRUE ~ .)) %>%
     gt() %>%
-    cols_label(contig = "contig", original_name = "original_name") %>%
+    cols_label(contig = "Contig", original_name = "Original Name") %>%
     tab_header(title = md(paste0("**", title, "**")), subtitle = md(subtitle)) %>%
     tab_options(table.font.size = px(10)) %>% gt_theme()
 }
@@ -1329,11 +1330,11 @@ arrays_tbl <- arrays_show %>%
   )
 
 arrays_tbl %>%
-  select(array_id, contig, coords, span_bar, span_text,
+  select(array_id, contig, original_name, coords, span_bar, span_text,
          copies_text, id_dist, id_text) %>%
   gt() %>%
   cols_label(
-    array_id = "Array", contig = "Contig",
+    array_id = "Array", contig = "Contig", original_name = "Original Name",
     coords = "Coordinates",
     span_bar = "", span_text = "Span",
     copies_text = "Copies (F/P/Fr)",
@@ -1359,7 +1360,7 @@ rdna_show <- rdna_df %>%
          conf_html = sapply(classification_confidence, conf_badge))
 
 sel <- c("contig", "original_name", "length_kb", "identity_pct", "conf_html")
-labels <- list(contig = "contig", original_name = "original_name", length_kb = "Length (kb)",
+labels <- list(contig = "Contig", original_name = "Original Name", length_kb = "Length (kb)",
                identity_pct = "Identity %", conf_html = "Confidence")
 
 rdna_show %>%
@@ -1407,7 +1408,7 @@ has_org_debris <- nrow(org_debris) > 0
 
 .render_org_gt <- function(df, title) {
   sel <- c("contig", "original_name", "type", "length_kb")
-  labels <- list(contig = "contig", original_name = "original_name", type = "Type", length_kb = "Length (kb)")
+  labels <- list(contig = "Contig", original_name = "Original Name", type = "Type", length_kb = "Length (kb)")
   if (has_depth) { sel <- c(sel, "depth_val"); labels$depth_val <- "Depth" }
   df %>% select(all_of(sel)) %>% gt() %>% cols_label(.list = labels) %>%
     fmt_number(columns = length_kb, decimals = 1) %>%
@@ -1629,7 +1630,7 @@ if (nrow(debris_df) > 0) {
   debris_df %>% head(50) %>%
     select(contig, original_name, length_mb, classification, best_ref, aligned_bp, reason) %>%
     gt() %>%
-    cols_label(contig = "contig", original_name = "original_name", length_mb = "Length (Mb)", classification = "Category",
+    cols_label(contig = "Contig", original_name = "Original Name", length_mb = "Length (Mb)", classification = "Category",
                best_ref = "Best Ref Hit", aligned_bp = "Aligned Bp", reason = "Reason") %>%
     fmt_number(columns = length_mb, decimals = 2) %>%
     fmt_number(columns = any_of("aligned_bp"), decimals = 0) %>%

@@ -765,7 +765,6 @@ def _select_subgenome_k(
     ref_to_clfs: Dict[str, List['ContigClassification']],
     ref_ids: List[str],
     qr_best_chain_ident: Dict[Tuple[str, str], float],
-    min_separation: float = 0.03,
     min_consistency: float = 0.70,
 ) -> Tuple[int, List[float], List[float]]:
     """Select the number of query subgenomes using GMM + paired validation.
@@ -775,19 +774,19 @@ def _select_subgenome_k(
     2. If BIC picks k=1, also try k=2: validate the k=2 split using
        per-chromosome consistency (for chromosomes with exactly 2 copies,
        what fraction have their copies landing in different clusters?).
-       Accept k=2 if consistency >= min_consistency AND cluster means
-       are separated by >= min_separation.
+       Accept k=2 if consistency >= min_consistency.
 
-    This two-step approach handles the case where BIC is too conservative
-    for small sample sizes but the paired structure across chromosomes
-    provides strong evidence for two subgenomes.
+    Paired validation is the sole gatekeeper — no minimum separation
+    threshold is imposed.  If 70%+ of chromosomes consistently place
+    their copies in different clusters, the split is accepted regardless
+    of how small the identity gap is.  This avoids rejecting valid
+    segmentations for closely related ancestral subgenomes.
 
     Args:
         all_idents: All identity values from multi-copy chromosomes.
         ref_to_clfs: Dict mapping ref_id -> list of ContigClassifications.
         ref_ids: Reference chromosome IDs in this subgenome group.
         qr_best_chain_ident: Dict of (contig, ref_id) -> best chain identity.
-        min_separation: Minimum gap between cluster means (default 0.03).
         min_consistency: Minimum fraction of 2-copy chromosomes that must
             have their copies in different clusters (default 0.70).
 
@@ -833,13 +832,6 @@ def _select_subgenome_k(
         order = sorted(range(k), key=lambda j: means[j], reverse=True)
         return [means[j] for j in order], [stds[j] for j in order]
 
-    def _has_separation(sorted_means, k):
-        """Check all adjacent cluster means are separated by >= min_separation."""
-        return all(
-            sorted_means[ci] - sorted_means[ci + 1] >= min_separation
-            for ci in range(k - 1)
-        )
-
     # Fit all candidate GMMs once (avoids redundant k=2 refit in rescue path)
     fits: Dict[int, Tuple[List[float], List[float], List[float], float]] = {}
     for k in range(1, min(4, len(all_idents) + 1)):
@@ -857,18 +849,18 @@ def _select_subgenome_k(
             best_bic = bic
             bic_k = k
 
-    # Validate BIC result
+    # Validate BIC result via paired consistency
     if bic_k > 1 and bic_k in fits:
         _, bic_means, bic_stds, _ = fits[bic_k]
         sorted_means, sorted_stds = _sort_components(bic_means, bic_stds, bic_k)
-        if _has_separation(sorted_means, bic_k) and _validate_k_by_pairing(sorted_means, bic_k):
+        if _validate_k_by_pairing(sorted_means, bic_k):
             return bic_k, sorted_means, sorted_stds
 
     # Rescue: try k=2 with paired validation (BIC may be too conservative)
     if 2 in fits:
         _, means_2, stds_2, _ = fits[2]
         sorted_means, sorted_stds = _sort_components(means_2, stds_2, 2)
-        if _has_separation(sorted_means, 2) and _validate_k_by_pairing(sorted_means, 2):
+        if _validate_k_by_pairing(sorted_means, 2):
             return 2, sorted_means, sorted_stds
 
     # Fall back to k=1

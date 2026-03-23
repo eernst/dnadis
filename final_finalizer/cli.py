@@ -125,6 +125,7 @@ from final_finalizer.utils.reference_utils import (
     parse_gff3_transcript_coords,
     read_fasta_lengths_with_map,
     set_ref_id_patterns,
+    split_chrom_subgenome,
     write_ref_lengths_tsv,
 )
 from final_finalizer.alignment.external_tools import (
@@ -2103,15 +2104,26 @@ def main():
             # bridge the gap so the Rmd can draw spanning ribbons.
             rescue_futures: list[tuple[str, Any]] = []
 
-            def _submit_rescue_pairs(ordered_results, rescue_dir, get_fasta, log_suffix=""):
-                """Detect and submit rescue pairwise alignments for one result list."""
-                asm_chroms = {
-                    r.assembly_name: {
-                        cc.assigned_ref_id for cc in r.classifications
-                        if cc.classification == "chrom_assigned" and cc.assigned_ref_id
-                    }
-                    for r in ordered_results
-                }
+            def _submit_rescue_pairs(ordered_results, rescue_dir, get_fasta, log_suffix="", subgenome_filter=None):
+                """Detect and submit rescue pairwise alignments for one result list.
+
+                Args:
+                    subgenome_filter: If set, only consider ref_ids belonging to
+                        this reference subgenome when detecting gaps.  Prevents
+                        chromosomes from other subgenomes triggering spurious
+                        rescues in the current chain.
+                """
+                asm_chroms = {}
+                for r in ordered_results:
+                    chroms = set()
+                    for cc in r.classifications:
+                        if cc.classification == "chrom_assigned" and cc.assigned_ref_id:
+                            if subgenome_filter is not None:
+                                _, ref_sg = split_chrom_subgenome(cc.assigned_ref_id)
+                                if ref_sg != subgenome_filter:
+                                    continue
+                            chroms.add(cc.assigned_ref_id)
+                    asm_chroms[r.assembly_name] = chroms
                 rescue_needed: set[tuple[int, int]] = set()
                 for i in range(len(ordered_results)):
                     for ref_id in asm_chroms.get(ordered_results[i].assembly_name, ()):
@@ -2163,6 +2175,7 @@ def main():
                             pairwise_dir / sg / "rescue",
                             get_fasta=lambda r, _sg=sg: r.per_subgenome_chrs[_sg],
                             log_suffix=f" for subgenome {sg}",
+                            subgenome_filter=sg,
                         )
             else:
                 if len(results) >= 3:

@@ -94,8 +94,7 @@ higher than the actual inter-subgenome gaps (0.06-0.09).
    sizes (n~36). If BIC picks k=1, also try k=2 and validate using
    per-chromosome pairing: for chromosomes with exactly 2 copies, each
    copy should land in a different cluster. Accept the split if >= 70% of
-   testable chromosomes are consistent AND cluster means are separated by
-   >= 3% identity.
+   testable chromosomes are consistent.
 
 3. **Rank rescue**: For chromosomes where all copies land in the same
    cluster (borderline cases), rank-assign by identity (highest -> primary,
@@ -108,21 +107,23 @@ scipy or sklearn as a dependency would be disproportionate.
 **Why not Otsu's method**: Otsu assumes equal variance and is inherently
 binary (k=2 only). Extending to k>1 requires exhaustive search. GMM
 naturally handles unequal variances and extends to k=3+ with BIC-based
-selection. On this data, both find the same clusters, but GMM is more
-principled and extensible.
+selection.
 
 **Why paired validation over BIC alone**: BIC's penalty term
-(`num_params * log(n)`) is strong for small n. With 36 data points, BIC
-favours k=1 even when the k=2 GMM finds well-separated clusters
-(means 0.686 vs 0.614). The paired structure across chromosomes provides
-strong biological evidence: if 17/18 chromosomes have their two copies
-landing in different clusters, the split is real.
+(`num_params * log(n)`) is strong for small n. With ~36 data points,
+BIC can favour k=1 even when the k=2 GMM finds well-separated clusters.
+The paired structure across chromosomes provides strong biological
+evidence: if the majority of chromosomes have their copies landing in
+different clusters, the split is real.
 
-**Minimum separation threshold (3%)**: Prevents splitting when clusters
-are very close (e.g., allelic variation within a single subgenome). BIC
-can prefer k>1 for marginally better fit even when cluster means differ
-by only 1-2%. The 3% floor ensures only biologically meaningful
-divergence triggers a split.
+**No minimum separation threshold**: Paired validation is the sole
+gatekeeper.  An earlier version imposed a 3% identity gap floor, but
+this was removed because paired validation is a more principled
+discriminator — it uses biological structure (per-chromosome pairing)
+rather than an arbitrary cutoff.  Even small identity gaps are accepted
+if consistently paired across chromosomes, which avoids rejecting valid
+segmentations for closely related ancestral subgenomes or in protein
+mode where identity values are compressed.
 
 ---
 

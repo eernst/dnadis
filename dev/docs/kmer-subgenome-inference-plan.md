@@ -6,8 +6,8 @@ The current subgenome inference uses reference alignment identity as the
 primary signal: contigs from subgenome A align to the reference at ~69%
 identity while subgenome B aligns at ~61%. This works well when the
 identity gap is clear (>3%), but fails for chromosomes where both copies
-have similar divergence from the reference (e.g., la9524 chr9A: 0.629 vs
-0.607). Additional reference-based metrics (collinearity, synteny score,
+have similar divergence from the reference (e.g., both copies at ~0.62
+identity with only a 2% gap). Additional reference-based metrics (collinearity, synteny score,
 GC content) don't provide a consistent directional signal for
 tie-breaking.
 
@@ -118,7 +118,7 @@ post-processing step.
 
 Start with **approach 3** (hybrid validation) as it has the lowest risk
 and effort. If the identity-based GMM correctly segments most
-chromosomes (as it does for la9524: 17/18), k-mer validation only needs
+chromosomes (typically 17/18 or better), k-mer validation only needs
 to handle the residual cases. This avoids adding a heavy dependency for
 a marginal improvement.
 
