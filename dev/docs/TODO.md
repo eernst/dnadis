@@ -10,9 +10,15 @@
 
 * [ ] We should implement a "clean" subcommand that can clean up residual executorlib_cache directories and any other intermediates (introduce a --keep-intermediates flag for the other subcommands to retain them in the first place). Consider whether we need to retain anything in the *_classification output subdirectory by default.
 
+## NUMT/NUPT detection
+
+* [ ] Add NUMT and NUPT detection using determined organelle reference contigs for alignment and accepted thresholds of sequence retention to call. Add stats tables to assembly report and include avg # and length in the aggregate homologous chromsome stats in the comparison report.
+
 ## Plotting improvements
 
 * [ ] Add branding to the top of the report index/nav at left
+
+* [ ] Comparison report: show reference-relative aggregate homologous chromosome stats, e.g. a table with box plots of lengths for each chromosome and min/med/max text next to it, rDNA presence/absence/mixed as full/empty/half-filled circle
 
 ### 1. Assembly Overview
 
@@ -92,6 +98,10 @@
 * [x] Replace all hardcoded bar colors and CSS gradients with `bar_cell()` helper using Okabe-Ito palette.
 
 * [x] Add `--comparison-name` CLI argument and register all `--*-name` args in TOML config schema.
+
+## Translocation-aware chromosome assignment
+
+* [x] Replace raw-score-based reference assignment with reference span fraction (`qr_ref_span_bp / ref_length`) to avoid bias toward larger reference chromosomes in translocation cases. Implemented as a reassignment pass in `classify_all_contigs` using proportionate coverage.
 
 ## Incremental multi-assembly re-runs
 

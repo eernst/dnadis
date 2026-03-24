@@ -1232,6 +1232,37 @@ def classify_all_contigs(
     classifications: List[ContigClassification] = []
     classified_contigs: Set[str] = set()
 
+    # --- Span-fraction-based best_ref reassignment ---
+    # The initial best_ref from chain parsing uses raw score, which biases
+    # toward larger reference chromosomes.  Re-score using reference span
+    # fraction (qr_ref_span_bp / ref_length) so that proportionate coverage
+    # determines assignment rather than absolute aligned bp.
+    if ref_lengths and ev.qr_ref_span_bp:
+        span_frac_score: Dict[Tuple[str, str], float] = {}
+        for (q, rid), span_bp in ev.qr_ref_span_bp.items():
+            rlen = ref_lengths.get(rid, 0)
+            if rlen > 0:
+                span_frac_score[(q, rid)] = span_bp / rlen
+
+        new_best_ref: Dict[str, str] = {}
+        new_best_score: Dict[str, float] = defaultdict(float)
+        for (q, rid), frac in span_frac_score.items():
+            if frac > new_best_score[q]:
+                new_best_score[q] = frac
+                new_best_ref[q] = rid
+
+        # Only override if the contig had a best_ref assignment originally
+        for q in list(best_ref.keys()):
+            if q in new_best_ref and new_best_ref[q] != best_ref[q]:
+                old, new = best_ref[q], new_best_ref[q]
+                old_frac = span_frac_score.get((q, old), 0.0)
+                new_frac = span_frac_score.get((q, new), 0.0)
+                logger.info(
+                    f"Reassigning {q}: {old} (span {old_frac:.1%}) "
+                    f"→ {new} (span {new_frac:.1%})"
+                )
+                best_ref[q] = new
+
     # Compute cluster metrics per (contig, ref_id) for rearrangement detection
     qr_cluster_metrics = compute_largest_cluster_metrics_per_ref(ev.macro_block_rows)
 
