@@ -2015,7 +2015,6 @@ def main():
             if any_has_sg:
                 from collections import defaultdict as _defaultdict
 
-                logger.phase("Per-subgenome pairwise synteny (nucleotide mode)")
                 pairwise_dir = output_dir / "pairwise"
                 pairwise_dir.mkdir(exist_ok=True)
 
@@ -2023,6 +2022,15 @@ def main():
                 for result in results:
                     for sg in result.per_subgenome_chrs:
                         sg_assemblies[sg].append(result)
+
+                n_pw_total = sum(
+                    max(0, len(v) - 1)
+                    for v in sg_assemblies.values() if len(v) >= 2
+                )
+                logger.phase(
+                    f"Per-subgenome pairwise synteny (nucleotide mode): "
+                    f"{n_pw_total} pairs across {len(sg_assemblies)} subgenome(s)"
+                )
 
                 for sg in sorted(sg_assemblies):
                     sg_results = sg_assemblies[sg]
@@ -2058,7 +2066,10 @@ def main():
                             )
                             pairwise_futures.append((pair_name, fut))
             else:
-                logger.phase("Pairwise assembly synteny (nucleotide mode)")
+                logger.phase(
+                    f"Pairwise assembly synteny (nucleotide mode): "
+                    f"{len(results) - 1} pairs"
+                )
                 pairwise_dir = output_dir / "pairwise"
                 pairwise_dir.mkdir(exist_ok=True)
                 for i in range(len(results) - 1):

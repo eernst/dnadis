@@ -331,6 +331,7 @@ def parse_paf_chain_evidence_and_segments(
 
     blocks = defaultdict(list)  # (q, ref_id, strand) -> [Block,...]
     qlens_from_paf: dict[str, int] = {}
+    rlens_from_paf: dict[str, int] = {}  # ref_id -> length from PAF
 
     with open_maybe_gzip(paf_gz_path, "rt") as f:
         for line in f:
@@ -350,6 +351,7 @@ def parse_paf_chain_evidence_and_segments(
                 qe = int(fields[3])
                 strand = fields[4]
                 ref_id_raw = fields[5]
+                rlen = int(fields[6])
                 rs = int(fields[7])
                 re_ = int(fields[8])
                 matches = int(fields[9])
@@ -358,6 +360,7 @@ def parse_paf_chain_evidence_and_segments(
             except ValueError:
                 continue
             ref_id = ref_id_map.get(ref_id_raw, normalize_ref_id(ref_id_raw)) if ref_id_map else normalize_ref_id(ref_id_raw)
+            rlens_from_paf[ref_id] = rlen
 
             if aln_len < assign_minlen:
                 continue
@@ -408,6 +411,7 @@ def parse_paf_chain_evidence_and_segments(
         assign_chain_min_bp=assign_chain_min_bp,
         assign_ref_score=assign_ref_score,
         segments_strand_from_blocks=True,
+        rlens_from_paf=rlens_from_paf,
     )
 
 
@@ -654,6 +658,7 @@ def _chains_to_evidence_and_segments(
     assign_ref_score: str,
     segments_strand_from_blocks: bool,
     infer_strand_from_coords: bool = False,
+    rlens_from_paf: Optional[Dict[str, int]] = None,
 ) -> ChainEvidenceResult:
     # Precompute contig-level strand inference if needed
     # This uses ALL blocks for each (contig, ref_id) pair to determine orientation
@@ -882,6 +887,20 @@ def _chains_to_evidence_and_segments(
     else:
         raise ValueError(f"Unknown assign_ref_score: {assign_ref_score}")
 
+    # Assign best_ref using reference span fraction (span_bp / ref_length)
+    # as the primary metric.  This normalises for reference chromosome size,
+    # preventing bias toward larger chromosomes in translocation cases.
+    # Falls back to raw score when reference lengths are unavailable.
+    qr_span_frac: dict[tuple[str, str], float] = {}
+    if rlens_from_paf:
+        for (q, ref_id), span_bp in qr_ref_span_bp.items():
+            rlen = rlens_from_paf.get(ref_id, 0)
+            if rlen > 0:
+                qr_span_frac[(q, ref_id)] = span_bp / rlen
+
+    use_span_frac = len(qr_span_frac) > 0
+    scoring = qr_span_frac if use_span_frac else qr_ref_score
+
     best_ref = defaultdict(str)
     best_score = defaultdict(float)
     best_bp = defaultdict(int)
@@ -890,7 +909,7 @@ def _chains_to_evidence_and_segments(
     second_score = defaultdict(float)
     second_bp = defaultdict(int)
 
-    for (q, ref_id), score in qr_ref_score.items():
+    for (q, ref_id), score in scoring.items():
         ubp = int(qr_union_bp.get((q, ref_id), 0) or 0)
         if score > best_score[q]:
             second_score[q] = best_score[q]

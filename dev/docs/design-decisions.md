@@ -144,6 +144,46 @@ minimum alignment length, gate filtering) prevents spurious assignments.
 
 ---
 
+## Span fraction as primary reference chromosome scoring metric (nucleotide mode)
+
+**Decision**: In nucleotide mode, each contig is assigned to the reference chromosome
+with the highest span fraction (`qr_ref_span_bp / ref_length`), computed directly
+in `chain_parsing.py` from reference lengths extracted from the PAF file. Span
+fraction is the primary assignment metric; there is no subsequent reassignment pass.
+In protein mode, span fraction falls back to raw synteny score because miniprot
+PAF does not carry reference chromosome lengths.
+
+**Context**: Raw synteny score (sum of matching bases across chains) is size-biased:
+a contig with synteny to both a large and a small reference chromosome accumulates
+more score against the larger one regardless of proportional coverage. A contig
+produced by a reciprocal translocation between two chromosomes of unequal length
+would be incorrectly assigned to the larger donor chromosome, even if it covers
+a greater fraction of the smaller one. Span fraction normalises by reference length
+and is therefore a better indicator of which chromosome the contig primarily
+represents.
+
+**Alternatives considered**:
+- **Conflict-aware global optimisation** (e.g., maximise total span fraction across
+  all contigs jointly): Rejected. It would require assuming a one-to-one or
+  many-to-one mapping between contigs and reference chromosomes. This assumption
+  is false for polyploids, where multiple contigs legitimately map to the same
+  reference chromosome. Imposing it would actively misclassify valid polyploid
+  assemblies.
+- **Two-pass approach (greedy raw score, then span-fraction override)**: The previous
+  implementation used raw score for the initial assignment and overrode it in a
+  second pass only when span fraction pointed to a different reference. This was
+  replaced by computing span fraction directly as the primary metric in chain
+  parsing, which is simpler and avoids the classifier needing to perform a
+  correction step.
+
+**Rationale**: Span fraction is size-normalized and directly captures what fraction
+of each reference chromosome a contig represents. Computing it as the primary metric
+in chain parsing is cleaner than correcting a size-biased score in a downstream
+pass. Each contig is still scored independently and multiple contigs can still be
+assigned to the same reference.
+
+---
+
 ## Gate-based chromosome assignment (AND logic)
 
 **Decision**: Contigs must satisfy ALL criteria for chromosome assignment.

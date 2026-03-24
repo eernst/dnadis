@@ -38,7 +38,7 @@ The main output file containing classification results and quality metrics for e
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `contig` | string | New contig name following the scheme `chr<ref>(_<subgenome>)?(_c<copy>|_f<frag>)?` for chromosome-assigned contigs, or `contig_<N>` (by descending length) for all others. Examples: `chr5A` (full-length, single copy), `chr5A_B` (full-length, query subgenome B), `chr5A_f1` (longest fragment of chr5A), `chr5A_c1` (first of multiple full-length duplicate copies), `contig_1` (non-chromosome). See [Contig Naming Scheme](../README.md#contig-naming-scheme) for full suffix semantics. |
+| `contig` | string | New contig name following the scheme `chr<ref>(_<subgenome>)?(_c<copy>|_f<frag>)?` for chromosome-assigned contigs, or `contig_<N>` (by descending length) for all others. Examples: `chr5A` (full-length, single copy), `chr5A_B` (full-length, query subgenome B), `chr5A_f1` (highest-identity fragment of chr5A), `chr5A_c1` (highest-identity of multiple full-length copies), `contig_1` (non-chromosome). Copy and fragment suffixes are ordered by descending alignment identity to the reference. See [Contig Naming Scheme](../README.md#contig-naming-scheme) for full suffix semantics. |
 | `original_name` | string | Original contig name from input FASTA |
 | `classification` | string | Classification category (see [Categories](#classification-categories)) |
 | `classification_confidence` | string | Confidence level: `high`, `medium`, or `low` (see [Confidence](#classification-confidence)) |
@@ -108,7 +108,7 @@ These depth metrics are useful for:
 | Column | Type | Description |
 |--------|------|-------------|
 | `assigned_subgenome` | string | Subgenome identifier (e.g., `A`, `B`, `At`, `Dt`) or `NA` if none |
-| `assigned_ref_id` | string | Best-matching reference chromosome ID (e.g., `chr5A`) or `NA` |
+| `assigned_ref_id` | string | Best-matching reference chromosome ID (e.g., `chr5A`) or `NA`. In nucleotide mode, assignment uses span fraction (`qr_ref_span_bp / ref_length`) as the primary metric, which is size-normalized and avoids the size bias of raw score toward larger chromosomes. In protein mode, raw synteny score is used because miniprot PAF does not carry reference chromosome lengths. |
 | `assigned_chrom_id` | string | Chromosome number without subgenome (e.g., `chr5`) |
 | `status` | string | Assignment status: `OK`, `NO_HITS`, `AMBIG_LOW_FRAC`, or `AMBIG_LOW_RATIO` |
 
@@ -436,9 +436,11 @@ Two scoring aggregations are provided for each (contig, reference) pair:
 | `score_topk` | Sum of top-K chain scores (K = `--assign-chain-topk`, default 3) | Focuses on strongest evidence; reduces impact of noisy secondary chains |
 | `score_all` | Sum of ALL chain scores | Considers total cumulative evidence; better for fragmented assemblies |
 
-The `--assign-ref-score` parameter controls which is used for chromosome assignment:
+The `--assign-ref-score` parameter controls which is used for the initial chromosome assignment:
 - `topk`: Use `score_topk` (focuses on best chains)
 - `all` (default): Use `score_all` (considers all evidence)
+
+In nucleotide mode, span fraction (`qr_ref_span_bp / ref_length`) is the primary assignment metric, computed directly in chain parsing from reference lengths in the PAF file. This is size-normalized and avoids the size bias of raw score: a contig with synteny to both a large and a small reference chromosome accumulates more raw score against the larger chromosome even when it proportionally covers more of the smaller one. In protein mode, raw score is used because miniprot PAF does not carry reference chromosome lengths.
 
 Individual chain scores are computed using the formula specified by `--assign-chain-score`:
 - `matches` (default): Total matching bases in chain
