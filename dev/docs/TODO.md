@@ -103,6 +103,20 @@
 
 * [x] Replace raw-score-based reference assignment with reference span fraction (`qr_ref_span_bp / ref_length`) to avoid bias toward larger reference chromosomes in translocation cases. Implemented as a reassignment pass in `classify_all_contigs` using proportionate coverage.
 
+## Reference chromosome filtering
+
+* [ ] Filter reference sequences used for synteny assignment to exclude small scaffolds that can soak up spurious mappings and add noise. Precedence:
+
+  1. **User-specified list** (`--ref-chr-list`): Only use the listed reference sequence IDs for chromosome assignment. Highest priority, explicit control.
+
+  2. **Naming convention detection**: If no list provided, test reference sequence names against widely used chromosome naming conventions (chr1, Chr1, chromosome_1, etc. — extend `is_nuclear_chromosome()`). Keep only sequences matching recognized chromosome patterns.
+
+  3. **Automatic gap detection**: If naming conventions don't match (e.g., scaffold_001, contig_123), sort reference sequences by length, detect the largest length gap, and retain only sequences above the gap. This handles references with a clear size discontinuity between chromosomes and unplaced scaffolds.
+
+  4. **Keep-all flag** (`--ref-keep-all-contigs`): Opt-in to retain all reference sequences for assignment, overriding the above filters.
+
+  Filtered-out reference sequences should still be present in the FASTA (for organelle/rDNA detection) but excluded from synteny-based chromosome assignment and the chromosome overview plot. This affects alignment target selection, assignment scoring, and all downstream outputs — needs careful integration across the pipeline.
+
 ## Incremental multi-assembly re-runs
 
 * [ ] When re-running a multi-assembly job with a modified FOFN (added/removed/reordered assemblies), detect changes relative to existing cached results and compute a minimal set of jobs to update. This includes:

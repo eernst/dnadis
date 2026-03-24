@@ -559,9 +559,20 @@ scaffold_brackets <- if (nzchar(params$agp_tsv) && file.exists(params$agp_tsv)) 
 } else tibble()
 
 # Reference chromosome data
+# Show reference chromosomes that either have an assigned contig or are large
+# enough to be a chromosome (≥ chr_like_minlen).  Large unassigned chromosomes
+# are retained to reveal aneuploidy at a glance; small unassigned scaffolds
+# are excluded to avoid bloating the y-axis.
+assigned_chrom_ids <- summary_df %>%
+  filter(classification == "chrom_assigned") %>%
+  pull(assigned_chrom_id) %>% unique()
+show_chrom_ids <- ref_lengths %>%
+  filter(chrom_id %in% assigned_chrom_ids | ref_len >= chr_like_minlen) %>%
+  pull(chrom_id) %>% unique()
+
 if (has_subgenomes) {
   ref_sg <- ref_lengths %>%
-    filter(subgenome %in% sg_levels) %>%
+    filter(subgenome %in% sg_levels, chrom_id %in% show_chrom_ids) %>%
     mutate(chrom_label = str_replace(chrom_id, "^[Cc]hr", ""),
            chrom_index = suppressWarnings(as.integer(chrom_label)),
            chrom_index = if_else(is.na(chrom_index), 9999L, chrom_index))
@@ -569,7 +580,8 @@ if (has_subgenomes) {
     arrange(chrom_index, chrom_id) %>% pull(chrom_id)
 } else {
   ref_sg <- ref_lengths %>%
-    filter(!(ref_id %in% c("chrC", "chrM", "ChrC", "ChrM"))) %>%
+    filter(!(ref_id %in% c("chrC", "chrM", "ChrC", "ChrM")),
+           chrom_id %in% show_chrom_ids) %>%
     mutate(chrom_label = str_replace(chrom_id, "^[Cc]hr", ""),
            chrom_index = suppressWarnings(as.integer(chrom_label)),
            chrom_index = if_else(is.na(chrom_index), 9999L, chrom_index),
