@@ -838,11 +838,9 @@ This prevents spurious assignments from:
 
 ### Reference assignment scoring
 
-Chromosome assignment uses a two-pass approach:
+In nucleotide mode, each contig is assigned to the reference chromosome with the highest span fraction (`qr_ref_span_bp / ref_length` — the fraction of each reference chromosome's length spanned by syntenic alignments). This metric is size-normalized: a contig aligned to both a large and a small reference chromosome accumulates more raw score against the larger one even when it proportionally covers more of the smaller chromosome, but span fraction correctly reflects which chromosome the contig represents. Span fraction is computed directly in chain parsing from reference lengths extracted from the PAF file and used as the primary assignment metric.
 
-1. **Initial assignment**: Each contig is assigned to the reference chromosome with the highest raw synteny score (sum of chain scores; see `--assign-ref-score`). This favors chromosomes with the most total aligned sequence.
-
-2. **Span-fraction reassignment**: After the initial pass, each contig is re-scored by reference span fraction (`qr_ref_span_bp / ref_length` — the fraction of each reference chromosome's length spanned by syntenic alignments). If the reference with the highest span fraction differs from the initial assignment, the assignment is overridden. This corrects for size bias: a contig aligned to both a large and a small reference chromosome accumulates more raw score against the larger one even when it proportionally covers more of the smaller chromosome. The span-fraction metric is size-normalized and thus a more accurate indicator of which chromosome the contig represents.
+In protein mode, span fraction falls back to raw synteny score (sum of chain scores; see `--assign-ref-score`) because miniprot PAF does not carry reference chromosome lengths.
 
 Each contig is scored independently; this is not a conflict-aware or globally optimal assignment. Multiple contigs can be assigned to the same reference chromosome, which is expected and correct for polyploid assemblies.
 
