@@ -513,7 +513,7 @@ cat('<div class="note-box">No contigs were assigned to reference chromosomes. Th
 
 ```{r chrom_overview_build, include=FALSE, eval=has_chrom_assigned && has_segments}
 # ---------------------------------------------------------------------------
-# Chromosome overview (migrated from chromosome_overview.tmpl.R)
+# Chromosome overview
 # ---------------------------------------------------------------------------
 
 # Load segment/macro/evidence data

@@ -218,6 +218,13 @@ all_agp_df <- if (length(agp_list) > 0) bind_rows(agp_list) else NULL
 agp_idx <- if (!is.null(all_agp_df) && nrow(all_agp_df) > 0) {
   split(all_agp_df, paste(all_agp_df$assembly, all_agp_df$scaffold, sep = "\x01"))
 } else { NULL }
+
+# Build contig_new → scaffold mapping for ribbon matching.  When a scaffold
+# contains multiple components (e.g., chr1P from chr1P_f1 + chr1P_f2), the
+# per-assembly macro_blocks use individual contig names (contig_new = chr1P_f1)
+# but the pill uses the scaffold name (chr1P).  This map resolves the mismatch.
+# Key: assembly::contig_new → scaffold name
+contig_to_scaffold <- NULL
 ```
 
 ---
@@ -1164,6 +1171,29 @@ if (!is.null(per_asm_macro_df) && nrow(asm_lookup_df) > 0) {
   per_asm_macro_df <- per_asm_macro_df %>% mutate(contig_new = contig)
 }
 
+# --- Build contig_new → scaffold name mapping ---
+# Maps (assembly, renamed_contig_name) → scaffold_name for contigs that are
+# components of multi-component scaffolds.  Used for ribbon pill matching.
+if (!is.null(all_agp_df) && nrow(all_agp_df) > 0 && nrow(asm_lookup_df) > 0) {
+  agp_components <- all_agp_df %>%
+    filter(type == "W") %>%
+    select(assembly, component, scaffold)
+  # Map component (original name) → renamed name via asm_lookup_df
+  comp_renamed <- agp_components %>%
+    left_join(
+      asm_lookup_df %>% distinct(assembly, original_name, .keep_all = TRUE) %>%
+        select(assembly, original_name, contig_new = contig),
+      by = c("assembly", "component" = "original_name")
+    ) %>%
+    filter(!is.na(contig_new), contig_new != scaffold)
+  if (nrow(comp_renamed) > 0) {
+    contig_to_scaffold <- setNames(
+      comp_renamed$scaffold,
+      paste(comp_renamed$assembly, comp_renamed$contig_new, sep = "\x01")
+    )
+  }
+}
+
 # --- Fix pairwise macro_blocks: map original contig names -> renamed names ---
 if (!is.null(pairwise_macro_df) && nrow(asm_lookup_df) > 0) {
   left_map <- asm_lookup_df %>%
@@ -1646,6 +1676,15 @@ build_synteny_plot <- function(sg) {
       bp_key <- paste(gm$bot_row, bp_ctg, sep = "\x01")
       tp <- pill_idx[[tp_key]]
       bp <- pill_idx[[bp_key]]
+      # Fallback: if contig name is a scaffold component, look up the scaffold pill
+      if ((is.null(tp) || nrow(tp) == 0) && !is.null(contig_to_scaffold)) {
+        sc <- contig_to_scaffold[paste(gm$top_row, blk$ref_id, sep = "\x01")]
+        if (!is.na(sc)) tp <- pill_idx[[paste(gm$top_row, sc, sep = "\x01")]]
+      }
+      if ((is.null(bp) || nrow(bp) == 0) && !is.null(contig_to_scaffold)) {
+        sc <- contig_to_scaffold[paste(gm$bot_row, bp_ctg, sep = "\x01")]
+        if (!is.na(sc)) bp <- pill_idx[[paste(gm$bot_row, sc, sep = "\x01")]]
+      }
       if (is.null(tp) || is.null(bp) || nrow(tp) == 0 || nrow(bp) == 0) next
 
       top_len <- tp$contig_len[1]; top_xl <- tp$x_left[1]; top_w <- tp$pill_width[1]
@@ -1765,6 +1804,14 @@ build_synteny_plot <- function(sg) {
         blk <- pair_df[b, ]
         tp <- pill_idx[[paste(r_top_asm, blk$ref_id, sep = "\x01")]]
         bp <- pill_idx[[paste(r_bot_asm, blk$contig, sep = "\x01")]]
+        if ((is.null(tp) || nrow(tp) == 0) && !is.null(contig_to_scaffold)) {
+          sc <- contig_to_scaffold[paste(r_top_asm, blk$ref_id, sep = "\x01")]
+          if (!is.na(sc)) tp <- pill_idx[[paste(r_top_asm, sc, sep = "\x01")]]
+        }
+        if ((is.null(bp) || nrow(bp) == 0) && !is.null(contig_to_scaffold)) {
+          sc <- contig_to_scaffold[paste(r_bot_asm, blk$contig, sep = "\x01")]
+          if (!is.na(sc)) bp <- pill_idx[[paste(r_bot_asm, sc, sep = "\x01")]]
+        }
         if (is.null(tp) || is.null(bp) || nrow(tp) == 0 || nrow(bp) == 0) next
         top_len <- tp$contig_len[1]; top_xl <- tp$x_left[1]; top_w <- tp$pill_width[1]
         bot_len <- bp$contig_len[1]; bot_xl <- bp$x_left[1]; bot_w <- bp$pill_width[1]
