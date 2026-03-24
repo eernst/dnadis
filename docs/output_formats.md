@@ -108,7 +108,7 @@ These depth metrics are useful for:
 | Column | Type | Description |
 |--------|------|-------------|
 | `assigned_subgenome` | string | Subgenome identifier (e.g., `A`, `B`, `At`, `Dt`) or `NA` if none |
-| `assigned_ref_id` | string | Best-matching reference chromosome ID (e.g., `chr5A`) or `NA` |
+| `assigned_ref_id` | string | Best-matching reference chromosome ID (e.g., `chr5A`) or `NA`. The initial greedy assignment uses raw synteny score (`score_all`); a subsequent reassignment pass re-scores by reference span fraction (`qr_ref_span_bp / ref_length`) and overrides the initial assignment if a different reference chromosome scores highest by that metric. This corrects for size bias toward larger chromosomes. |
 | `assigned_chrom_id` | string | Chromosome number without subgenome (e.g., `chr5`) |
 | `status` | string | Assignment status: `OK`, `NO_HITS`, `AMBIG_LOW_FRAC`, or `AMBIG_LOW_RATIO` |
 
@@ -436,9 +436,11 @@ Two scoring aggregations are provided for each (contig, reference) pair:
 | `score_topk` | Sum of top-K chain scores (K = `--assign-chain-topk`, default 3) | Focuses on strongest evidence; reduces impact of noisy secondary chains |
 | `score_all` | Sum of ALL chain scores | Considers total cumulative evidence; better for fragmented assemblies |
 
-The `--assign-ref-score` parameter controls which is used for chromosome assignment:
+The `--assign-ref-score` parameter controls which is used for the initial chromosome assignment:
 - `topk`: Use `score_topk` (focuses on best chains)
 - `all` (default): Use `score_all` (considers all evidence)
+
+After the initial greedy assignment, a span-fraction reassignment pass re-scores each contig by the fraction of each reference chromosome it spans (`qr_ref_span_bp / ref_length`). If the highest span-fraction reference differs from the raw-score winner, the assignment is overridden. This corrects for size bias: a contig with synteny to both a large and a small reference chromosome accumulates more raw score against the larger chromosome even when it proportionally covers more of the smaller one.
 
 Individual chain scores are computed using the formula specified by `--assign-chain-score`:
 - `matches` (default): Total matching bases in chain

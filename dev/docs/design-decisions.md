@@ -144,6 +144,43 @@ minimum alignment length, gate filtering) prevents spurious assignments.
 
 ---
 
+## Span-fraction reassignment pass for reference chromosome selection
+
+**Decision**: After the initial greedy reference assignment (by raw synteny score), a
+second pass re-scores each contig by reference span fraction (`qr_ref_span_bp /
+ref_length`). If the highest span-fraction reference differs from the raw-score
+winner, the assignment is overridden and logged.
+
+**Context**: Raw synteny score (sum of matching bases across chains) is size-biased:
+a contig with synteny to both a large and a small reference chromosome accumulates
+more score against the larger one regardless of proportional coverage. A contig
+produced by a reciprocal translocation between two chromosomes of unequal length
+would be incorrectly assigned to the larger donor chromosome, even if it covers
+a greater fraction of the smaller one. Span fraction normalises by reference length
+and is therefore a better indicator of which chromosome the contig primarily
+represents.
+
+**Alternatives considered**:
+- **Conflict-aware global optimisation** (e.g., maximise total span fraction across
+  all contigs jointly): Rejected. It would require assuming a one-to-one or
+  many-to-one mapping between contigs and reference chromosomes. This assumption
+  is false for polyploids, where multiple contigs legitimately map to the same
+  reference chromosome. Imposing it would actively misclassify valid polyploid
+  assemblies.
+- **Replace raw score with span fraction for the initial assignment**: This would
+  change the scoring of all contigs, not just those where the two metrics disagree.
+  The two-pass design is conservative: raw score is used first, and span fraction
+  only overrides when it produces a different answer. This minimises disruption to
+  unambiguous cases.
+
+**Rationale**: The fix is targeted at the specific failure mode (size bias) without
+changing the broader assignment logic. Each contig is still scored independently.
+Multiple contigs can still be assigned to the same reference. The only change is
+the tie-breaking metric when raw score and span fraction point to different
+references.
+
+---
+
 ## Gate-based chromosome assignment (AND logic)
 
 **Decision**: Contigs must satisfy ALL criteria for chromosome assignment.

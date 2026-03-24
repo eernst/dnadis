@@ -359,6 +359,12 @@ When creating or modifying visualizations:
 
 Classification happens in `classification/classifier.py:classify_all_contigs()`. The function applies a decision tree:
 
+Before the decision tree, a two-pass reference assignment runs for contigs that have synteny evidence:
+- **Pass 1 (greedy)**: Assign each contig to the reference chromosome with the highest raw synteny score (`score_all` or `score_topk`, per `--assign-ref-score`).
+- **Pass 2 (span-fraction reassignment)**: Re-score each contig by reference span fraction (`qr_ref_span_bp / ref_length`). If the highest span-fraction reference differs from the raw-score winner, override the assignment. This corrects for size bias: raw score accumulates more signal against larger chromosomes regardless of proportional coverage.
+
+Each contig is scored independently. Multiple contigs can still be assigned to the same reference (valid for polyploids). The span-fraction pass fires only when it produces a different result; otherwise the raw-score assignment is kept.
+
 1. Organelle complete (if BLAST coverage ≥80%)
 2. rDNA (if BLAST coverage ≥50%)
 3. Chromosome assigned (if passes ALL synteny gates)
