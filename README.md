@@ -37,8 +37,8 @@ Chromosome-assigned contigs are renamed using the pattern `chr<ref>(_<subgenome>
 |--------|---------|---------|
 | _(none)_ | Single full-length contig assigned to this reference chromosome | `chr1A` |
 | `_B`, `_C`, … | Query subgenome label — the query assembly carries multiple homeologous copies that map to the same reference chromosome and can be resolved into distinct subgenomes | `chr1A_B` |
-| `_c1`, `_c2`, … | Multiple full-length copies of the same (subgenome, reference chromosome) pair, ordered by descending length — unusual; indicates the assembler produced duplicate complete copies | `chr1A_c1`, `chr1A_c2` |
-| `_f1`, `_f2`, … | Chromosome fragments (contigs not classified as full-length), ordered by descending length | `chr1A_f1`, `chr1A_f2` |
+| `_c1`, `_c2`, … | Multiple full-length copies of the same (subgenome, reference chromosome) pair, ordered by descending alignment identity to the reference — `_c1` is always the highest-identity copy, consistent with the primary subgenome convention | `chr1A_c1`, `chr1A_c2` |
+| `_f1`, `_f2`, … | Chromosome fragments (contigs not classified as full-length), ordered by descending alignment identity to the reference | `chr1A_f1`, `chr1A_f2` |
 
 Suffixes compose left-to-right: subgenome first, then copy/fragment. For example, `chr1A_B_f1` is the longest fragment of chr1A from query subgenome B.
 

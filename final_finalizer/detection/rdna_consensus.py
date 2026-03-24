@@ -624,7 +624,7 @@ def annotate_sub_features_infernal(
         str(consensus_fasta),
     ]
 
-    logger.info(f"Running Infernal cmscan for sub-feature annotation")
+    logger.info(f"Running Infernal cmscan for rDNA sub-feature annotation")
 
     with err_path.open("wb") as err_fh:
         ret = subprocess.call(cmd, stderr=err_fh)

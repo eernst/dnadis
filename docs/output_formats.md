@@ -38,7 +38,7 @@ The main output file containing classification results and quality metrics for e
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `contig` | string | New contig name following the scheme `chr<ref>(_<subgenome>)?(_c<copy>|_f<frag>)?` for chromosome-assigned contigs, or `contig_<N>` (by descending length) for all others. Examples: `chr5A` (full-length, single copy), `chr5A_B` (full-length, query subgenome B), `chr5A_f1` (longest fragment of chr5A), `chr5A_c1` (first of multiple full-length duplicate copies), `contig_1` (non-chromosome). See [Contig Naming Scheme](../README.md#contig-naming-scheme) for full suffix semantics. |
+| `contig` | string | New contig name following the scheme `chr<ref>(_<subgenome>)?(_c<copy>|_f<frag>)?` for chromosome-assigned contigs, or `contig_<N>` (by descending length) for all others. Examples: `chr5A` (full-length, single copy), `chr5A_B` (full-length, query subgenome B), `chr5A_f1` (highest-identity fragment of chr5A), `chr5A_c1` (highest-identity of multiple full-length copies), `contig_1` (non-chromosome). Copy and fragment suffixes are ordered by descending alignment identity to the reference. See [Contig Naming Scheme](../README.md#contig-naming-scheme) for full suffix semantics. |
 | `original_name` | string | Original contig name from input FASTA |
 | `classification` | string | Classification category (see [Categories](#classification-categories)) |
 | `classification_confidence` | string | Confidence level: `high`, `medium`, or `low` (see [Confidence](#classification-confidence)) |

@@ -93,6 +93,15 @@
 
 * [x] Add `--comparison-name` CLI argument and register all `--*-name` args in TOML config schema.
 
+## Incremental multi-assembly re-runs
+
+* [ ] When re-running a multi-assembly job with a modified FOFN (added/removed/reordered assemblies), detect changes relative to existing cached results and compute a minimal set of jobs to update. This includes:
+  * Per-assembly phases: skip assemblies whose inputs haven't changed and whose outputs are valid
+  * Pairwise synteny: recompute only pairs affected by new/removed/reordered assemblies; invalidate pairs where the adjacent assembly changed
+  * Rescue pairwise: regenerate based on updated assembly chain membership
+  * Comparison report: always regenerate since row ordering and rescue logic depend on the full FOFN
+  * Consider storing a manifest (FOFN hash, assembly list, per-assembly input checksums) alongside outputs to detect staleness
+
 ## Performance
 
 * [ ] Add bgzip and indexing by default of pipeline outputs (FASTA, GFF3).

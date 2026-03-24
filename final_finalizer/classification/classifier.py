@@ -801,9 +801,12 @@ def _select_subgenome_k(
     def _validate_k_by_pairing(sorted_means, k):
         """Check if a k-cluster split is consistent across chromosomes.
 
-        For chromosomes with exactly k copies, verify that each copy
-        lands in a different cluster (i.e., the clusters correspond to
-        distinct subgenomes, not random variation).
+        For each multi-copy chromosome, assign all contigs to their nearest
+        cluster and check whether at least k distinct clusters are
+        represented.  This handles fragmented assemblies where a chromosome
+        may have more than k contigs (e.g., one full-length + several
+        fragments) — the key question is whether the contigs span k
+        different identity clusters, not whether there are exactly k copies.
         """
         if k < 2:
             return True
@@ -812,7 +815,7 @@ def _select_subgenome_k(
         n_consistent = 0
         for ref_id in ref_ids:
             ref_clfs = ref_to_clfs[ref_id]
-            if len(ref_clfs) != k:
+            if len(ref_clfs) < k:
                 continue
             n_testable += 1
             copy_idents = [
@@ -820,7 +823,7 @@ def _select_subgenome_k(
                 for clf in ref_clfs
             ]
             labels = _assign_labels(copy_idents, sorted_means)
-            if len(set(labels)) == k:
+            if len(set(labels)) >= k:
                 n_consistent += 1
 
         if n_testable < 3:
@@ -1038,9 +1041,13 @@ def generate_contig_names(
     Suffixes compose left-to-right; subgenome comes before copy/fragment:
     - chr1A:           Full-length chr1A, single copy, no resolved subgenome
     - chr1A_B:         Full-length chr1A, query subgenome B
-    - chr1A_c1/c2:     Multiple full-length copies of the same chromosome (unusual)
-    - chr1A_f1/f2:     Chromosome fragments, ordered by descending length
-    - chr1A_B_f1:      Longest fragment of chr1A from query subgenome B
+    - chr1A_c1/c2:     Multiple full-length copies, ordered by descending identity
+    - chr1A_f1/f2:     Chromosome fragments, ordered by descending identity
+    - chr1A_B_f1:      Highest-identity fragment of chr1A from query subgenome B
+
+    Copies and fragments are ordered by alignment identity to the reference
+    (highest first), consistent with the subgenome cluster ordering where the
+    primary (unsuffixed) copy has the highest identity.
 
     Non-chromosome contigs are named contig_1, contig_2, … by descending length.
 
@@ -1086,9 +1093,18 @@ def generate_contig_names(
         full_length = [c for c in contigs if c.is_full_length]
         fragments = [c for c in contigs if not c.is_full_length]
 
-        # Sort each group by length descending
-        full_length.sort(key=lambda c: c.contig_len, reverse=True)
-        fragments.sort(key=lambda c: c.contig_len, reverse=True)
+        # Sort by identity descending (primary key) then length descending
+        # (tiebreaker).  Identity-based ordering keeps _c1/_c2 consistent
+        # with subgenome cluster ordering (_B), so the highest-identity
+        # copy is always _c1 / unsuffixed.
+        full_length.sort(
+            key=lambda c: (c.seq_identity_vs_ref or 0.0, c.contig_len),
+            reverse=True,
+        )
+        fragments.sort(
+            key=lambda c: (c.seq_identity_vs_ref or 0.0, c.contig_len),
+            reverse=True,
+        )
 
         # Name full-length contigs
         if len(full_length) == 1:
