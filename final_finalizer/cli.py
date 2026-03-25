@@ -560,8 +560,18 @@ def run_assembly(
     n_no_candidates = 0  # Contigs with no alignment candidates
     qr_ref_score = ev.qr_weight_all if args.assign_ref_score == "all" else ev.qr_score_topk
 
+    # Use span fraction for candidate ranking when ref lengths are available
+    # (nucleotide mode).  This matches the primary assignment in chain parsing.
+    qr_span_frac: Dict[Tuple[str, str], float] = {}
+    if ev.qr_ref_span_bp and ref_lengths:
+        for (q, rid), span_bp in ev.qr_ref_span_bp.items():
+            rlen = ref_lengths.get(rid, 0)
+            if rlen > 0:
+                qr_span_frac[(q, rid)] = span_bp / rlen
+    ranking_score = qr_span_frac if qr_span_frac else qr_ref_score
+
     candidates_by_contig = defaultdict(list)
-    for (q, ref_id), sc in qr_ref_score.items():
+    for (q, ref_id), sc in ranking_score.items():
         if sc > 0:
             candidates_by_contig[q].append((float(sc), ref_id))
 
