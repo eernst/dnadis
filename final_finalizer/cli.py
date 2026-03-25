@@ -563,7 +563,7 @@ def run_assembly(
     # Use span fraction for candidate ranking when ref lengths are available
     # (nucleotide mode).  This matches the primary assignment in chain parsing.
     qr_span_frac: Dict[Tuple[str, str], float] = {}
-    if ev.qr_ref_span_bp and ref_lengths:
+    if ev.qr_ref_span_bp and ref_lengths and isinstance(ref_lengths, dict):
         for (q, rid), span_bp in ev.qr_ref_span_bp.items():
             rlen = ref_lengths.get(rid, 0)
             if rlen > 0:
