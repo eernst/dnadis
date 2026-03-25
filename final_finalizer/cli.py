@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import traceback
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, Optional, Set, Tuple
@@ -563,7 +564,7 @@ def run_assembly(
     # Use span fraction for candidate ranking when ref lengths are available
     # (nucleotide mode).  This matches the primary assignment in chain parsing.
     qr_span_frac: Dict[Tuple[str, str], float] = {}
-    if ev.qr_ref_span_bp and ref_lengths and isinstance(ref_lengths, dict):
+    if ev.qr_ref_span_bp and ref_lengths:
         for (q, rid), ref_span in ev.qr_ref_span_bp.items():
             rlen = ref_lengths.get(rid, 0)
             if rlen > 0:
@@ -1977,8 +1978,7 @@ def main():
                         results.append(fut.result())
                         n_ok += 1
                     except Exception as e:
-                        import traceback as _tb
-                        logger.error(f"Assembly '{name}' failed: {e}\n{_tb.format_exc()}")
+                        logger.error(f"Assembly '{name}' failed: {e}\n{traceback.format_exc()}")
                         failures.append((name, str(e)))
         else:
             for i, (asm_path, asm_name, asm_reads) in enumerate(assemblies):
