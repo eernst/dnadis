@@ -108,7 +108,7 @@ These depth metrics are useful for:
 | Column | Type | Description |
 |--------|------|-------------|
 | `assigned_subgenome` | string | Subgenome identifier (e.g., `A`, `B`, `At`, `Dt`) or `NA` if none |
-| `assigned_ref_id` | string | Best-matching reference chromosome ID (e.g., `chr5A`) or `NA`. In nucleotide mode, assignment uses span fraction (`qr_ref_span_bp / ref_length`) as the primary metric, which is size-normalized and avoids the size bias of raw score toward larger chromosomes. In protein mode, raw synteny score is used because miniprot PAF does not carry reference chromosome lengths. |
+| `assigned_ref_id` | string | Best-matching reference chromosome ID (e.g., `chr5A`) or `NA`. In nucleotide mode, assignment uses the combined span fraction `max(ref_span_bp / ref_length, query_union_bp / query_length)` as the primary metric. Reference span fraction is size-normalized and handles translocations between chromosomes of unequal size; query span fraction handles the complementary case where a translocation occupies most of the contig but covers only a small fraction of a large reference chromosome. In protein mode, raw synteny score is used because miniprot PAF does not carry reference chromosome lengths. |
 | `assigned_chrom_id` | string | Chromosome number without subgenome (e.g., `chr5`) |
 | `status` | string | Assignment status: `OK`, `NO_HITS`, `AMBIG_LOW_FRAC`, or `AMBIG_LOW_RATIO` |
 
@@ -440,7 +440,7 @@ The `--assign-ref-score` parameter controls which is used for the initial chromo
 - `topk`: Use `score_topk` (focuses on best chains)
 - `all` (default): Use `score_all` (considers all evidence)
 
-In nucleotide mode, span fraction (`qr_ref_span_bp / ref_length`) is the primary assignment metric, computed directly in chain parsing from reference lengths in the PAF file. This is size-normalized and avoids the size bias of raw score: a contig with synteny to both a large and a small reference chromosome accumulates more raw score against the larger chromosome even when it proportionally covers more of the smaller one. In protein mode, raw score is used because miniprot PAF does not carry reference chromosome lengths.
+In nucleotide mode, the combined span fraction `max(ref_span_bp / ref_length, query_union_bp / query_length)` is the primary assignment metric, computed directly in chain parsing from reference lengths in the PAF file. Reference span fraction avoids the size bias of raw score (a contig accumulates more raw score against larger chromosomes regardless of proportional coverage). Query span fraction handles the complementary case where a translocation occupies most of the contig but covers only a small fraction of a large reference chromosome. Taking the maximum of both ensures correct assignment in either scenario. In protein mode, raw score is used because miniprot PAF does not carry reference chromosome lengths.
 
 Individual chain scores are computed using the formula specified by `--assign-chain-score`:
 - `matches` (default): Total matching bases in chain

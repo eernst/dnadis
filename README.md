@@ -838,7 +838,7 @@ This prevents spurious assignments from:
 
 ### Reference assignment scoring
 
-In nucleotide mode, each contig is assigned to the reference chromosome with the highest span fraction (`qr_ref_span_bp / ref_length` — the fraction of each reference chromosome's length spanned by syntenic alignments). This metric is size-normalized: a contig aligned to both a large and a small reference chromosome accumulates more raw score against the larger one even when it proportionally covers more of the smaller chromosome, but span fraction correctly reflects which chromosome the contig represents. Span fraction is computed directly in chain parsing from reference lengths extracted from the PAF file and used as the primary assignment metric.
+In nucleotide mode, each contig is assigned to the reference chromosome with the highest combined span fraction: `max(ref_span_bp / ref_length, query_union_bp / query_length)`. Reference span fraction measures what fraction of each reference chromosome is spanned by syntenic alignments; query span fraction measures what fraction of the contig is covered by those alignments. Reference span fraction alone is size-normalized and handles simple translocations correctly, but fails when a translocation occupies most of the contig while covering only a small fraction of a large reference chromosome — query span fraction handles that case. Taking the maximum of both metrics ensures correct assignment in either scenario. The combined metric is computed directly in chain parsing from reference lengths extracted from the PAF file.
 
 In protein mode, span fraction falls back to raw synteny score (sum of chain scores; see `--assign-ref-score`) because miniprot PAF does not carry reference chromosome lengths.
 
