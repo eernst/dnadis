@@ -128,6 +128,8 @@
 
 ## Performance
 
+* [ ] Parallelize per-chromosome RagTag scaffolding within `scaffold_chromosomes()`. Currently each chromosome group runs serially with full thread allocation. For fragmented assemblies with many groups, running N groups in parallel with `threads / N` threads each would be significantly faster. Each group's scaffolding is independent — use internal `ThreadPoolExecutor`, merge per-group results after completion.
+
 * [ ] Add bgzip and indexing by default of pipeline outputs (FASTA, GFF3).
 
 ## Testing

@@ -887,19 +887,29 @@ def _chains_to_evidence_and_segments(
     else:
         raise ValueError(f"Unknown assign_ref_score: {assign_ref_score}")
 
-    # Assign best_ref using reference span fraction (span_bp / ref_length)
-    # as the primary metric.  This normalises for reference chromosome size,
-    # preventing bias toward larger chromosomes in translocation cases.
+    # Assign best_ref using the maximum of reference span fraction and query
+    # span fraction.  Reference span fraction (ref_span_bp / ref_length)
+    # normalises for reference chromosome size; query span fraction
+    # (query_union_bp / query_length) captures how much of the contig is
+    # occupied by blocks to each reference.  Taking the max of both ensures
+    # that the stronger signal — whichever dimension it comes from — drives
+    # the assignment.  This handles both translocation cases (where ref span
+    # fraction is the better discriminator) and large-translocation contigs
+    # (where query span fraction is more informative because a small
+    # reference chromosome inflates the ref span fraction).
     # Falls back to raw score when reference lengths are unavailable.
-    qr_span_frac: dict[tuple[str, str], float] = {}
+    qr_combined_frac: dict[tuple[str, str], float] = {}
     if rlens_from_paf:
-        for (q, ref_id), span_bp in qr_ref_span_bp.items():
+        for (q, ref_id), ref_span in qr_ref_span_bp.items():
             rlen = rlens_from_paf.get(ref_id, 0)
-            if rlen > 0:
-                qr_span_frac[(q, ref_id)] = span_bp / rlen
+            qlen = contig_lengths.get(q, 0) or qlens_from_paf.get(q, 0)
+            qbp = qr_union_bp.get((q, ref_id), 0)
+            ref_frac = (ref_span / rlen) if rlen > 0 else 0.0
+            qry_frac = (qbp / qlen) if qlen > 0 else 0.0
+            qr_combined_frac[(q, ref_id)] = max(ref_frac, qry_frac)
 
-    use_span_frac = len(qr_span_frac) > 0
-    scoring = qr_span_frac if use_span_frac else qr_ref_score
+    use_combined = len(qr_combined_frac) > 0
+    scoring = qr_combined_frac if use_combined else qr_ref_score
 
     best_ref = defaultdict(str)
     best_score = defaultdict(float)
