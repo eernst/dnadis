@@ -1977,7 +1977,8 @@ def main():
                         results.append(fut.result())
                         n_ok += 1
                     except Exception as e:
-                        logger.error(f"Assembly '{name}' failed: {e}")
+                        import traceback as _tb
+                        logger.error(f"Assembly '{name}' failed: {e}\n{_tb.format_exc()}")
                         failures.append((name, str(e)))
         else:
             for i, (asm_path, asm_name, asm_reads) in enumerate(assemblies):
