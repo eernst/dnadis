@@ -564,10 +564,10 @@ def run_assembly(
     # (nucleotide mode).  This matches the primary assignment in chain parsing.
     qr_span_frac: Dict[Tuple[str, str], float] = {}
     if ev.qr_ref_span_bp and ref_lengths and isinstance(ref_lengths, dict):
-        for (q, rid), span_bp in ev.qr_ref_span_bp.items():
+        for (q, rid), ref_span in ev.qr_ref_span_bp.items():
             rlen = ref_lengths.get(rid, 0)
             if rlen > 0:
-                qr_span_frac[(q, rid)] = span_bp / rlen
+                qr_span_frac[(q, rid)] = ref_span / rlen
     ranking_score = qr_span_frac if qr_span_frac else qr_ref_score
 
     candidates_by_contig = defaultdict(list)
