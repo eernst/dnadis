@@ -1746,9 +1746,16 @@ build_synteny_plot <- function(sg) {
           tmp <- seg_bx_left; seg_bx_left <- seg_bx_right; seg_bx_right <- tmp
         }
 
+        seg_l_start <- l_start + cs$frac_start * (l_end - l_start)
+        seg_l_end   <- l_start + cs$frac_end   * (l_end - l_start)
+        seg_r_start <- r_start + cs$frac_start * (r_end - r_start)
+        seg_r_end   <- r_start + cs$frac_end   * (r_end - r_start)
         tooltip <- sprintf(
-          "%s \u2192 %s\n%.2f Mb\nIdentity: %.1f%%\nStrand: %s",
-          tp$contig[1], bp$contig[1],
+          "%s %s\n  %s  %.2f\u2013%.2f Mb\n\u2192\n%s %s\n  %s  %.2f\u2013%.2f Mb\n%.2f Mb | Identity: %.1f%% | Strand: %s",
+          gm$top_row, tp$contig[1],
+          if (!is.na(cid)) cid else "", seg_l_start / 1e6, seg_l_end / 1e6,
+          gm$bot_row, bp$contig[1],
+          if (!is.na(cid)) cid else "", seg_r_start / 1e6, seg_r_end / 1e6,
           as.numeric(blk$union_bp) / 1e6,
           ident_val * 100, strand_val
         )
@@ -1843,8 +1850,11 @@ build_synteny_plot <- function(sg) {
         ident_val <- as.numeric(blk$identity)
         alpha_ribbon <- 0.8 + 0.15 * min(1, ident_val)
         tooltip <- sprintf(
-          "%s \u2192 %s\n%.2f Mb\nIdentity: %.1f%%\nStrand: %s",
-          tp$contig[1], bp$contig[1],
+          "%s %s\n  %s  %.2f\u2013%.2f Mb\n\u2192\n%s %s\n  %s  %.2f\u2013%.2f Mb\n%.2f Mb | Identity: %.1f%% | Strand: %s | rescue",
+          r_top_asm, tp$contig[1],
+          if (!is.na(cid)) cid else "", l_start / 1e6, l_end / 1e6,
+          r_bot_asm, bp$contig[1],
+          if (!is.na(cid)) cid else "", r_start / 1e6, r_end / 1e6,
           as.numeric(blk$union_bp) / 1e6, ident_val * 100, strand_val
         )
         ribbon_idx <- ribbon_idx + 1
