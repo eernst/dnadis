@@ -1354,10 +1354,9 @@ if (n_unique_chroms <= 9) {
 # Fixed min_span (50kb) — proportional scaling is too aggressive for large genomes
 min_span <- 50000
 
-# --- Rescue macro_blocks ---
-rescue_macro_df <- if (!is.null(pairwise_macro_df) && "is_rescue" %in% names(pairwise_macro_df)) {
-  pairwise_macro_df %>% filter(is_rescue)
-} else { NULL }
+# Rescue macro_blocks are pairwise alignments between non-adjacent assemblies
+# that bridge gaps in the per-subgenome chain.  They are treated identically
+# to normal pairwise data for rendering — no visual distinction is needed.
 
 # =========================================================================
 # Per-subgenome plot builder
@@ -1771,42 +1770,47 @@ build_synteny_plot <- function(sg) {
     }
   }
 
-  # --- Rescue ribbons ---
-  # Only draw rescue ribbons when:
-  # 1. Intermediate assemblies genuinely lack the chromosome in this tab
-  # 2. A non-rescue pairwise pair doesn't already cover the same pair
-  #    (can happen when P/T chain pairs are out of row order)
-  normal_pairs_drawn <- if (!is.null(pairwise_macro_df)) {
-    pairwise_macro_df %>%
-      filter(!is_rescue) %>%
+  # --- Non-adjacent pairwise ribbons ---
+  # Pairwise alignments between non-adjacent assemblies (bridging gaps in the
+  # per-subgenome chain) are treated identically to adjacent-row ribbons.
+  # Skip blocks where all intermediate rows have pills for the chromosome
+  # (adjacent ribbons already cover those).
+  if (!is.null(pairwise_macro_df)) {
+    # Collect adjacent pairs already drawn
+    adjacent_pair_keys <- character(0)
+    for (ri in seq_along(gap_meta)) {
+      gm_adj <- gap_meta[[ri]]
+      if (!gm_adj$top_is_ref) {
+        adjacent_pair_keys <- c(adjacent_pair_keys,
+          paste(gm_adj$top_asm, gm_adj$bot_asm, sep = "\x01"))
+      }
+    }
+
+    nonadj_pairs <- pairwise_macro_df %>%
       distinct(left_assembly, right_assembly) %>%
       mutate(key = paste(left_assembly, right_assembly, sep = "\x01")) %>%
-      pull(key)
-  } else { character(0) }
+      filter(!(key %in% adjacent_pair_keys),
+             left_assembly %in% row_names,
+             right_assembly %in% row_names)
 
-  if (!is.null(rescue_macro_df) && nrow(rescue_macro_df) > 0) {
-    rescue_pairs <- rescue_macro_df %>%
-      distinct(left_assembly, right_assembly)
-    for (rp_i in seq_len(nrow(rescue_pairs))) {
-      r_top_asm <- rescue_pairs$left_assembly[rp_i]
-      r_bot_asm <- rescue_pairs$right_assembly[rp_i]
-      if (!(r_top_asm %in% row_names) || !(r_bot_asm %in% row_names)) next
-      # Skip if a normal pairwise pair already covers this assembly pair
-      if (paste(r_top_asm, r_bot_asm, sep = "\x01") %in% normal_pairs_drawn) next
-      pair_df <- rescue_macro_df %>%
+    for (rp_i in seq_len(nrow(nonadj_pairs))) {
+      r_top_asm <- nonadj_pairs$left_assembly[rp_i]
+      r_bot_asm <- nonadj_pairs$right_assembly[rp_i]
+      pair_df <- pairwise_macro_df %>%
         filter(left_assembly == r_top_asm, right_assembly == r_bot_asm,
                qspan_bp >= min_span)
       if (n_subgenomes > 1) pair_df <- pair_df %>% filter(subgenome == sg)
       if (nrow(pair_df) == 0) next
 
-      # Pre-compute intermediate rows between this rescue pair
+      # Intermediate rows for coverage check
       top_idx <- which(row_names == r_top_asm)
       bot_idx <- which(row_names == r_bot_asm)
       mid_rows <- if (length(top_idx) == 1 && length(bot_idx) == 1 && bot_idx - top_idx > 1) {
         row_names[(top_idx + 1):(bot_idx - 1)]
       } else { character(0) }
-      gz_rescue <- c(row_centers[[r_top_asm]] + 0.03,
-                     row_centers[[r_bot_asm]] - 0.03)
+      gz_span <- c(row_centers[[r_top_asm]] + 0.03,
+                   row_centers[[r_bot_asm]] - 0.03)
+
       for (b in seq_len(nrow(pair_df))) {
         blk <- pair_df[b, ]
         tp <- pill_idx[[paste(r_top_asm, blk$ref_id, sep = "\x01")]]
@@ -1820,6 +1824,7 @@ build_synteny_plot <- function(sg) {
           if (!is.na(sc)) bp <- pill_idx[[paste(r_bot_asm, sc, sep = "\x01")]]
         }
         if (is.null(tp) || is.null(bp) || nrow(tp) == 0 || nrow(bp) == 0) next
+
         top_len <- tp$contig_len[1]; top_xl <- tp$x_left[1]; top_w <- tp$pill_width[1]
         bot_len <- bp$contig_len[1]; bot_xl <- bp$x_left[1]; bot_w <- bp$pill_width[1]
         ref_cid <- lookup_ref_origin(
@@ -1827,8 +1832,7 @@ build_synteny_plot <- function(sg) {
           as.numeric(blk$qstart), as.numeric(blk$qend))
         cid <- if (!is.na(ref_cid)) ref_cid else as.character(bp$chrom_id[1])
 
-        # Skip this block if all intermediate rows have a pill for the
-        # same chromosome — adjacent ribbons already connect them.
+        # Skip if all intermediate rows have pills for this chromosome
         if (length(mid_rows) > 0) {
           mid_covered <- all(vapply(mid_rows, function(mr) {
             paste(mr, cid, sep = "\x01") %in% pill_chrom_set
@@ -1849,21 +1853,23 @@ build_synteny_plot <- function(sg) {
         if (strand_val == "-") { tmp <- bx_left; bx_left <- bx_right; bx_right <- tmp }
         ident_val <- as.numeric(blk$identity)
         alpha_ribbon <- 0.8 + 0.15 * min(1, ident_val)
+
         tooltip <- sprintf(
-          "%s %s\n  %s  %.2f\u2013%.2f Mb\n\u2192\n%s %s\n  %s  %.2f\u2013%.2f Mb\n%.2f Mb | Identity: %.1f%% | Strand: %s | rescue",
+          "%s %s\n  %s  %.2f\u2013%.2f Mb\n\u2192\n%s %s\n  %s  %.2f\u2013%.2f Mb\n%.2f Mb | Identity: %.1f%% | Strand: %s",
           r_top_asm, tp$contig[1],
           if (!is.na(cid)) cid else "", l_start / 1e6, l_end / 1e6,
           r_bot_asm, bp$contig[1],
           if (!is.na(cid)) cid else "", r_start / 1e6, r_end / 1e6,
           as.numeric(blk$union_bp) / 1e6, ident_val * 100, strand_val
         )
+
         ribbon_idx <- ribbon_idx + 1
         ribbon_polys[[ribbon_idx]] <- make_ribbon_v(
-          gz_rescue[1], gz_rescue[2], tx_left, tx_right, bx_left, bx_right,
+          gz_span[1], gz_span[2], tx_left, tx_right, bx_left, bx_right,
           chrom_id_val = cid, alpha_val = alpha_ribbon,
           tooltip_text = tooltip, subgenome_val = sg,
           data_id_val = cid
-        ) %>% mutate(group_id = ribbon_idx, is_rescue = TRUE)
+        ) %>% mutate(group_id = ribbon_idx)
       }
     }
   }
@@ -1871,9 +1877,7 @@ build_synteny_plot <- function(sg) {
   has_ribbons <- length(ribbon_polys) > 0
   if (has_ribbons) {
     all_ribbons <- bind_rows(ribbon_polys)
-    if (!"is_rescue" %in% names(all_ribbons)) all_ribbons$is_rescue <- FALSE
-    all_ribbons$is_rescue[is.na(all_ribbons$is_rescue)] <- FALSE
-    all_ribbons <- all_ribbons %>% arrange(desc(is_rescue), group_id)
+    all_ribbons <- all_ribbons %>% arrange(group_id)
   } else {
     all_ribbons <- NULL
   }
