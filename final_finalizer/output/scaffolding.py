@@ -716,7 +716,7 @@ def scaffold_chromosomes(
     # ---- First pass: collect trivial scaffolds (T2T, single-contig) ----
     # These are instant and don't need parallelization.
     # Also collect multi-contig groups for the parallel second pass.
-    work_list: List[Tuple[str, str, int, List[str]]] = []  # (scaffold_name, ref_id, grp, contig_names)
+    work_list: List[Tuple[str, str, List[str]]] = []  # (scaffold_name, ref_id, contig_names)
 
     for (ref_id, grp) in sorted(groups.keys()):
         contig_names = groups[(ref_id, grp)]
@@ -791,7 +791,7 @@ def scaffold_chromosomes(
             continue
 
         # Multi-contig group: needs scaffolding — add to work list
-        work_list.append((scaffold_name, ref_id, grp, contig_names))
+        work_list.append((scaffold_name, ref_id, contig_names))
 
     # ---- Second pass: scaffold multi-contig groups (possibly in parallel) ----
     if work_list:
@@ -799,7 +799,7 @@ def scaffold_chromosomes(
         if n_jobs == 1:
             # Single job: run directly with all threads, no executor overhead
             job_threads = max(1, threads)
-            scaffold_name, ref_id, grp, contig_names = work_list[0]
+            scaffold_name, ref_id, contig_names = work_list[0]
             logger.info(
                 f"Scaffolding 1 multi-contig group with {job_threads} threads"
             )
@@ -831,9 +831,9 @@ def scaffold_chromosomes(
             )
 
             def _submit_job(
-                item: Tuple[str, str, int, List[str]],
+                item: Tuple[str, str, List[str]],
             ) -> _ScaffoldGroupResult:
-                s_name, r_id, _grp, c_names = item
+                s_name, r_id, c_names = item
                 return _scaffold_group(
                     scaffold_name=s_name,
                     ref_id=r_id,

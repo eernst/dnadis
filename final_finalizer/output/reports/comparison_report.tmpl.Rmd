@@ -120,10 +120,7 @@ for (i in seq_along(pairwise_macro_paths)) {
                    col_types = cols(subgenome = col_character()))
     if (nrow(df) > 0 && i <= length(pairwise_pair_names)) {
       df$pair_name <- pairwise_pair_names[i]
-      # Detect rescue pairs (prefixed with "rescue:")
-      raw_name <- pairwise_pair_names[i]
-      df$is_rescue <- startsWith(raw_name, "rescue:")
-      clean_name <- sub("^rescue:", "", raw_name)
+      clean_name <- sub("^rescue:", "", pairwise_pair_names[i])
       # Extract left and right assembly names from pair name
       parts <- strsplit(clean_name, "_vs_", fixed = TRUE)[[1]]
       if (length(parts) >= 2) {
@@ -1181,8 +1178,9 @@ if (!is.null(all_agp_df) && nrow(all_agp_df) > 0 && nrow(asm_lookup_df) > 0) {
   # Map component (original name) → renamed name via asm_lookup_df
   comp_renamed <- agp_components %>%
     left_join(
-      asm_lookup_df %>% distinct(assembly, original_name, .keep_all = TRUE) %>%
-        select(assembly, original_name, contig_new = contig),
+      asm_lookup_df %>%
+        select(assembly, original_name, contig_new = contig) %>%
+        distinct(),
       by = c("assembly", "component" = "original_name")
     ) %>%
     filter(!is.na(contig_new), contig_new != scaffold)
@@ -1631,8 +1629,15 @@ build_synteny_plot <- function(sg) {
   # Pre-index pill_lookup for O(1) access in the ribbon loop
   pill_idx <- split(pill_lookup,
     paste(pill_lookup$row_name, pill_lookup$contig, sep = "\x01"))
-  # Presence set for (row_name, chrom_id) — used by rescue ribbon coverage check
+  # Presence set for (row_name, chrom_id) — used by non-adjacent ribbon coverage check
   pill_chrom_set <- unique(paste(pill_lookup$row_name, pill_lookup$chrom_id, sep = "\x01"))
+
+  # Pre-split pairwise macro_blocks by (left_assembly, right_assembly) for O(1) lookup
+  pairwise_by_pair <- if (!is.null(pairwise_macro_df)) {
+    pw_filtered <- pairwise_macro_df %>% filter(qspan_bp >= min_span)
+    if (n_subgenomes > 1) pw_filtered <- pw_filtered %>% filter(subgenome == sg)
+    split(pw_filtered, paste(pw_filtered$left_assembly, pw_filtered$right_assembly, sep = "\x01"))
+  } else { NULL }
 
   # --- Build ribbon polygons ---
   ribbon_polys <- list()
@@ -1656,16 +1661,11 @@ build_synteny_plot <- function(sg) {
     } else {
       top_asm <- gm$top_asm
       bot_asm <- gm$bot_asm
-      if (!is.null(pairwise_macro_df)) {
-        macro_src <- pairwise_macro_df %>%
-          filter(left_assembly == top_asm, right_assembly == bot_asm)
-        if (n_subgenomes > 1) macro_src <- macro_src %>% filter(subgenome == sg)
-      } else { macro_src <- NULL }
+      macro_src <- if (!is.null(pairwise_by_pair))
+        pairwise_by_pair[[paste(top_asm, bot_asm, sep = "\x01")]] else NULL
     }
 
     if (is.null(macro_src) || nrow(macro_src) == 0) next
-    macro_src <- macro_src %>% filter(qspan_bp >= min_span)
-    if (nrow(macro_src) == 0) next
 
     for (b in seq_len(nrow(macro_src))) {
       blk <- macro_src[b, ]
@@ -1796,11 +1796,8 @@ build_synteny_plot <- function(sg) {
     for (rp_i in seq_len(nrow(nonadj_pairs))) {
       r_top_asm <- nonadj_pairs$left_assembly[rp_i]
       r_bot_asm <- nonadj_pairs$right_assembly[rp_i]
-      pair_df <- pairwise_macro_df %>%
-        filter(left_assembly == r_top_asm, right_assembly == r_bot_asm,
-               qspan_bp >= min_span)
-      if (n_subgenomes > 1) pair_df <- pair_df %>% filter(subgenome == sg)
-      if (nrow(pair_df) == 0) next
+      pair_df <- pairwise_by_pair[[paste(r_top_asm, r_bot_asm, sep = "\x01")]]
+      if (is.null(pair_df) || nrow(pair_df) == 0) next
 
       # Intermediate rows for coverage check
       top_idx <- which(row_names == r_top_asm)
