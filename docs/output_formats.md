@@ -609,7 +609,7 @@ If `rmarkdown` or `pandoc` is not available, report generation is skipped with a
 - The HTML file is fully self-contained (`self_contained: true`) — all CSS, JavaScript, and widget assets are embedded
 - Summary tables use the `gt` package with consistent styling (dark headers, row striping, inline gradient bars)
 - The report can be opened in any web browser and shared as a single file
-- Refreshable via `refresh_plots.py` alongside other plot scripts
+- Refreshable via `refresh_reports.py` alongside other plot scripts
 
 ---
 

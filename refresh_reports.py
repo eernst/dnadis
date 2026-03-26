@@ -2,11 +2,11 @@
 """Re-render R plot scripts from current templates and optionally re-run them.
 
 Usage:
-    ./refresh_plots.py /path/to/run_folder              # refresh + run changed
-    ./refresh_plots.py /path/to/run_folder --force      # refresh + run all
-    ./refresh_plots.py /path/to/run_folder --dry-run    # show what would change
-    ./refresh_plots.py /path/to/run_folder --no-run     # refresh scripts only
-    ./refresh_plots.py /path/to/run_folder --only bar   # only matching scripts
+    ./refresh_reports.py /path/to/run_folder              # refresh + run changed
+    ./refresh_reports.py /path/to/run_folder --force      # refresh + run all
+    ./refresh_reports.py /path/to/run_folder --dry-run    # show what would change
+    ./refresh_reports.py /path/to/run_folder --no-run     # refresh scripts only
+    ./refresh_reports.py /path/to/run_folder --only bar   # only matching scripts
 """
 from __future__ import annotations
 
@@ -237,6 +237,7 @@ def refresh_script(
     template_dir: Path,
     prefix: Path,
     dry_run: bool = False,
+    overrides: dict[str, str] | None = None,
 ) -> bool:
     """Re-render a single generated R script from the current template.
 
@@ -261,6 +262,10 @@ def refresh_script(
     missing = all_placeholders - set(values.keys())
     if missing:
         print(f"  WARN {suffix}: could not extract values for: {', '.join(sorted(missing))}", file=sys.stderr)
+
+    # Apply CLI overrides (e.g., --self-contained / --no-self-contained)
+    if overrides:
+        values.update(overrides)
 
     # Apply values to fresh template
     filled = template_text
@@ -348,6 +353,17 @@ def main():
         action="store_true",
         help="Re-run scripts even if unchanged",
     )
+    sc_group = parser.add_mutually_exclusive_group()
+    sc_group.add_argument(
+        "--self-contained",
+        action="store_true", default=None,
+        help="Force self-contained HTML (all resources embedded)",
+    )
+    sc_group.add_argument(
+        "--no-self-contained",
+        action="store_true", default=None,
+        help="Force non-self-contained HTML (faster, HTML + _files/ directory)",
+    )
     args = parser.parse_args()
 
     run_dir = args.run_dir.resolve()
@@ -380,9 +396,17 @@ def main():
     print(f"Found {len(scripts)} script(s):")
     print()
 
+    # Build CLI overrides for template placeholders
+    overrides = {}
+    if args.self_contained:
+        overrides["__SELF_CONTAINED__"] = "true"
+    elif args.no_self_contained:
+        overrides["__SELF_CONTAINED__"] = "false"
+
     updated = []
     for suffix, script_path in scripts:
-        changed = refresh_script(suffix, script_path, template_dir, prefix, dry_run=args.dry_run)
+        changed = refresh_script(suffix, script_path, template_dir, prefix,
+                                 dry_run=args.dry_run, overrides=overrides or None)
         if changed:
             updated.append((suffix, script_path))
 
