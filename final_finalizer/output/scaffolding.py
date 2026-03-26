@@ -522,6 +522,7 @@ def _scaffold_group(
     work_dir: Path,
     threads: int,
     gap_size: int,
+    assembly_context: str = "",
 ) -> _ScaffoldGroupResult:
     """Scaffold a single multi-contig group (RagTag or built-in fallback).
 
@@ -547,6 +548,12 @@ def _scaffold_group(
     Returns:
         _ScaffoldGroupResult with scaffold sequence, AGP lines, and confidences.
     """
+    # Set thread-local assembly context for log messages (ThreadPoolExecutor
+    # threads don't inherit the parent's threading.local state)
+    if assembly_context:
+        from final_finalizer.utils.logging_config import set_assembly_context
+        set_assembly_context(assembly_context)
+
     result = _ScaffoldGroupResult(scaffold_name=scaffold_name)
     n_contigs = len(contig_names)
     logger.info(f"{scaffold_name}: scaffolding {n_contigs} contigs")
@@ -689,6 +696,10 @@ def scaffold_chromosomes(
         logger.warning("No contigs to scaffold")
         return {}, [], {}
 
+    # Capture assembly context for thread-local propagation to worker threads
+    from final_finalizer.utils.logging_config import _assembly_context
+    _asm_ctx = getattr(_assembly_context, "name", "")
+
     # Build classification lookup
     clf_lookup = {clf.original_name: clf for clf in classifications}
 
@@ -816,6 +827,7 @@ def scaffold_chromosomes(
                 work_dir=work_dir,
                 threads=job_threads,
                 gap_size=gap_size,
+                assembly_context=_asm_ctx,
             )
             if result.scaffold_seq:
                 all_scaffolded[result.scaffold_name] = result.scaffold_seq
@@ -847,6 +859,7 @@ def scaffold_chromosomes(
                     work_dir=work_dir,
                     threads=job_threads,
                     gap_size=gap_size,
+                    assembly_context=_asm_ctx,
                 )
 
             with ThreadPoolExecutor(max_workers=max_workers) as pool:
