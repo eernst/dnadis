@@ -4,6 +4,10 @@
 
 * [ ] executorlib is pretty flaky - moving to snakemake could simplify installation (as it handles conda dependencies in a more user-transparent fashion), simplify SLURM cluster execution, possibly make the pipeline more robust, and support more platforms. Need to look at pros/cons, but pretty sure this needs to happen. If it does, we'll want to use final_finalizer.py as a convenience wrapper around snakemake (and retain our current flags). This will be a big refactor.
 
+## CLI flag naming
+
+* [ ] Review CLI flag names for clarity. `--min-span-bp` controls the minimum synteny block span for chromosome assignment gates, but the name doesn't convey this. Consider renaming to something like `--min-synteny-span` or `--gate-min-span`. This flag also implicitly controls the minimum detectable rearrangement size (since rearrangement detection operates on macro_blocks that passed this threshold).
+
 ## Implement subcommands
 
 * [ ] There are an overwhelming number of command line options available, some of which only apply to one or the other synteny mode. Look into the potential benefit of splitting these two modes of operation into subcommands, opening up the possibility of partitioning other use cases in the same way.

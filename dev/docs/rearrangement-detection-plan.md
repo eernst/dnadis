@@ -83,8 +83,14 @@ Each call gets a confidence level based on:
 
 Proposed levels:
 - **high**: Large (>1 Mb), reciprocal or collinear, good coverage
-- **medium**: Moderate size (100kb-1Mb), or large but one-sided
-- **low**: Small (50-100kb), or ambiguous pattern
+- **medium**: Moderate size (50kb-1 Mb), or large but one-sided
+- **low**: Near the macro_block threshold, or ambiguous pattern
+
+No additional threshold flags.  The detection inherits the pipeline's
+existing macro_block minimum span (controlled by `--min-span-bp`,
+default 50kb).  Any macro_block that survived chain parsing is already
+credible alignment evidence.  Confidence tiers describe trust in the
+biological interpretation, not the alignment quality.
 
 ## Output
 
@@ -111,7 +117,7 @@ Proposed levels:
 Add a "Rearrangements" tab or section showing:
 - Per-chromosome rearrangement summary table
 - Count of each type with confidence breakdown
-- Visual indicators in the chromosome overview plot (already partially done with red off-target blocks)
+- Visual indicators in the chromosome overview plot (already partially done with red off-target blocks), need a legend for this plot
 
 ### Comparison report integration
 
@@ -125,7 +131,7 @@ Add a rearrangement summary to the comparison report:
 ### New module: `detection/rearrangements.py`
 
 Functions:
-- `detect_rearrangements(macro_block_rows, best_ref, ref_lengths, query_lengths, min_span=500000)` → list of RearrangementCall dataclass instances
+- `detect_rearrangements(macro_block_rows, best_ref, ref_lengths, query_lengths)` → list of RearrangementCall dataclass instances (inherits macro_block min_span from pipeline)
 - `classify_translocation(contig_blocks, assigned_ref, partner_ref)` → type + confidence
 - `detect_inversions(on_target_blocks)` → list of inversion calls
 - `detect_fusions(contig_blocks, ref_lengths)` → fusion call or None
@@ -138,7 +144,7 @@ Functions:
 ### Pipeline integration
 
 - Run after Phase 11 (classification) since it needs `best_ref` assignments
-- Could be Phase 11b or a new phase number
+- Could be Phase 11b or a new phase number - use a new phase number, we shouldn't have sub-phases (a, b, etc.)
 - Results stored on `AssemblyResult` for comparison report access
 
 ## Dependencies
