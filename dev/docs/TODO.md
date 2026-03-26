@@ -2,6 +2,8 @@
 
 ## Current PR: Reporting Improvements
 
+* [ ] Reference alignment coordinates in the synteny plot are currently given for multiple individual ribbons (blocks?) within each connection pair, but this is unnecessary detail, and the reference info is not really what we want unless we're looking at ribbons connecting the reference and the adjacent assembly. Really what we want to see are the span coordinates on each participating chromosome at either end of the ribbon group we're hovered over. This should also reduce the number of distinct labels in the output HTML.
+
 * [ ] Add branding to the top of the report index/nav at left
 
 * [ ] Add a legend to the Chromosome Assignments compound plot (contig composition + identity panel). Should explain: blue/colored blocks = on-target synteny, red blocks = off-target synteny (potential rearrangement), pill background = contig extent, identity values = matches/alignment_length from best chain to assigned reference.

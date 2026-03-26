@@ -18,7 +18,7 @@ params:
   out_prefix: "__OUTPREFIX__"
 output:
   html_document:
-    self_contained: true
+    self_contained: __SELF_CONTAINED__
     css: "__COMMON_CSS__"
     toc: true
     toc_float:

@@ -96,6 +96,7 @@ def run_assembly_report(
     compleasm_chrs_summary: Optional[Path] = None,
     compleasm_non_chrs_summary: Optional[Path] = None,
     top_n_contaminants: int = 10,
+    self_contained: bool = False,
 ) -> bool:
     """Generate unified HTML report with all plots and summary tables.
 
@@ -148,6 +149,7 @@ def run_assembly_report(
         .replace("__TOP_N__", str(int(top_n_contaminants)))
         .replace("__COMMON_R__", _esc(_COMMON_R))
         .replace("__COMMON_CSS__", _esc(_COMMON_CSS))
+        .replace("__SELF_CONTAINED__", "true" if self_contained else "false")
     )
 
     with report_rmd.open("w", encoding="utf-8") as fh:
@@ -182,6 +184,7 @@ def run_comparison_report(
     synteny_mode: str,
     reference_name: str = "",
     pairwise_pairs: Optional[List[tuple]] = None,
+    self_contained: bool = False,
 ) -> bool:
     """Generate cross-assembly comparison HTML report.
 
@@ -274,6 +277,7 @@ def run_comparison_report(
         .replace("__OUTPREFIX__", _abs_esc(outprefix))
         .replace("__COMMON_R__", _esc(_COMMON_R))
         .replace("__COMMON_CSS__", _esc(_COMMON_CSS))
+        .replace("__SELF_CONTAINED__", "true" if self_contained else "false")
     )
 
     with report_rmd.open("w", encoding="utf-8") as fh:
