@@ -42,6 +42,8 @@
 
 * [x] Use dark reference color for the small numbers for greater visibility.
 
+* [ ] Add a legend to the Chromosome Assignments compound plot (contig composition + identity panel). Should explain: blue/colored blocks = on-target synteny, red blocks = off-target synteny (potential rearrangement), pill background = contig extent, identity values = matches/alignment_length from best chain to assigned reference.
+
 #### Completeness Table
 
 * [x] Introduce separate tabs for each reference (sub)genome, for example, for the A+P+T reference, we'd have Completeness Tbl. A, Completeness Tbl. P, Completeness Tbl. T as separate tabs and tables.

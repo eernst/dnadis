@@ -1008,7 +1008,7 @@ if (has_subgenomes) {
     theme_classic(base_family = base_family, base_size = base_font_pt) +
     axis_theme + theme(axis.ticks = element_blank(), panel.grid = element_blank(),
                        plot.margin = margin(5.5, 5.5, 5.5, 5.5)) +
-    labs(x = "Assigned subgenome", y = "Alignment identity proxy")
+    labs(x = "Assigned subgenome", y = "Alignment identity")
 } else {
   df_id_assigned <- df_plot %>%
     filter(!is.na(best_identity), assigned_ref_id != "NA") %>%
@@ -1020,7 +1020,7 @@ if (has_subgenomes) {
     theme_classic(base_family = base_family, base_size = base_font_pt) +
     axis_theme + theme(axis.ticks = element_blank(), panel.grid = element_blank(),
                        plot.margin = margin(5.5, 5.5, 5.5, 5.5)) +
-    labs(x = NULL, y = "Alignment identity proxy")
+    labs(x = NULL, y = "Alignment identity")
 }
 
 # Patchwork layout

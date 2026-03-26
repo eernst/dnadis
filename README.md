@@ -807,8 +807,6 @@ Miniprot alignments are:
 5. Aggregated per contig × reference chromosome
 6. Scored and ranked for assignment
 
-**Performance optimization**: The pipeline uses interval trees (via the `intervaltree` package) for efficient O(n log n) overlap detection during synteny block filtering, replacing the previous O(n²) algorithm. This significantly improves runtime for large assemblies with many protein alignments.
-
 #### Nucleotide mode (default)
 
 Uses whole-genome nucleotide alignment for structural composition analysis:
