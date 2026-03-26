@@ -1593,6 +1593,11 @@ build_synteny_plot <- function(sg) {
   s_seq <- 0.5 - 0.5 * cos(pi * t_seq)
   pts_per_ribbon <- 2L * n_pts
 
+  # Per-ribbon metadata for tooltip merging (indexed by group_id)
+  # Consecutive ribbons with the same (top_row, top_contig, bot_row, bot_contig, chrom_id)
+  # will share a merged tooltip showing the aggregate span.
+  ribbon_meta <- list()  # ribbon_meta[[group_id]] = list(top_row, top_ctg, bot_row, bot_ctg, cid, l_start, l_end, r_start, r_end, union_bp, ident, strand)
+
   # Pre-allocated ribbon buffers (grown in chunks if needed)
   buf_cap <- 50000L  # initial capacity in points
   r_x <- numeric(buf_cap)
@@ -1807,23 +1812,21 @@ build_synteny_plot <- function(sg) {
         seg_l_end   <- l_start + cs$frac_end   * (l_end - l_start)
         seg_r_start <- r_start + cs$frac_start * (r_end - r_start)
         seg_r_end   <- r_start + cs$frac_end   * (r_end - r_start)
-        tooltip <- sprintf(
-          "%s %s\n  %s  %.2f\u2013%.2f Mb\n\u2192\n%s %s\n  %s  %.2f\u2013%.2f Mb\n%.2f Mb | Identity: %.1f%% | Strand: %s",
-          gm$top_row, tp$contig[1],
-          if (!is.na(cid)) cid else "", seg_l_start / 1e6, seg_l_end / 1e6,
-          gm$bot_row, bp$contig[1],
-          if (!is.na(cid)) cid else "", seg_r_start / 1e6, seg_r_end / 1e6,
-          as.numeric(blk$union_bp) / 1e6,
-          ident_val * 100, strand_val
-        )
 
         ribbon_idx <- ribbon_idx + 1
         append_ribbon(
           gz[1], gz[2], seg_tx_left, seg_tx_right, seg_bx_left, seg_bx_right,
           chrom_id_val = cid, alpha_val = alpha_ribbon,
-          tooltip_text = tooltip, subgenome_val = sg,
+          tooltip_text = "", subgenome_val = sg,
           data_id_val = cid, group_id_val = ribbon_idx
         )
+        ribbon_meta[[ribbon_idx]] <- list(
+          top_row = gm$top_row, top_ctg = tp$contig[1],
+          bot_row = gm$bot_row, bot_ctg = bp$contig[1],
+          cid = cid, l_start = seg_l_start, l_end = seg_l_end,
+          r_start = seg_r_start, r_end = seg_r_end,
+          union_bp = as.numeric(blk$union_bp),
+          ident = ident_val, strand = strand_val)
       }
     }
   }
@@ -1909,22 +1912,72 @@ build_synteny_plot <- function(sg) {
         ident_val <- as.numeric(blk$identity)
         alpha_ribbon <- 0.8 + 0.15 * min(1, ident_val)
 
-        tooltip <- sprintf(
-          "%s %s\n  %s  %.2f\u2013%.2f Mb\n\u2192\n%s %s\n  %s  %.2f\u2013%.2f Mb\n%.2f Mb | Identity: %.1f%% | Strand: %s",
-          r_top_asm, tp$contig[1],
-          if (!is.na(cid)) cid else "", l_start / 1e6, l_end / 1e6,
-          r_bot_asm, bp$contig[1],
-          if (!is.na(cid)) cid else "", r_start / 1e6, r_end / 1e6,
-          as.numeric(blk$union_bp) / 1e6, ident_val * 100, strand_val
-        )
-
         ribbon_idx <- ribbon_idx + 1
         append_ribbon(
           gz_span[1], gz_span[2], tx_left, tx_right, bx_left, bx_right,
           chrom_id_val = cid, alpha_val = alpha_ribbon,
-          tooltip_text = tooltip, subgenome_val = sg,
+          tooltip_text = "", subgenome_val = sg,
           data_id_val = cid, group_id_val = ribbon_idx
         )
+        ribbon_meta[[ribbon_idx]] <- list(
+          top_row = r_top_asm, top_ctg = tp$contig[1],
+          bot_row = r_bot_asm, bot_ctg = bp$contig[1],
+          cid = cid, l_start = l_start, l_end = l_end,
+          r_start = r_start, r_end = r_end,
+          union_bp = as.numeric(blk$union_bp),
+          ident = ident_val, strand = strand_val)
+      }
+    }
+  }
+
+  # --- Merge tooltips for consecutive same-connection ribbons ---
+  # Group consecutive ribbons sharing (top_row, top_ctg, bot_row, bot_ctg, cid)
+  # into one tooltip showing the aggregate span. Translocations (different cid)
+  # break the grouping naturally.
+  if (length(ribbon_meta) > 0) {
+    n_ribbons <- length(ribbon_meta)
+    merged_tooltips <- character(n_ribbons)
+    group_start <- 1
+    for (ri in seq_len(n_ribbons)) {
+      m <- ribbon_meta[[ri]]
+      is_last <- (ri == n_ribbons)
+      # Check if next ribbon continues the same connection
+      same_group <- FALSE
+      if (!is_last) {
+        nx <- ribbon_meta[[ri + 1]]
+        same_group <- (m$top_row == nx$top_row && m$top_ctg == nx$top_ctg &&
+                       m$bot_row == nx$bot_row && m$bot_ctg == nx$bot_ctg &&
+                       identical(m$cid, nx$cid))
+      }
+      if (!same_group) {
+        # End of group: compute aggregate span from group_start..ri
+        grp <- ribbon_meta[group_start:ri]
+        agg_l_min <- min(vapply(grp, function(g) g$l_start, numeric(1)))
+        agg_l_max <- max(vapply(grp, function(g) g$l_end, numeric(1)))
+        agg_r_min <- min(vapply(grp, function(g) g$r_start, numeric(1)))
+        agg_r_max <- max(vapply(grp, function(g) g$r_end, numeric(1)))
+        agg_bp <- sum(vapply(grp, function(g) g$union_bp, numeric(1)))
+        med_ident <- median(vapply(grp, function(g) g$ident, numeric(1)))
+        n_blocks <- length(grp)
+        cid <- m$cid
+        tip <- sprintf(
+          "%s %s\n  %s  %.2f\u2013%.2f Mb\n\u2192\n%s %s\n  %s  %.2f\u2013%.2f Mb\n%.2f Mb | %d block(s) | Identity: %.1f%%",
+          m$top_row, m$top_ctg,
+          if (!is.na(cid)) cid else "", agg_l_min / 1e6, agg_l_max / 1e6,
+          m$bot_row, m$bot_ctg,
+          if (!is.na(cid)) cid else "", agg_r_min / 1e6, agg_r_max / 1e6,
+          agg_bp / 1e6, n_blocks, med_ident * 100
+        )
+        merged_tooltips[group_start:ri] <- tip
+        group_start <- ri + 1
+      }
+    }
+    # Write merged tooltips back into the ribbon buffer
+    for (ri in seq_len(n_ribbons)) {
+      pt_start <- (ri - 1L) * pts_per_ribbon + 1L
+      pt_end <- ri * pts_per_ribbon
+      if (pt_end <= r_idx) {
+        r_tooltip[pt_start:pt_end] <- merged_tooltips[ri]
       }
     }
   }
