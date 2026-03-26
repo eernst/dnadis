@@ -1093,10 +1093,28 @@ def run_assembly(
     for clf in classifications:
         clf.reversed = contig_orientations.get(clf.original_name, False)
 
-    # --- Phase 12: Read depth analysis (optional) ---
+    # --- Phase 12: Rearrangement detection ---
+    logger.phase("Phase 12: Rearrangement detection")
+    from final_finalizer.detection.rearrangements import detect_rearrangements
+    from final_finalizer.output.tsv_output import write_rearrangements_tsv
+
+    rearrangement_calls = detect_rearrangements(
+        macro_block_rows=ev.macro_block_rows,
+        best_ref=best_ref,
+        ref_lengths=ref_lengths,
+        query_lengths=qry_lengths,
+        classifications=classifications,
+    )
+    rearrangements_tsv: Optional[Path] = None
+    if rearrangement_calls:
+        rearrangements_tsv = Path(str(outprefix) + ".rearrangements.tsv")
+        write_rearrangements_tsv(rearrangements_tsv, rearrangement_calls)
+        logger.done(f"Rearrangements:    {rearrangements_tsv}")
+
+    # --- Phase 13: Read depth analysis (optional) ---
     depth_stats: Dict[str, 'DepthStats'] = {}
     if reads and not args.skip_depth:
-        logger.phase("Phase 12: Read depth analysis")
+        logger.phase("Phase 13: Read depth analysis")
         from final_finalizer.analysis.read_depth import calculate_depth_metrics
         from final_finalizer.models import DepthStats
 
@@ -1135,9 +1153,9 @@ def run_assembly(
         if depth_stats:
             logger.done(f"Depth analysis complete for {len(depth_stats)} contigs")
     elif reads and args.skip_depth:
-        logger.info("Phase 12: Skipping depth analysis (--skip-depth)")
+        logger.info("Phase 13: Skipping depth analysis (--skip-depth)")
 
-    # --- Phase 13: rDNA consensus building (optional) ---
+    # --- Phase 14: rDNA consensus building (optional) ---
     rdna_consensus_obj = None
     rdna_loci = []
     rdna_arrays = []
@@ -1145,7 +1163,7 @@ def run_assembly(
     rdna_arrays_tsv_path = None
     rdna_ref = ref_ctx.rdna_ref
     if not args.skip_rdna_consensus and not args.skip_rdna and rdna_hit_intervals:
-        logger.phase("Phase 13: Building rDNA consensus from query assembly")
+        logger.phase("Phase 14: Building rDNA consensus from query assembly")
         from final_finalizer.detection.rdna_consensus import build_rdna_consensus
 
         # Build classification lookup for annotation
@@ -1242,13 +1260,13 @@ def run_assembly(
         else:
             logger.warning("rDNA consensus building did not produce a result")
     elif not args.skip_rdna_consensus and args.skip_rdna:
-        logger.info("Phase 13: Skipping rDNA consensus (--skip-rdna)")
+        logger.info("Phase 14: Skipping rDNA consensus (--skip-rdna)")
 
-    # --- Phase 14: Scaffolding (optional) ---
+    # --- Phase 15: Scaffolding (optional) ---
     scaffolded_seqs: Dict[str, str] = {}
     scaffold_confidences: Optional[Dict[str, tuple]] = None
     if args.scaffold:
-        logger.phase("Phase 14: Reference-guided scaffolding")
+        logger.phase("Phase 15: Reference-guided scaffolding")
         from final_finalizer.output.scaffolding import scaffold_chromosomes, write_agp, orientations_from_agp
 
         scaffolded_seqs, agp_lines, scaffold_confidences = scaffold_chromosomes(
@@ -1285,10 +1303,10 @@ def run_assembly(
                 if clf.original_name in agp_orients:
                     clf.reversed = agp_orients[clf.original_name]
     else:
-        logger.info("Phase 14: Skipping scaffolding (use --scaffold to enable)")
+        logger.info("Phase 15: Skipping scaffolding (use --scaffold to enable)")
 
-    # --- Phase 15: Write FASTA outputs ---
-    logger.phase("Phase 15: Writing FASTA outputs")
+    # --- Phase 16: Write FASTA outputs ---
+    logger.phase("Phase 16: Writing FASTA outputs")
     write_classified_fastas(
         query_fasta=qry,
         classifications=classifications,
@@ -1301,8 +1319,8 @@ def run_assembly(
     chrs_fasta = Path(str(outprefix) + ".chrs.fasta")
     per_sg_chrs = write_per_subgenome_chrs_fastas(chrs_fasta, outprefix)
 
-    # --- Phase 16: Write summary TSV ---
-    logger.phase("Phase 16: Writing summary TSV")
+    # --- Phase 17: Write summary TSV ---
+    logger.phase("Phase 17: Writing summary TSV")
     summary_tsv = Path(str(outprefix) + ".contig_summary.tsv")
 
     write_contig_summary_tsv(
@@ -1354,14 +1372,14 @@ def run_assembly(
     for cat, count in sorted(clf_counts.items()):
         logger.info(f"       {cat}: {count}")
 
-    # --- Phase 17: Compleasm (BUSCO) evaluation ---
+    # --- Phase 18: Compleasm (BUSCO) evaluation ---
     compleasm_chrs_result = None
     compleasm_non_chrs_result = None
 
     can_compleasm = args.compleasm_lineage and not args.skip_compleasm
     if can_compleasm:
         import shutil
-        logger.phase("Phase 17: Compleasm (BUSCO completeness) evaluation")
+        logger.phase("Phase 18: Compleasm (BUSCO completeness) evaluation")
 
         chrs_fasta = Path(str(outprefix) + ".chrs.fasta")
 
@@ -1418,9 +1436,9 @@ def run_assembly(
             logger.done(f"Compleasm non-chrs: {compleasm_non_chrs_result.summary_line()}")
     else:
         if args.compleasm_lineage:
-            logger.info("Phase 17: Skipping compleasm (--skip-compleasm)")
+            logger.info("Phase 18: Skipping compleasm (--skip-compleasm)")
         else:
-            logger.info("Phase 17: Skipping compleasm (no --compleasm-lineage specified)")
+            logger.info("Phase 18: Skipping compleasm (no --compleasm-lineage specified)")
 
     # Build assembly result for cross-assembly comparison
     from final_finalizer.output.comparison import build_assembly_result
@@ -1451,6 +1469,8 @@ def run_assembly(
         compleasm_chrs=compleasm_chrs_result,
         compleasm_non_chrs=compleasm_non_chrs_result,
     )
+    result.rearrangements = rearrangement_calls
+    result.rearrangements_tsv = rearrangements_tsv
 
     if not args.skip_plot:
         agp_tsv = result.agp_tsv
