@@ -1004,7 +1004,7 @@ if (has_subgenomes) {
     geom_point(data = id_stats, aes(x = assigned_sg, y = mean_id, color = assigned_sg),
                shape = 16, size = 1.5, show.legend = FALSE, position = position_nudge(x = 0.35)) +
     scale_color_manual(values = col_dark, drop = FALSE) +
-    scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
+    scale_y_continuous(limits = c(0.4, 1), breaks = seq(0.4, 1, 0.1)) +
     theme_classic(base_family = base_family, base_size = base_font_pt) +
     axis_theme + theme(axis.ticks = element_blank(), panel.grid = element_blank(),
                        plot.margin = margin(5.5, 5.5, 5.5, 5.5)) +
@@ -1016,7 +1016,7 @@ if (has_subgenomes) {
   p_id <- ggplot(df_id_assigned, aes(x = assigned_bin, y = pmax(0, pmin(1, best_identity)))) +
     geom_jitter(width = 0.18, height = 0, alpha = 0.55, size = 1.2, color = "grey35", show.legend = FALSE) +
     stat_summary(fun = median, geom = "point", shape = 95, size = 7, color = "grey15", show.legend = FALSE) +
-    scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
+    scale_y_continuous(limits = c(0.4, 1), breaks = seq(0.4, 1, 0.1)) +
     theme_classic(base_family = base_family, base_size = base_font_pt) +
     axis_theme + theme(axis.ticks = element_blank(), panel.grid = element_blank(),
                        plot.margin = margin(5.5, 5.5, 5.5, 5.5)) +

@@ -1007,6 +1007,7 @@ p_si <- ggplot(si_df, aes(x = length_mb, y = seq_identity_vs_ref * 100,
     facet_wrap(~ sg)
   }} +
   scale_color_manual(values = asm_colors, name = NULL) +
+  scale_y_continuous(limits = c(40, 100), breaks = seq(40, 100, 10)) +
   labs(x = "Contig length (Mb)", y = "Sequence identity vs reference (%)") +
   theme_minimal(base_size = base_font_pt, base_family = base_family) +
   axis_theme +
