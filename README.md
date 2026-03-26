@@ -35,8 +35,8 @@ Chromosome-assigned contigs are renamed using the pattern `chr<ref>(_<subgenome>
 
 | Suffix | Meaning | Example |
 |--------|---------|---------|
-| _(none)_ | Single full-length contig assigned to this reference chromosome | `chr1A` |
-| `_B`, `_C`, … | Query subgenome label — the query assembly carries multiple homeologous copies that map to the same reference chromosome and can be resolved into distinct subgenomes | `chr1A_B` |
+| _(none)_ | Primary contig assigned to this reference chromosome — either the only copy, or the highest-identity copy when multiple query subgenomes are detected | `chr1A` |
+| `_B`, `_C`, … | Secondary query subgenome label — the query assembly carries multiple homeologous copies that map to the same reference chromosome, resolved into distinct subgenomes by identity clustering. The primary (highest-identity) copy is always unsuffixed. | `chr1A_B` |
 | `_c1`, `_c2`, … | Multiple full-length copies of the same (subgenome, reference chromosome) pair, ordered by descending alignment identity to the reference — `_c1` is always the highest-identity copy, consistent with the primary subgenome convention | `chr1A_c1`, `chr1A_c2` |
 | `_f1`, `_f2`, … | Chromosome fragments (contigs not classified as full-length), ordered by descending alignment identity to the reference | `chr1A_f1`, `chr1A_f2` |
 
