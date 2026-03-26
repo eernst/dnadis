@@ -26,6 +26,34 @@ _MIN_OFF_TARGET_SPAN_BP = 50_000
 # Minimum fraction of contig covered by a second ref to call a fusion.
 _MIN_FUSION_FRAC = 0.30
 
+# Assembly artifacts that can mimic each rearrangement type
+_CAVEATS = {
+    "reciprocal_translocation": (
+        "May indicate misjoins in both contigs at a shared repetitive or "
+        "homologous region, or scaffolding errors joining wrong chromosome arms"
+    ),
+    "whole_arm_translocation": (
+        "May indicate a scaffolding misjoin at a single breakpoint, typically "
+        "at a repeat-rich region (centromere, rDNA, subtelomere)"
+    ),
+    "translocation": (
+        "May indicate a collapsed segmental duplication placed on the wrong "
+        "contig, or a misassembled repeat-mediated insertion"
+    ),
+    "inversion": (
+        "May indicate misassembly at inverted repeat boundaries or an "
+        "uncorrected chimeric read spanning an inversion"
+    ),
+    "fusion": (
+        "May indicate a scaffolding error joining two chromosomes end-to-end, "
+        "especially if both lack telomeres at the join"
+    ),
+    "fission": (
+        "May indicate genuine assembly fragmentation (gap in coverage or "
+        "uncrossable repeat) rather than a biological structural variant"
+    ),
+}
+
 
 # ---------------------------------------------------------------------------
 # Helper: unpack a macro_block row tuple
@@ -161,6 +189,7 @@ def _detect_translocations(
             strand=strand,
             confidence=confidence,
             evidence=evidence,
+            caveat=_CAVEATS.get(rtype, ""),
         ))
 
     return calls
@@ -223,6 +252,7 @@ def _detect_inversions(
             strand=inverted_strand,
             confidence=confidence,
             evidence=evidence,
+            caveat=_CAVEATS["inversion"],
         ))
 
     for block in sorted_blocks:
@@ -303,6 +333,7 @@ def _detect_fusions(
                 strand="+",
                 confidence=confidence,
                 evidence=evidence,
+                caveat=_CAVEATS["fusion"],
             ))
 
     return calls
@@ -377,6 +408,7 @@ def _detect_fissions(
                 strand="+",
                 confidence=confidence,
                 evidence=evidence,
+                caveat=_CAVEATS["fission"],
             ))
 
     return calls

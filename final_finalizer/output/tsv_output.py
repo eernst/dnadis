@@ -1091,6 +1091,7 @@ def write_rearrangements_tsv(
         "strand",
         "confidence",
         "evidence",
+        "caveat",
     ]
     with output_path.open("w") as fh:
         fh.write("\t".join(header) + "\n")
@@ -1109,4 +1110,5 @@ def write_rearrangements_tsv(
                 c.strand,
                 c.confidence,
                 c.evidence,
+                c.caveat,
             ]) + "\n")
