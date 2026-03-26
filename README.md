@@ -37,7 +37,7 @@ Chromosome-assigned contigs are renamed using the pattern `chr<ref>(_<subgenome>
 |--------|---------|---------|
 | _(none)_ | Primary contig assigned to this reference chromosome — either the only copy, or the highest-identity copy when multiple query subgenomes are detected | `chr1A` |
 | `_B`, `_C`, … | Secondary query subgenome label — the query assembly carries multiple homeologous copies that map to the same reference chromosome, resolved into distinct subgenomes by identity clustering. The primary (highest-identity) copy is always unsuffixed. | `chr1A_B` |
-| `_c1`, `_c2`, … | Multiple full-length copies of the same (subgenome, reference chromosome) pair, ordered by descending alignment identity to the reference — `_c1` is always the highest-identity copy, consistent with the primary subgenome convention | `chr1A_c1`, `chr1A_c2` |
+| `_c1`, `_c2`, … | Multiple full-length copies that could not be resolved into distinct subgenomes — the copies align to the reference at nearly identical identity levels, so the GMM clustering cannot distinguish them. This typically arises when both haplotypes of a phased assembly are provided in a single query FASTA, or when the assembler produces near-identical duplicate copies. Ordered by descending alignment identity; `_c1` is always the highest-identity copy. See [Limitations](#limitations-and-expectations) for details. | `chr1A_c1`, `chr1A_c2` |
 | `_f1`, `_f2`, … | Chromosome fragments (contigs not classified as full-length), ordered by descending alignment identity to the reference | `chr1A_f1`, `chr1A_f2` |
 
 Suffixes compose left-to-right: subgenome first, then copy/fragment. For example, `chr1A_B_f1` is the longest fragment of chr1A from query subgenome B.
@@ -71,6 +71,8 @@ No user configuration is required. The feature runs automatically whenever multi
 **Haplotype-collapsed assemblies**: Assemblers that produce a single primary assembly (e.g., in primary/alternate mode) collapse both haplotypes of each chromosome into one contig. There is nothing to segment — the tool correctly reports a single copy with no subgenome suffix. This is expected behavior.
 
 **Haplotype-phased assemblies**: Assemblies that retain both haplotypes as separate contigs (e.g., from phased assembly workflows) may include two copies of each chromosome that differ only at heterozygous positions. If both haplotypes are provided in a single query FASTA, they typically align to the reference at nearly identical identity levels and may not be separable by the GMM. The tool will label them `_c1`/`_c2` (unsegmented copies) rather than `_B` (distinct subgenome). This is the correct outcome: the two copies represent haplotypes of the same subgenome, not distinct homeologous subgenomes.
+
+**Autopolyploids**: Autopolyploid genomes (e.g., autotetraploids) carry multiple chromosome sets derived from the same ancestral species. Unlike allopolyploids, the subgenomes have identical evolutionary distance from the reference, so identity-based clustering cannot distinguish them. These will also be labeled `_c1`/`_c2`.
 
 **Minimum data requirement**: Clustering requires at least 4 multi-copy reference chromosomes to attempt model fitting, and at least 3 chromosomes with exactly _k_ copies for paired validation. Assemblies with very few assigned chromosomes may not trigger subgenome segmentation.
 
