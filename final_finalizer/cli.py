@@ -561,18 +561,15 @@ def run_assembly(
     n_no_candidates = 0  # Contigs with no alignment candidates
     qr_ref_score = ev.qr_weight_all if args.assign_ref_score == "all" else ev.qr_score_topk
 
-    # Use max(ref_span_frac, query_span_frac) for candidate ranking when ref
-    # lengths are available.  Matches the primary assignment in chain parsing.
-    qr_combined_frac: Dict[Tuple[str, str], float] = {}
+    # Use reference span fraction for candidate ranking when ref lengths are
+    # available.  Matches the primary assignment in chain parsing.
+    qr_span_frac: Dict[Tuple[str, str], float] = {}
     if ev.qr_ref_span_bp and ref_lengths:
         for (q, rid), ref_span in ev.qr_ref_span_bp.items():
             rlen = ref_lengths.get(rid, 0)
-            qlen = qry_lengths.get(q, 0) or ev.qlens_from_paf.get(q, 0)
-            qbp = ev.qr_union_bp.get((q, rid), 0)
-            ref_frac = (ref_span / rlen) if rlen > 0 else 0.0
-            qry_frac = (qbp / qlen) if qlen > 0 else 0.0
-            qr_combined_frac[(q, rid)] = max(ref_frac, qry_frac)
-    ranking_score = qr_combined_frac if qr_combined_frac else qr_ref_score
+            if rlen > 0:
+                qr_span_frac[(q, rid)] = ref_span / rlen
+    ranking_score = qr_span_frac if qr_span_frac else qr_ref_score
 
     candidates_by_contig = defaultdict(list)
     for (q, ref_id), sc in ranking_score.items():
