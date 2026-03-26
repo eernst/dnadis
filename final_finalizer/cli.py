@@ -2259,29 +2259,20 @@ def main():
                         )
                         pairwise_futures.append((pair_name, fut))
 
-            # Collect pairwise results
-            for pair_name, fut in pairwise_futures:
-                try:
-                    macro_tsv = fut.result()
-                    if macro_tsv:
-                        pairwise_pairs.append((pair_name, macro_tsv))
-                except Exception as e:
-                    logger.error(f"Pairwise '{pair_name}' failed: {e}")
-
-            # --- Rescue pairwise alignments for non-adjacent assemblies ---
+            # --- Non-adjacent pairwise alignments ---
             # When an intermediate assembly lacks a chromosome that its
-            # neighbors share, no ribbon can be drawn.  Rescue alignments
-            # bridge the gap so the Rmd can draw spanning ribbons.
-            rescue_futures: list[tuple[str, Any]] = []
+            # neighbors share, no adjacent ribbon can be drawn.  Non-adjacent
+            # alignments bridge the gap.  These are submitted alongside the
+            # adjacent pairs so all pairwise jobs run concurrently.
 
-            def _submit_rescue_pairs(ordered_results, rescue_dir, get_fasta, log_suffix="", subgenome_filter=None):
-                """Detect and submit rescue pairwise alignments for one result list.
+            def _submit_nonadj_pairs(ordered_results, nonadj_dir, get_fasta, log_suffix="", subgenome_filter=None):
+                """Detect and submit non-adjacent pairwise alignments.
 
                 Args:
                     subgenome_filter: If set, only consider ref_ids belonging to
                         this reference subgenome when detecting gaps.  Prevents
                         chromosomes from other subgenomes triggering spurious
-                        rescues in the current chain.
+                        pairs in the current chain.
                 """
                 asm_chroms = {}
                 for r in ordered_results:
@@ -2294,26 +2285,26 @@ def main():
                                     continue
                             chroms.add(cc.assigned_ref_id)
                     asm_chroms[r.assembly_name] = chroms
-                rescue_needed: set[tuple[int, int]] = set()
+                needed: set[tuple[int, int]] = set()
                 for i in range(len(ordered_results)):
                     for ref_id in asm_chroms.get(ordered_results[i].assembly_name, ()):
                         if i > 0 and ref_id not in asm_chroms.get(ordered_results[i - 1].assembly_name, ()):
                             for j in range(i - 2, -1, -1):
                                 if ref_id in asm_chroms.get(ordered_results[j].assembly_name, ()):
-                                    rescue_needed.add((j, i))
+                                    needed.add((j, i))
                                     break
-                if not rescue_needed:
+                if not needed:
                     return
-                rescue_dir.mkdir(parents=True, exist_ok=True)
+                nonadj_dir.mkdir(parents=True, exist_ok=True)
                 n_submitted = 0
-                for j, i in sorted(rescue_needed):
+                for j, i in sorted(needed):
                     left, right = ordered_results[j], ordered_results[i]
-                    pair_name = f"rescue:{left.assembly_name}_vs_{right.assembly_name}"
-                    pair_prefix = rescue_dir / f"{left.assembly_name}_vs_{right.assembly_name}"
+                    pair_name = f"{left.assembly_name}_vs_{right.assembly_name}"
+                    pair_prefix = nonadj_dir / pair_name
                     left_fasta, right_fasta = get_fasta(left), get_fasta(right)
                     macro_tsv = Path(str(pair_prefix) + ".macro_blocks.tsv")
                     if file_exists_and_valid(macro_tsv):
-                        logger.info(f"Reusing cached rescue pairwise: {macro_tsv}")
+                        logger.info(f"Reusing cached pairwise: {macro_tsv}")
                         pairwise_pairs.append((pair_name, macro_tsv))
                     else:
                         res_spec = estimate_pairwise_resources(
@@ -2331,38 +2322,38 @@ def main():
                             resource_spec=res_spec if use_cluster_pw else None,
                             **chain_kwargs,
                         )
-                        rescue_futures.append((pair_name, fut))
+                        pairwise_futures.append((pair_name, fut))
                         n_submitted += 1
                 if n_submitted > 0:
-                    logger.info(f"Submitted {n_submitted} rescue pairwise alignment(s){log_suffix}")
+                    logger.info(f"Submitted {n_submitted} non-adjacent pairwise alignment(s){log_suffix}")
 
             if any_has_sg:
                 for sg in sorted(sg_assemblies):
                     sg_results = sg_assemblies[sg]
                     if len(sg_results) >= 3:
-                        _submit_rescue_pairs(
+                        _submit_nonadj_pairs(
                             sg_results,
-                            pairwise_dir / sg / "rescue",
+                            pairwise_dir / sg / "nonadj",
                             get_fasta=lambda r, _sg=sg: r.per_subgenome_chrs[_sg],
                             log_suffix=f" for subgenome {sg}",
                             subgenome_filter=sg,
                         )
             else:
                 if len(results) >= 3:
-                    _submit_rescue_pairs(
+                    _submit_nonadj_pairs(
                         results,
-                        pairwise_dir / "rescue",
+                        pairwise_dir / "nonadj",
                         get_fasta=lambda r: Path(str(r.outprefix) + ".chrs.fasta"),
                     )
 
-            # Collect rescue pairwise results
-            for pair_name, fut in rescue_futures:
+            # Collect all pairwise results (adjacent + non-adjacent)
+            for pair_name, fut in pairwise_futures:
                 try:
                     macro_tsv = fut.result()
                     if macro_tsv:
                         pairwise_pairs.append((pair_name, macro_tsv))
                 except Exception as e:
-                    logger.error(f"Rescue pairwise '{pair_name}' failed: {e}")
+                    logger.error(f"Pairwise '{pair_name}' failed: {e}")
 
     # --- executor is now closed ---
 
