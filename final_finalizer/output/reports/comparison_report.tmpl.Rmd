@@ -1584,17 +1584,73 @@ build_synteny_plot <- function(sg) {
     pill_x_left + (pos / seq_len) * pill_w
   }
 
-  # Transposed ribbon: flows vertically (top→bottom) between rows
+  # Transposed ribbon: flows vertically (top→bottom) between rows.
+  # Uses n_pts=10 for a 20-point polygon (10 forward + 10 reversed).
+  # Returns raw vectors instead of a tibble — caller accumulates into
+  # pre-allocated buffers to avoid bind_rows of thousands of small frames.
+  n_pts <- 10L
+  t_seq <- seq(0, 1, length.out = n_pts)
+  s_seq <- 0.5 - 0.5 * cos(pi * t_seq)
+  pts_per_ribbon <- 2L * n_pts
+
+  # Pre-allocated ribbon buffers (grown in chunks if needed)
+  buf_cap <- 50000L  # initial capacity in points
+  r_x <- numeric(buf_cap)
+  r_y <- numeric(buf_cap)
+  r_chrom_id <- character(buf_cap)
+  r_alpha <- numeric(buf_cap)
+  r_tooltip <- character(buf_cap)
+  r_subgenome <- character(buf_cap)
+  r_data_id <- character(buf_cap)
+  r_group_id <- integer(buf_cap)
+  r_idx <- 0L  # next write position
+
+  grow_buf <- function() {
+    new_cap <<- length(r_x) * 2L
+    r_x <<- c(r_x, numeric(new_cap - length(r_x)))
+    r_y <<- c(r_y, numeric(new_cap - length(r_y)))
+    r_chrom_id <<- c(r_chrom_id, character(new_cap - length(r_chrom_id)))
+    r_alpha <<- c(r_alpha, numeric(new_cap - length(r_alpha)))
+    r_tooltip <<- c(r_tooltip, character(new_cap - length(r_tooltip)))
+    r_subgenome <<- c(r_subgenome, character(new_cap - length(r_subgenome)))
+    r_data_id <<- c(r_data_id, character(new_cap - length(r_data_id)))
+    r_group_id <<- c(r_group_id, integer(new_cap - length(r_group_id)))
+  }
+
+  append_ribbon <- function(gap_top, gap_bot,
+                            top_x_left, top_x_right,
+                            bot_x_left, bot_x_right,
+                            chrom_id_val, alpha_val, tooltip_text,
+                            subgenome_val, data_id_val, group_id_val) {
+    y_fwd <- gap_top + t_seq * (gap_bot - gap_top)
+    left_fwd  <- top_x_left  + s_seq * (bot_x_left  - top_x_left)
+    right_fwd <- top_x_right + s_seq * (bot_x_right - top_x_right)
+    xs <- c(left_fwd, rev(right_fwd))
+    ys <- c(y_fwd, rev(y_fwd))
+
+    end_idx <- r_idx + pts_per_ribbon
+    if (end_idx > length(r_x)) grow_buf()
+    rng <- (r_idx + 1L):end_idx
+    r_x[rng] <<- xs
+    r_y[rng] <<- ys
+    r_chrom_id[rng] <<- chrom_id_val
+    r_alpha[rng] <<- alpha_val
+    r_tooltip[rng] <<- tooltip_text
+    r_subgenome[rng] <<- subgenome_val
+    r_data_id[rng] <<- data_id_val
+    r_group_id[rng] <<- group_id_val
+    r_idx <<- end_idx
+  }
+
+  # Legacy wrapper for compatibility with existing code that expects tibble
   make_ribbon_v <- function(gap_top, gap_bot,
                             top_x_left, top_x_right,
                             bot_x_left, bot_x_right,
                             chrom_id_val, alpha_val, tooltip_text,
-                            subgenome_val, data_id_val, n_pts = 20) {
-    t <- seq(0, 1, length.out = n_pts)
-    s <- 0.5 - 0.5 * cos(pi * t)
-    y_fwd <- gap_top + t * (gap_bot - gap_top)
-    left_fwd  <- top_x_left  + s * (bot_x_left  - top_x_left)
-    right_fwd <- top_x_right + s * (bot_x_right - top_x_right)
+                            subgenome_val, data_id_val, n_pts_unused = 10) {
+    y_fwd <- gap_top + t_seq * (gap_bot - gap_top)
+    left_fwd  <- top_x_left  + s_seq * (bot_x_left  - top_x_left)
+    right_fwd <- top_x_right + s_seq * (bot_x_right - top_x_right)
     tibble(
       x = c(left_fwd, rev(right_fwd)),
       y = c(y_fwd, rev(y_fwd)),
@@ -1640,8 +1696,12 @@ build_synteny_plot <- function(sg) {
     split(pw_filtered, paste(pw_filtered$left_assembly, pw_filtered$right_assembly, sep = "\x01"))
   } else { NULL }
 
+  # Pre-split per-assembly macro_blocks by assembly for O(1) lookup
+  per_asm_by_asm <- if (!is.null(per_asm_macro_df)) {
+    split(per_asm_macro_df, per_asm_macro_df$assembly)
+  } else { NULL }
+
   # --- Build ribbon polygons ---
-  ribbon_polys <- list()
   ribbon_idx <- 0
 
   for (gap_i in seq_along(gap_zones)) {
@@ -1651,14 +1711,11 @@ build_synteny_plot <- function(sg) {
     # Gather macro_blocks for this row pair
     if (gm$top_is_ref) {
       bot_asm <- gm$bot_asm
-      if (!is.null(per_asm_macro_df)) {
-        macro_src <- per_asm_macro_df %>%
-          filter(assembly == bot_asm)
-        if (n_subgenomes > 1) {
-          sg_ref_ids <- sg_chr$ref_id
-          macro_src <- macro_src %>% filter(ref_id %in% sg_ref_ids)
-        }
-      } else { macro_src <- NULL }
+      macro_src <- if (!is.null(per_asm_by_asm)) per_asm_by_asm[[bot_asm]] else NULL
+      if (!is.null(macro_src) && n_subgenomes > 1) {
+        sg_ref_ids <- sg_chr$ref_id
+        macro_src <- macro_src[macro_src$ref_id %in% sg_ref_ids, , drop = FALSE]
+      }
     } else {
       top_asm <- gm$top_asm
       bot_asm <- gm$bot_asm
@@ -1761,12 +1818,12 @@ build_synteny_plot <- function(sg) {
         )
 
         ribbon_idx <- ribbon_idx + 1
-        ribbon_polys[[ribbon_idx]] <- make_ribbon_v(
+        append_ribbon(
           gz[1], gz[2], seg_tx_left, seg_tx_right, seg_bx_left, seg_bx_right,
           chrom_id_val = cid, alpha_val = alpha_ribbon,
           tooltip_text = tooltip, subgenome_val = sg,
-          data_id_val = cid
-        ) %>% mutate(group_id = ribbon_idx)
+          data_id_val = cid, group_id_val = ribbon_idx
+        )
       }
     }
   }
@@ -1862,20 +1919,28 @@ build_synteny_plot <- function(sg) {
         )
 
         ribbon_idx <- ribbon_idx + 1
-        ribbon_polys[[ribbon_idx]] <- make_ribbon_v(
+        append_ribbon(
           gz_span[1], gz_span[2], tx_left, tx_right, bx_left, bx_right,
           chrom_id_val = cid, alpha_val = alpha_ribbon,
           tooltip_text = tooltip, subgenome_val = sg,
-          data_id_val = cid
-        ) %>% mutate(group_id = ribbon_idx)
+          data_id_val = cid, group_id_val = ribbon_idx
+        )
       }
     }
   }
 
-  has_ribbons <- length(ribbon_polys) > 0
+  # Build ribbon data frame from pre-allocated buffers (avoids bind_rows of
+  # thousands of small tibbles which is O(n²) in dplyr/vctrs).
+  has_ribbons <- r_idx > 0
   if (has_ribbons) {
-    all_ribbons <- bind_rows(ribbon_polys)
-    all_ribbons <- all_ribbons %>% arrange(group_id)
+    rng <- seq_len(r_idx)
+    all_ribbons <- data.frame(
+      x = r_x[rng], y = r_y[rng],
+      chrom_id = r_chrom_id[rng], alpha = r_alpha[rng],
+      tooltip = r_tooltip[rng], subgenome = r_subgenome[rng],
+      data_id = r_data_id[rng], group_id = r_group_id[rng],
+      stringsAsFactors = FALSE
+    )
   } else {
     all_ribbons <- NULL
   }
