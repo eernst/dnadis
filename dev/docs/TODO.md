@@ -157,6 +157,22 @@
   * Comparison report: always regenerate since row ordering and rescue logic depend on the full FOFN
   * Consider storing a manifest (FOFN hash, assembly list, per-assembly input checksums) alongside outputs to detect staleness
 
+## Read depth evidence for rearrangement confidence (separate PR)
+
+* [ ] Use read depth uniformity at predicted rearrangement breakpoints to refine confidence. A real rearrangement should show uniform depth across the breakpoint; an assembly misjoin often shows a depth drop or spike at the junction.
+
+  **Phase ordering**: Swap Phase 12 (rearrangement detection) and Phase 13 (read depth) so that depth data is available when rearrangement confidence is scored. Single-pass — no need for a two-pass approach.
+
+  **Depth resolution**: Consider reducing mosdepth window size from 500bp to 100bp for finer breakpoint resolution. Estimated file size increase ~2-3× (not 5×) due to gzip compression efficiency on autocorrelated depth values.
+
+  **Implementation**:
+  - After depth calculation, for each rearrangement breakpoint candidate, extract depth in a ±5kb window around the junction from the mosdepth bed.gz
+  - Compute depth uniformity metric (e.g., coefficient of variation in the breakpoint window vs flanking regions)
+  - Uniform depth across breakpoint → upgrade confidence; depth anomaly → add caveat or downgrade
+  - No dependency on `--keep-bam` for depth-based evidence
+
+  **Opportunistic split-read analysis**: If `--keep-bam` is in use, additionally check for split/discordant reads spanning predicted breakpoints. This provides direct confirmation but is optional — depth uniformity alone is sufficient for confidence adjustment.
+
 ## Performance
 
 * [ ] Parallelize per-chromosome RagTag scaffolding within `scaffold_chromosomes()`. Currently each chromosome group runs serially with full thread allocation. For fragmented assemblies with many groups, running N groups in parallel with `threads / N` threads each would be significantly faster. Each group's scaffolding is independent — use internal `ThreadPoolExecutor`, merge per-group results after completion.
