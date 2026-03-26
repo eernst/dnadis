@@ -791,6 +791,21 @@ Assemblies run concurrently; each submits its own SLURM jobs for compute-intensi
 
 The tool supports two complementary synteny modes:
 
+#### Nucleotide mode (default)
+
+Uses whole-genome nucleotide alignment for structural composition analysis:
+- Detects actual sequence-level identity and synteny
+- Ideal for identifying structural features (fusions, translocations, homeologous exchanges)
+- Works for both within-species and cross-species comparisons
+- Creates megabase-scale synteny blocks for chromosome architecture analysis
+
+Minimap2 alignments use permissive chaining parameters to create continuous chromosome-scale blocks:
+- `--max-chain-skip=300`: Chain through repetitive regions
+- `-z 10000,1000`: Tolerate long gaps in alignment chains
+- `-r 50000`: Large bandwidth (50kb) to accommodate structural variations
+
+This permissive approach chains through homopolymer runs, tandem repeats, and ambiguous regions that would otherwise fragment alignments. The resulting megabase-scale blocks are suitable for chromosome classification and compositional analysis, balanced by downstream filtering (identity thresholds, minimum alignment length, gate filtering) to prevent spurious assignments.
+
 #### Protein mode
 
 Uses protein homology as the primary evidence source because:
@@ -807,23 +822,6 @@ Miniprot alignments are:
 5. Aggregated per contig × reference chromosome
 6. Scored and ranked for assignment
 
-#### Nucleotide mode (default)
-
-Uses whole-genome nucleotide alignment for structural composition analysis:
-- Detects actual sequence-level identity and synteny
-- Ideal for identifying structural features (fusions, translocations, homeologous exchanges)
-- Works for both within-species and cross-species comparisons
-- Creates megabase-scale synteny blocks for chromosome architecture analysis
-
-Minimap2 alignments use permissive chaining parameters to create continuous chromosome-scale blocks:
-- `--max-chain-skip=300`: Chain through repetitive regions
-- `-z 10000,1000`: Tolerate long gaps in alignment chains
-- `-r 50000`: Large bandwidth (50kb) to accommodate structural variations
-
-This permissive approach chains through homopolymer runs, tandem repeats, and ambiguous regions that would otherwise fragment alignments. The resulting megabase-scale blocks are suitable for chromosome classification and compositional analysis, balanced by downstream filtering (identity thresholds, minimum alignment length, gate filtering) to prevent spurious assignments.
-
-**Gate threshold differences**: Nucleotide mode requires ≥1 segment (vs. ≥5 for protein mode) because perfect full-length nucleotide alignments produce fewer segments than fragmented protein hits.
-
 ### Gate-based assignment
 
 Contigs must pass "gates" to be assigned:
@@ -835,6 +833,8 @@ This prevents spurious assignments from:
 - Single conserved genes
 - Repetitive sequences
 - Low-complexity regions
+
+**Gate threshold differences**: Nucleotide mode requires ≥1 segment (vs. ≥5 for protein mode) because perfect full-length nucleotide alignments produce fewer segments than fragmented protein hits.
 
 ### Reference assignment scoring
 
