@@ -103,7 +103,22 @@
 
 ## Translocation-aware chromosome assignment
 
-* [x] Replace raw-score-based reference assignment with reference span fraction (`qr_ref_span_bp / ref_length`) to avoid bias toward larger reference chromosomes in translocation cases. Implemented as a reassignment pass in `classify_all_contigs` using proportionate coverage.
+* [x] Replace raw-score-based reference assignment with reference span fraction (`qr_ref_span_bp / ref_length`) to avoid bias toward larger reference chromosomes in translocation cases. Implemented as primary scoring in chain parsing.
+
+## Reciprocal translocation detection and 1:1 assignment
+
+* [ ] Detect reciprocal translocations and resolve with 1:1 ref:query assignment. Current ref_span_frac scoring is per-contig (each contig independently picks its best ref), so two contigs involved in a reciprocal translocation can both be assigned to the same reference chromosome, leaving the partner chromosome empty.
+
+  **Detection signature**: Two contigs both assigned to the same ref R1, both with second-best ref R2, R2 has zero assigned contigs, and the contigs have complementary coverage patterns (one covers one arm of R1 + one arm of R2, the other covers the reverse).
+
+  **Resolution**: Reassign the contig with the lower R1 span fraction to R2. This is a targeted post-assignment correction, not a global optimization — it only fires for the specific reciprocal translocation pattern.
+
+  **Important constraints**:
+  - Only apply when R2 has zero contigs (the reassignment fills an empty slot, not displaces another contig)
+  - Do not apply in polyploid cases where two contigs legitimately belong to the same ref
+  - The reassigned contig's R2 span fraction should be non-trivial (above some minimum threshold)
+
+* [ ] Develop synthetic test cases for chromosome assignment with known rearrangements: reciprocal translocations (balanced and unbalanced), Robertsonian translocations, inversions, whole-arm translocations, fusions, and fissions. Verify assignment outcomes match biological expectations across scenarios.
 
 ## Reference chromosome filtering
 
