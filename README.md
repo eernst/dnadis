@@ -24,7 +24,7 @@
 - **Read depth analysis** (optional) with automated downsampling and caching
 - **Multi-assembly mode**: analyze multiple assemblies concurrently against a shared reference via `--fofn` (file-of-filenames TSV) or `--assembly-dir` (directory scan)
 - **Cross-assembly comparison reports**: interactive HTML tables (via gt) aggregating classification and BUSCO completeness results across all assemblies
-- **Interactive HTML reports** per assembly with chromosome overview, classification summary, read depth, and contaminant table (enabled by default; requires rmarkdown + pandoc)
+- **Interactive HTML reports** per assembly with chromosome overview, classification summary, read depth, and contaminant table (enabled by default; requires rmarkdown + pandoc). Reports are non-self-contained by default (HTML + companion `_files/` directory); use `--self-contained-html` for a single portable file
 - **Distributed SLURM execution** (optional) via executorlib: compute-intensive phases submitted as individual SLURM jobs with automatic resource estimation
 
 ## Contig Naming Scheme
@@ -219,6 +219,7 @@ Latest tested conda package versions (CI):
 |----------|-------------|---------|
 | `-t, --threads` | Number of threads | 8 |
 | `--skip-plot` | Skip unified HTML report generation | off |
+| `--self-contained-html` | Embed all resources (JS, CSS, SVG) into a single portable HTML file. Slower and produces larger files; suitable for sharing. Default produces HTML + companion `_files/` directory, which loads faster. | off |
 | `-v, --verbose` | Enable verbose (DEBUG level) logging | off |
 | `--quiet` | Suppress INFO messages (only warnings and errors) | off |
 | `--log-file` | Write logs to file (in addition to stderr) | none |
@@ -390,7 +391,7 @@ Enabled by default; skip with `--skip-plot` (requires R with ggplot2 and related
 
 | File | Description |
 |------|-------------|
-| `*.unified_report.html` | Self-contained HTML report per assembly with all plots (chromosome overview, classification bar, read depth overview, contaminant table) |
+| `*.unified_report.html` | HTML report per assembly with all plots (chromosome overview, classification bar, read depth overview, contaminant table). Non-self-contained by default: a companion `*.unified_report_files/` directory holds JS/CSS resources. Use `--self-contained-html` to embed all resources into a single portable file. |
 | `*.chromosome_overview.pdf` | Multi-panel plot showing contig composition, subgenome support, and alignment identity (exported from the unified report) |
 | `*.depth_overview.pdf` | Read depth visualization by classification and chromosome (if `--reads` provided; exported from the unified report) |
 
