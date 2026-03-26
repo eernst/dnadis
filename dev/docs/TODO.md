@@ -14,11 +14,11 @@
 
 * [ ] Add NUMT and NUPT detection using determined organelle reference contigs for alignment and accepted thresholds of sequence retention to call. Add stats tables to assembly report and include avg # and length in the aggregate homologous chromsome stats in the comparison report.
 
-## Plotting improvements
+## Reporting/Plotting improvements
 
 * [ ] Add branding to the top of the report index/nav at left
 
-* [ ] Comparison report: show reference-relative aggregate homologous chromosome stats, e.g. a table with box plots of lengths for each chromosome and min/med/max text next to it, rDNA presence/absence/mixed as full/empty/half-filled circle
+* [ ] Comparison report: show reference-relative aggregate homologous chromosome stats, e.g. a table with box plots of lengths for each chromosome and min/med/max text next to it, rDNA array presence/absence/mixed as full/empty/half-filled circle, rearrangements detected.
 
 * [ ] Consider adding a flag to allow different sort orders for assemblies in the report. Current should be using fixed sort order by fofn input order, but users may prefer sorting by global identity to the reference, or other metrics.
 
