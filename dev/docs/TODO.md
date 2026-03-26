@@ -20,6 +20,8 @@
 
 * [ ] Comparison report: show reference-relative aggregate homologous chromosome stats, e.g. a table with box plots of lengths for each chromosome and min/med/max text next to it, rDNA presence/absence/mixed as full/empty/half-filled circle
 
+* [ ] Consider adding a flag to allow different sort orders for assemblies in the report. Current should be using fixed sort order by fofn input order, but users may prefer sorting by global identity to the reference, or other metrics.
+
 ### 1. Assembly Overview
 
 #### Assembly Comparison Summary table
