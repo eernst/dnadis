@@ -118,6 +118,8 @@
   - Do not apply in polyploid cases where two contigs legitimately belong to the same ref
   - The reassigned contig's R2 span fraction should be non-trivial (above some minimum threshold)
 
+  **Fragment reassignment after reciprocal resolution**: After main contigs are resolved, fragments originally assigned to R1 may belong with the contig reassigned to R2. Re-evaluate fragments whose assigned ref has multiple contigs: if a fragment's second-best ref matches the newly-resolved partner chromosome and the fragment's synteny blocks overlap the partner contig's coverage region, reassign it. This couples assignment with scaffolding context but is necessary for fragmented assemblies with reciprocal translocations.
+
 * [ ] Develop synthetic test cases for chromosome assignment with known rearrangements: reciprocal translocations (balanced and unbalanced), Robertsonian translocations, inversions, whole-arm translocations, fusions, and fissions. Verify assignment outcomes match biological expectations across scenarios.
 
 ## Reference chromosome filtering

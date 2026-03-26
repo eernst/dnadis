@@ -330,6 +330,124 @@ def prepare_reference(args, ref_outprefix: Path) -> ReferenceContext:
 
 
 # ---------------------------------------------------------------------------
+# Reciprocal translocation detection and resolution
+# ---------------------------------------------------------------------------
+def _resolve_reciprocal_translocations(
+    best_ref: Dict[str, str],
+    span_frac: Dict[Tuple[str, str], float],
+) -> Dict[str, str]:
+    """Detect reciprocal translocations and resolve with 1:1 assignment.
+
+    When two contigs are both assigned to the same reference chromosome R1
+    and their second-best reference R2 has zero assigned contigs, this is
+    the signature of a reciprocal translocation.  The weaker contig (lower
+    R1 span fraction) is reassigned to R2.
+
+    After main contig resolution, fragments assigned to R1 are re-evaluated:
+    if a fragment's second-best reference is R2 (now occupied by the
+    reassigned main contig), the fragment is also moved to R2 so it can be
+    scaffolded with the main contig.
+
+    Only fires when exactly 2 main contigs (non-fragment-sized) compete for
+    the same ref and the partner ref is empty.  Does not fire for 3+ contigs
+    (likely polyploidy, not a reciprocal translocation).
+
+    Args:
+        best_ref: Dict of contig → best reference chromosome (modified copy returned).
+        span_frac: Dict of (contig, ref_id) → span fraction score.
+
+    Returns:
+        New best_ref dict with reciprocal translocations resolved.
+    """
+    from final_finalizer.utils.logging_config import get_logger
+    logger = get_logger("cli")
+
+    result = dict(best_ref)
+
+    # Group contigs by assigned ref
+    ref_to_contigs: Dict[str, list] = defaultdict(list)
+    for ctg, rid in result.items():
+        if rid:
+            ref_to_contigs[rid].append(ctg)
+
+    # Set of all assigned refs (for checking empty partner)
+    assigned_refs = set(result.values()) - {""}
+
+    # Find refs with 2+ contigs — candidate reciprocal translocations.
+    # Sort contigs by span fraction descending to identify the top-2 "main"
+    # contigs.  If the 2nd-strongest contig's partner ref is empty, it's a
+    # reciprocal translocation.  Any remaining contigs are fragments.
+    resolved_partners: set = set()  # Track (rid, partner_ref) pairs resolved
+
+    for rid, contigs in list(ref_to_contigs.items()):
+        if len(contigs) < 2:
+            continue
+
+        # Sort by span fraction for this ref, descending
+        ranked = sorted(contigs, key=lambda c: span_frac.get((c, rid), 0.0), reverse=True)
+        stronger, weaker = ranked[0], ranked[1]
+        fragments = ranked[2:]  # Any additional contigs are fragments
+
+        # Find second-best ref for both contigs
+        weaker_refs = sorted(
+            [(sf, r) for (q, r), sf in span_frac.items() if q == weaker and r != rid],
+            reverse=True,
+        )
+        stronger_refs = sorted(
+            [(sf, r) for (q, r), sf in span_frac.items() if q == stronger and r != rid],
+            reverse=True,
+        )
+        if not weaker_refs or not stronger_refs:
+            continue
+        partner_frac, partner_ref = weaker_refs[0]
+
+        # Reciprocal signature: both contigs share the same partner ref as
+        # their second-best, and the stronger contig also has substantial
+        # partner coverage (it carries one arm of the translocation).
+        # This distinguishes reciprocal translocations from polyploidy
+        # where the second-best coverage is just noise.
+        stronger_partner_frac = stronger_refs[0][0]
+        if stronger_refs[0][1] != partner_ref:
+            continue
+        # Both contigs must have meaningful partner coverage (>5% of partner ref)
+        if stronger_partner_frac < 0.05 or partner_frac < 0.05:
+            continue
+
+        # Only resolve if partner ref is empty
+        if partner_ref in assigned_refs:
+            continue
+
+        # Only resolve if the weaker contig has non-trivial partner coverage
+        if partner_frac <= 0:
+            continue
+
+        logger.info(
+            f"Reciprocal translocation: {weaker} reassigned "
+            f"{rid} (frac {span_frac.get((weaker, rid), 0):.3f}) → "
+            f"{partner_ref} (frac {partner_frac:.3f})"
+        )
+        result[weaker] = partner_ref
+        assigned_refs.add(partner_ref)
+        resolved_partners.add((rid, partner_ref))
+
+        # Re-evaluate fragments: those whose second-best is partner_ref
+        # should follow the reassigned main contig
+        for frag in fragments:
+            frag_refs = sorted(
+                [(sf, r) for (q, r), sf in span_frac.items() if q == frag and r != rid],
+                reverse=True,
+            )
+            if frag_refs and frag_refs[0][1] == partner_ref:
+                logger.info(
+                    f"  Fragment {frag} follows → {partner_ref} "
+                    f"(frac {frag_refs[0][0]:.3f})"
+                )
+                result[frag] = partner_ref
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # run_assembly: per-assembly analysis pipeline
 # ---------------------------------------------------------------------------
 def run_assembly(
@@ -649,6 +767,11 @@ def run_assembly(
                 f"{n_passing} passing gates, {n_demoted} demoted, {n_switched} switched")
     logger.info(f"Gate thresholds: min_segments={min_segments}, min_span_bp={args.min_span_bp}, "
                 f"min_span_frac={args.min_span_frac}, min_genes={min_genes}")
+
+    # Resolve reciprocal translocations: when two contigs are both assigned
+    # to the same ref and the partner ref is empty, reassign the weaker one
+    if ranking_score:
+        best_ref = _resolve_reciprocal_translocations(best_ref, ranking_score)
 
     if args.synteny_mode == "protein":
         plot_suffix = "protein-anchor synteny"

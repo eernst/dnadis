@@ -1611,3 +1611,164 @@ def test_infer_query_subgenomes_allotriploid():
             f"chr{i}P: expected no subgenome suffix, got {p_clf.query_subgenome}"
         )
         assert p_clf.query_subgenome_grp == 1
+
+
+# ===================================================================
+# Reciprocal translocation assignment tests
+# ===================================================================
+
+def test_resolve_reciprocal_translocation_basic():
+    """Two contigs with reciprocal translocation should get 1:1 assignment.
+
+    Scenario: contig_A covers 60% of chr1 + 30% of chr2
+              contig_B covers 30% of chr1 + 55% of chr2
+    Without resolution: both assigned to their respective best (A→chr1, B→chr2) — correct.
+    This test verifies the baseline is already correct when span fractions are unambiguous.
+    """
+    from final_finalizer.cli import _resolve_reciprocal_translocations
+
+    best_ref = {"ctg_A": "chr1", "ctg_B": "chr2"}
+    span_frac = {
+        ("ctg_A", "chr1"): 0.60, ("ctg_A", "chr2"): 0.30,
+        ("ctg_B", "chr1"): 0.30, ("ctg_B", "chr2"): 0.55,
+    }
+    resolved = _resolve_reciprocal_translocations(best_ref, span_frac)
+    assert resolved["ctg_A"] == "chr1"
+    assert resolved["ctg_B"] == "chr2"
+
+
+def test_resolve_reciprocal_translocation_both_same_ref():
+    """Two contigs both assigned to chr1, chr2 empty — reciprocal detected.
+
+    Scenario: contig_A covers 40% of chr1 + 35% of chr2
+              contig_B covers 38% of chr1 + 50% of chr2
+    Both assigned to chr1 by span_frac (0.40 > 0.35, 0.38 > 0.50... wait)
+    Actually contig_B has chr2=0.50 > chr1=0.38, so it would go to chr2.
+
+    Let's make it so both truly prefer chr1:
+              contig_A covers 40% of chr1 + 10% of chr2 (small ref)
+              contig_B covers 35% of chr1 + 30% of chr2 (small ref)
+    Both prefer chr1 by span_frac. But chr2 is empty.
+    Resolution: reassign contig_B (weaker chr1 coverage) to chr2.
+    """
+    from final_finalizer.cli import _resolve_reciprocal_translocations
+
+    best_ref = {"ctg_A": "chr1", "ctg_B": "chr1"}
+    span_frac = {
+        ("ctg_A", "chr1"): 0.40, ("ctg_A", "chr2"): 0.10,
+        ("ctg_B", "chr1"): 0.35, ("ctg_B", "chr2"): 0.30,
+    }
+    resolved = _resolve_reciprocal_translocations(best_ref, span_frac)
+    assert resolved["ctg_A"] == "chr1"
+    assert resolved["ctg_B"] == "chr2"
+
+
+def test_resolve_reciprocal_no_empty_partner():
+    """Two contigs on chr1, but chr2 already has a contig — no reassignment.
+
+    This prevents breaking polyploid assignments where two contigs
+    legitimately map to the same reference.
+    """
+    from final_finalizer.cli import _resolve_reciprocal_translocations
+
+    best_ref = {"ctg_A": "chr1", "ctg_B": "chr1", "ctg_C": "chr2"}
+    span_frac = {
+        ("ctg_A", "chr1"): 0.40, ("ctg_A", "chr2"): 0.10,
+        ("ctg_B", "chr1"): 0.35, ("ctg_B", "chr2"): 0.30,
+        ("ctg_C", "chr2"): 0.80,
+    }
+    resolved = _resolve_reciprocal_translocations(best_ref, span_frac)
+    # No change — chr2 already occupied
+    assert resolved["ctg_A"] == "chr1"
+    assert resolved["ctg_B"] == "chr1"
+    assert resolved["ctg_C"] == "chr2"
+
+
+def test_resolve_reciprocal_with_fragments():
+    """After resolving main contigs, fragments should follow.
+
+    Scenario: ctg_main1 and ctg_main2 both on chr15 (reciprocal with chr1)
+              ctg_frag1 also on chr15 but has chr1 as second-best
+    After resolution: ctg_main2 → chr1, then ctg_frag1 should also move to chr1
+    if its chr1 span_frac is non-trivial and chr15 is now less crowded.
+    """
+    from final_finalizer.cli import _resolve_reciprocal_translocations
+
+    best_ref = {
+        "ctg_main1": "chr15", "ctg_main2": "chr15",
+        "ctg_frag1": "chr15",
+    }
+    span_frac = {
+        ("ctg_main1", "chr15"): 0.40, ("ctg_main1", "chr1"): 0.10,
+        ("ctg_main2", "chr15"): 0.35, ("ctg_main2", "chr1"): 0.30,
+        ("ctg_frag1", "chr15"): 0.08, ("ctg_frag1", "chr1"): 0.05,
+    }
+    resolved = _resolve_reciprocal_translocations(best_ref, span_frac)
+    assert resolved["ctg_main1"] == "chr15"
+    assert resolved["ctg_main2"] == "chr1"
+    # Fragment: chr1 is now occupied by ctg_main2, and ctg_frag1's chr1
+    # span_frac (0.05) is its second-best. It should be reassigned to chr1
+    # to be scaffolded with ctg_main2.
+    assert resolved["ctg_frag1"] == "chr1"
+
+
+def test_resolve_reciprocal_fragment_stays_if_no_partner():
+    """Fragment should NOT be reassigned if its second-best ref has no main contig."""
+    from final_finalizer.cli import _resolve_reciprocal_translocations
+
+    best_ref = {
+        "ctg_main1": "chr15", "ctg_main2": "chr15",
+        "ctg_frag1": "chr15",
+    }
+    span_frac = {
+        ("ctg_main1", "chr15"): 0.40, ("ctg_main1", "chr1"): 0.10,
+        ("ctg_main2", "chr15"): 0.35, ("ctg_main2", "chr1"): 0.30,
+        # Fragment has chr3 as second-best, not chr1
+        ("ctg_frag1", "chr15"): 0.08, ("ctg_frag1", "chr3"): 0.05,
+    }
+    resolved = _resolve_reciprocal_translocations(best_ref, span_frac)
+    assert resolved["ctg_main1"] == "chr15"
+    assert resolved["ctg_main2"] == "chr1"
+    # Fragment stays on chr15 — chr3 wasn't part of the reciprocal
+    assert resolved["ctg_frag1"] == "chr15"
+
+
+def test_resolve_reciprocal_polyploid_safe():
+    """Polyploid: two contigs on same ref, but partner already has contigs.
+
+    In a real polyploid, the partner chromosome also has assigned contigs.
+    The resolution should not fire when the partner ref is occupied.
+    """
+    from final_finalizer.cli import _resolve_reciprocal_translocations
+
+    best_ref = {
+        "ctg_A1": "chr1", "ctg_A2": "chr1",
+        "ctg_B1": "chr2", "ctg_B2": "chr2",
+    }
+    span_frac = {
+        ("ctg_A1", "chr1"): 0.40, ("ctg_A1", "chr2"): 0.10,
+        ("ctg_A2", "chr1"): 0.35, ("ctg_A2", "chr2"): 0.08,
+        ("ctg_B1", "chr2"): 0.45, ("ctg_B1", "chr1"): 0.05,
+        ("ctg_B2", "chr2"): 0.38, ("ctg_B2", "chr1"): 0.03,
+    }
+    resolved = _resolve_reciprocal_translocations(best_ref, span_frac)
+    # No change — chr2 already has contigs, not a reciprocal
+    assert resolved["ctg_A1"] == "chr1"
+    assert resolved["ctg_A2"] == "chr1"
+    assert resolved["ctg_B1"] == "chr2"
+    assert resolved["ctg_B2"] == "chr2"
+
+
+def test_resolve_reciprocal_weaker_has_no_second_best():
+    """Weaker contig has no second-best ref — no reassignment."""
+    from final_finalizer.cli import _resolve_reciprocal_translocations
+
+    best_ref = {"ctg_A": "chr1", "ctg_B": "chr1"}
+    span_frac = {
+        ("ctg_A", "chr1"): 0.40,
+        ("ctg_B", "chr1"): 0.35,
+        # ctg_B has no chr2 entry at all
+    }
+    resolved = _resolve_reciprocal_translocations(best_ref, span_frac)
+    assert resolved["ctg_A"] == "chr1"
+    assert resolved["ctg_B"] == "chr1"
