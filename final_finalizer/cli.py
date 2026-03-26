@@ -373,6 +373,11 @@ def _resolve_reciprocal_translocations(
     # Set of all assigned refs (for checking empty partner)
     assigned_refs = set(result.values()) - {""}
 
+    # Pre-index span_frac by contig for O(1) per-contig lookups
+    span_frac_by_ctg: Dict[str, list] = defaultdict(list)
+    for (q, r), sf in span_frac.items():
+        span_frac_by_ctg[q].append((sf, r))
+
     # Find refs with 2+ contigs — candidate reciprocal translocations.
     # Sort contigs by span fraction descending to identify the top-2 "main"
     # contigs.  If the 2nd-strongest contig's partner ref is empty, it's a
@@ -390,11 +395,11 @@ def _resolve_reciprocal_translocations(
 
         # Find second-best ref for both contigs
         weaker_refs = sorted(
-            [(sf, r) for (q, r), sf in span_frac.items() if q == weaker and r != rid],
+            [(sf, r) for sf, r in span_frac_by_ctg.get(weaker, []) if r != rid],
             reverse=True,
         )
         stronger_refs = sorted(
-            [(sf, r) for (q, r), sf in span_frac.items() if q == stronger and r != rid],
+            [(sf, r) for sf, r in span_frac_by_ctg.get(stronger, []) if r != rid],
             reverse=True,
         )
         if not weaker_refs or not stronger_refs:
@@ -434,7 +439,7 @@ def _resolve_reciprocal_translocations(
         # should follow the reassigned main contig
         for frag in fragments:
             frag_refs = sorted(
-                [(sf, r) for (q, r), sf in span_frac.items() if q == frag and r != rid],
+                [(sf, r) for sf, r in span_frac_by_ctg.get(frag, []) if r != rid],
                 reverse=True,
             )
             if frag_refs and frag_refs[0][1] == partner_ref:

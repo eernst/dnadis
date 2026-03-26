@@ -17,12 +17,15 @@ from collections import defaultdict
 from typing import Dict, List, Optional, Set, Tuple
 
 from final_finalizer.models import RearrangementCall
+from final_finalizer.utils.io_utils import merge_intervals
 from final_finalizer.utils.logging_config import get_logger
 
 logger = get_logger("rearrangements")
 
 # Minimum off-target span (bp) to consider as translocation evidence.
 _MIN_OFF_TARGET_SPAN_BP = 50_000
+# Minimum span (bp) for high-confidence calls.
+_HIGH_CONFIDENCE_SPAN_BP = 1_000_000
 # Minimum fraction of contig covered by a second ref to call a fusion.
 _MIN_FUSION_FRAC = 0.30
 
@@ -53,6 +56,22 @@ _CAVEATS = {
         "uncrossable repeat) rather than a biological structural variant"
     ),
 }
+
+
+def _block_bounds(blocks: List[dict]) -> Tuple[int, int, int, int]:
+    """Return (q_min, q_max, r_min, r_max) for a list of block dicts."""
+    return (
+        min(b["qstart"] for b in blocks),
+        max(b["qend"] for b in blocks),
+        min(b["ref_start"] for b in blocks),
+        max(b["ref_end"] for b in blocks),
+    )
+
+
+def _union_query_span(blocks: List[dict]) -> int:
+    """Return the merged (non-overlapping) query span of a list of blocks."""
+    _, total = merge_intervals([(b["qstart"], b["qend"]) for b in blocks])
+    return total
 
 
 # ---------------------------------------------------------------------------
@@ -108,7 +127,7 @@ def _score_confidence(span_bp: int, *, reciprocal: bool = False,
     - medium: 50 kb–1 Mb if reciprocal/collinear, OR >1 Mb but one-sided
     - low: everything else (near threshold or ambiguous)
     """
-    if span_bp > 1_000_000:
+    if span_bp > _HIGH_CONFIDENCE_SPAN_BP:
         if reciprocal or collinear:
             return "high"
         return "medium"
@@ -141,16 +160,12 @@ def _detect_translocations(
         if ref_id == assigned_ref:
             continue
 
-        total_span = sum(b["qspan_bp"] for b in blocks)
+        total_span = _union_query_span(blocks)
         if total_span < _MIN_OFF_TARGET_SPAN_BP:
             continue
 
-        # Aggregate query and ref coordinates
-        q_min = min(b["qstart"] for b in blocks)
-        q_max = max(b["qend"] for b in blocks)
-        r_min = min(b["ref_start"] for b in blocks)
-        r_max = max(b["ref_end"] for b in blocks)
-        strand = blocks[0]["strand"]  # majority strand
+        q_min, q_max, r_min, r_max = _block_bounds(blocks)
+        strand = blocks[0]["strand"]
 
         is_reciprocal = ref_id in reciprocal_partners
 
@@ -228,13 +243,10 @@ def _detect_inversions(
     def _flush_inv_run() -> None:
         if not inv_run:
             return
-        total_span = sum(b["qspan_bp"] for b in inv_run)
+        total_span = _union_query_span(inv_run)
         if total_span < _MIN_OFF_TARGET_SPAN_BP:
             return
-        q_min = min(b["qstart"] for b in inv_run)
-        q_max = max(b["qend"] for b in inv_run)
-        r_min = min(b["ref_start"] for b in inv_run)
-        r_max = max(b["ref_end"] for b in inv_run)
+        q_min, q_max, r_min, r_max = _block_bounds(inv_run)
         confidence = _score_confidence(total_span, collinear=True)
         evidence = (f"Strand flip ({inverted_strand}) within {assigned_ref} "
                     f"({total_span:,} bp, {len(inv_run)} block(s))")
@@ -283,11 +295,10 @@ def _detect_fusions(
     # Collect refs with significant coverage
     significant_refs: List[Tuple[str, int, int, int]] = []  # (ref_id, span, q_min, q_max)
     for ref_id, blocks in blocks_by_ref.items():
-        total_span = sum(b["qspan_bp"] for b in blocks)
+        total_span = _union_query_span(blocks)
         frac_of_contig = total_span / contig_len if contig_len > 0 else 0
         if frac_of_contig >= _MIN_FUSION_FRAC:
-            q_min = min(b["qstart"] for b in blocks)
-            q_max = max(b["qend"] for b in blocks)
+            q_min, q_max, _, _ = _block_bounds(blocks)
             significant_refs.append((ref_id, total_span, q_min, q_max))
 
     if len(significant_refs) < 2:
@@ -346,7 +357,6 @@ def _detect_fusions(
 def _detect_fissions(
     contigs_for_ref: Dict[str, List[Tuple[str, int, int, int]]],
     ref_lengths: Dict[str, int],
-    best_ref: Dict[str, str],
 ) -> List[RearrangementCall]:
     """Detect fissions: one reference split across multiple contigs.
 
@@ -370,10 +380,9 @@ def _detect_fissions(
 
         # Check that contigs cover complementary, non-overlapping ref ranges
         # and together cover a substantial fraction of the reference
-        total_ref_covered = 0
-        for _, _, rmin, rmax in contig_ranges:
-            total_ref_covered += rmax - rmin
-
+        _, total_ref_covered = merge_intervals(
+            [(rmin, rmax) for _, _, rmin, rmax in contig_ranges]
+        )
         ref_frac = total_ref_covered / ref_len if ref_len > 0 else 0
         if ref_frac < 0.50:
             continue
@@ -473,9 +482,15 @@ def detect_rearrangements(
         for ref_id, blocks in ref_blocks.items():
             if ref_id == assigned:
                 continue
-            total_span = sum(b["qspan_bp"] for b in blocks)
+            total_span = _union_query_span(blocks)
             if total_span >= _MIN_OFF_TARGET_SPAN_BP:
                 off_target_refs[contig].add(ref_id)
+
+    # Pre-invert best_ref for O(1) lookup: ref_id → set of contigs assigned to it
+    contigs_by_ref: Dict[str, Set[str]] = defaultdict(set)
+    for ctg, rid in best_ref.items():
+        if rid:
+            contigs_by_ref[rid].add(ctg)
 
     # reciprocal_partners[contig] = set of off-target refs that show reciprocity
     reciprocal_partners: Dict[str, Set[str]] = defaultdict(set)
@@ -484,10 +499,7 @@ def detect_rearrangements(
         if not assigned:
             continue
         for off_ref in off_refs:
-            # Find contigs assigned to off_ref
-            for other_contig, other_assigned in best_ref.items():
-                if other_assigned != off_ref:
-                    continue
+            for other_contig in contigs_by_ref.get(off_ref, ()):
                 if assigned in off_target_refs.get(other_contig, set()):
                     reciprocal_partners[contig].add(off_ref)
                     break
@@ -530,7 +542,7 @@ def detect_rearrangements(
         ))
 
     # Fission detection (cross-contig)
-    all_calls.extend(_detect_fissions(contigs_for_ref, ref_lengths, best_ref))
+    all_calls.extend(_detect_fissions(contigs_for_ref, ref_lengths))
 
     # ---- Map contig names (original → renamed) ----
     if orig_to_new:

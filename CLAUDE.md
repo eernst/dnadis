@@ -200,16 +200,17 @@ final_finalizer/
 | 9 | Orientation determination | |
 | 10 | Telomere detection | `--skip-telomeres` |
 | 11 | Classification (assign all contigs) | |
-| 12 | Read depth analysis | requires `--reads` |
-| 13 | rDNA consensus building | `--skip-rdna-consensus` |
-| 14 | Reference-guided scaffolding | `--scaffold` |
-| 15 | Writing FASTA outputs | |
-| 16 | Writing summary TSV | |
-| 17 | Compleasm (BUSCO completeness) evaluation | requires `--compleasm-lineage` / `--skip-compleasm` |
+| 12 | Rearrangement detection | |
+| 13 | Read depth analysis | requires `--reads` |
+| 14 | rDNA consensus building | `--skip-rdna-consensus` |
+| 15 | Reference-guided scaffolding | `--scaffold` |
+| 16 | Writing FASTA outputs | |
+| 17 | Writing summary TSV | |
+| 18 | Compleasm (BUSCO completeness) evaluation | requires `--compleasm-lineage` / `--skip-compleasm` |
 
 Reference preparation (`prepare_reference()`) runs before phase 1 and is not numbered — it produces the shared `ReferenceContext`. Multi-assembly orchestration (assembly headers, pairwise synteny, comparison report) also runs outside the per-assembly phase sequence.
 
-The rDNA consensus module (`rdna_consensus.py`) uses internal "Step 1-4" numbering within phase 13.
+The rDNA consensus module (`rdna_consensus.py`) uses internal "Step 1-4" numbering within phase 14.
 
 ### Key Design Patterns
 
