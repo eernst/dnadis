@@ -2080,7 +2080,8 @@ ident_df <- chrom_df %>%
 p_ident <- ggplot(ident_df, aes(x = value, y = assembly, fill = sg, color = sg)) +
   geom_density_ridges(alpha = 0.6, scale = 1.4, linewidth = 0.4,
                       rel_min_height = 0.01,
-                      quantile_lines = TRUE, quantiles = 2) +
+                      quantile_lines = TRUE, quantiles = 2,
+                      from = 0.4, to = 1.0) +
   { if (has_subgenomes && n_sg_facets > 1) {
     list(
       facet_wrap(~ sg, ncol = n_sg_facets),
@@ -2114,7 +2115,8 @@ collin_df <- chrom_df %>%
 p_collin <- ggplot(collin_df, aes(x = value, y = assembly, fill = sg, color = sg)) +
   geom_density_ridges(alpha = 0.6, scale = 1.4, linewidth = 0.4,
                       rel_min_height = 0.01,
-                      quantile_lines = TRUE, quantiles = 2) +
+                      quantile_lines = TRUE, quantiles = 2,
+                      from = 0.4, to = 1.0) +
   { if (has_subgenomes && n_sg_facets > 1) {
     list(
       facet_wrap(~ sg, ncol = n_sg_facets),
@@ -2148,7 +2150,8 @@ gc_df <- chrom_df %>%
 p_gc <- ggplot(gc_df, aes(x = value, y = assembly, fill = sg, color = sg)) +
   geom_density_ridges(alpha = 0.6, scale = 1.4, linewidth = 0.4,
                       rel_min_height = 0.01,
-                      quantile_lines = TRUE, quantiles = 2) +
+                      quantile_lines = TRUE, quantiles = 2,
+                      from = 0.4, to = 1.0) +
   { if (has_subgenomes && n_sg_facets > 1) {
     list(
       facet_wrap(~ sg, ncol = n_sg_facets),
