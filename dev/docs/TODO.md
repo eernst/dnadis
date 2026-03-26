@@ -120,7 +120,15 @@
 
   **Fragment reassignment after reciprocal resolution**: After main contigs are resolved, fragments originally assigned to R1 may belong with the contig reassigned to R2. Re-evaluate fragments whose assigned ref has multiple contigs: if a fragment's second-best ref matches the newly-resolved partner chromosome and the fragment's synteny blocks overlap the partner contig's coverage region, reassign it. This couples assignment with scaffolding context but is necessary for fragmented assemblies with reciprocal translocations.
 
-* [ ] Develop synthetic test cases for chromosome assignment with known rearrangements: reciprocal translocations (balanced and unbalanced), Robertsonian translocations, inversions, whole-arm translocations, fusions, and fissions. Verify assignment outcomes match biological expectations across scenarios.
+* [ ] **Fragmented reciprocal translocations**: The current reciprocal detection requires the partner ref to have zero assigned contigs. This fails when the assembly is fragmented and one fragment has already been independently assigned to the partner ref. Example: a large contig assigned to chr15P carries both chr15P and chr1P content (reciprocal translocation), while `chr1P_f1` and `chr15P_f1` are fragments independently assigned to chr1P and chr15P. The `chr15P_f1` should ideally be reassigned to chr1P and scaffolded with `chr1P_f1`, but the reciprocal detection doesn't fire because chr1P is already occupied by `chr1P_f1`.
+
+  **Possible approach**: Use the coordinate layout of synteny blocks on the main translocation contig to determine which fragments belong with which arm. For each fragment assigned to the same ref as the main contig, check whether its synteny blocks overlap the main contig's R1 region or R2 region. If they overlap the R2 region (the translocated arm), reassign the fragment to R2. This requires:
+  - Detecting that the main contig spans two reference chromosomes (already visible in the per-assembly macro_blocks)
+  - Partitioning the main contig's query coordinates into R1 and R2 zones
+  - Checking each fragment's macro_block coordinates against these zones
+  - Only reassigning when the overlap with the R2 zone significantly exceeds overlap with the R1 zone
+
+* [ ] Develop synthetic test cases for chromosome assignment with known rearrangements: reciprocal translocations (balanced and unbalanced), Robertsonian translocations, inversions, whole-arm translocations, fusions, and fissions. Include fragmented assembly variants of each scenario. Verify assignment outcomes match biological expectations across scenarios.
 
 ## Reference chromosome filtering
 
