@@ -2215,13 +2215,14 @@ asm_sort_key <- chrom_df %>%
 asm_quality_order <- if (nrow(asm_sort_key) > 0) asm_sort_key$assembly else asm_names
 
 n_sg_facets <- length(unique(chrom_df$sg))
+ridge_h <- max(3, n_asm * 0.3 + 1.5)
 ```
 
 ```{r quality_identity, eval=(has_any_chrom && has_per_asm && exists("has_identity") && has_identity), results='asis'}
 cat("## Sequence Identity\n\n")
 ```
 
-```{r quality_identity_plot, eval=(has_any_chrom && has_per_asm && exists("has_identity") && has_identity), fig.width=10, fig.height=max(3, n_asm * 0.3 + 1.5)}
+```{r quality_identity_plot, eval=(has_any_chrom && has_per_asm && exists("has_identity") && has_identity), fig.width=10, fig.height=ridge_h}
 ident_df <- chrom_df %>%
   filter(!is.na(seq_identity_vs_ref)) %>%
   mutate(assembly = factor(assembly, levels = rev(asm_quality_order)),
@@ -2231,7 +2232,7 @@ p_ident <- ggplot(ident_df, aes(x = value, y = assembly, fill = sg, color = sg))
   geom_density_ridges(alpha = 0.6, scale = 1.4, linewidth = 0.4,
                       rel_min_height = 0.01,
                       quantile_lines = TRUE, quantiles = 2,
-                      from = 0.4, to = 1.0) +
+                      from = 0, to = 100) +
   { if (has_subgenomes && n_sg_facets > 1) {
     list(
       facet_wrap(~ sg, ncol = n_sg_facets),
@@ -2249,14 +2250,14 @@ p_ident <- ggplot(ident_df, aes(x = value, y = assembly, fill = sg, color = sg))
   axis_theme +
   theme(panel.grid.major.y = element_blank())
 
-p_ident
+girafe_styled(ggobj = p_ident, height_svg = ridge_h)  # girafe for SVG device (ggridges renders poorly with R's svg())
 ```
 
 ```{r quality_collinearity, eval=(has_any_chrom && has_per_asm && exists("has_collin") && has_collin), results='asis'}
 cat("## Collinearity\n\n")
 ```
 
-```{r quality_collinearity_plot, eval=(has_any_chrom && has_per_asm && exists("has_collin") && has_collin), fig.width=10, fig.height=max(3, n_asm * 0.3 + 1.5)}
+```{r quality_collinearity_plot, eval=(has_any_chrom && has_per_asm && exists("has_collin") && has_collin), fig.width=10, fig.height=ridge_h}
 collin_df <- chrom_df %>%
   filter(!is.na(collinearity_score)) %>%
   mutate(assembly = factor(assembly, levels = rev(asm_quality_order)),
@@ -2266,7 +2267,7 @@ p_collin <- ggplot(collin_df, aes(x = value, y = assembly, fill = sg, color = sg
   geom_density_ridges(alpha = 0.6, scale = 1.4, linewidth = 0.4,
                       rel_min_height = 0.01,
                       quantile_lines = TRUE, quantiles = 2,
-                      from = 0.4, to = 1.0) +
+                      from = 0, to = 100) +
   { if (has_subgenomes && n_sg_facets > 1) {
     list(
       facet_wrap(~ sg, ncol = n_sg_facets),
@@ -2284,14 +2285,14 @@ p_collin <- ggplot(collin_df, aes(x = value, y = assembly, fill = sg, color = sg
   axis_theme +
   theme(panel.grid.major.y = element_blank())
 
-p_collin
+girafe_styled(ggobj = p_collin, height_svg = ridge_h)  # girafe for SVG device
 ```
 
 ```{r quality_gc, eval=(has_any_chrom && has_per_asm && exists("has_gc_dev") && has_gc_dev), results='asis'}
 cat("## GC Deviation\n\n")
 ```
 
-```{r quality_gc_plot, eval=(has_any_chrom && has_per_asm && exists("has_gc_dev") && has_gc_dev), fig.width=10, fig.height=max(3, n_asm * 0.3 + 1.5)}
+```{r quality_gc_plot, eval=(has_any_chrom && has_per_asm && exists("has_gc_dev") && has_gc_dev), fig.width=10, fig.height=ridge_h}
 gc_df <- chrom_df %>%
   filter(!is.na(gc_deviation)) %>%
   mutate(assembly = factor(assembly, levels = rev(asm_quality_order)),
@@ -2300,8 +2301,7 @@ gc_df <- chrom_df %>%
 p_gc <- ggplot(gc_df, aes(x = value, y = assembly, fill = sg, color = sg)) +
   geom_density_ridges(alpha = 0.6, scale = 1.4, linewidth = 0.4,
                       rel_min_height = 0.01,
-                      quantile_lines = TRUE, quantiles = 2,
-                      from = 0.4, to = 1.0) +
+                      quantile_lines = TRUE, quantiles = 2) +
   { if (has_subgenomes && n_sg_facets > 1) {
     list(
       facet_wrap(~ sg, ncol = n_sg_facets),
@@ -2319,13 +2319,13 @@ p_gc <- ggplot(gc_df, aes(x = value, y = assembly, fill = sg, color = sg)) +
   axis_theme +
   theme(panel.grid.major.y = element_blank())
 
-p_gc
+girafe_styled(ggobj = p_gc, height_svg = ridge_h)  # girafe for SVG device
 ```
 
 
 `r if (has_any_depth) "# 5. Read Depth" else ""`
 
-```{r depth_section, eval=(has_any_depth && has_per_asm), fig.width=10, fig.height=max(3, n_asm * 0.3 + 1.5)}
+```{r depth_section, eval=(has_any_depth && has_per_asm), fig.width=10, fig.height=ridge_h}
 depth_df <- all_summary_df %>%
   filter(classification == "chrom_assigned", !is.na(depth_mean))
 
@@ -2365,7 +2365,7 @@ if (nrow(depth_df) > 0) {
     axis_theme +
     theme(panel.grid.major.y = element_blank())
 
-  p_depth
+  girafe_styled(ggobj = p_depth, height_svg = ridge_h)  # girafe for SVG device
 } else {
   cat("No depth data available for chromosome-assigned contigs.")
 }
