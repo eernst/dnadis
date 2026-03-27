@@ -1818,6 +1818,10 @@ build_synteny_plot <- function(sg) {
         # Interpolate top and bottom x-coordinates for this fraction
         seg_tx_left  <- pos_to_x(l_start + frac_s * (l_end - l_start), top_len, top_xl, top_w)
         seg_tx_right <- pos_to_x(l_start + frac_e * (l_end - l_start), top_len, top_xl, top_w)
+
+        # Skip color segments too narrow to see — these create invisible SVG
+        # polygons that cause ghost hovers on unrelated chromosomes
+        if (seg_tx_right - seg_tx_left < 0.005) next
         seg_bx_left  <- pos_to_x(r_start + frac_s * (r_end - r_start), bot_len, bot_xl, bot_w)
         seg_bx_right <- pos_to_x(r_start + frac_e * (r_end - r_start), bot_len, bot_xl, bot_w)
 
@@ -2164,7 +2168,7 @@ for (sg_i in seq_along(subgenome_order)) {
       "background: white; padding: 6px; border: 1px solid #666;"
     )),
     ggiraph::opts_hover(css = "opacity: 0.8;"),
-    ggiraph::opts_hover_inv(css = "opacity: 0.15;"),
+    ggiraph::opts_hover_inv(css = "opacity: 0.2;"),
     ggiraph::opts_toolbar(saveaspng = FALSE)
   )
   cat(as.character(htmltools::as.tags(g)))
