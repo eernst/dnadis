@@ -304,6 +304,12 @@ def run_script(script_path: Path) -> bool:
         capture_output=True,
         text=True,
     )
+    # Pass through timing lines from R chunk profiling
+    if result.stderr:
+        for line in result.stderr.splitlines():
+            if "[timing]" in line:
+                print(f"    {line}")
+
     if result.returncode == 0:
         print("ok")
         return True
