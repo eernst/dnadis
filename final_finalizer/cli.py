@@ -1503,6 +1503,7 @@ def run_assembly(
             agp_tsv=agp_tsv,
             compleasm_chrs_summary=compleasm_chrs_sum,
             compleasm_non_chrs_summary=compleasm_non_sum,
+            rearrangements_tsv=rearrangements_tsv,
             self_contained=args.self_contained_html,
         ):
             logger.error(

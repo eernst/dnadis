@@ -2,21 +2,27 @@
 
 ## Current PR: Reporting Improvements
 
-* [ ] Reference alignment coordinates in the synteny plot are currently given for multiple individual ribbons (blocks?) within each connection pair, but this is unnecessary detail, and the reference info is not really what we want unless we're looking at ribbons connecting the reference and the adjacent assembly. Really what we want to see are the span coordinates on each participating chromosome at either end of the ribbon group we're hovered over. This should also reduce the number of distinct labels in the output HTML.
+* [x] Reference alignment coordinates in the synteny plot: merged consecutive same-connection ribbon tooltips into aggregate spans with total bp, block count, and median identity.
 
 * [ ] Add branding to the top of the report index/nav at left (only to be completed after renaming the software: current leader is "Trommel")
 
-* [ ] Add a legend to the Chromosome Assignments compound plot (contig composition + identity panel). Should explain: blue/colored blocks = on-target synteny, red blocks = off-target synteny (potential rearrangement), pill background = contig extent, identity values = matches/alignment_length from best chain to assigned reference.
+* [x] Add a legend to the Chromosome Assignments compound plot — explains T2T/telomere shapes, fill intensity = mean identity, red border = off-target synteny, multi-contig counts.
 
 * [ ] Comparison report: show reference-relative aggregate homologous chromosome stats, e.g. a table with box plots of lengths for each chromosome and min/med/max text next to it, rDNA array presence/absence/mixed as full/empty/half-filled circle, rearrangements detected.
 
-* [ ] Consider adding a flag to allow different sort orders for assemblies in the report. Current should be using fixed sort order by fofn input order, but users may prefer sorting by global identity to the reference, or other metrics.
+* [x] Assembly sort order flag: `--assembly-sort-order input|identity` controls assembly ordering in comparison report.
 
 * [ ] We might actually need to do all vs all alignments within the set of contigs across all assemblies assigned to each reference subgenome. This would allow for more complete syntenic relationship tracking and plotting over rearrangements, potentially.
+
+* [x] rDNA table improvements: comparison report Arrays split into "Arrays (Chr)" / "Arrays (Other)"; assembly report renamed "rDNA Contig Summary" and "Non-Array rDNA Annotations". Remaining: identity column still NA, arrays info not yet in contig table, coverage not shown.
 
 ---
 
 ## Future PRs
+
+### Rename app to "trommel"
+
+* [ ] **Rename from final_finalizer to trommel**
 
 ### Pipeline architecture
 
@@ -90,3 +96,7 @@
 ### Broader scope
 
 * [ ] **Mammalian/non-plant support**: The pipeline could be particularly useful in long-read survey sequencing of cancer genomes, where polyaneuploidy and large-scale rearrangements can be common. Ensure we have no hard organismal assumptions - non-plants won't have a plastid organellar genome. We should either bundle a few specific rDNA references or maybe extract Infernal/Rfam eukaryotic references and use those.
+
+### Feature dev
+
+* [ ] Add support for MSA-building and phylogenetic tree construction from compleasm output. Look to ~/scriptorium/comparative/compleasm-phylogeny.sh for inspiration, but we can also consider alternative construction methods if there's a tractable approach within the context of this pipeline that could be more accurate than simple concatenation of BUSCOs common to all query assemblies. We need to consider how to include/specify an outgroup for rooting the tree.

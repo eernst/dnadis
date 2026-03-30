@@ -96,6 +96,7 @@ def run_assembly_report(
     compleasm_chrs_summary: Optional[Path] = None,
     compleasm_non_chrs_summary: Optional[Path] = None,
     top_n_contaminants: int = 10,
+    rearrangements_tsv: Optional[Path] = None,
     self_contained: bool = False,
 ) -> bool:
     """Generate unified HTML report with all plots and summary tables.
@@ -127,6 +128,7 @@ def run_assembly_report(
     agp_str = _abs_esc(agp_tsv) if agp_tsv and agp_tsv.exists() else ""
     compleasm_chrs_str = _abs_esc(compleasm_chrs_summary) if compleasm_chrs_summary and compleasm_chrs_summary.exists() else ""
     compleasm_non_str = _abs_esc(compleasm_non_chrs_summary) if compleasm_non_chrs_summary and compleasm_non_chrs_summary.exists() else ""
+    rearr_str = _abs_esc(rearrangements_tsv) if rearrangements_tsv and rearrangements_tsv.exists() else ""
 
     filled = (
         tmpl.replace("__SUMMARY__", _abs_esc(summary_tsv))
@@ -140,6 +142,7 @@ def run_assembly_report(
         .replace("__AGP__", agp_str)
         .replace("__COMPLEASM_CHRS__", compleasm_chrs_str)
         .replace("__COMPLEASM_NONCHRS__", compleasm_non_str)
+        .replace("__REARRANGEMENTS__", rearr_str)
         .replace("__ASMNAME__", str(assembly_name).replace('"', '\\"'))
         .replace("__REFNAME__", str(reference_name).replace('"', '\\"'))
         .replace("__SYNTENY_MODE__", str(synteny_mode))

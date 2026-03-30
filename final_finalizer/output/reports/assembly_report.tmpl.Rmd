@@ -12,6 +12,7 @@ params:
   agp_tsv: "__AGP__"
   compleasm_chrs_summary: "__COMPLEASM_CHRS__"
   compleasm_non_chrs_summary: "__COMPLEASM_NONCHRS__"
+  rearrangements_tsv: "__REARRANGEMENTS__"
   assembly_name: "__ASMNAME__"
   reference_name: "__REFNAME__"
   synteny_mode: "__SYNTENY_MODE__"
@@ -98,6 +99,13 @@ contam_df <- if (has_contaminants) {
   if (nrow(tmp) > 0) tmp else NULL
 } else NULL
 has_contaminants <- !is.null(contam_df)
+
+has_rearrangements <- nchar(params$rearrangements_tsv) > 0 && file.exists(params$rearrangements_tsv)
+rearr_df <- if (has_rearrangements) {
+  tmp <- read_tsv(params$rearrangements_tsv, show_col_types = FALSE)
+  if (nrow(tmp) > 0) tmp else NULL
+} else NULL
+has_rearrangements <- !is.null(rearr_df)
 
 has_depth <- "depth_mean" %in% names(summary_df) && !all(is.na(summary_df$depth_mean))
 has_collinearity <- "collinearity_score" %in% names(summary_df)
@@ -1211,7 +1219,51 @@ ev_df %>%
 ```
 
 
-# 4. Read Depth Analysis {.tabset}
+# 4. Rearrangements
+
+```{r rearr_placeholder, eval=!has_rearrangements, results='asis'}
+cat('<div class="note-box">No structural rearrangements were detected in this assembly.</div>')
+```
+
+```{r rearr_table, eval=has_rearrangements}
+# Map original contig names to renamed contigs
+rearr_name_map <- summary_df %>% select(original_name, contig) %>% distinct()
+rearr_show <- rearr_df %>%
+  rename(original_name = contig) %>%
+  left_join(rearr_name_map, by = "original_name") %>%
+  mutate(contig = if_else(!is.na(contig), contig, original_name)) %>%
+  mutate(
+    type_label = str_replace_all(rearrangement_type, "_", " ") %>% str_to_sentence(),
+    span_mb = span_bp / 1e6,
+    evidence_short = if_else(nchar(evidence) > 60,
+                             paste0(substr(evidence, 1, 57), "..."),
+                             evidence),
+    conf_html = sapply(confidence, conf_badge)
+  )
+
+rearr_show %>%
+  select(contig, assigned_ref_id, type_label, partner_ref_id,
+         span_mb, conf_html, evidence_short, caveat) %>%
+  gt() %>%
+  cols_label(
+    contig = "Contig",
+    assigned_ref_id = "Assigned",
+    type_label = "Type",
+    partner_ref_id = "Partner",
+    span_mb = "Span (Mb)",
+    conf_html = "Confidence",
+    evidence_short = "Evidence",
+    caveat = "Caveat"
+  ) %>%
+  fmt_number(columns = span_mb, decimals = 2) %>%
+  fmt(columns = conf_html, fns = function(x) x) %>%
+  sub_missing(missing_text = "\u2014") %>%
+  tab_header(title = md("**Detected Structural Rearrangements**")) %>%
+  gt_theme()
+```
+
+
+# 5. Read Depth Analysis {.tabset}
 
 ```{r depth_placeholder, eval=!has_depth, results='asis'}
 cat('<div class="note-box">Read depth data is not available. Provide sequencing reads with <code>--reads</code> to enable depth analysis.</div>')
@@ -1420,7 +1472,7 @@ has_organelles <- nrow(org_df) > 0
 has_rdna <- nrow(rdna_df) > 0
 ```
 
-# 5. rDNA {.tabset}
+# 6. rDNA {.tabset}
 
 ```{r rdna_stub, eval=!has_rdna, results='asis'}
 cat('<div class="note-box">No rDNA contigs were detected in this assembly.</div>')
@@ -1543,7 +1595,7 @@ cat('\n## Non-Array rDNA Annotations\n')
   paste0("Showing up to 50 of ", nrow(other_df), " non-array annotations"))
 ```
 
-# 6. Organelles
+# 7. Organelles
 
 ```{r organelle_stub, eval=!has_organelles, results='asis'}
 cat('<div class="note-box">No organelle contigs were detected in this assembly.</div>')
@@ -1626,7 +1678,7 @@ if (has_depth) {
 gt_tbl
 ```
 
-# 7. Contaminants
+# 8. Contaminants
 
 ```{r contaminant_table_build, eval=has_contaminants}
 # ---------------------------------------------------------------------------
@@ -1770,7 +1822,7 @@ if (nrow(ct_df) > 0) {
 cat('<div class="note-box">No contaminant sequences were detected. If contamination screening was not performed, provide a Centrifuger index with <code>--centrifuger-idx</code>.</div>')
 ```
 
-# 8. Unclassified & Debris
+# 9. Unclassified & Debris
 
 ```{r debris_table}
 debris_df <- summary_df %>%
