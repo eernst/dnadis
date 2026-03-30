@@ -185,6 +185,7 @@ def run_comparison_report(
     reference_name: str = "",
     pairwise_pairs: Optional[List[tuple]] = None,
     self_contained: bool = False,
+    assembly_sort_order: str = "input",
 ) -> bool:
     """Generate cross-assembly comparison HTML report.
 
@@ -204,6 +205,9 @@ def run_comparison_report(
         pairwise_pairs: List of (pair_name, tsv_path) tuples for pairwise
             macro_blocks (nucleotide mode only). Each pair_name is
             "{left_asm}_vs_{right_asm}".
+        assembly_sort_order: Assembly ordering in comparison report.
+            "input" preserves FOFN/directory order; "identity" sorts by
+            descending median sequence identity vs reference.
 
     Returns:
         True if the report was generated successfully.
@@ -278,6 +282,7 @@ def run_comparison_report(
         .replace("__COMMON_R__", _esc(_COMMON_R))
         .replace("__COMMON_CSS__", _esc(_COMMON_CSS))
         .replace("__SELF_CONTAINED__", "true" if self_contained else "false")
+        .replace("__ASM_SORT_ORDER__", str(assembly_sort_order))
     )
 
     with report_rmd.open("w", encoding="utf-8") as fh:

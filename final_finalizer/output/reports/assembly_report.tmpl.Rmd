@@ -1511,7 +1511,7 @@ arrays_tbl %>%
 ```
 
 ```{r rdna_summary_tab, eval=has_rdna, results='asis'}
-cat('\n## rDNA Summary\n')
+cat('\n## rDNA Contig Summary\n')
 ```
 
 ```{r rdna_table, eval=has_rdna}
@@ -1531,11 +1531,11 @@ rdna_show %>%
   fmt_number(columns = length_kb, decimals = 1) %>%
   fmt_number(columns = any_of("identity_pct"), decimals = 1) %>%
   fmt(columns = conf_html, fns = function(x) x) %>%
-  tab_header(title = md("**rDNA Summary**")) %>% gt_theme()
+  tab_header(title = md("**rDNA Contig Summary**")) %>% gt_theme()
 ```
 
 ```{r rdna_other_tab, eval=has_rdna_ann && has_other_rdna_ann, results='asis'}
-cat('\n## Other Annotations\n')
+cat('\n## Non-Array rDNA Annotations\n')
 ```
 
 ```{r rdna_other_table, eval=has_rdna_ann && has_other_rdna_ann}

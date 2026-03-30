@@ -48,6 +48,7 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
         "assembly_name": "assembly_name",
         "reference_name": "reference_name",
         "comparison_name": "comparison_name",
+        "assembly_sort_order": "assembly_sort_order",
     },
     "read_depth": {
         "reads": "reads",

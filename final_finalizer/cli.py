@@ -1602,6 +1602,12 @@ def main():
     common.add_argument("--assembly-name", type=str, default="", metavar="NAME", help="Assembly name for plot subtitles (default: omitted)")
     common.add_argument("--reference-name", type=str, default="", metavar="NAME", help="Reference name for plot subtitles (default: derived from reference filename)")
     common.add_argument("--comparison-name", type=str, default="comparison", metavar="NAME", help="Prefix for multi-assembly comparison output files (default: comparison)")
+    common.add_argument(
+        "--assembly-sort-order",
+        choices=["input", "identity"],
+        default="input",
+        help="Assembly ordering in comparison report: 'input' preserves FOFN/directory order (default), 'identity' sorts by descending median sequence identity vs reference",
+    )
     common.add_argument("-v", "--verbose", action="store_true", help="Enable verbose (DEBUG level) logging")
     common.add_argument("--quiet", action="store_true", help="Suppress INFO messages (only show warnings and errors)")
     common.add_argument("--log-file", type=str, default=None, metavar="PATH", help="Also write logs to this file")
@@ -2391,6 +2397,7 @@ def main():
                 reference_name=args.reference_name,
                 pairwise_pairs=pairwise_pairs,
                 self_contained=args.self_contained_html,
+                assembly_sort_order=args.assembly_sort_order,
             ):
                 logger.error("Comparison report generation failed.")
 

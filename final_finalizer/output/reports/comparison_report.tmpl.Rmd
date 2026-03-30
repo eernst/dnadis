@@ -16,6 +16,7 @@ params:
   synteny_mode: "__SYNTENY_MODE__"
   chr_like_minlen: "__CHRLIKE__"
   out_prefix: "__OUTPREFIX__"
+  assembly_sort_order: "__ASM_SORT_ORDER__"
 output:
   html_document:
     self_contained: __SELF_CONTAINED__
@@ -92,6 +93,18 @@ for (i in seq_along(asm_tsv_paths)) {
 }
 all_summary_df <- if (length(per_asm_summaries) > 0) bind_rows(per_asm_summaries) else NULL
 has_per_asm <- !is.null(all_summary_df) && nrow(all_summary_df) > 0
+
+# Re-sort assemblies by identity if requested
+if (params$assembly_sort_order == "identity" && has_per_asm) {
+  ident_sort <- all_summary_df %>%
+    filter(classification == "chrom_assigned", !is.na(seq_identity_vs_ref)) %>%
+    group_by(assembly) %>%
+    summarise(med_ident = median(seq_identity_vs_ref, na.rm = TRUE), .groups = "drop") %>%
+    arrange(desc(med_ident))
+  asm_names <- c(intersect(ident_sort$assembly, asm_names),
+                 setdiff(asm_names, ident_sort$assembly))
+  asm_colors <- setNames(rep_len(asm_pal, n_asm), asm_names)
+}
 
 has_any_chrom <- any(comp_df$n_chrom_assigned > 0, na.rm = TRUE)
 has_any_contam <- any(comp_df$n_contaminants > 0, na.rm = TRUE)
@@ -978,13 +991,16 @@ if (has_any_chrom) {
 
 <div class="note-box">
 <b>Legend</b>:&ensp;
-<svg width="14" height="24" style="vertical-align:middle"><rect x="1" y="1" width="12" height="22" rx="6" fill="#8cc5e3" stroke="#2a6496" stroke-width="0.8"/></svg>&ensp;Both telomeres&emsp;
-<svg width="14" height="24" style="vertical-align:middle"><path d="M1,7 C1,1 13,1 13,7 L13,23 L1,23 Z" fill="#8cc5e3" stroke="#2a6496" stroke-width="0.8"/></svg>&ensp;5&#x2032; telomere&emsp;
-<svg width="14" height="24" style="vertical-align:middle"><path d="M1,1 L13,1 L13,17 C13,23 1,23 1,17 Z" fill="#8cc5e3" stroke="#2a6496" stroke-width="0.8"/></svg>&ensp;3&#x2032; telomere&emsp;
-<svg width="14" height="20" style="vertical-align:middle"><rect x="1" y="1" width="12" height="18" fill="#8cc5e3" stroke="#2a6496" stroke-width="0.8"/></svg>&ensp;Full-length&emsp;
+<svg width="14" height="24" style="vertical-align:middle"><rect x="1" y="1" width="12" height="22" rx="6" fill="#8cc5e3" stroke="#2a6496" stroke-width="0.8"/></svg>&ensp;T2T (both telomeres)&emsp;
+<svg width="14" height="24" style="vertical-align:middle"><path d="M1,7 C1,1 13,1 13,7 L13,23 L1,23 Z" fill="#8cc5e3" stroke="#2a6496" stroke-width="0.8"/></svg>&ensp;5&#x2032; telomere only&emsp;
+<svg width="14" height="24" style="vertical-align:middle"><path d="M1,1 L13,1 L13,17 C13,23 1,23 1,17 Z" fill="#8cc5e3" stroke="#2a6496" stroke-width="0.8"/></svg>&ensp;3&#x2032; telomere only&emsp;
+<svg width="14" height="20" style="vertical-align:middle"><rect x="1" y="1" width="12" height="18" fill="#8cc5e3" stroke="#2a6496" stroke-width="0.8"/></svg>&ensp;Full-length, no telomeres&emsp;
 <svg width="14" height="20" style="vertical-align:middle"><path d="M1,4 L4,1 L7,4 L10,1 L13,4 L13,16 L10,19 L7,16 L4,19 L1,16 Z" fill="#8cc5e3" stroke="#2a6496" stroke-width="0.8"/></svg>&ensp;Incomplete&emsp;
-<svg width="14" height="20" style="vertical-align:middle"><rect x="1" y="1" width="12" height="18" fill="#f0f0f0" stroke="none"/></svg>&ensp;Unassigned<br>
-Fill intensity = reference coverage. Red border = off-target synteny. Small numbers = multi-contig.
+<svg width="14" height="20" style="vertical-align:middle"><rect x="1" y="1" width="12" height="18" fill="#f0f0f0" stroke="none"/></svg>&ensp;Unassigned&emsp;
+<svg width="14" height="20" style="vertical-align:middle"><rect x="1" y="1" width="12" height="18" fill="#8cc5e3" stroke="#c0392b" stroke-width="2"/></svg>&ensp;<span style="color:#c0392b">Red border</span> = off-target synteny<br>
+Fill intensity = mean sequence identity vs reference (white&thinsp;=&thinsp;0%, dark&thinsp;=&thinsp;100%; each subgenome has its own color).
+Red border intensity proportional to off-target coverage (capped at 20%).
+Number inside cell = multiple contigs assigned to the same reference chromosome.
 </div>
 
 ```{r scatter_setup, eval=(has_any_chrom && has_per_asm), include=FALSE}
@@ -2383,12 +2399,37 @@ cat("## Summary\n\n")
 ```
 
 ```{r rdna_summary, eval=(has_per_asm && exists("has_any_rdna") && has_any_rdna)}
+# Count arrays on chromosome-assigned vs other contigs per assembly
+if (has_rdna_arrays) {
+  # Join arrays with contig classification via original_name
+  arr_clf <- all_rdna_arrays_df %>%
+    left_join(
+      all_summary_df %>% distinct(assembly, original_name, classification),
+      by = c("assembly", "contig" = "original_name")
+    ) %>%
+    mutate(on_chr = !is.na(classification) & classification == "chrom_assigned")
+
+  arr_counts <- arr_clf %>%
+    group_by(assembly) %>%
+    summarise(
+      arrays_chr   = sum(on_chr),
+      arrays_other = sum(!on_chr),
+      .groups = "drop"
+    )
+} else {
+  arr_counts <- tibble(assembly = character(), arrays_chr = integer(), arrays_other = integer())
+}
+
 rdna_tbl <- comp_df %>%
   transmute(
     Assembly = assembly,
     rdna_mb = round(rdna_bp / 1e6, 2),
-    `Contigs` = n_rdna,
-    `Arrays` = n_rdna_arrays
+    `Contigs` = n_rdna
+  ) %>%
+  left_join(arr_counts, by = c("Assembly" = "assembly")) %>%
+  mutate(
+    arrays_chr   = replace_na(arrays_chr, 0L),
+    arrays_other = replace_na(arrays_other, 0L)
   )
 
 max_rdna_mb <- max(rdna_tbl$rdna_mb, na.rm = TRUE)
@@ -2402,10 +2443,11 @@ rdna_tbl %>%
     }
   ) %>%
   ungroup() %>%
-  select(Assembly, `Total (Mb)`, Contigs, Arrays) %>%
+  select(Assembly, `Total (Mb)`, Contigs,
+         `Arrays (Chr)` = arrays_chr, `Arrays (Other)` = arrays_other) %>%
   gt() %>%
   fmt(columns = `Total (Mb)`, fns = function(x) lapply(x, html)) %>%
-  cols_align(align = "right", columns = c(Contigs, Arrays)) %>%
+  cols_align(align = "right", columns = c(Contigs, `Arrays (Chr)`, `Arrays (Other)`)) %>%
   cols_width(`Total (Mb)` ~ px(140)) %>%
   tab_style(
     style = css(vertical_align = "middle"),
