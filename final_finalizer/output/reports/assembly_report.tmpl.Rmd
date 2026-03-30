@@ -1226,12 +1226,8 @@ cat('<div class="note-box">No structural rearrangements were detected in this as
 ```
 
 ```{r rearr_table, eval=has_rearrangements}
-# Map original contig names to renamed contigs
-rearr_name_map <- summary_df %>% select(original_name, contig) %>% distinct()
+# rearr_df already has 'contig' (renamed) and 'original_name' from the TSV
 rearr_show <- rearr_df %>%
-  rename(original_name = contig) %>%
-  left_join(rearr_name_map, by = "original_name") %>%
-  mutate(contig = if_else(!is.na(contig), contig, original_name)) %>%
   mutate(
     type_label = str_replace_all(rearrangement_type, "_", " ") %>% str_to_sentence(),
     span_mb = span_bp / 1e6,
