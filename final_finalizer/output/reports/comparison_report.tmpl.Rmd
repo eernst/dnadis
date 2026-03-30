@@ -989,7 +989,7 @@ if (has_any_chrom) {
 }
 ```
 
-<div class="note-box">
+<div class="legend-box">
 <b>Legend</b>:&ensp;
 <svg width="14" height="24" style="vertical-align:middle"><rect x="1" y="1" width="12" height="22" rx="6" fill="#8cc5e3" stroke="#2a6496" stroke-width="0.8"/></svg>&ensp;T2T (both telomeres)&emsp;
 <svg width="14" height="24" style="vertical-align:middle"><path d="M1,7 C1,1 13,1 13,7 L13,23 L1,23 Z" fill="#8cc5e3" stroke="#2a6496" stroke-width="0.8"/></svg>&ensp;5&#x2032; telomere only&emsp;
