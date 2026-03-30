@@ -213,7 +213,7 @@ class RearrangementCall:
         strand: '+' or '-' (meaningful for inversions).
         confidence: 'high', 'medium', or 'low'.
         evidence: Brief description of the supporting evidence.
-        caveat: Assembly artifact that could produce the same signature.
+        misassembly_mimic: Assembly artifact that could produce the same signature.
     """
     contig: str
     original_name: str
@@ -228,7 +228,7 @@ class RearrangementCall:
     strand: str
     confidence: str
     evidence: str
-    caveat: str = ""
+    misassembly_mimic: str = ""
 
 
 @dataclass
