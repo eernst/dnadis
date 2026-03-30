@@ -645,14 +645,14 @@ if (has_any_chrom) {
   # For each (assembly, ref_chromosome), find blocks from contigs NOT assigned to that ref_id
   has_off_target <- FALSE
   if (!is.null(per_asm_macro_df) && has_per_asm) {
-    # Build contig-to-assigned mapping
+    # Build contig-to-assigned mapping (use original_name to match macro_blocks)
     contig_assigned <- all_summary_df %>%
       filter(classification == "chrom_assigned") %>%
-      select(assembly, contig, assigned_ref_id)
+      select(assembly, original_name, assigned_ref_id)
 
     off_target_df <- per_asm_macro_df %>%
       left_join(contig_assigned,
-                by = c("assembly", "contig" = "contig")) %>%
+                by = c("assembly", "contig" = "original_name")) %>%
       filter(!is.na(assigned_ref_id), ref_id != assigned_ref_id) %>%
       group_by(assembly, ref_id) %>%
       summarise(off_target_bp = sum(union_bp, na.rm = TRUE), .groups = "drop") %>%
