@@ -1555,28 +1555,50 @@ arrays_tbl %>%
   gt_theme()
 ```
 
+<div class="legend-box">
+<b>Copies</b>: F&thinsp;=&thinsp;full-length 45S units &emsp; P&thinsp;=&thinsp;partial (truncated at array boundary) &emsp; Fr&thinsp;=&thinsp;fragment (&lt;&thinsp;50% of consensus)
+</div>
+
 ```{r rdna_summary_tab, eval=has_rdna, results='asis'}
-cat('\n## rDNA Contig Summary\n')
+cat('\n## rDNA Debris Summary\n')
 ```
 
 ```{r rdna_table, eval=has_rdna}
+# Compute per-contig rDNA coverage from annotations (merge overlapping loci)
+rdna_cov <- if (has_rdna_ann) {
+  rdna_ann_df %>%
+    filter(contig_classification == "rDNA") %>%
+    group_by(contig) %>%
+    summarise(
+      rdna_bp = {
+        s <- sort(start); e <- sort(end)
+        # Merge overlapping intervals
+        merged_bp <- 0; cur_s <- s[1]; cur_e <- e[1]
+        if (length(s) > 1) for (i in 2:length(s)) {
+          if (s[i] <= cur_e) { cur_e <- max(cur_e, e[i]) }
+          else { merged_bp <- merged_bp + cur_e - cur_s; cur_s <- s[i]; cur_e <- e[i] }
+        }
+        merged_bp + cur_e - cur_s
+      }, .groups = "drop")
+} else { tibble(contig = character(), rdna_bp = numeric()) }
+
 rdna_show <- rdna_df %>%
-  mutate(length_kb = length / 1e3,
-         identity_pct = if ("best_identity" %in% names(.)) best_identity * 100 else NA_real_,
+  mutate(length_kb = length / 1e3) %>%
+  left_join(rdna_cov, by = c("original_name" = "contig")) %>%
+  mutate(rdna_pct = ifelse(!is.na(rdna_bp), rdna_bp / length * 100, NA_real_),
          conf_html = sapply(classification_confidence, conf_badge))
 
-sel <- c("contig", "original_name", "length_kb", "identity_pct", "conf_html")
-labels <- list(contig = "Contig", original_name = "Original Name", length_kb = "Length (kb)",
-               identity_pct = "Identity %", conf_html = "Confidence")
-
 rdna_show %>%
-  select(all_of(sel)) %>%
+  select(contig, original_name, length_kb, rdna_pct, conf_html) %>%
   gt() %>%
-  cols_label(.list = labels) %>%
+  cols_label(contig = "Contig", original_name = "Original Name",
+             length_kb = "Length (kb)", rdna_pct = "rDNA %",
+             conf_html = "Confidence") %>%
   fmt_number(columns = length_kb, decimals = 1) %>%
-  fmt_number(columns = any_of("identity_pct"), decimals = 1) %>%
+  fmt_number(columns = rdna_pct, decimals = 1) %>%
   fmt(columns = conf_html, fns = function(x) x) %>%
-  tab_header(title = md("**rDNA Contig Summary**")) %>% gt_theme()
+  sub_missing(missing_text = "\u2014") %>%
+  tab_header(title = md("**rDNA Debris Summary**")) %>% gt_theme()
 ```
 
 ```{r rdna_other_tab, eval=has_rdna_ann && has_other_rdna_ann, results='asis'}
