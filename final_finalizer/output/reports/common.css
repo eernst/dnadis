@@ -17,7 +17,7 @@ h2 { font-size: 16px; }
 }
 .legend-box {
   background: #f8f9fa; border-left: 4px solid #6c757d;
-  padding: 8px 12px; margin: 12px 0; font-size: 11px; color: #495057;
-  line-height: 1.6;
+  padding: 6px 10px; margin: 8px 0; font-size: 10px; color: #666;
+  line-height: 1.5;
 }
 .section-intro { font-size: 13px; color: #555; margin-bottom: 12px; }
