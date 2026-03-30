@@ -641,35 +641,7 @@ if (has_any_chrom) {
 
   hm_data$cell_fill <- mapply(compute_sg_fill, hm_data$identity_pct, hm_data$sg)
 
-  # --- Off-target coverage computation ---
-  # For each (assembly, ref_chromosome), find blocks from contigs NOT assigned to that ref_id
-  has_off_target <- FALSE
-  if (!is.null(per_asm_macro_df) && has_per_asm) {
-    # Build contig-to-assigned mapping (use original_name to match macro_blocks)
-    contig_assigned <- all_summary_df %>%
-      filter(classification == "chrom_assigned") %>%
-      select(assembly, original_name, assigned_ref_id)
-
-    off_target_df <- per_asm_macro_df %>%
-      left_join(contig_assigned,
-                by = c("assembly", "contig" = "original_name")) %>%
-      filter(!is.na(assigned_ref_id), ref_id != assigned_ref_id) %>%
-      group_by(assembly, ref_id) %>%
-      summarise(off_target_bp = sum(union_bp, na.rm = TRUE), .groups = "drop") %>%
-      left_join(ref_lengths %>% select(ref_id, ref_len), by = "ref_id") %>%
-      mutate(off_target_pct = off_target_bp / ref_len * 100)
-
-    if (nrow(off_target_df) > 0) {
-      has_off_target <- TRUE
-      hm_data <- hm_data %>%
-        left_join(off_target_df %>% select(assembly, ref_id, off_target_pct),
-                  by = c("assembly", "ref_id")) %>%
-        mutate(off_target_pct = ifelse(is.na(off_target_pct), 0, off_target_pct))
-    }
-  }
-  if (!has_off_target) {
-    hm_data$off_target_pct <- 0
-  }
+  hm_data$off_target_pct <- 0
 
   # --- Compute per-cell telomere status from per-assembly summaries ---
   if (has_per_asm && "has_5p_telomere" %in% names(all_summary_df) &&
@@ -707,22 +679,12 @@ if (has_any_chrom) {
       multi_label = ifelse(n_contigs > 1, as.character(n_contigs), "")
     )
 
-  # --- Border color: dark subgenome color or red gradient for off-target ---
-  compute_offtarget_border <- function(ot_pct) {
-    if (is.na(ot_pct) || ot_pct <= 0) return(NA_character_)
-    frac <- min(ot_pct / 20, 1)
-    ramp <- colorRampPalette(c("#e08080", "#e74c3c"))(101)
-    ramp[round(frac * 100) + 1]
-  }
+  # --- Border color: dark subgenome color ---
   hm_data <- hm_data %>%
     mutate(
-      sg_dark_col = unname(sg_cols_dark[ifelse(sg %in% names(sg_cols_dark), sg, "NA")]),
-      border_color = ifelse(
-        off_target_pct > 0,
-        sapply(off_target_pct, compute_offtarget_border),
-        darken(sg_dark_col, 0.2)
-      ),
-      border_lw = ifelse(off_target_pct > 0, 0.6, 0.3),
+      border_color = darken(
+        unname(sg_cols_dark[ifelse(sg %in% names(sg_cols_dark), sg, "NA")]), 0.2),
+      border_lw = 0.3,
       tooltip = paste0(
         ref_id, " \u2014 ", assembly, "\n",
         "Contigs: ", n_contigs, "\n",
@@ -735,9 +697,7 @@ if (has_any_chrom) {
           shape_status == "telo_5p"   ~ "5\u2032 only",
           shape_status == "telo_3p"   ~ "3\u2032 only",
           TRUE ~ "none"
-        ),
-        ifelse(off_target_pct > 0,
-               paste0("\nOff-target: ", sprintf("%.1f%%", off_target_pct)), "")
+        )
       )
     )
 
@@ -996,10 +956,8 @@ if (has_any_chrom) {
 <svg width="14" height="24" style="vertical-align:middle"><path d="M1,1 L13,1 L13,17 C13,23 1,23 1,17 Z" fill="#8cc5e3" stroke="#2a6496" stroke-width="0.8"/></svg>&ensp;3&#x2032; telomere only&emsp;
 <svg width="14" height="20" style="vertical-align:middle"><rect x="1" y="1" width="12" height="18" fill="#8cc5e3" stroke="#2a6496" stroke-width="0.8"/></svg>&ensp;Full-length, no telomeres&emsp;
 <svg width="14" height="20" style="vertical-align:middle"><path d="M1,4 L4,1 L7,4 L10,1 L13,4 L13,16 L10,19 L7,16 L4,19 L1,16 Z" fill="#8cc5e3" stroke="#2a6496" stroke-width="0.8"/></svg>&ensp;Incomplete&emsp;
-<svg width="14" height="20" style="vertical-align:middle"><rect x="1" y="1" width="12" height="18" fill="#f0f0f0" stroke="none"/></svg>&ensp;Unassigned&emsp;
-<svg width="14" height="20" style="vertical-align:middle"><rect x="1" y="1" width="12" height="18" fill="#8cc5e3" stroke="#c0392b" stroke-width="2"/></svg>&ensp;<span style="color:#c0392b">Red border</span> = off-target synteny<br>
+<svg width="14" height="20" style="vertical-align:middle"><rect x="1" y="1" width="12" height="18" fill="#f0f0f0" stroke="none"/></svg>&ensp;Unassigned<br>
 Fill intensity = mean sequence identity vs reference (white&thinsp;=&thinsp;0%, dark&thinsp;=&thinsp;100%; each subgenome has its own color).
-Red border intensity proportional to off-target coverage (capped at 20%).
 Number inside cell = multiple contigs assigned to the same reference chromosome.
 </div>
 
