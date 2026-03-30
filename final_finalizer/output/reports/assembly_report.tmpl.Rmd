@@ -1229,30 +1229,48 @@ cat('<div class="note-box">No structural rearrangements or potential misassembli
 # rearr_df already has 'contig' (renamed) and 'original_name' from the TSV
 rearr_show <- rearr_df %>%
   mutate(
-    type_label = str_replace_all(rearrangement_type, "_", " ") %>% str_to_sentence(),
+    type_label = paste0(str_replace_all(rearrangement_type, "_", " ") %>%
+                          str_to_sentence(), "*"),
     span_mb = span_bp / 1e6,
     conf_html = sapply(confidence, conf_badge)
   )
 
 rearr_show %>%
-  select(contig, assigned_ref_id, partner_ref_id,
-         span_mb, conf_html, evidence, type_label, misassembly_mimic) %>%
+  select(type_label, contig, assigned_ref_id, partner_ref_id,
+         span_mb, evidence, conf_html) %>%
   gt() %>%
   cols_label(
+    type_label = "Type",
     contig = "Contig",
     assigned_ref_id = "Assigned",
     partner_ref_id = "Partner",
     span_mb = "Span (Mb)",
-    conf_html = "Confidence",
     evidence = "Evidence",
-    type_label = "Type",
-    misassembly_mimic = "Misassembly Mimic"
+    conf_html = "Confidence"
   ) %>%
   fmt_number(columns = span_mb, decimals = 2) %>%
   fmt(columns = conf_html, fns = function(x) x) %>%
   sub_missing(missing_text = "\u2014") %>%
   tab_header(title = md("**Rearrangements / Misassemblies**")) %>%
   gt_theme()
+
+# Legend: misassembly mimics for each rearrangement type
+mimic_map <- rearr_show %>%
+  distinct(rearrangement_type, misassembly_mimic) %>%
+  filter(nzchar(misassembly_mimic)) %>%
+  mutate(type_label = str_replace_all(rearrangement_type, "_", " ") %>%
+           str_to_sentence())
+```
+
+```{r rearr_legend, eval=has_rearrangements, results='asis'}
+cat('<div class="legend-box">\n')
+cat('<b>*Misassembly mimics</b>: Each rearrangement type has an alternative ')
+cat('explanation as an assembly artifact.<br>\n')
+for (i in seq_len(nrow(mimic_map))) {
+  cat(sprintf('<b>%s</b> \u2014 %s', mimic_map$type_label[i], mimic_map$misassembly_mimic[i]))
+  if (i < nrow(mimic_map)) cat('<br>\n')
+}
+cat('\n</div>\n')
 ```
 
 
