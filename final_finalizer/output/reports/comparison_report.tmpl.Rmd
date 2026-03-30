@@ -924,8 +924,7 @@ if (has_any_chrom) {
     coord_cartesian(clip = "off") +
     labs(caption = paste0(
       "Pill = telomeres, rect = full-length, zigzag = incomplete, ",
-      "grey = unassigned. Fill intensity = mean identity.",
-      if (has_off_target) " Red border = off-target synteny." else ""
+      "grey = unassigned. Fill intensity = mean identity."
     )) +
     theme_void(base_size = base_font_pt, base_family = base_family) +
     theme(
