@@ -1195,7 +1195,10 @@ ev_df <- summary_df %>%
     syn_score = if ("synteny_score" %in% names(.)) synteny_score else NA_real_,
     collin = if (has_collinearity) collinearity_score else NA_real_,
     gc_dev = if ("gc_deviation" %in% names(.)) gc_deviation else NA_real_,
-    s_ratio = if ("score_ratio" %in% names(.)) score_ratio else NA_real_
+    # Cap sentinel value (1e9) to display as "max"
+    s_ratio = if ("score_ratio" %in% names(.)) {
+      ifelse(score_ratio >= 1e8, Inf, score_ratio)
+    } else NA_real_
   ) %>%
   arrange(version_sort_key(assigned_ref_id), assigned_ref_id, desc(length_mb))
 
@@ -1211,12 +1214,23 @@ ev_df %>%
   cols_label(.list = labels) %>%
   fmt_number(columns = any_of(c("length_mb", "span_frac", "gene_pct", "gc_dev")), decimals = 1) %>%
   fmt_number(columns = any_of(c("syn_score", "collin")), decimals = 2) %>%
-  fmt_number(columns = any_of("s_ratio"), decimals = 1) %>%
+  fmt(columns = any_of("s_ratio"), fns = function(x) {
+    ifelse(is.infinite(x), "\u221e", sprintf("%.1f", x))
+  }) %>%
   fmt(columns = any_of("conf_html"), fns = function(x) x) %>%
   tab_header(title = md("**Per-Contig Evidence Summary**"),
              subtitle = md("Sorted by chromosome assignment")) %>%
   gt_theme()
 ```
+
+<div class="legend-box">
+<b>Synteny Score</b> = total aligned bp from best chain to assigned reference.
+<b>Span Frac</b> = fraction of contig covered by synteny blocks.
+<b>Gene %</b> = proportion of reference genes found on this contig (protein mode only).
+<b>Collinearity</b> = fraction of synteny blocks in reference order (1.0 = perfectly collinear).
+<b>Score Ratio</b> = best score / second-best score (&infin; = no second hit; higher = more confident assignment).
+<b>GC Dev</b> = GC content deviation from reference mean (in standard deviations).
+</div>
 
 
 # 4. Rearrangements / Misassemblies
