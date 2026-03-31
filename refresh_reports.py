@@ -359,6 +359,11 @@ def main():
         action="store_true",
         help="Re-run scripts even if unchanged",
     )
+    parser.add_argument(
+        "--recursive", "-r",
+        action="store_true",
+        help="Also refresh assembly reports in per-assembly subdirectories",
+    )
     sc_group = parser.add_mutually_exclusive_group()
     sc_group.add_argument(
         "--self-contained",
@@ -380,28 +385,6 @@ def main():
     if not template_dir.is_dir():
         sys.exit(f"Error: template directory not found: {template_dir}")
 
-    scripts = find_generated_scripts(run_dir)
-    if not scripts:
-        sys.exit(f"No generated .R scripts found in {run_dir}")
-
-    # Detect output prefix from script filenames
-    prefix = detect_prefix(run_dir, scripts)
-    print(f"Run folder: {run_dir}")
-    print(f"Prefix:     {prefix}")
-    print(f"Templates:  {template_dir}")
-
-    # Filter by --only patterns
-    if args.only:
-        scripts = [
-            (suffix, path) for suffix, path in scripts
-            if any(pat in suffix for pat in args.only)
-        ]
-        if not scripts:
-            sys.exit(f"No scripts matched --only {' '.join(args.only)}")
-
-    print(f"Found {len(scripts)} script(s):")
-    print()
-
     # Build CLI overrides for template placeholders
     overrides = {}
     if args.self_contained:
@@ -409,32 +392,72 @@ def main():
     elif args.no_self_contained:
         overrides["__SELF_CONTAINED__"] = "false"
 
-    updated = []
-    for suffix, script_path in scripts:
-        changed = refresh_script(suffix, script_path, template_dir, prefix,
-                                 dry_run=args.dry_run, overrides=overrides or None)
-        if changed:
-            updated.append((suffix, script_path))
+    # Collect (dir, scripts, prefix) groups to process
+    groups: list[tuple[Path, list[tuple[str, Path]], Path]] = []
+
+    # Top-level run directory
+    top_scripts = find_generated_scripts(run_dir)
+    if top_scripts:
+        prefix = detect_prefix(run_dir, top_scripts)
+        groups.append((run_dir, top_scripts, prefix))
+
+    # Subdirectories (--recursive)
+    if args.recursive:
+        for subdir in sorted(run_dir.iterdir()):
+            if not subdir.is_dir() or subdir.name in ("reference", "_files"):
+                continue
+            sub_scripts = find_generated_scripts(subdir)
+            if sub_scripts:
+                sub_prefix = detect_prefix(subdir, sub_scripts)
+                groups.append((subdir, sub_scripts, sub_prefix))
+
+    if not groups:
+        sys.exit(f"No generated .R/.Rmd scripts found in {run_dir}")
+
+    print(f"Run folder: {run_dir}")
+    print(f"Templates:  {template_dir}")
+
+    all_to_run: list[tuple[str, Path]] = []
+
+    for group_dir, scripts, prefix in groups:
+        # Filter by --only patterns
+        if args.only:
+            scripts = [
+                (suffix, path) for suffix, path in scripts
+                if any(pat in suffix for pat in args.only)
+            ]
+            if not scripts:
+                continue
+
+        rel = group_dir.relative_to(run_dir) if group_dir != run_dir else Path(".")
+        print(f"\n[{rel}] Prefix: {prefix.name} — {len(scripts)} script(s)")
+
+        updated = []
+        for suffix, script_path in scripts:
+            changed = refresh_script(suffix, script_path, template_dir, prefix,
+                                     dry_run=args.dry_run, overrides=overrides or None)
+            if changed:
+                updated.append((suffix, script_path))
+
+        if args.force:
+            all_to_run.extend(scripts)
+        else:
+            all_to_run.extend(updated)
 
     if args.dry_run:
-        print(f"\nDry run: {len(updated)} script(s) would be updated.")
+        print(f"\nDry run: {len(all_to_run)} script(s) would be updated.")
         return
 
     if args.no_run:
         return
 
-    # Determine which scripts to run
-    if args.force:
-        to_run = scripts
-    elif updated:
-        to_run = updated
-    else:
+    if not all_to_run:
         print("\nNo scripts changed. Use --force to re-run anyway.")
         return
 
-    print(f"\nRunning {len(to_run)} script(s):")
-    for suffix, script_path in to_run:
-            run_script(script_path)
+    print(f"\nRunning {len(all_to_run)} script(s):")
+    for suffix, script_path in all_to_run:
+        run_script(script_path)
 
 
 if __name__ == "__main__":
