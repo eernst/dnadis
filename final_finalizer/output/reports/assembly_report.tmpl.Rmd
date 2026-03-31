@@ -1229,8 +1229,7 @@ cat('<div class="note-box">No structural rearrangements or potential misassembli
 # rearr_df already has 'contig' (renamed) and 'original_name' from the TSV
 rearr_show <- rearr_df %>%
   mutate(
-    type_label = paste0(str_replace_all(rearrangement_type, "_", " ") %>%
-                          str_to_sentence(), "*"),
+    type_label = str_replace_all(rearrangement_type, "_", " ") %>% str_to_sentence(),
     span_mb = span_bp / 1e6,
     conf_html = sapply(confidence, conf_badge)
   )
@@ -1240,7 +1239,7 @@ rearr_show %>%
          span_mb, evidence, conf_html) %>%
   gt() %>%
   cols_label(
-    type_label = "Type",
+    type_label = "Type*",
     contig = "Contig",
     assigned_ref_id = "Assigned",
     partner_ref_id = "Partner",
