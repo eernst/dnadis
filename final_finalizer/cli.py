@@ -1504,7 +1504,7 @@ def run_assembly(
             compleasm_chrs_summary=compleasm_chrs_sum,
             compleasm_non_chrs_summary=compleasm_non_sum,
             rearrangements_tsv=rearrangements_tsv,
-            self_contained=args.self_contained_html,
+            self_contained=not args.no_self_contained_html,
         ):
             logger.error(
                 "--plot failed: unified report could not be generated. "
@@ -1596,10 +1596,9 @@ def main():
     common = p.add_argument_group("Common options")
     common.add_argument("-t", "--threads", type=_positive_int, default=8, help="Threads for minimap2/miniprot [8]")
     common.add_argument("--skip-plot", action="store_true", help="Skip unified HTML report generation")
-    common.add_argument("--self-contained-html", action="store_true",
-                        help="Produce self-contained HTML reports (all resources embedded). "
-                             "Slower to render but produces a single portable file. "
-                             "Default: false (HTML + companion _files/ directory).")
+    common.add_argument("--no-self-contained-html", action="store_true",
+                        help="Produce non-self-contained HTML reports (HTML + companion _files/ directory). "
+                             "Default: self-contained (all resources embedded in a single portable file).")
     common.add_argument("--assembly-name", type=str, default="", metavar="NAME", help="Assembly name for plot subtitles (default: omitted)")
     common.add_argument("--reference-name", type=str, default="", metavar="NAME", help="Reference name for plot subtitles (default: derived from reference filename)")
     common.add_argument("--comparison-name", type=str, default="comparison", metavar="NAME", help="Prefix for multi-assembly comparison output files (default: comparison)")
@@ -2397,7 +2396,7 @@ def main():
                 synteny_mode=args.synteny_mode,
                 reference_name=args.reference_name,
                 pairwise_pairs=pairwise_pairs,
-                self_contained=args.self_contained_html,
+                self_contained=not args.no_self_contained_html,
                 assembly_sort_order=args.assembly_sort_order,
             ):
                 logger.error("Comparison report generation failed.")

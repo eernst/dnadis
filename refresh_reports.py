@@ -220,7 +220,7 @@ def build_placeholder_values(
     defaults = {
         "__PLOTHTML__": "TRUE",
         "__TOP_N__": "10",
-        "__SELF_CONTAINED__": "false",
+        "__SELF_CONTAINED__": "true",
     }
     for placeholder, default in defaults.items():
         if placeholder in template_text:
