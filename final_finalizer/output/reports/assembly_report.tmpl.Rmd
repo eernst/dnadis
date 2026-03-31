@@ -1225,7 +1225,38 @@ ev_df %>%
 cat('<div class="note-box">No structural rearrangements or potential misassemblies were detected in this assembly.</div>')
 ```
 
-```{r rearr_table, eval=has_rearrangements}
+```{r rearr_filter, eval=has_rearrangements, results='asis'}
+n_high <- sum(rearr_df$confidence == "high")
+n_med  <- sum(rearr_df$confidence == "medium")
+n_low  <- sum(rearr_df$confidence == "low")
+cat(sprintf('
+<div class="legend-box" style="border-left-color: #2a6496;">
+<b>Min. confidence</b>:&ensp;
+<label><input type="radio" name="rearr_conf" value="high" checked
+  onchange="filterRearr(this.value)"> High (%d)</label>&emsp;
+<label><input type="radio" name="rearr_conf" value="medium"
+  onchange="filterRearr(this.value)"> Medium (%d)</label>&emsp;
+<label><input type="radio" name="rearr_conf" value="low"
+  onchange="filterRearr(this.value)"> Low (%d)</label>
+</div>
+<script>
+function filterRearr(minConf) {
+  var levels = {high: 3, medium: 2, low: 1};
+  var minLevel = levels[minConf] || 1;
+  var tbl = document.getElementById("rearr-gt");
+  if (!tbl) return;
+  var rows = tbl.querySelectorAll("tbody tr");
+  rows.forEach(function(tr) {
+    var conf = tr.getAttribute("data-conf") || "low";
+    tr.style.display = (levels[conf] >= minLevel) ? "" : "none";
+  });
+}
+document.addEventListener("DOMContentLoaded", function() { filterRearr("high"); });
+</script>
+', n_high, n_med, n_low))
+```
+
+```{r rearr_table, eval=has_rearrangements, results='asis'}
 # rearr_df already has 'contig' (renamed) and 'original_name' from the TSV
 rearr_show <- rearr_df %>%
   mutate(
@@ -1234,7 +1265,8 @@ rearr_show <- rearr_df %>%
     conf_html = sapply(confidence, conf_badge)
   )
 
-rearr_show %>%
+# Build gt table with id for JS filtering
+tbl <- rearr_show %>%
   select(type_label, contig, assigned_ref_id, partner_ref_id,
          span_mb, evidence, conf_html) %>%
   gt() %>%
@@ -1251,7 +1283,23 @@ rearr_show %>%
   fmt(columns = conf_html, fns = function(x) x) %>%
   sub_missing(missing_text = "\u2014") %>%
   tab_header(title = md("**Rearrangements / Misassemblies**")) %>%
-  gt_theme()
+  gt_theme() %>%
+  opt_table_id(id = "rearr-gt")
+
+# Inject data-conf attributes into <tbody> <tr> elements for JS filtering
+tbl_html <- as.character(as_raw_html(tbl))
+conf_vals <- rearr_show$confidence
+# Split at <tbody>, inject only into body rows
+parts <- strsplit(tbl_html, "<tbody>", fixed = TRUE)[[1]]
+if (length(parts) == 2) {
+  body <- parts[2]
+  for (i in seq_along(conf_vals)) {
+    body <- sub("<tr>", sprintf('<tr data-conf="%s">', conf_vals[i]),
+                body, fixed = TRUE)
+  }
+  tbl_html <- paste0(parts[1], "<tbody>", body)
+}
+cat(tbl_html)
 
 # Legend: misassembly mimics for each rearrangement type
 mimic_map <- rearr_show %>%
