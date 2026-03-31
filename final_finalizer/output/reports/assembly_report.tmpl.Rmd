@@ -1283,11 +1283,11 @@ tbl <- rearr_show %>%
   fmt(columns = conf_html, fns = function(x) x) %>%
   sub_missing(missing_text = "\u2014") %>%
   tab_header(title = md("**Rearrangements / Misassemblies**")) %>%
-  gt_theme() %>%
-  opt_table_id(id = "rearr-gt")
+  gt_theme()
 
-# Inject data-conf attributes into <tbody> <tr> elements for JS filtering
+# Inject table id and data-conf attributes into HTML for JS filtering
 tbl_html <- as.character(as_raw_html(tbl))
+tbl_html <- sub('<table', '<table id="rearr-gt"', tbl_html, fixed = TRUE)
 conf_vals <- rearr_show$confidence
 # Split at <tbody>, inject only into body rows
 parts <- strsplit(tbl_html, "<tbody>", fixed = TRUE)[[1]]
