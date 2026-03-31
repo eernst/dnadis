@@ -1284,22 +1284,29 @@ tbl <- rearr_show %>%
   tab_header(title = md("**Rearrangements / Misassemblies**")) %>%
   gt_theme()
 
-# Inject table id and data-conf attributes into HTML for JS filtering
+# Inject table id for JS filtering
 tbl_html <- as.character(as_raw_html(tbl))
 tbl_html <- sub("<table", '<table id="rearr-gt"', tbl_html, fixed = TRUE)
-conf_vals <- rearr_show$confidence
-# Inject data-conf into each <tr> inside <tbody> (gt adds style attrs to <tr>)
-parts <- strsplit(tbl_html, "<tbody", fixed = TRUE)[[1]]
-if (length(parts) == 2) {
-  body <- parts[2]
-  for (i in seq_along(conf_vals)) {
-    body <- sub("<tr", sprintf('<tr data-conf="%s"', conf_vals[i]),
-                body, fixed = TRUE)
-  }
-  tbl_html <- paste0(parts[1], "<tbody", body)
-}
 cat(tbl_html)
-cat('<script>filterRearr("high");</script>\n')
+# Tag rows and apply initial filter after table is in the DOM
+cat('<script>
+(function() {
+  var tbl = document.getElementById("rearr-gt");
+  if (!tbl) return;
+  var rows = tbl.querySelectorAll("tbody tr");
+  rows.forEach(function(tr) {
+    var cells = tr.querySelectorAll("td");
+    var last = cells[cells.length - 1];
+    if (last) {
+      var txt = last.textContent.trim().toLowerCase();
+      if (txt === "high" || txt === "medium" || txt === "low") {
+        tr.setAttribute("data-conf", txt);
+      }
+    }
+  });
+  filterRearr("high");
+})();
+</script>\n')
 
 # Legend: misassembly mimics for each rearrangement type
 mimic_map <- rearr_show %>%
