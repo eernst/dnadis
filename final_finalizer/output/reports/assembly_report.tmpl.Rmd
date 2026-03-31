@@ -1251,7 +1251,6 @@ function filterRearr(minConf) {
     tr.style.display = (levels[conf] >= minLevel) ? "" : "none";
   });
 }
-document.addEventListener("DOMContentLoaded", function() { filterRearr("high"); });
 </script>
 ', n_high, n_med, n_low))
 ```
@@ -1287,19 +1286,20 @@ tbl <- rearr_show %>%
 
 # Inject table id and data-conf attributes into HTML for JS filtering
 tbl_html <- as.character(as_raw_html(tbl))
-tbl_html <- sub('<table', '<table id="rearr-gt"', tbl_html, fixed = TRUE)
+tbl_html <- sub("<table", '<table id="rearr-gt"', tbl_html, fixed = TRUE)
 conf_vals <- rearr_show$confidence
-# Split at <tbody>, inject only into body rows
-parts <- strsplit(tbl_html, "<tbody>", fixed = TRUE)[[1]]
+# Inject data-conf into each <tr> inside <tbody> (gt adds style attrs to <tr>)
+parts <- strsplit(tbl_html, "<tbody", fixed = TRUE)[[1]]
 if (length(parts) == 2) {
   body <- parts[2]
   for (i in seq_along(conf_vals)) {
-    body <- sub("<tr>", sprintf('<tr data-conf="%s">', conf_vals[i]),
+    body <- sub("<tr", sprintf('<tr data-conf="%s"', conf_vals[i]),
                 body, fixed = TRUE)
   }
-  tbl_html <- paste0(parts[1], "<tbody>", body)
+  tbl_html <- paste0(parts[1], "<tbody", body)
 }
 cat(tbl_html)
+cat('<script>filterRearr("high");</script>\n')
 
 # Legend: misassembly mimics for each rearrangement type
 mimic_map <- rearr_show %>%
