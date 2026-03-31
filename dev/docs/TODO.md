@@ -8,11 +8,9 @@
 
 * [x] Add a legend to the Chromosome Assignments compound plot — explains T2T/telomere shapes, fill intensity = mean identity, red border = off-target synteny, multi-contig counts.
 
-* [ ] Comparison report: show reference-relative aggregate homologous chromosome stats, e.g. a table with box plots of lengths for each chromosome and min/med/max text next to it, rDNA array presence/absence/mixed as full/empty/half-filled circle, rearrangements detected.
+* [ ] Comparison report: show reference-relative aggregate homologous chromosome stats, e.g. a table with box plots of lengths for each chromosome and min/med/max text next to it, rDNA array presence/absence/mixed as full/empty/half-filled circle, rearrangements detected. Anything else?
 
 * [x] Assembly sort order flag: `--assembly-sort-order input|identity` controls assembly ordering in comparison report.
-
-* [ ] We might actually need to do all vs all alignments within the set of contigs across all assemblies assigned to each reference subgenome. This would allow for more complete syntenic relationship tracking and plotting over rearrangements, potentially.
 
 * [x] rDNA table improvements: comparison report Arrays split into "Arrays (Chr)" / "Arrays (Other)"; assembly report renamed "rDNA Contig Summary" and "Non-Array rDNA Annotations". Remaining: identity column still NA, arrays info not yet in contig table, coverage not shown.
 
@@ -64,6 +62,8 @@
   Filtered-out reference sequences should still be present in the FASTA (for organelle/rDNA detection) but excluded from synteny-based chromosome assignment and the chromosome overview plot. This affects alignment target selection, assignment scoring, and all downstream outputs — needs careful integration across the pipeline.
 
 ### Detection
+
+* [ ] **Polysomy detection**: Flag chromosomes with evidence of extra copies (trisomy, tetrasomy, etc.). Signal: per-chromosome median read depth significantly above the genome-wide median (e.g., ~1.5x for trisomy), combined with multiple distinct-haplotype contigs assigned to the same reference chromosome. Requires read depth (Phase 13) — consider swapping Phase 12/13 ordering (see read depth evidence item below).
 
 * [ ] **NUMT/NUPT detection**: Add NUMT and NUPT detection using determined organelle reference contigs for alignment and accepted thresholds of sequence retention to call. Add stats tables to assembly report and include avg # and length in the aggregate homologous chromsome stats in the comparison report.
 
