@@ -13,6 +13,8 @@ import shutil
 import statistics
 import subprocess
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -494,6 +496,146 @@ def _emit_trivial_scaffold(
 
 
 # ---------------------------------------------------------------------------
+# Per-group scaffolding helper (for parallel execution)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _ScaffoldGroupResult:
+    """Result from scaffolding a single multi-contig group."""
+
+    scaffold_name: str
+    scaffold_seq: Optional[str] = None
+    agp_lines: List[str] = field(default_factory=list)
+    confidences: Dict[str, Tuple[float, float, float]] = field(default_factory=dict)
+
+
+def _scaffold_group(
+    scaffold_name: str,
+    ref_id: str,
+    contig_names: List[str],
+    query_seqs: Dict[str, str],
+    ref_seqs: Dict[str, str],
+    contig_orientations: Dict[str, bool],
+    qr_ref_ranges: Dict[Tuple[str, str], Tuple[int, int]],
+    ref_norm_to_orig: Optional[Dict[str, str]],
+    have_ragtag: bool,
+    work_dir: Path,
+    threads: int,
+    gap_size: int,
+    assembly_context: str = "",
+) -> _ScaffoldGroupResult:
+    """Scaffold a single multi-contig group (RagTag or built-in fallback).
+
+    This function is safe to call from multiple threads because:
+    - query_seqs and ref_seqs are read-only shared dicts
+    - Each group writes to its own work_dir / scaffold_name subdirectory
+    - The built-in scaffolder is pure Python with no shared mutable state
+
+    Args:
+        scaffold_name: Output scaffold name (e.g., 'chr1A').
+        ref_id: Normalized reference chromosome ID.
+        contig_names: Contigs to scaffold for this group.
+        query_seqs: Read-only dict of all query sequences.
+        ref_seqs: Read-only dict of all reference sequences.
+        contig_orientations: Dict mapping contig -> True if reversed.
+        qr_ref_ranges: Dict mapping (contig, ref_id) -> (ref_min, ref_max).
+        ref_norm_to_orig: Optional mapping from normalized to original ref IDs.
+        have_ragtag: Whether ragtag.py is available.
+        work_dir: Base working directory (per-group subdir is created).
+        threads: Number of threads for RagTag.
+        gap_size: Number of Ns between scaffolded contigs.
+
+    Returns:
+        _ScaffoldGroupResult with scaffold sequence, AGP lines, and confidences.
+    """
+    # Set thread-local assembly context for log messages (ThreadPoolExecutor
+    # threads don't inherit the parent's threading.local state)
+    if assembly_context:
+        from final_finalizer.utils.logging_config import set_assembly_context
+        set_assembly_context(assembly_context)
+
+    result = _ScaffoldGroupResult(scaffold_name=scaffold_name)
+    n_contigs = len(contig_names)
+    logger.info(f"{scaffold_name}: scaffolding {n_contigs} contigs")
+
+    if have_ragtag and ref_id in ref_seqs:
+        # Extract reference chromosome to temp FASTA
+        chr_work = work_dir / scaffold_name
+        chr_work.mkdir(parents=True, exist_ok=True)
+        ref_chr_fasta = chr_work / "ref_chr.fa"
+        # Find original ref ID in ref_seqs
+        ref_seq_key = None
+        for key in ref_seqs:
+            orig = ref_norm_to_orig.get(ref_id, ref_id) if ref_norm_to_orig else ref_id
+            if key == orig or key == ref_id:
+                ref_seq_key = key
+                break
+        if ref_seq_key is None:
+            # Try to find by iterating ref_norm_to_orig
+            if ref_norm_to_orig:
+                orig_id = ref_norm_to_orig.get(ref_id, ref_id)
+                if orig_id in ref_seqs:
+                    ref_seq_key = orig_id
+
+        if ref_seq_key and ref_seq_key in ref_seqs:
+            write_fasta({ref_seq_key: ref_seqs[ref_seq_key]}, ref_chr_fasta)
+            # Remove stale .fai so pysam/samtools re-indexes
+            ref_fai = Path(str(ref_chr_fasta) + ".fai")
+            if ref_fai.exists():
+                ref_fai.unlink()
+
+            # Extract contigs to temp FASTA
+            contigs_fasta = chr_work / "contigs.fa"
+            contig_seqs_subset = {}
+            for cn in contig_names:
+                if cn in query_seqs:
+                    contig_seqs_subset[cn] = query_seqs[cn]
+            write_fasta(contig_seqs_subset, contigs_fasta)
+            # Remove stale .fai so pysam/samtools re-indexes
+            contigs_fai = Path(str(contigs_fasta) + ".fai")
+            if contigs_fai.exists():
+                contigs_fai.unlink()
+
+            # Run RagTag
+            ragtag_dir = chr_work / "ragtag_out"
+            agp_path, fasta_path = _run_ragtag_scaffold(
+                ref_chr_fasta, contigs_fasta, ragtag_dir, threads,
+            )
+
+            if agp_path and fasta_path:
+                agp_lines = _parse_ragtag_agp(agp_path, scaffold_name)
+                scaffold_seq = _extract_ragtag_scaffold_seq(fasta_path)
+                if scaffold_seq and agp_lines:
+                    result.scaffold_seq = scaffold_seq
+                    result.agp_lines = agp_lines
+                    # Parse RagTag confidence scores
+                    conf_path = ragtag_dir / "ragtag.scaffold.confidence.txt"
+                    result.confidences = _parse_ragtag_confidence(conf_path)
+                    return result
+                else:
+                    logger.warning(f"{scaffold_name}: RagTag produced empty output, falling back")
+            else:
+                logger.warning(f"{scaffold_name}: RagTag failed, falling back to built-in scaffolder")
+        else:
+            logger.warning(f"{scaffold_name}: reference sequence not found, falling back")
+
+    # Fallback: built-in scaffolder
+    scaffold_seq, agp_lines = _builtin_scaffold(
+        contig_names=contig_names,
+        sequences=query_seqs,
+        orientations=contig_orientations,
+        ref_ranges=qr_ref_ranges,
+        ref_id=ref_id,
+        scaffold_name=scaffold_name,
+        gap_size=gap_size,
+    )
+    if scaffold_seq:
+        result.scaffold_seq = scaffold_seq
+        result.agp_lines = agp_lines
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Main scaffolding function
 # ---------------------------------------------------------------------------
 
@@ -554,6 +696,10 @@ def scaffold_chromosomes(
         logger.warning("No contigs to scaffold")
         return {}, [], {}
 
+    # Capture assembly context for thread-local propagation to worker threads
+    from final_finalizer.utils.logging_config import _assembly_context
+    _asm_ctx = getattr(_assembly_context, "name", "")
+
     # Build classification lookup
     clf_lookup = {clf.original_name: clf for clf in classifications}
 
@@ -574,11 +720,15 @@ def scaffold_chromosomes(
     if have_ragtag:
         ref_seqs = read_fasta_sequences(ref_fasta)
 
-    # Process each (ref_id, grp)
+    # Process each (ref_id, grp) — trivial scaffolds first, then parallel
     all_scaffolded: Dict[str, str] = {}
     all_agp: List[str] = []
 
-    # Sort for deterministic output
+    # ---- First pass: collect trivial scaffolds (T2T, single-contig) ----
+    # These are instant and don't need parallelization.
+    # Also collect multi-contig groups for the parallel second pass.
+    work_list: List[Tuple[str, str, List[str]]] = []  # (scaffold_name, ref_id, contig_names)
+
     for (ref_id, grp) in sorted(groups.keys()):
         contig_names = groups[(ref_id, grp)]
         if not contig_names:
@@ -651,85 +801,76 @@ def scaffold_chromosomes(
             )
             continue
 
-        # Multi-contig group: scaffold
-        n_contigs = len(contig_names)
-        logger.info(f"{scaffold_name}: scaffolding {n_contigs} contigs")
+        # Multi-contig group: needs scaffolding — add to work list
+        work_list.append((scaffold_name, ref_id, contig_names))
 
-        if have_ragtag and ref_id in ref_seqs:
-            # Extract reference chromosome to temp FASTA
-            chr_work = work_dir / scaffold_name
-            chr_work.mkdir(parents=True, exist_ok=True)
-            ref_chr_fasta = chr_work / "ref_chr.fa"
-            # Find original ref ID in ref_seqs
-            ref_seq_key = None
-            for key in ref_seqs:
-                orig = ref_norm_to_orig.get(ref_id, ref_id) if ref_norm_to_orig else ref_id
-                if key == orig or key == ref_id:
-                    ref_seq_key = key
-                    break
-            if ref_seq_key is None:
-                # Try to find by iterating ref_norm_to_orig
-                if ref_norm_to_orig:
-                    orig_id = ref_norm_to_orig.get(ref_id, ref_id)
-                    if orig_id in ref_seqs:
-                        ref_seq_key = orig_id
+    # ---- Second pass: scaffold multi-contig groups (possibly in parallel) ----
+    if work_list:
+        n_jobs = len(work_list)
+        if n_jobs == 1:
+            # Single job: run directly with all threads, no executor overhead
+            job_threads = max(1, threads)
+            scaffold_name, ref_id, contig_names = work_list[0]
+            logger.info(
+                f"Scaffolding 1 multi-contig group with {job_threads} threads"
+            )
+            result = _scaffold_group(
+                scaffold_name=scaffold_name,
+                ref_id=ref_id,
+                contig_names=contig_names,
+                query_seqs=query_seqs,
+                ref_seqs=ref_seqs,
+                contig_orientations=contig_orientations,
+                qr_ref_ranges=qr_ref_ranges,
+                ref_norm_to_orig=ref_norm_to_orig,
+                have_ragtag=have_ragtag,
+                work_dir=work_dir,
+                threads=job_threads,
+                gap_size=gap_size,
+                assembly_context=_asm_ctx,
+            )
+            if result.scaffold_seq:
+                all_scaffolded[result.scaffold_name] = result.scaffold_seq
+                all_agp.extend(result.agp_lines)
+                all_confidences.update(result.confidences)
+        else:
+            # Multiple jobs: run in parallel
+            max_workers = min(n_jobs, max(1, threads // 4))
+            job_threads = max(1, threads // max_workers)
+            logger.info(
+                f"Scaffolding {n_jobs} multi-contig groups in parallel "
+                f"({max_workers} workers, {job_threads} threads each)"
+            )
 
-            if ref_seq_key and ref_seq_key in ref_seqs:
-                write_fasta({ref_seq_key: ref_seqs[ref_seq_key]}, ref_chr_fasta)
-                # Remove stale .fai so pysam/samtools re-indexes
-                ref_fai = Path(str(ref_chr_fasta) + ".fai")
-                if ref_fai.exists():
-                    ref_fai.unlink()
-
-                # Extract contigs to temp FASTA
-                contigs_fasta = chr_work / "contigs.fa"
-                contig_seqs_subset = {}
-                for cn in contig_names:
-                    if cn in query_seqs:
-                        contig_seqs_subset[cn] = query_seqs[cn]
-                write_fasta(contig_seqs_subset, contigs_fasta)
-                # Remove stale .fai so pysam/samtools re-indexes
-                contigs_fai = Path(str(contigs_fasta) + ".fai")
-                if contigs_fai.exists():
-                    contigs_fai.unlink()
-
-                # Run RagTag
-                ragtag_dir = chr_work / "ragtag_out"
-                agp_path, fasta_path = _run_ragtag_scaffold(
-                    ref_chr_fasta, contigs_fasta, ragtag_dir, threads,
+            def _submit_job(
+                item: Tuple[str, str, List[str]],
+            ) -> _ScaffoldGroupResult:
+                s_name, r_id, c_names = item
+                return _scaffold_group(
+                    scaffold_name=s_name,
+                    ref_id=r_id,
+                    contig_names=c_names,
+                    query_seqs=query_seqs,
+                    ref_seqs=ref_seqs,
+                    contig_orientations=contig_orientations,
+                    qr_ref_ranges=qr_ref_ranges,
+                    ref_norm_to_orig=ref_norm_to_orig,
+                    have_ragtag=have_ragtag,
+                    work_dir=work_dir,
+                    threads=job_threads,
+                    gap_size=gap_size,
+                    assembly_context=_asm_ctx,
                 )
 
-                if agp_path and fasta_path:
-                    agp_lines = _parse_ragtag_agp(agp_path, scaffold_name)
-                    scaffold_seq = _extract_ragtag_scaffold_seq(fasta_path)
-                    if scaffold_seq and agp_lines:
-                        all_scaffolded[scaffold_name] = scaffold_seq
-                        all_agp.extend(agp_lines)
-                        # Parse RagTag confidence scores
-                        conf_path = ragtag_dir / "ragtag.scaffold.confidence.txt"
-                        conf = _parse_ragtag_confidence(conf_path)
-                        all_confidences.update(conf)
-                        continue
-                    else:
-                        logger.warning(f"{scaffold_name}: RagTag produced empty output, falling back")
-                else:
-                    logger.warning(f"{scaffold_name}: RagTag failed, falling back to built-in scaffolder")
-            else:
-                logger.warning(f"{scaffold_name}: reference sequence not found, falling back")
-
-        # Fallback: built-in scaffolder
-        scaffold_seq, agp_lines = _builtin_scaffold(
-            contig_names=contig_names,
-            sequences=query_seqs,
-            orientations=contig_orientations,
-            ref_ranges=qr_ref_ranges,
-            ref_id=ref_id,
-            scaffold_name=scaffold_name,
-            gap_size=gap_size,
-        )
-        if scaffold_seq:
-            all_scaffolded[scaffold_name] = scaffold_seq
-            all_agp.extend(agp_lines)
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                futures = [pool.submit(_submit_job, item) for item in work_list]
+                # Collect results in submission order (= sorted key order)
+                for future in futures:
+                    result = future.result()
+                    if result.scaffold_seq:
+                        all_scaffolded[result.scaffold_name] = result.scaffold_seq
+                        all_agp.extend(result.agp_lines)
+                        all_confidences.update(result.confidences)
 
     logger.done(f"Scaffolded {len(all_scaffolded)} chromosomes")
     return all_scaffolded, all_agp, all_confidences

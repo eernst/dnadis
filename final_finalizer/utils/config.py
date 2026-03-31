@@ -41,12 +41,14 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
     "common": {
         "threads": "threads",
         "skip_plot": "skip_plot",
+        "no_self_contained_html": "no_self_contained_html",
         "chr_like_minlen": "chr_like_minlen",
         "add_subgenome_suffix": "add_subgenome_suffix",
         "ref_id_pattern": "ref_id_pattern",
         "assembly_name": "assembly_name",
         "reference_name": "reference_name",
         "comparison_name": "comparison_name",
+        "assembly_sort_order": "assembly_sort_order",
     },
     "read_depth": {
         "reads": "reads",

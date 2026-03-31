@@ -14,6 +14,7 @@ from final_finalizer.detection.organelle import (
     prepare_organelle_references,
 )
 from final_finalizer.detection.rdna import detect_rdna_contigs, prepare_rdna_reference
+from final_finalizer.detection.rearrangements import detect_rearrangements
 from final_finalizer.detection.rdna_consensus import build_rdna_consensus
 
 __all__ = [
@@ -34,4 +35,6 @@ __all__ = [
     "detect_chromosome_debris",
     # contaminant.py
     "detect_contaminants",
+    # rearrangements.py
+    "detect_rearrangements",
 ]

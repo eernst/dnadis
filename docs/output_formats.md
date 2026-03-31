@@ -108,7 +108,7 @@ These depth metrics are useful for:
 | Column | Type | Description |
 |--------|------|-------------|
 | `assigned_subgenome` | string | Subgenome identifier (e.g., `A`, `B`, `At`, `Dt`) or `NA` if none |
-| `assigned_ref_id` | string | Best-matching reference chromosome ID (e.g., `chr5A`) or `NA`. In nucleotide mode, assignment uses span fraction (`qr_ref_span_bp / ref_length`) as the primary metric, which is size-normalized and avoids the size bias of raw score toward larger chromosomes. In protein mode, raw synteny score is used because miniprot PAF does not carry reference chromosome lengths. |
+| `assigned_ref_id` | string | Best-matching reference chromosome ID (e.g., `chr5A`) or `NA`. In nucleotide mode, assignment uses reference span fraction (`ref_span_bp / ref_length`) as the primary metric. This is size-normalized and answers the biologically meaningful question: what fraction of the reference chromosome does this contig represent? In protein mode, raw synteny score is used because miniprot PAF does not carry reference chromosome lengths. |
 | `assigned_chrom_id` | string | Chromosome number without subgenome (e.g., `chr5`) |
 | `status` | string | Assignment status: `OK`, `NO_HITS`, `AMBIG_LOW_FRAC`, or `AMBIG_LOW_RATIO` |
 
@@ -440,7 +440,7 @@ The `--assign-ref-score` parameter controls which is used for the initial chromo
 - `topk`: Use `score_topk` (focuses on best chains)
 - `all` (default): Use `score_all` (considers all evidence)
 
-In nucleotide mode, span fraction (`qr_ref_span_bp / ref_length`) is the primary assignment metric, computed directly in chain parsing from reference lengths in the PAF file. This is size-normalized and avoids the size bias of raw score: a contig with synteny to both a large and a small reference chromosome accumulates more raw score against the larger chromosome even when it proportionally covers more of the smaller one. In protein mode, raw score is used because miniprot PAF does not carry reference chromosome lengths.
+In nucleotide mode, reference span fraction (`ref_span_bp / ref_length`) is the primary assignment metric, computed directly in chain parsing from reference lengths in the PAF file. This normalises for reference chromosome size (avoiding the raw-score bias toward larger chromosomes) and answers the canonical assignment question: what fraction of the reference chromosome does this contig represent? In protein mode, raw score is used because miniprot PAF does not carry reference chromosome lengths.
 
 Individual chain scores are computed using the formula specified by `--assign-chain-score`:
 - `matches` (default): Total matching bases in chain
@@ -609,7 +609,7 @@ If `rmarkdown` or `pandoc` is not available, report generation is skipped with a
 - The HTML file is fully self-contained (`self_contained: true`) — all CSS, JavaScript, and widget assets are embedded
 - Summary tables use the `gt` package with consistent styling (dark headers, row striping, inline gradient bars)
 - The report can be opened in any web browser and shared as a single file
-- Refreshable via `refresh_plots.py` alongside other plot scripts
+- Refreshable via `refresh_reports.py` alongside other plot scripts
 
 ---
 

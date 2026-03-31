@@ -200,16 +200,17 @@ final_finalizer/
 | 9 | Orientation determination | |
 | 10 | Telomere detection | `--skip-telomeres` |
 | 11 | Classification (assign all contigs) | |
-| 12 | Read depth analysis | requires `--reads` |
-| 13 | rDNA consensus building | `--skip-rdna-consensus` |
-| 14 | Reference-guided scaffolding | `--scaffold` |
-| 15 | Writing FASTA outputs | |
-| 16 | Writing summary TSV | |
-| 17 | Compleasm (BUSCO completeness) evaluation | requires `--compleasm-lineage` / `--skip-compleasm` |
+| 12 | Rearrangement detection | |
+| 13 | Read depth analysis | requires `--reads` |
+| 14 | rDNA consensus building | `--skip-rdna-consensus` |
+| 15 | Reference-guided scaffolding | `--scaffold` |
+| 16 | Writing FASTA outputs | |
+| 17 | Writing summary TSV | |
+| 18 | Compleasm (BUSCO completeness) evaluation | requires `--compleasm-lineage` / `--skip-compleasm` |
 
 Reference preparation (`prepare_reference()`) runs before phase 1 and is not numbered — it produces the shared `ReferenceContext`. Multi-assembly orchestration (assembly headers, pairwise synteny, comparison report) also runs outside the per-assembly phase sequence.
 
-The rDNA consensus module (`rdna_consensus.py`) uses internal "Step 1-4" numbering within phase 13.
+The rDNA consensus module (`rdna_consensus.py`) uses internal "Step 1-4" numbering within phase 14.
 
 ### Key Design Patterns
 
@@ -359,7 +360,9 @@ When creating or modifying visualizations:
 
 Classification happens in `classification/classifier.py:classify_all_contigs()`. The function applies a decision tree:
 
-Before the decision tree, reference assignment runs for contigs that have synteny evidence. In nucleotide mode, each contig is assigned to the reference chromosome with the highest span fraction (`qr_ref_span_bp / ref_length` — reference span bp / reference length), computed directly in `chain_parsing.py` from reference lengths extracted from the PAF file. Span fraction is size-normalized and thus a more accurate indicator of which chromosome a contig represents than raw score, which accumulates more signal against larger chromosomes regardless of proportional coverage. In protein mode, span fraction falls back to raw synteny score because miniprot PAF does not carry reference chromosome lengths.
+Before the decision tree, reference assignment runs for contigs that have synteny evidence. In nucleotide mode, each contig is assigned to the reference chromosome with the highest reference span fraction: `ref_span_bp / ref_length`. This metric is size-normalized and correctly handles translocations between chromosomes of unequal size by answering "what fraction of the reference chromosome does this contig represent?" — the biologically meaningful question for chromosome assignment. This metric is computed directly in `chain_parsing.py` from reference lengths extracted from the PAF file. In protein mode, raw synteny score is used because miniprot PAF does not carry reference chromosome lengths.
+
+After initial assignment, `_resolve_reciprocal_translocations()` in `cli.py` detects and corrects a specific assignment error: when exactly two contigs are both assigned to the same reference chromosome and their shared second-best reference is empty, this is the signature of a reciprocal translocation. The weaker contig (lower ref span fraction for the disputed reference) is reassigned to the empty partner reference. Fragments whose second-best reference matches the resolved partner are also moved. The function guards against polyploid false positives by requiring exactly 2 competing main contigs and meaningful partner coverage (>5%) from both.
 
 Each contig is scored independently. Multiple contigs can still be assigned to the same reference (valid for polyploids).
 

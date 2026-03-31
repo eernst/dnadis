@@ -12,6 +12,7 @@ params:
   agp_tsv: "__AGP__"
   compleasm_chrs_summary: "__COMPLEASM_CHRS__"
   compleasm_non_chrs_summary: "__COMPLEASM_NONCHRS__"
+  rearrangements_tsv: "__REARRANGEMENTS__"
   assembly_name: "__ASMNAME__"
   reference_name: "__REFNAME__"
   synteny_mode: "__SYNTENY_MODE__"
@@ -21,7 +22,7 @@ params:
   top_n_contaminants: "__TOP_N__"
 output:
   html_document:
-    self_contained: true
+    self_contained: __SELF_CONTAINED__
     css: "__COMMON_CSS__"
     toc: true
     toc_float:
@@ -98,6 +99,13 @@ contam_df <- if (has_contaminants) {
   if (nrow(tmp) > 0) tmp else NULL
 } else NULL
 has_contaminants <- !is.null(contam_df)
+
+has_rearrangements <- nchar(params$rearrangements_tsv) > 0 && file.exists(params$rearrangements_tsv)
+rearr_df <- if (has_rearrangements) {
+  tmp <- read_tsv(params$rearrangements_tsv, show_col_types = FALSE)
+  if (nrow(tmp) > 0) tmp else NULL
+} else NULL
+has_rearrangements <- !is.null(rearr_df)
 
 has_depth <- "depth_mean" %in% names(summary_df) && !all(is.na(summary_df$depth_mean))
 has_collinearity <- "collinearity_score" %in% names(summary_df)
@@ -513,7 +521,7 @@ cat('<div class="note-box">No contigs were assigned to reference chromosomes. Th
 
 ```{r chrom_overview_build, include=FALSE, eval=has_chrom_assigned && has_segments}
 # ---------------------------------------------------------------------------
-# Chromosome overview (migrated from chromosome_overview.tmpl.R)
+# Chromosome overview
 # ---------------------------------------------------------------------------
 
 # Load segment/macro/evidence data
@@ -559,9 +567,20 @@ scaffold_brackets <- if (nzchar(params$agp_tsv) && file.exists(params$agp_tsv)) 
 } else tibble()
 
 # Reference chromosome data
+# Show reference chromosomes that either have an assigned contig or are large
+# enough to be a chromosome (≥ chr_like_minlen).  Large unassigned chromosomes
+# are retained to reveal aneuploidy at a glance; small unassigned scaffolds
+# are excluded to avoid bloating the y-axis.
+assigned_chrom_ids <- summary_df %>%
+  filter(classification == "chrom_assigned") %>%
+  pull(assigned_chrom_id) %>% unique()
+show_chrom_ids <- ref_lengths %>%
+  filter(chrom_id %in% assigned_chrom_ids | ref_len >= chr_like_minlen) %>%
+  pull(chrom_id) %>% unique()
+
 if (has_subgenomes) {
   ref_sg <- ref_lengths %>%
-    filter(subgenome %in% sg_levels) %>%
+    filter(subgenome %in% sg_levels, chrom_id %in% show_chrom_ids) %>%
     mutate(chrom_label = str_replace(chrom_id, "^[Cc]hr", ""),
            chrom_index = suppressWarnings(as.integer(chrom_label)),
            chrom_index = if_else(is.na(chrom_index), 9999L, chrom_index))
@@ -569,7 +588,8 @@ if (has_subgenomes) {
     arrange(chrom_index, chrom_id) %>% pull(chrom_id)
 } else {
   ref_sg <- ref_lengths %>%
-    filter(!(ref_id %in% c("chrC", "chrM", "ChrC", "ChrM"))) %>%
+    filter(!(ref_id %in% c("chrC", "chrM", "ChrC", "ChrM")),
+           chrom_id %in% show_chrom_ids) %>%
     mutate(chrom_label = str_replace(chrom_id, "^[Cc]hr", ""),
            chrom_index = suppressWarnings(as.integer(chrom_label)),
            chrom_index = if_else(is.na(chrom_index), 9999L, chrom_index),
@@ -992,11 +1012,11 @@ if (has_subgenomes) {
     geom_point(data = id_stats, aes(x = assigned_sg, y = mean_id, color = assigned_sg),
                shape = 16, size = 1.5, show.legend = FALSE, position = position_nudge(x = 0.35)) +
     scale_color_manual(values = col_dark, drop = FALSE) +
-    scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
+    scale_y_continuous(limits = c(0.4, 1), breaks = seq(0.4, 1, 0.1)) +
     theme_classic(base_family = base_family, base_size = base_font_pt) +
     axis_theme + theme(axis.ticks = element_blank(), panel.grid = element_blank(),
                        plot.margin = margin(5.5, 5.5, 5.5, 5.5)) +
-    labs(x = "Assigned subgenome", y = "Alignment identity proxy")
+    labs(x = "Assigned subgenome", y = "Alignment identity")
 } else {
   df_id_assigned <- df_plot %>%
     filter(!is.na(best_identity), assigned_ref_id != "NA") %>%
@@ -1004,11 +1024,11 @@ if (has_subgenomes) {
   p_id <- ggplot(df_id_assigned, aes(x = assigned_bin, y = pmax(0, pmin(1, best_identity)))) +
     geom_jitter(width = 0.18, height = 0, alpha = 0.55, size = 1.2, color = "grey35", show.legend = FALSE) +
     stat_summary(fun = median, geom = "point", shape = 95, size = 7, color = "grey15", show.legend = FALSE) +
-    scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
+    scale_y_continuous(limits = c(0.4, 1), breaks = seq(0.4, 1, 0.1)) +
     theme_classic(base_family = base_family, base_size = base_font_pt) +
     axis_theme + theme(axis.ticks = element_blank(), panel.grid = element_blank(),
                        plot.margin = margin(5.5, 5.5, 5.5, 5.5)) +
-    labs(x = NULL, y = "Alignment identity proxy")
+    labs(x = NULL, y = "Alignment identity")
 }
 
 # Patchwork layout
@@ -1175,7 +1195,10 @@ ev_df <- summary_df %>%
     syn_score = if ("synteny_score" %in% names(.)) synteny_score else NA_real_,
     collin = if (has_collinearity) collinearity_score else NA_real_,
     gc_dev = if ("gc_deviation" %in% names(.)) gc_deviation else NA_real_,
-    s_ratio = if ("score_ratio" %in% names(.)) score_ratio else NA_real_
+    # Cap sentinel value (1e9) to display as "max"
+    s_ratio = if ("score_ratio" %in% names(.)) {
+      ifelse(score_ratio >= 1e8, Inf, score_ratio)
+    } else NA_real_
   ) %>%
   arrange(version_sort_key(assigned_ref_id), assigned_ref_id, desc(length_mb))
 
@@ -1191,15 +1214,135 @@ ev_df %>%
   cols_label(.list = labels) %>%
   fmt_number(columns = any_of(c("length_mb", "span_frac", "gene_pct", "gc_dev")), decimals = 1) %>%
   fmt_number(columns = any_of(c("syn_score", "collin")), decimals = 2) %>%
-  fmt_number(columns = any_of("s_ratio"), decimals = 1) %>%
+  fmt(columns = any_of("s_ratio"), fns = function(x) {
+    ifelse(is.infinite(x), "\u221e", sprintf("%.1f", x))
+  }) %>%
   fmt(columns = any_of("conf_html"), fns = function(x) x) %>%
   tab_header(title = md("**Per-Contig Evidence Summary**"),
              subtitle = md("Sorted by chromosome assignment")) %>%
   gt_theme()
 ```
 
+<div class="legend-box">
+<b>Synteny Score</b> = total aligned bp from best chain to assigned reference.
+<b>Span Frac</b> = fraction of contig covered by synteny blocks.
+<b>Gene %</b> = proportion of reference genes found on this contig (protein mode only).
+<b>Collinearity</b> = fraction of synteny blocks in reference order (1.0 = perfectly collinear).
+<b>Score Ratio</b> = best score / second-best score (&infin; = no second hit; higher = more confident assignment).
+<b>GC Dev</b> = GC content deviation from reference mean (in standard deviations).
+</div>
 
-# 4. Read Depth Analysis {.tabset}
+
+# 4. Rearrangements / Misassemblies
+
+```{r rearr_placeholder, eval=!has_rearrangements, results='asis'}
+cat('<div class="note-box">No structural rearrangements or potential misassemblies were detected in this assembly.</div>')
+```
+
+```{r rearr_filter, eval=has_rearrangements, results='asis'}
+n_high <- sum(rearr_df$confidence == "high")
+n_med  <- sum(rearr_df$confidence == "medium")
+n_low  <- sum(rearr_df$confidence == "low")
+cat(sprintf('
+<div class="legend-box" style="border-left-color: #2a6496;">
+<b>Min. confidence</b>:&ensp;
+<label><input type="radio" name="rearr_conf" value="high" checked
+  onchange="filterRearr(this.value)"> High (%d)</label>&emsp;
+<label><input type="radio" name="rearr_conf" value="medium"
+  onchange="filterRearr(this.value)"> Medium (%d)</label>&emsp;
+<label><input type="radio" name="rearr_conf" value="low"
+  onchange="filterRearr(this.value)"> Low (%d)</label>
+</div>
+<script>
+function filterRearr(minConf) {
+  var levels = {high: 3, medium: 2, low: 1};
+  var minLevel = levels[minConf] || 1;
+  var tbl = document.getElementById("rearr-gt");
+  if (!tbl) return;
+  var rows = tbl.querySelectorAll("tbody tr");
+  rows.forEach(function(tr) {
+    var conf = tr.getAttribute("data-conf") || "low";
+    tr.style.display = (levels[conf] >= minLevel) ? "" : "none";
+  });
+}
+</script>
+', n_high, n_med, n_low))
+```
+
+```{r rearr_table, eval=has_rearrangements, results='asis'}
+# rearr_df already has 'contig' (renamed) and 'original_name' from the TSV
+rearr_show <- rearr_df %>%
+  mutate(
+    type_label = str_replace_all(rearrangement_type, "_", " ") %>% str_to_sentence(),
+    span_mb = span_bp / 1e6,
+    conf_html = sapply(confidence, conf_badge)
+  )
+
+# Build gt table with id for JS filtering
+tbl <- rearr_show %>%
+  select(type_label, contig, assigned_ref_id, partner_ref_id,
+         span_mb, evidence, conf_html) %>%
+  gt() %>%
+  cols_label(
+    type_label = "Type*",
+    contig = "Contig",
+    assigned_ref_id = "Assigned",
+    partner_ref_id = "Partner",
+    span_mb = "Span (Mb)",
+    evidence = "Evidence",
+    conf_html = "Confidence"
+  ) %>%
+  fmt_number(columns = span_mb, decimals = 2) %>%
+  fmt(columns = conf_html, fns = function(x) x) %>%
+  sub_missing(missing_text = "\u2014") %>%
+  tab_header(title = md("**Rearrangements / Misassemblies**")) %>%
+  gt_theme()
+
+# Inject table id for JS filtering
+tbl_html <- as.character(as_raw_html(tbl))
+tbl_html <- sub("<table", '<table id="rearr-gt"', tbl_html, fixed = TRUE)
+cat(tbl_html)
+# Tag rows and apply initial filter after table is in the DOM
+cat('<script>
+(function() {
+  var tbl = document.getElementById("rearr-gt");
+  if (!tbl) return;
+  var rows = tbl.querySelectorAll("tbody tr");
+  rows.forEach(function(tr) {
+    var cells = tr.querySelectorAll("td");
+    var last = cells[cells.length - 1];
+    if (last) {
+      var txt = last.textContent.trim().toLowerCase();
+      if (txt === "high" || txt === "medium" || txt === "low") {
+        tr.setAttribute("data-conf", txt);
+      }
+    }
+  });
+  filterRearr("high");
+})();
+</script>\n')
+
+# Legend: misassembly mimics for each rearrangement type
+mimic_map <- rearr_show %>%
+  distinct(rearrangement_type, misassembly_mimic) %>%
+  filter(nzchar(misassembly_mimic)) %>%
+  mutate(type_label = str_replace_all(rearrangement_type, "_", " ") %>%
+           str_to_sentence())
+```
+
+```{r rearr_legend, eval=has_rearrangements, results='asis'}
+cat('<div class="legend-box">\n')
+cat('<b>*Misassembly mimics</b>: Each rearrangement type has an alternative ')
+cat('explanation as an assembly artifact.<br>\n')
+for (i in seq_len(nrow(mimic_map))) {
+  cat(sprintf('<b>%s</b> \u2014 %s', mimic_map$type_label[i], mimic_map$misassembly_mimic[i]))
+  if (i < nrow(mimic_map)) cat('<br>\n')
+}
+cat('\n</div>\n')
+```
+
+
+# 5. Read Depth Analysis {.tabset}
 
 ```{r depth_placeholder, eval=!has_depth, results='asis'}
 cat('<div class="note-box">Read depth data is not available. Provide sequencing reads with <code>--reads</code> to enable depth analysis.</div>')
@@ -1408,7 +1551,7 @@ has_organelles <- nrow(org_df) > 0
 has_rdna <- nrow(rdna_df) > 0
 ```
 
-# 5. rDNA {.tabset}
+# 6. rDNA {.tabset}
 
 ```{r rdna_stub, eval=!has_rdna, results='asis'}
 cat('<div class="note-box">No rDNA contigs were detected in this assembly.</div>')
@@ -1498,32 +1641,54 @@ arrays_tbl %>%
   gt_theme()
 ```
 
+<div class="legend-box">
+<b>Copies</b>: F&thinsp;=&thinsp;full-length 45S units &emsp; P&thinsp;=&thinsp;partial (truncated at array boundary) &emsp; Fr&thinsp;=&thinsp;fragment (&lt;&thinsp;50% of consensus)
+</div>
+
 ```{r rdna_summary_tab, eval=has_rdna, results='asis'}
-cat('\n## rDNA Summary\n')
+cat('\n## rDNA Debris Summary\n')
 ```
 
 ```{r rdna_table, eval=has_rdna}
+# Compute per-contig rDNA coverage from annotations (merge overlapping loci)
+rdna_cov <- if (has_rdna_ann) {
+  rdna_ann_df %>%
+    filter(contig_classification == "rDNA") %>%
+    group_by(contig) %>%
+    summarise(
+      rdna_bp = {
+        s <- sort(start); e <- sort(end)
+        # Merge overlapping intervals
+        merged_bp <- 0; cur_s <- s[1]; cur_e <- e[1]
+        if (length(s) > 1) for (i in 2:length(s)) {
+          if (s[i] <= cur_e) { cur_e <- max(cur_e, e[i]) }
+          else { merged_bp <- merged_bp + cur_e - cur_s; cur_s <- s[i]; cur_e <- e[i] }
+        }
+        merged_bp + cur_e - cur_s
+      }, .groups = "drop")
+} else { tibble(contig = character(), rdna_bp = numeric()) }
+
 rdna_show <- rdna_df %>%
-  mutate(length_kb = length / 1e3,
-         identity_pct = if ("best_identity" %in% names(.)) best_identity * 100 else NA_real_,
+  mutate(length_kb = length / 1e3) %>%
+  left_join(rdna_cov, by = c("original_name" = "contig")) %>%
+  mutate(rdna_pct = ifelse(!is.na(rdna_bp), rdna_bp / length * 100, NA_real_),
          conf_html = sapply(classification_confidence, conf_badge))
 
-sel <- c("contig", "original_name", "length_kb", "identity_pct", "conf_html")
-labels <- list(contig = "Contig", original_name = "Original Name", length_kb = "Length (kb)",
-               identity_pct = "Identity %", conf_html = "Confidence")
-
 rdna_show %>%
-  select(all_of(sel)) %>%
+  select(contig, original_name, length_kb, rdna_pct, conf_html) %>%
   gt() %>%
-  cols_label(.list = labels) %>%
+  cols_label(contig = "Contig", original_name = "Original Name",
+             length_kb = "Length (kb)", rdna_pct = "rDNA %",
+             conf_html = "Confidence") %>%
   fmt_number(columns = length_kb, decimals = 1) %>%
-  fmt_number(columns = any_of("identity_pct"), decimals = 1) %>%
+  fmt_number(columns = rdna_pct, decimals = 1) %>%
   fmt(columns = conf_html, fns = function(x) x) %>%
-  tab_header(title = md("**rDNA Summary**")) %>% gt_theme()
+  sub_missing(missing_text = "\u2014") %>%
+  tab_header(title = md("**rDNA Debris Summary**")) %>% gt_theme()
 ```
 
 ```{r rdna_other_tab, eval=has_rdna_ann && has_other_rdna_ann, results='asis'}
-cat('\n## Other Annotations\n')
+cat('\n## Non-Array rDNA Annotations\n')
 ```
 
 ```{r rdna_other_table, eval=has_rdna_ann && has_other_rdna_ann}
@@ -1531,7 +1696,7 @@ cat('\n## Other Annotations\n')
   paste0("Showing up to 50 of ", nrow(other_df), " non-array annotations"))
 ```
 
-# 6. Organelles
+# 7. Organelles
 
 ```{r organelle_stub, eval=!has_organelles, results='asis'}
 cat('<div class="note-box">No organelle contigs were detected in this assembly.</div>')
@@ -1614,7 +1779,7 @@ if (has_depth) {
 gt_tbl
 ```
 
-# 7. Contaminants
+# 8. Contaminants
 
 ```{r contaminant_table_build, eval=has_contaminants}
 # ---------------------------------------------------------------------------
@@ -1758,7 +1923,7 @@ if (nrow(ct_df) > 0) {
 cat('<div class="note-box">No contaminant sequences were detected. If contamination screening was not performed, provide a Centrifuger index with <code>--centrifuger-idx</code>.</div>')
 ```
 
-# 8. Unclassified & Debris
+# 9. Unclassified & Debris
 
 ```{r debris_table}
 debris_df <- summary_df %>%

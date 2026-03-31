@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import traceback
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, Optional, Set, Tuple
@@ -329,6 +330,129 @@ def prepare_reference(args, ref_outprefix: Path) -> ReferenceContext:
 
 
 # ---------------------------------------------------------------------------
+# Reciprocal translocation detection and resolution
+# ---------------------------------------------------------------------------
+def _resolve_reciprocal_translocations(
+    best_ref: Dict[str, str],
+    span_frac: Dict[Tuple[str, str], float],
+) -> Dict[str, str]:
+    """Detect reciprocal translocations and resolve with 1:1 assignment.
+
+    When two contigs are both assigned to the same reference chromosome R1
+    and their second-best reference R2 has zero assigned contigs, this is
+    the signature of a reciprocal translocation.  The weaker contig (lower
+    R1 span fraction) is reassigned to R2.
+
+    After main contig resolution, fragments assigned to R1 are re-evaluated:
+    if a fragment's second-best reference is R2 (now occupied by the
+    reassigned main contig), the fragment is also moved to R2 so it can be
+    scaffolded with the main contig.
+
+    Only fires when exactly 2 main contigs (non-fragment-sized) compete for
+    the same ref and the partner ref is empty.  Does not fire for 3+ contigs
+    (likely polyploidy, not a reciprocal translocation).
+
+    Args:
+        best_ref: Dict of contig → best reference chromosome (modified copy returned).
+        span_frac: Dict of (contig, ref_id) → span fraction score.
+
+    Returns:
+        New best_ref dict with reciprocal translocations resolved.
+    """
+    from final_finalizer.utils.logging_config import get_logger
+    logger = get_logger("cli")
+
+    result = dict(best_ref)
+
+    # Group contigs by assigned ref
+    ref_to_contigs: Dict[str, list] = defaultdict(list)
+    for ctg, rid in result.items():
+        if rid:
+            ref_to_contigs[rid].append(ctg)
+
+    # Set of all assigned refs (for checking empty partner)
+    assigned_refs = set(result.values()) - {""}
+
+    # Pre-index span_frac by contig for O(1) per-contig lookups
+    span_frac_by_ctg: Dict[str, list] = defaultdict(list)
+    for (q, r), sf in span_frac.items():
+        span_frac_by_ctg[q].append((sf, r))
+
+    # Find refs with 2+ contigs — candidate reciprocal translocations.
+    # Sort contigs by span fraction descending to identify the top-2 "main"
+    # contigs.  If the 2nd-strongest contig's partner ref is empty, it's a
+    # reciprocal translocation.  Any remaining contigs are fragments.
+    resolved_partners: set = set()  # Track (rid, partner_ref) pairs resolved
+
+    for rid, contigs in list(ref_to_contigs.items()):
+        if len(contigs) < 2:
+            continue
+
+        # Sort by span fraction for this ref, descending
+        ranked = sorted(contigs, key=lambda c: span_frac.get((c, rid), 0.0), reverse=True)
+        stronger, weaker = ranked[0], ranked[1]
+        fragments = ranked[2:]  # Any additional contigs are fragments
+
+        # Find second-best ref for both contigs
+        weaker_refs = sorted(
+            [(sf, r) for sf, r in span_frac_by_ctg.get(weaker, []) if r != rid],
+            reverse=True,
+        )
+        stronger_refs = sorted(
+            [(sf, r) for sf, r in span_frac_by_ctg.get(stronger, []) if r != rid],
+            reverse=True,
+        )
+        if not weaker_refs or not stronger_refs:
+            continue
+        partner_frac, partner_ref = weaker_refs[0]
+
+        # Reciprocal signature: both contigs share the same partner ref as
+        # their second-best, and the stronger contig also has substantial
+        # partner coverage (it carries one arm of the translocation).
+        # This distinguishes reciprocal translocations from polyploidy
+        # where the second-best coverage is just noise.
+        stronger_partner_frac = stronger_refs[0][0]
+        if stronger_refs[0][1] != partner_ref:
+            continue
+        # Both contigs must have meaningful partner coverage (>5% of partner ref)
+        if stronger_partner_frac < 0.05 or partner_frac < 0.05:
+            continue
+
+        # Only resolve if partner ref is empty
+        if partner_ref in assigned_refs:
+            continue
+
+        # Only resolve if the weaker contig has non-trivial partner coverage
+        if partner_frac <= 0:
+            continue
+
+        logger.info(
+            f"Reciprocal translocation: {weaker} reassigned "
+            f"{rid} (frac {span_frac.get((weaker, rid), 0):.3f}) → "
+            f"{partner_ref} (frac {partner_frac:.3f})"
+        )
+        result[weaker] = partner_ref
+        assigned_refs.add(partner_ref)
+        resolved_partners.add((rid, partner_ref))
+
+        # Re-evaluate fragments: those whose second-best is partner_ref
+        # should follow the reassigned main contig
+        for frag in fragments:
+            frag_refs = sorted(
+                [(sf, r) for sf, r in span_frac_by_ctg.get(frag, []) if r != rid],
+                reverse=True,
+            )
+            if frag_refs and frag_refs[0][1] == partner_ref:
+                logger.info(
+                    f"  Fragment {frag} follows → {partner_ref} "
+                    f"(frac {frag_refs[0][0]:.3f})"
+                )
+                result[frag] = partner_ref
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # run_assembly: per-assembly analysis pipeline
 # ---------------------------------------------------------------------------
 def run_assembly(
@@ -560,8 +684,18 @@ def run_assembly(
     n_no_candidates = 0  # Contigs with no alignment candidates
     qr_ref_score = ev.qr_weight_all if args.assign_ref_score == "all" else ev.qr_score_topk
 
+    # Use reference span fraction for candidate ranking when ref lengths are
+    # available.  Matches the primary assignment in chain parsing.
+    qr_span_frac: Dict[Tuple[str, str], float] = {}
+    if ev.qr_ref_span_bp and ref_lengths:
+        for (q, rid), ref_span in ev.qr_ref_span_bp.items():
+            rlen = ref_lengths.get(rid, 0)
+            if rlen > 0:
+                qr_span_frac[(q, rid)] = ref_span / rlen
+    ranking_score = qr_span_frac if qr_span_frac else qr_ref_score
+
     candidates_by_contig = defaultdict(list)
-    for (q, ref_id), sc in qr_ref_score.items():
+    for (q, ref_id), sc in ranking_score.items():
         if sc > 0:
             candidates_by_contig[q].append((float(sc), ref_id))
 
@@ -638,6 +772,11 @@ def run_assembly(
                 f"{n_passing} passing gates, {n_demoted} demoted, {n_switched} switched")
     logger.info(f"Gate thresholds: min_segments={min_segments}, min_span_bp={args.min_span_bp}, "
                 f"min_span_frac={args.min_span_frac}, min_genes={min_genes}")
+
+    # Resolve reciprocal translocations: when two contigs are both assigned
+    # to the same ref and the partner ref is empty, reassign the weaker one
+    if ranking_score:
+        best_ref = _resolve_reciprocal_translocations(best_ref, ranking_score)
 
     if args.synteny_mode == "protein":
         plot_suffix = "protein-anchor synteny"
@@ -959,10 +1098,28 @@ def run_assembly(
     for clf in classifications:
         clf.reversed = contig_orientations.get(clf.original_name, False)
 
-    # --- Phase 12: Read depth analysis (optional) ---
+    # --- Phase 12: Rearrangement detection ---
+    logger.phase("Phase 12: Rearrangement detection")
+    from final_finalizer.detection.rearrangements import detect_rearrangements
+    from final_finalizer.output.tsv_output import write_rearrangements_tsv
+
+    rearrangement_calls = detect_rearrangements(
+        macro_block_rows=ev.macro_block_rows,
+        best_ref=best_ref,
+        ref_lengths=ref_lengths,
+        query_lengths=qry_lengths,
+        classifications=classifications,
+    )
+    rearrangements_tsv: Optional[Path] = None
+    if rearrangement_calls:
+        rearrangements_tsv = Path(str(outprefix) + ".rearrangements.tsv")
+        write_rearrangements_tsv(rearrangements_tsv, rearrangement_calls)
+        logger.done(f"Rearrangements:    {rearrangements_tsv}")
+
+    # --- Phase 13: Read depth analysis (optional) ---
     depth_stats: Dict[str, 'DepthStats'] = {}
     if reads and not args.skip_depth:
-        logger.phase("Phase 12: Read depth analysis")
+        logger.phase("Phase 13: Read depth analysis")
         from final_finalizer.analysis.read_depth import calculate_depth_metrics
         from final_finalizer.models import DepthStats
 
@@ -1001,9 +1158,9 @@ def run_assembly(
         if depth_stats:
             logger.done(f"Depth analysis complete for {len(depth_stats)} contigs")
     elif reads and args.skip_depth:
-        logger.info("Phase 12: Skipping depth analysis (--skip-depth)")
+        logger.info("Phase 13: Skipping depth analysis (--skip-depth)")
 
-    # --- Phase 13: rDNA consensus building (optional) ---
+    # --- Phase 14: rDNA consensus building (optional) ---
     rdna_consensus_obj = None
     rdna_loci = []
     rdna_arrays = []
@@ -1011,7 +1168,7 @@ def run_assembly(
     rdna_arrays_tsv_path = None
     rdna_ref = ref_ctx.rdna_ref
     if not args.skip_rdna_consensus and not args.skip_rdna and rdna_hit_intervals:
-        logger.phase("Phase 13: Building rDNA consensus from query assembly")
+        logger.phase("Phase 14: Building rDNA consensus from query assembly")
         from final_finalizer.detection.rdna_consensus import build_rdna_consensus
 
         # Build classification lookup for annotation
@@ -1108,13 +1265,13 @@ def run_assembly(
         else:
             logger.warning("rDNA consensus building did not produce a result")
     elif not args.skip_rdna_consensus and args.skip_rdna:
-        logger.info("Phase 13: Skipping rDNA consensus (--skip-rdna)")
+        logger.info("Phase 14: Skipping rDNA consensus (--skip-rdna)")
 
-    # --- Phase 14: Scaffolding (optional) ---
+    # --- Phase 15: Scaffolding (optional) ---
     scaffolded_seqs: Dict[str, str] = {}
     scaffold_confidences: Optional[Dict[str, tuple]] = None
     if args.scaffold:
-        logger.phase("Phase 14: Reference-guided scaffolding")
+        logger.phase("Phase 15: Reference-guided scaffolding")
         from final_finalizer.output.scaffolding import scaffold_chromosomes, write_agp, orientations_from_agp
 
         scaffolded_seqs, agp_lines, scaffold_confidences = scaffold_chromosomes(
@@ -1151,10 +1308,10 @@ def run_assembly(
                 if clf.original_name in agp_orients:
                     clf.reversed = agp_orients[clf.original_name]
     else:
-        logger.info("Phase 14: Skipping scaffolding (use --scaffold to enable)")
+        logger.info("Phase 15: Skipping scaffolding (use --scaffold to enable)")
 
-    # --- Phase 15: Write FASTA outputs ---
-    logger.phase("Phase 15: Writing FASTA outputs")
+    # --- Phase 16: Write FASTA outputs ---
+    logger.phase("Phase 16: Writing FASTA outputs")
     write_classified_fastas(
         query_fasta=qry,
         classifications=classifications,
@@ -1167,8 +1324,8 @@ def run_assembly(
     chrs_fasta = Path(str(outprefix) + ".chrs.fasta")
     per_sg_chrs = write_per_subgenome_chrs_fastas(chrs_fasta, outprefix)
 
-    # --- Phase 16: Write summary TSV ---
-    logger.phase("Phase 16: Writing summary TSV")
+    # --- Phase 17: Write summary TSV ---
+    logger.phase("Phase 17: Writing summary TSV")
     summary_tsv = Path(str(outprefix) + ".contig_summary.tsv")
 
     write_contig_summary_tsv(
@@ -1220,14 +1377,14 @@ def run_assembly(
     for cat, count in sorted(clf_counts.items()):
         logger.info(f"       {cat}: {count}")
 
-    # --- Phase 17: Compleasm (BUSCO) evaluation ---
+    # --- Phase 18: Compleasm (BUSCO) evaluation ---
     compleasm_chrs_result = None
     compleasm_non_chrs_result = None
 
     can_compleasm = args.compleasm_lineage and not args.skip_compleasm
     if can_compleasm:
         import shutil
-        logger.phase("Phase 17: Compleasm (BUSCO completeness) evaluation")
+        logger.phase("Phase 18: Compleasm (BUSCO completeness) evaluation")
 
         chrs_fasta = Path(str(outprefix) + ".chrs.fasta")
 
@@ -1284,9 +1441,9 @@ def run_assembly(
             logger.done(f"Compleasm non-chrs: {compleasm_non_chrs_result.summary_line()}")
     else:
         if args.compleasm_lineage:
-            logger.info("Phase 17: Skipping compleasm (--skip-compleasm)")
+            logger.info("Phase 18: Skipping compleasm (--skip-compleasm)")
         else:
-            logger.info("Phase 17: Skipping compleasm (no --compleasm-lineage specified)")
+            logger.info("Phase 18: Skipping compleasm (no --compleasm-lineage specified)")
 
     # Build assembly result for cross-assembly comparison
     from final_finalizer.output.comparison import build_assembly_result
@@ -1317,6 +1474,8 @@ def run_assembly(
         compleasm_chrs=compleasm_chrs_result,
         compleasm_non_chrs=compleasm_non_chrs_result,
     )
+    result.rearrangements = rearrangement_calls
+    result.rearrangements_tsv = rearrangements_tsv
 
     if not args.skip_plot:
         agp_tsv = result.agp_tsv
@@ -1344,6 +1503,8 @@ def run_assembly(
             agp_tsv=agp_tsv,
             compleasm_chrs_summary=compleasm_chrs_sum,
             compleasm_non_chrs_summary=compleasm_non_sum,
+            rearrangements_tsv=rearrangements_tsv,
+            self_contained=not args.no_self_contained_html,
         ):
             logger.error(
                 "--plot failed: unified report could not be generated. "
@@ -1435,9 +1596,18 @@ def main():
     common = p.add_argument_group("Common options")
     common.add_argument("-t", "--threads", type=_positive_int, default=8, help="Threads for minimap2/miniprot [8]")
     common.add_argument("--skip-plot", action="store_true", help="Skip unified HTML report generation")
+    common.add_argument("--no-self-contained-html", action="store_true",
+                        help="Produce non-self-contained HTML reports (HTML + companion _files/ directory). "
+                             "Default: self-contained (all resources embedded in a single portable file).")
     common.add_argument("--assembly-name", type=str, default="", metavar="NAME", help="Assembly name for plot subtitles (default: omitted)")
     common.add_argument("--reference-name", type=str, default="", metavar="NAME", help="Reference name for plot subtitles (default: derived from reference filename)")
     common.add_argument("--comparison-name", type=str, default="comparison", metavar="NAME", help="Prefix for multi-assembly comparison output files (default: comparison)")
+    common.add_argument(
+        "--assembly-sort-order",
+        choices=["input", "identity"],
+        default="input",
+        help="Assembly ordering in comparison report: 'input' preserves FOFN/directory order (default), 'identity' sorts by descending median sequence identity vs reference",
+    )
     common.add_argument("-v", "--verbose", action="store_true", help="Enable verbose (DEBUG level) logging")
     common.add_argument("--quiet", action="store_true", help="Suppress INFO messages (only show warnings and errors)")
     common.add_argument("--log-file", type=str, default=None, metavar="PATH", help="Also write logs to this file")
@@ -1967,7 +2137,7 @@ def main():
                         results.append(fut.result())
                         n_ok += 1
                     except Exception as e:
-                        logger.error(f"Assembly '{name}' failed: {e}")
+                        logger.error(f"Assembly '{name}' failed: {e}\n{traceback.format_exc()}")
                         failures.append((name, str(e)))
         else:
             for i, (asm_path, asm_name, asm_reads) in enumerate(assemblies):
@@ -2100,29 +2270,20 @@ def main():
                         )
                         pairwise_futures.append((pair_name, fut))
 
-            # Collect pairwise results
-            for pair_name, fut in pairwise_futures:
-                try:
-                    macro_tsv = fut.result()
-                    if macro_tsv:
-                        pairwise_pairs.append((pair_name, macro_tsv))
-                except Exception as e:
-                    logger.error(f"Pairwise '{pair_name}' failed: {e}")
-
-            # --- Rescue pairwise alignments for non-adjacent assemblies ---
+            # --- Non-adjacent pairwise alignments ---
             # When an intermediate assembly lacks a chromosome that its
-            # neighbors share, no ribbon can be drawn.  Rescue alignments
-            # bridge the gap so the Rmd can draw spanning ribbons.
-            rescue_futures: list[tuple[str, Any]] = []
+            # neighbors share, no adjacent ribbon can be drawn.  Non-adjacent
+            # alignments bridge the gap.  These are submitted alongside the
+            # adjacent pairs so all pairwise jobs run concurrently.
 
-            def _submit_rescue_pairs(ordered_results, rescue_dir, get_fasta, log_suffix="", subgenome_filter=None):
-                """Detect and submit rescue pairwise alignments for one result list.
+            def _submit_nonadj_pairs(ordered_results, nonadj_dir, get_fasta, log_suffix="", subgenome_filter=None):
+                """Detect and submit non-adjacent pairwise alignments.
 
                 Args:
                     subgenome_filter: If set, only consider ref_ids belonging to
                         this reference subgenome when detecting gaps.  Prevents
                         chromosomes from other subgenomes triggering spurious
-                        rescues in the current chain.
+                        pairs in the current chain.
                 """
                 asm_chroms = {}
                 for r in ordered_results:
@@ -2135,26 +2296,26 @@ def main():
                                     continue
                             chroms.add(cc.assigned_ref_id)
                     asm_chroms[r.assembly_name] = chroms
-                rescue_needed: set[tuple[int, int]] = set()
+                needed: set[tuple[int, int]] = set()
                 for i in range(len(ordered_results)):
                     for ref_id in asm_chroms.get(ordered_results[i].assembly_name, ()):
                         if i > 0 and ref_id not in asm_chroms.get(ordered_results[i - 1].assembly_name, ()):
                             for j in range(i - 2, -1, -1):
                                 if ref_id in asm_chroms.get(ordered_results[j].assembly_name, ()):
-                                    rescue_needed.add((j, i))
+                                    needed.add((j, i))
                                     break
-                if not rescue_needed:
+                if not needed:
                     return
-                rescue_dir.mkdir(parents=True, exist_ok=True)
+                nonadj_dir.mkdir(parents=True, exist_ok=True)
                 n_submitted = 0
-                for j, i in sorted(rescue_needed):
+                for j, i in sorted(needed):
                     left, right = ordered_results[j], ordered_results[i]
-                    pair_name = f"rescue:{left.assembly_name}_vs_{right.assembly_name}"
-                    pair_prefix = rescue_dir / f"{left.assembly_name}_vs_{right.assembly_name}"
+                    pair_name = f"{left.assembly_name}_vs_{right.assembly_name}"
+                    pair_prefix = nonadj_dir / pair_name
                     left_fasta, right_fasta = get_fasta(left), get_fasta(right)
                     macro_tsv = Path(str(pair_prefix) + ".macro_blocks.tsv")
                     if file_exists_and_valid(macro_tsv):
-                        logger.info(f"Reusing cached rescue pairwise: {macro_tsv}")
+                        logger.info(f"Reusing cached pairwise: {macro_tsv}")
                         pairwise_pairs.append((pair_name, macro_tsv))
                     else:
                         res_spec = estimate_pairwise_resources(
@@ -2172,38 +2333,38 @@ def main():
                             resource_spec=res_spec if use_cluster_pw else None,
                             **chain_kwargs,
                         )
-                        rescue_futures.append((pair_name, fut))
+                        pairwise_futures.append((pair_name, fut))
                         n_submitted += 1
                 if n_submitted > 0:
-                    logger.info(f"Submitted {n_submitted} rescue pairwise alignment(s){log_suffix}")
+                    logger.info(f"Submitted {n_submitted} non-adjacent pairwise alignment(s){log_suffix}")
 
             if any_has_sg:
                 for sg in sorted(sg_assemblies):
                     sg_results = sg_assemblies[sg]
                     if len(sg_results) >= 3:
-                        _submit_rescue_pairs(
+                        _submit_nonadj_pairs(
                             sg_results,
-                            pairwise_dir / sg / "rescue",
+                            pairwise_dir / sg / "nonadj",
                             get_fasta=lambda r, _sg=sg: r.per_subgenome_chrs[_sg],
                             log_suffix=f" for subgenome {sg}",
                             subgenome_filter=sg,
                         )
             else:
                 if len(results) >= 3:
-                    _submit_rescue_pairs(
+                    _submit_nonadj_pairs(
                         results,
-                        pairwise_dir / "rescue",
+                        pairwise_dir / "nonadj",
                         get_fasta=lambda r: Path(str(r.outprefix) + ".chrs.fasta"),
                     )
 
-            # Collect rescue pairwise results
-            for pair_name, fut in rescue_futures:
+            # Collect all pairwise results (adjacent + non-adjacent)
+            for pair_name, fut in pairwise_futures:
                 try:
                     macro_tsv = fut.result()
                     if macro_tsv:
                         pairwise_pairs.append((pair_name, macro_tsv))
                 except Exception as e:
-                    logger.error(f"Rescue pairwise '{pair_name}' failed: {e}")
+                    logger.error(f"Pairwise '{pair_name}' failed: {e}")
 
     # --- executor is now closed ---
 
@@ -2235,6 +2396,8 @@ def main():
                 synteny_mode=args.synteny_mode,
                 reference_name=args.reference_name,
                 pairwise_pairs=pairwise_pairs,
+                self_contained=not args.no_self_contained_html,
+                assembly_sort_order=args.assembly_sort_order,
             ):
                 logger.error("Comparison report generation failed.")
 

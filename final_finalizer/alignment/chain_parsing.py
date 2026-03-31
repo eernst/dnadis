@@ -887,19 +887,18 @@ def _chains_to_evidence_and_segments(
     else:
         raise ValueError(f"Unknown assign_ref_score: {assign_ref_score}")
 
-    # Assign best_ref using reference span fraction (span_bp / ref_length)
-    # as the primary metric.  This normalises for reference chromosome size,
-    # preventing bias toward larger chromosomes in translocation cases.
-    # Falls back to raw score when reference lengths are unavailable.
+    # Assign best_ref using reference span fraction (ref_span_bp / ref_length).
+    # This normalises for reference chromosome size, preventing bias toward
+    # larger chromosomes in translocation cases.  Falls back to raw score
+    # when reference lengths are unavailable (protein mode).
     qr_span_frac: dict[tuple[str, str], float] = {}
     if rlens_from_paf:
-        for (q, ref_id), span_bp in qr_ref_span_bp.items():
+        for (q, ref_id), ref_span in qr_ref_span_bp.items():
             rlen = rlens_from_paf.get(ref_id, 0)
             if rlen > 0:
-                qr_span_frac[(q, ref_id)] = span_bp / rlen
+                qr_span_frac[(q, ref_id)] = ref_span / rlen
 
-    use_span_frac = len(qr_span_frac) > 0
-    scoring = qr_span_frac if use_span_frac else qr_ref_score
+    scoring = qr_span_frac if qr_span_frac else qr_ref_score
 
     best_ref = defaultdict(str)
     best_score = defaultdict(float)

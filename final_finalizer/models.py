@@ -190,6 +190,48 @@ class ContigClassification:
 
 
 @dataclass
+class RearrangementCall:
+    """Structural rearrangement detected from macro_block patterns.
+
+    Each instance represents one rearrangement event (translocation, inversion,
+    fusion, or fission) with coordinates on both the query contig and the
+    reference chromosome(s) involved.
+
+    Attributes:
+        contig: Query contig name (renamed).
+        original_name: Original contig name before renaming.
+        assigned_ref_id: Contig's primary assigned reference chromosome.
+        rearrangement_type: One of 'reciprocal_translocation', 'translocation',
+            'whole_arm_translocation', 'inversion', 'fusion', 'fission'.
+        partner_ref_id: Partner reference chromosome (translocations/fusions),
+            or None for inversions/fissions.
+        query_start: Start position on query contig.
+        query_end: End position on query contig.
+        ref_start: Start position on relevant reference chromosome.
+        ref_end: End position on relevant reference chromosome.
+        span_bp: Size of the rearranged region in bp.
+        strand: '+' or '-' (meaningful for inversions).
+        confidence: 'high', 'medium', or 'low'.
+        evidence: Brief description of the supporting evidence.
+        misassembly_mimic: Assembly artifact that could produce the same signature.
+    """
+    contig: str
+    original_name: str
+    assigned_ref_id: str
+    rearrangement_type: str
+    partner_ref_id: Optional[str]
+    query_start: int
+    query_end: int
+    ref_start: int
+    ref_end: int
+    span_bp: int
+    strand: str
+    confidence: str
+    evidence: str
+    misassembly_mimic: str = ""
+
+
+@dataclass
 class ContaminantHit:
     """Contaminant detection result for a contig."""
     taxid: int
@@ -540,3 +582,7 @@ class AssemblyResult:
     # Compleasm (BUSCO) completeness results
     compleasm_chrs: Optional['CompleasmResult'] = None
     compleasm_non_chrs: Optional['CompleasmResult'] = None
+
+    # Rearrangement calls
+    rearrangements: List['RearrangementCall'] = field(default_factory=list)
+    rearrangements_tsv: Optional[Path] = None

@@ -24,7 +24,7 @@
 - **Read depth analysis** (optional) with automated downsampling and caching
 - **Multi-assembly mode**: analyze multiple assemblies concurrently against a shared reference via `--fofn` (file-of-filenames TSV) or `--assembly-dir` (directory scan)
 - **Cross-assembly comparison reports**: interactive HTML tables (via gt) aggregating classification and BUSCO completeness results across all assemblies
-- **Interactive HTML reports** per assembly with chromosome overview, classification summary, read depth, and contaminant table (enabled by default; requires rmarkdown + pandoc)
+- **Interactive HTML reports** per assembly with chromosome overview, classification summary, read depth, and contaminant table (enabled by default; requires rmarkdown + pandoc). Reports are non-self-contained by default (HTML + companion `_files/` directory); use `--self-contained-html` for a single portable file
 - **Distributed SLURM execution** (optional) via executorlib: compute-intensive phases submitted as individual SLURM jobs with automatic resource estimation
 
 ## Contig Naming Scheme
@@ -35,9 +35,9 @@ Chromosome-assigned contigs are renamed using the pattern `chr<ref>(_<subgenome>
 
 | Suffix | Meaning | Example |
 |--------|---------|---------|
-| _(none)_ | Single full-length contig assigned to this reference chromosome | `chr1A` |
-| `_B`, `_C`, … | Query subgenome label — the query assembly carries multiple homeologous copies that map to the same reference chromosome and can be resolved into distinct subgenomes | `chr1A_B` |
-| `_c1`, `_c2`, … | Multiple full-length copies of the same (subgenome, reference chromosome) pair, ordered by descending alignment identity to the reference — `_c1` is always the highest-identity copy, consistent with the primary subgenome convention | `chr1A_c1`, `chr1A_c2` |
+| _(none)_ | Primary contig assigned to this reference chromosome — either the only copy, or the highest-identity copy when multiple query subgenomes are detected | `chr1A` |
+| `_B`, `_C`, … | Secondary query subgenome label — the query assembly carries multiple homeologous copies that map to the same reference chromosome, resolved into distinct subgenomes by identity clustering. The primary (highest-identity) copy is always unsuffixed. | `chr1A_B` |
+| `_c1`, `_c2`, … | Multiple full-length copies that could not be resolved into distinct subgenomes — the copies align to the reference at nearly identical identity levels, so the GMM clustering cannot distinguish them. This typically arises when both haplotypes of a phased assembly are provided in a single query FASTA, or when the assembler produces near-identical duplicate copies. Ordered by descending alignment identity; `_c1` is always the highest-identity copy. See [Limitations](#limitations-and-expectations) for details. | `chr1A_c1`, `chr1A_c2` |
 | `_f1`, `_f2`, … | Chromosome fragments (contigs not classified as full-length), ordered by descending alignment identity to the reference | `chr1A_f1`, `chr1A_f2` |
 
 Suffixes compose left-to-right: subgenome first, then copy/fragment. For example, `chr1A_B_f1` is the longest fragment of chr1A from query subgenome B.
@@ -71,6 +71,8 @@ No user configuration is required. The feature runs automatically whenever multi
 **Haplotype-collapsed assemblies**: Assemblers that produce a single primary assembly (e.g., in primary/alternate mode) collapse both haplotypes of each chromosome into one contig. There is nothing to segment — the tool correctly reports a single copy with no subgenome suffix. This is expected behavior.
 
 **Haplotype-phased assemblies**: Assemblies that retain both haplotypes as separate contigs (e.g., from phased assembly workflows) may include two copies of each chromosome that differ only at heterozygous positions. If both haplotypes are provided in a single query FASTA, they typically align to the reference at nearly identical identity levels and may not be separable by the GMM. The tool will label them `_c1`/`_c2` (unsegmented copies) rather than `_B` (distinct subgenome). This is the correct outcome: the two copies represent haplotypes of the same subgenome, not distinct homeologous subgenomes.
+
+**Autopolyploids**: Autopolyploid genomes (e.g., autotetraploids) carry multiple chromosome sets derived from the same ancestral species. Unlike allopolyploids, the subgenomes have identical evolutionary distance from the reference, so identity-based clustering cannot distinguish them. These will also be labeled `_c1`/`_c2`.
 
 **Minimum data requirement**: Clustering requires at least 4 multi-copy reference chromosomes to attempt model fitting, and at least 3 chromosomes with exactly _k_ copies for paired validation. Assemblies with very few assigned chromosomes may not trigger subgenome segmentation.
 
@@ -217,6 +219,7 @@ Latest tested conda package versions (CI):
 |----------|-------------|---------|
 | `-t, --threads` | Number of threads | 8 |
 | `--skip-plot` | Skip unified HTML report generation | off |
+| `--self-contained-html` | Embed all resources (JS, CSS, SVG) into a single portable HTML file. Slower and produces larger files; suitable for sharing. Default produces HTML + companion `_files/` directory, which loads faster. | off |
 | `-v, --verbose` | Enable verbose (DEBUG level) logging | off |
 | `--quiet` | Suppress INFO messages (only warnings and errors) | off |
 | `--log-file` | Write logs to file (in addition to stderr) | none |
@@ -388,7 +391,7 @@ Enabled by default; skip with `--skip-plot` (requires R with ggplot2 and related
 
 | File | Description |
 |------|-------------|
-| `*.unified_report.html` | Self-contained HTML report per assembly with all plots (chromosome overview, classification bar, read depth overview, contaminant table) |
+| `*.unified_report.html` | HTML report per assembly with all plots (chromosome overview, classification bar, read depth overview, contaminant table). Non-self-contained by default: a companion `*.unified_report_files/` directory holds JS/CSS resources. Use `--self-contained-html` to embed all resources into a single portable file. |
 | `*.chromosome_overview.pdf` | Multi-panel plot showing contig composition, subgenome support, and alignment identity (exported from the unified report) |
 | `*.depth_overview.pdf` | Read depth visualization by classification and chromosome (if `--reads` provided; exported from the unified report) |
 
@@ -789,6 +792,21 @@ Assemblies run concurrently; each submits its own SLURM jobs for compute-intensi
 
 The tool supports two complementary synteny modes:
 
+#### Nucleotide mode (default)
+
+Uses whole-genome nucleotide alignment for structural composition analysis:
+- Detects actual sequence-level identity and synteny
+- Ideal for identifying structural features (fusions, translocations, homeologous exchanges)
+- Works for both within-species and cross-species comparisons
+- Creates megabase-scale synteny blocks for chromosome architecture analysis
+
+Minimap2 alignments use permissive chaining parameters to create continuous chromosome-scale blocks:
+- `--max-chain-skip=300`: Chain through repetitive regions
+- `-z 10000,1000`: Tolerate long gaps in alignment chains
+- `-r 50000`: Large bandwidth (50kb) to accommodate structural variations
+
+This permissive approach chains through homopolymer runs, tandem repeats, and ambiguous regions that would otherwise fragment alignments. The resulting megabase-scale blocks are suitable for chromosome classification and compositional analysis, balanced by downstream filtering (identity thresholds, minimum alignment length, gate filtering) to prevent spurious assignments.
+
 #### Protein mode
 
 Uses protein homology as the primary evidence source because:
@@ -805,25 +823,6 @@ Miniprot alignments are:
 5. Aggregated per contig × reference chromosome
 6. Scored and ranked for assignment
 
-**Performance optimization**: The pipeline uses interval trees (via the `intervaltree` package) for efficient O(n log n) overlap detection during synteny block filtering, replacing the previous O(n²) algorithm. This significantly improves runtime for large assemblies with many protein alignments.
-
-#### Nucleotide mode (default)
-
-Uses whole-genome nucleotide alignment for structural composition analysis:
-- Detects actual sequence-level identity and synteny
-- Ideal for identifying structural features (fusions, translocations, homeologous exchanges)
-- Works for both within-species and cross-species comparisons
-- Creates megabase-scale synteny blocks for chromosome architecture analysis
-
-Minimap2 alignments use permissive chaining parameters to create continuous chromosome-scale blocks:
-- `--max-chain-skip=300`: Chain through repetitive regions
-- `-z 10000,1000`: Tolerate long gaps in alignment chains
-- `-r 50000`: Large bandwidth (50kb) to accommodate structural variations
-
-This permissive approach chains through homopolymer runs, tandem repeats, and ambiguous regions that would otherwise fragment alignments. The resulting megabase-scale blocks are suitable for chromosome classification and compositional analysis, balanced by downstream filtering (identity thresholds, minimum alignment length, gate filtering) to prevent spurious assignments.
-
-**Gate threshold differences**: Nucleotide mode requires ≥1 segment (vs. ≥5 for protein mode) because perfect full-length nucleotide alignments produce fewer segments than fragmented protein hits.
-
 ### Gate-based assignment
 
 Contigs must pass "gates" to be assigned:
@@ -836,9 +835,13 @@ This prevents spurious assignments from:
 - Repetitive sequences
 - Low-complexity regions
 
+**Gate threshold differences**: Nucleotide mode requires ≥1 segment (vs. ≥5 for protein mode) because perfect full-length nucleotide alignments produce fewer segments than fragmented protein hits.
+
 ### Reference assignment scoring
 
-In nucleotide mode, each contig is assigned to the reference chromosome with the highest span fraction (`qr_ref_span_bp / ref_length` — the fraction of each reference chromosome's length spanned by syntenic alignments). This metric is size-normalized: a contig aligned to both a large and a small reference chromosome accumulates more raw score against the larger one even when it proportionally covers more of the smaller chromosome, but span fraction correctly reflects which chromosome the contig represents. Span fraction is computed directly in chain parsing from reference lengths extracted from the PAF file and used as the primary assignment metric.
+In nucleotide mode, each contig is assigned to the reference chromosome with the highest reference span fraction: `ref_span_bp / ref_length`. This metric answers the biologically meaningful question — what fraction of the reference chromosome does this contig represent? — and is size-normalized, preventing the raw-score bias toward larger chromosomes that would otherwise skew assignments in translocation cases. The metric is computed directly in chain parsing from reference lengths extracted from the PAF file.
+
+After initial assignment, a dedicated pass (`_resolve_reciprocal_translocations()`) handles a specific edge case: when exactly two contigs are both assigned to the same reference chromosome and both share the same second-best reference (which has no contigs assigned), this is the signature of a reciprocal translocation. The weaker contig is reassigned to the partner reference.
 
 In protein mode, span fraction falls back to raw synteny score (sum of chain scores; see `--assign-ref-score`) because miniprot PAF does not carry reference chromosome lengths.
 

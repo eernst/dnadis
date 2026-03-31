@@ -144,23 +144,22 @@ minimum alignment length, gate filtering) prevents spurious assignments.
 
 ---
 
-## Span fraction as primary reference chromosome scoring metric (nucleotide mode)
+## Reference span fraction as primary reference assignment metric (nucleotide mode)
 
 **Decision**: In nucleotide mode, each contig is assigned to the reference chromosome
-with the highest span fraction (`qr_ref_span_bp / ref_length`), computed directly
-in `chain_parsing.py` from reference lengths extracted from the PAF file. Span
-fraction is the primary assignment metric; there is no subsequent reassignment pass.
-In protein mode, span fraction falls back to raw synteny score because miniprot
-PAF does not carry reference chromosome lengths.
+with the highest reference span fraction: `ref_span_bp / ref_length`. This is
+computed directly in `chain_parsing.py` from reference lengths extracted from the
+PAF file. In protein mode, raw synteny score is used because miniprot PAF does not
+carry reference chromosome lengths.
 
 **Context**: Raw synteny score (sum of matching bases across chains) is size-biased:
 a contig with synteny to both a large and a small reference chromosome accumulates
-more score against the larger one regardless of proportional coverage. A contig
-produced by a reciprocal translocation between two chromosomes of unequal length
-would be incorrectly assigned to the larger donor chromosome, even if it covers
-a greater fraction of the smaller one. Span fraction normalises by reference length
-and is therefore a better indicator of which chromosome the contig primarily
-represents.
+more score against the larger one regardless of proportional coverage. Reference
+span fraction (`ref_span_bp / ref_length`) removes this size bias by asking "what
+fraction of the reference chromosome does this contig represent?" — the biologically
+meaningful question for chromosome assignment. For simple translocations, the contig
+that actually represents chromosome A covers a larger fraction of chromosome A than
+of chromosome B, so the metric assigns it correctly regardless of chromosome size.
 
 **Alternatives considered**:
 - **Conflict-aware global optimisation** (e.g., maximise total span fraction across
@@ -169,18 +168,58 @@ represents.
   is false for polyploids, where multiple contigs legitimately map to the same
   reference chromosome. Imposing it would actively misclassify valid polyploid
   assemblies.
-- **Two-pass approach (greedy raw score, then span-fraction override)**: The previous
+- **Two-pass approach (greedy raw score, then span-fraction override)**: An earlier
   implementation used raw score for the initial assignment and overrode it in a
   second pass only when span fraction pointed to a different reference. This was
-  replaced by computing span fraction directly as the primary metric in chain
-  parsing, which is simpler and avoids the classifier needing to perform a
-  correction step.
+  replaced by computing the reference span fraction directly as the primary metric
+  in chain parsing, which is simpler and avoids the classifier needing to perform
+  a correction step.
+- **Combined `max(ref_span_frac, query_span_frac)`**: Tried and reverted. The query
+  span fraction (`query_union_bp / query_length`) reintroduces size bias from the
+  query side: a large contig with broad but shallow synteny to a small reference
+  chromosome could incorrectly receive a high query span fraction, overriding the
+  correct ref span fraction assignment. Reference span fraction alone is sufficient
+  — it is the canonical biologically grounded question.
 
-**Rationale**: Span fraction is size-normalized and directly captures what fraction
-of each reference chromosome a contig represents. Computing it as the primary metric
-in chain parsing is cleaner than correcting a size-biased score in a downstream
-pass. Each contig is still scored independently and multiple contigs can still be
-assigned to the same reference.
+**Rationale**: Reference span fraction is size-normalized and answers the correct
+biological question. Computing it directly in chain parsing is clean and avoids
+downstream correction passes. Reciprocal translocations (the edge case where ref
+span fraction may split evenly) are handled by a dedicated post-assignment pass
+(see "Reciprocal translocation detection" below). Each contig is scored
+independently and multiple contigs can still be assigned to the same reference.
+
+---
+
+## Reciprocal translocation detection and resolution
+
+**Decision**: After initial reference assignment, `_resolve_reciprocal_translocations()`
+(`cli.py`) detects and corrects a specific class of misassignment caused by reciprocal
+translocations. When exactly two contigs are both assigned to the same reference
+chromosome R1 and their shared second-best reference R2 has no assigned contigs, the
+weaker contig (lower R1 span fraction) is reassigned to R2. Fragments whose
+second-best reference matches R2 are also moved, so they can be scaffolded with the
+reassigned main contig.
+
+**Context**: A reciprocal translocation produces two derivative chromosomes, each
+containing sequence from two references. Both derivative contigs align best to the
+same reference (the larger donor), but their second-best hits point to the same
+partner reference. Without resolution, one derivative chromosome is correctly
+assigned while the other is misassigned to the same reference as a duplicate, and
+the partner reference appears empty.
+
+**Signature tested**:
+1. Exactly 2 contigs ranked as "main" (not fragment-sized) compete for the same
+   reference R1.
+2. Both share the same second-best reference R2.
+3. Both have meaningful partner coverage (>5% of R2 span fraction).
+4. R2 has no contigs currently assigned to it.
+
+**Guard against polyploidy false positives**: The function only fires when exactly 2
+main contigs compete (not 3+). Three or more contigs competing for the same reference
+is the expected signature of a polyploid assembly and is handled by subgenome
+segmentation, not translocation resolution.
+
+**Location**: `cli.py:_resolve_reciprocal_translocations()`
 
 ---
 

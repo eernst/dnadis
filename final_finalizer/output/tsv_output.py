@@ -7,7 +7,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
-from final_finalizer.models import ContigClassification, ContaminantHitExtended, DepthStats, RdnaArray, RdnaLocus
+from final_finalizer.models import ContigClassification, ContaminantHitExtended, DepthStats, RearrangementCall, RdnaArray, RdnaLocus
 from final_finalizer.utils.reference_utils import split_chrom_subgenome
 
 # Use a large but finite value instead of infinity to avoid parsing issues
@@ -1065,3 +1065,50 @@ def write_rdna_annotations_gff3(
                     ".",  # phase
                     ";".join(sf_attrs),
                 ]) + "\n")
+
+
+def write_rearrangements_tsv(
+    output_path: Path,
+    calls: List[RearrangementCall],
+) -> None:
+    """Write rearrangement calls to a TSV file.
+
+    Args:
+        output_path: Output TSV path.
+        calls: List of RearrangementCall instances.
+    """
+    header = [
+        "contig",
+        "original_name",
+        "assigned_ref_id",
+        "rearrangement_type",
+        "partner_ref_id",
+        "query_start",
+        "query_end",
+        "ref_start",
+        "ref_end",
+        "span_bp",
+        "strand",
+        "confidence",
+        "evidence",
+        "misassembly_mimic",
+    ]
+    with output_path.open("w") as fh:
+        fh.write("\t".join(header) + "\n")
+        for c in calls:
+            fh.write("\t".join(str(v) if v is not None else "" for v in [
+                c.contig,
+                c.original_name,
+                c.assigned_ref_id,
+                c.rearrangement_type,
+                c.partner_ref_id,
+                c.query_start,
+                c.query_end,
+                c.ref_start,
+                c.ref_end,
+                c.span_bp,
+                c.strand,
+                c.confidence,
+                c.evidence,
+                c.misassembly_mimic,
+            ]) + "\n")
