@@ -92,7 +92,7 @@ multi.add_argument("--output-dir", type=str,
 
 ## 4. Input resolution functions
 
-**New file**: `final_finalizer/utils/multi_assembly.py`
+**New file**: `dnadis/utils/multi_assembly.py`
 
 - `parse_fofn()`: Read TSV with header, required column `path`, optional `name`/`reads`
 - `scan_assembly_dir()`: Glob for FASTA files, derive names by stripping extensions

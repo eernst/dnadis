@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from final_finalizer.utils.multi_assembly import (
+from dnadis.utils.multi_assembly import (
     _strip_fasta_extension,
     parse_fofn,
     scan_assembly_dir,

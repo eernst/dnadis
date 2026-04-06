@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pytest
 
-from final_finalizer.alignment.pairwise import compute_pairwise_synteny
+from dnadis.alignment.pairwise import compute_pairwise_synteny
 
 
 # ---------------------------------------------------------------------------
@@ -160,5 +160,5 @@ class TestPairwiseImport:
     """Test that the module imports correctly."""
 
     def test_import(self):
-        from final_finalizer.alignment.pairwise import compute_pairwise_synteny
+        from dnadis.alignment.pairwise import compute_pairwise_synteny
         assert callable(compute_pairwise_synteny)

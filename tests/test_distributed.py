@@ -12,7 +12,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from final_finalizer.utils.distributed import (
+from dnadis.utils.distributed import (
     ClusterConfig,
     LocalExecutor,
     LocalFuture,
@@ -24,7 +24,7 @@ from final_finalizer.utils.distributed import (
     clamp_resources,
     create_executor,
 )
-from final_finalizer.utils.resource_estimation import (
+from dnadis.utils.resource_estimation import (
     _estimate_genome_bp_from_filesize,
     _file_size_bytes,
     _scale_time,
@@ -320,21 +320,21 @@ class TestFileHelpers:
 class TestScaleTime:
     def test_base_case(self):
         # genome == scale_bp → factor == 1 → returns base × safety
-        from final_finalizer.utils.resource_estimation import _TIME_SAFETY_FACTOR as SF
+        from dnadis.utils.resource_estimation import _TIME_SAFETY_FACTOR as SF
         assert _scale_time(60, 500_000_000) == 60 * SF
 
     def test_scales_up(self):
         # 2x genome → at least 2x base × safety
-        from final_finalizer.utils.resource_estimation import _TIME_SAFETY_FACTOR as SF
+        from dnadis.utils.resource_estimation import _TIME_SAFETY_FACTOR as SF
         assert _scale_time(60, 1_000_000_000) == 120 * SF
 
     def test_minimum(self):
         # Small genome → still returns base_minutes × safety
-        from final_finalizer.utils.resource_estimation import _TIME_SAFETY_FACTOR as SF
+        from dnadis.utils.resource_estimation import _TIME_SAFETY_FACTOR as SF
         assert _scale_time(60, 1000) == 60 * SF
 
     def test_zero_bp(self):
-        from final_finalizer.utils.resource_estimation import _TIME_SAFETY_FACTOR as SF
+        from dnadis.utils.resource_estimation import _TIME_SAFETY_FACTOR as SF
         assert _scale_time(60, 0) == 60 * SF
 
 

@@ -18,14 +18,14 @@ jobs:
         uses: mamba-org/setup-micromamba@v1
         with:
           micromamba-version: "latest"
-          environment-name: final_finalizer
+          environment-name: dnadis
           create-args: >-
             python=${{ matrix.python-version }}
             intervaltree
             miniprot gffread blast minimap2 centrifuger pytest
             -c conda-forge -c bioconda
       - name: Run tests
-        run: micromamba run -n final_finalizer pytest -q
+        run: micromamba run -n dnadis pytest -q
       - name: Record passing python
         if: success()
         run: |
@@ -65,7 +65,7 @@ jobs:
         uses: mamba-org/setup-micromamba@v1
         with:
           micromamba-version: "latest"
-          environment-name: final_finalizer
+          environment-name: dnadis
           create-args: >-
             python=${{ steps.latest.outputs.python }}
             intervaltree
@@ -74,7 +74,7 @@ jobs:
       - name: Capture conda versions
         if: steps.latest.outputs.python != ''
         run: |
-          micromamba run -n final_finalizer conda list > conda-list.txt
+          micromamba run -n dnadis conda list > conda-list.txt
       - name: Update README with Python and package versions
         if: steps.latest.outputs.python != ''
         run: |

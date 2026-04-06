@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-Bundle the final_finalizer package into a single executable Python file.
+Bundle the dnadis package into a single executable Python file.
 
 This script concatenates all package modules into a single file that can be
 distributed and run without installation:
-    wget https://example.com/final_finalizer.py
-    python final_finalizer.py --help
+    wget https://example.com/dnadis.py
+    python dnadis.py --help
 
 Usage:
-    python scripts/bundle_single_file.py > final_finalizer_bundled.py
+    python scripts/bundle_single_file.py > dnadis_bundled.py
 """
 from __future__ import annotations
 
@@ -20,36 +20,36 @@ from pathlib import Path
 # Define the order of modules to concatenate (dependencies first)
 MODULE_ORDER = [
     # Models (no dependencies)
-    ("final_finalizer/models.py", "final_finalizer.models"),
+    ("dnadis/models.py", "dnadis.models"),
     # Utils (depend on nothing or each other)
-    ("final_finalizer/utils/io_utils.py", "final_finalizer.utils.io_utils"),
-    ("final_finalizer/utils/sequence_utils.py", "final_finalizer.utils.sequence_utils"),
-    ("final_finalizer/utils/reference_utils.py", "final_finalizer.utils.reference_utils"),
+    ("dnadis/utils/io_utils.py", "dnadis.utils.io_utils"),
+    ("dnadis/utils/sequence_utils.py", "dnadis.utils.sequence_utils"),
+    ("dnadis/utils/reference_utils.py", "dnadis.utils.reference_utils"),
     # Alignment (depends on utils)
-    ("final_finalizer/alignment/external_tools.py", "final_finalizer.alignment.external_tools"),
-    ("final_finalizer/alignment/chain_parsing.py", "final_finalizer.alignment.chain_parsing"),
-    ("final_finalizer/alignment/stats.py", "final_finalizer.alignment.stats"),
+    ("dnadis/alignment/external_tools.py", "dnadis.alignment.external_tools"),
+    ("dnadis/alignment/chain_parsing.py", "dnadis.alignment.chain_parsing"),
+    ("dnadis/alignment/stats.py", "dnadis.alignment.stats"),
     # Detection (depends on utils, models, alignment)
-    ("final_finalizer/detection/blast.py", "final_finalizer.detection.blast"),
-    ("final_finalizer/detection/organelle.py", "final_finalizer.detection.organelle"),
-    ("final_finalizer/detection/rdna.py", "final_finalizer.detection.rdna"),
-    ("final_finalizer/detection/debris.py", "final_finalizer.detection.debris"),
-    ("final_finalizer/detection/contaminant.py", "final_finalizer.detection.contaminant"),
+    ("dnadis/detection/blast.py", "dnadis.detection.blast"),
+    ("dnadis/detection/organelle.py", "dnadis.detection.organelle"),
+    ("dnadis/detection/rdna.py", "dnadis.detection.rdna"),
+    ("dnadis/detection/debris.py", "dnadis.detection.debris"),
+    ("dnadis/detection/contaminant.py", "dnadis.detection.contaminant"),
     # Classification (depends on utils, models, detection)
-    ("final_finalizer/classification/classifier.py", "final_finalizer.classification.classifier"),
+    ("dnadis/classification/classifier.py", "dnadis.classification.classifier"),
     # Output (depends on utils, models)
-    ("final_finalizer/output/fasta_output.py", "final_finalizer.output.fasta_output"),
-    ("final_finalizer/output/tsv_output.py", "final_finalizer.output.tsv_output"),
-    ("final_finalizer/output/plotting.py", "final_finalizer.output.plotting"),
+    ("dnadis/output/fasta_output.py", "dnadis.output.fasta_output"),
+    ("dnadis/output/tsv_output.py", "dnadis.output.tsv_output"),
+    ("dnadis/output/plotting.py", "dnadis.output.plotting"),
     # CLI (main entry point - depends on all modules)
-    ("final_finalizer/cli.py", "final_finalizer.cli"),
+    ("dnadis/cli.py", "dnadis.cli"),
 ]
 
 # Patterns to remove from extracted modules
 REMOVE_PATTERNS = [
     # Remove imports from the package (they'll be in the same file)
-    r"^from final_finalizer\..*import.*$",
-    r"^from final_finalizer_orig import.*$",
+    r"^from dnadis\..*import.*$",
+    r"^from dnadis_orig import.*$",
     # Remove shebang lines except for the first module
     r"^#!/usr/bin/env python3$",
     # Remove __future__ imports after the first
@@ -88,13 +88,13 @@ def clean_module_content(content: str, module_name: str, is_first: bool = False)
             continue
 
         # Check if this starts a multi-line import from the package
-        if re.match(r"^from final_finalizer[._]", line) and "(" in line:
+        if re.match(r"^from dnadis[._]", line) and "(" in line:
             if ")" not in line:
                 in_multiline_import = True
             continue
 
         # Skip single-line imports from the package
-        if re.match(r"^from final_finalizer[._]", line):
+        if re.match(r"^from dnadis[._]", line):
             continue
 
         # Always skip shebang and __future__ (we add them at the top of bundle)
@@ -119,9 +119,9 @@ def bundle_package() -> str:
     output_parts.append('''\
 #!/usr/bin/env python3
 """
-final_finalizer - Genome-wide subgenome distance analysis tool.
+dnadis - Genome-wide subgenome distance analysis tool.
 
-This is a bundled single-file version of the final_finalizer package.
+This is a bundled single-file version of the dnadis package.
 Generated by scripts/bundle_single_file.py
 
 For development, use the package version instead.
