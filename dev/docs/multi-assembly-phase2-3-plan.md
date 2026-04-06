@@ -15,7 +15,7 @@ Phase 2 adds a data layer: `run_assembly()` returns an `AssemblyResult` summary,
 - `ChromRefSummary`: Per-reference-chromosome summary for one assembly (ref_id, ref_length, n_contigs, total_assigned_bp, best_ref_coverage, is_full_length, has_both_telomeres, mean_identity)
 - `AssemblyResult`: Full summary metrics from one assembly's finalization (contiguity, classification counts/bp, chromosome completeness, quality metrics, contamination, rDNA, organelles, read depth, per-ref detail, output file paths)
 
-### 2.2 New file: `final_finalizer/output/comparison.py`
+### 2.2 New file: `dnadis/output/comparison.py`
 
 - `_compute_n50_l50()`: N50/L50 from contig lengths
 - `build_assembly_result()`: Computes all metrics from classifications, qry_lengths, ev, etc.
@@ -51,11 +51,11 @@ After writing comparison TSVs, if `--plot` and results exist, calls `run_compari
 
 | File | Change |
 |------|--------|
-| `final_finalizer/models.py` | Added `ChromRefSummary` and `AssemblyResult` dataclasses |
-| `final_finalizer/output/comparison.py` | **New**: `build_assembly_result()`, TSV writers |
-| `final_finalizer/cli.py` | Changed `run_assembly()` return type; added result collection and comparison outputs |
-| `final_finalizer/output/plotting.py` | Added `run_comparison_report()` |
-| `final_finalizer/output/comparison_report.tmpl.Rmd` | **New**: Comparison report Rmd template |
+| `dnadis/models.py` | Added `ChromRefSummary` and `AssemblyResult` dataclasses |
+| `dnadis/output/comparison.py` | **New**: `build_assembly_result()`, TSV writers |
+| `dnadis/cli.py` | Changed `run_assembly()` return type; added result collection and comparison outputs |
+| `dnadis/output/plotting.py` | Added `run_comparison_report()` |
+| `dnadis/output/comparison_report.tmpl.Rmd` | **New**: Comparison report Rmd template |
 | `tests/test_comparison.py` | **New**: 24 unit tests for Phase 2 functions |
 
 ## Verification

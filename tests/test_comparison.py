@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pytest
 
-from final_finalizer.models import (
+from dnadis.models import (
     AssemblyResult,
     ChainEvidenceResult,
     ChromRefSummary,
@@ -16,7 +16,7 @@ from final_finalizer.models import (
     ContigClassification,
     DepthStats,
 )
-from final_finalizer.output.comparison import (
+from dnadis.output.comparison import (
     _compute_n50_l50,
     build_assembly_result,
     write_chromosome_completeness_tsv,
@@ -432,7 +432,7 @@ class TestWriteChromosomeCompletenessTsv:
 # ---------------------------------------------------------------------------
 class TestParseCompleasmSummary:
     def test_parse_valid_summary(self, tmp_path):
-        from final_finalizer.detection.compleasm import parse_compleasm_summary
+        from dnadis.detection.compleasm import parse_compleasm_summary
 
         summary = tmp_path / "summary.txt"
         summary.write_text(
@@ -459,13 +459,13 @@ class TestParseCompleasmSummary:
         assert result.summary_path == summary
 
     def test_parse_missing_file(self, tmp_path):
-        from final_finalizer.detection.compleasm import parse_compleasm_summary
+        from dnadis.detection.compleasm import parse_compleasm_summary
 
         result = parse_compleasm_summary(tmp_path / "nonexistent.txt")
         assert result is None
 
     def test_parse_all_missing(self, tmp_path):
-        from final_finalizer.detection.compleasm import parse_compleasm_summary
+        from dnadis.detection.compleasm import parse_compleasm_summary
 
         summary = tmp_path / "summary.txt"
         summary.write_text(

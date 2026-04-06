@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-`final_finalizer` is a bioinformatics genome assembly finalization tool that classifies contigs from *de novo* genome assemblies into biological categories (chromosomes, organelles, rDNA, contaminants, debris) using synteny evidence (protein-anchored or nucleotide whole-genome alignment), organelle/rDNA alignments, and taxonomic classification.
+`dnadis` is a bioinformatics genome assembly finalization tool that classifies contigs from *de novo* genome assemblies into biological categories (chromosomes, organelles, rDNA, contaminants, debris) using synteny evidence (protein-anchored or nucleotide whole-genome alignment), organelle/rDNA alignments, and taxonomic classification.
 
 **Key concepts**:
 - **Nucleotide mode** (default): Uses whole-genome nucleotide alignment (via minimap2) for structural composition analysis. Detects actual sequence-level identity, making it ideal for identifying structural features like chromosomal fusions, homeologous recombination, or introgression events.
@@ -14,10 +14,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Running tests
 
-**Important:** Use the `final_finalizer` conda environment for testing. Integration tests require external tools (gffread, miniprot, etc.) that are installed in this environment:
+**Important:** Use the `dnadis` conda environment for testing. Integration tests require external tools (gffread, miniprot, etc.) that are installed in this environment:
 
 ```bash
-conda activate final_finalizer
+conda activate dnadis
 ```
 
 ```bash
@@ -25,13 +25,13 @@ conda activate final_finalizer
 pytest
 
 # Run specific test file
-pytest tests/test_final_finalizer.py
+pytest tests/test_dnadis.py
 
 # Run specific test function
-pytest tests/test_final_finalizer.py::test_parse_paf_chain_evidence_for_subgenome_assignment
+pytest tests/test_dnadis.py::test_parse_paf_chain_evidence_for_subgenome_assignment
 
 # Run with coverage
-pytest --cov=final_finalizer --cov-report=html
+pytest --cov=dnadis --cov-report=html
 
 # Run only integration tests (may download large reference files)
 pytest -m integration
@@ -44,13 +44,13 @@ pytest -m "not integration"
 ```bash
 # Basic run (nucleotide mode - default)
 # Output goes to output_dir/assembly/assembly.* (name derived from query filename)
-./final_finalizer.py -r reference.fasta -q assembly.fasta -o results/
+./dnadis.py -r reference.fasta -q assembly.fasta -o results/
 
 # Protein mode for gene-level classification (requires --ref-gff3)
-./final_finalizer.py -r reference.fasta -q assembly.fasta -o results/ --synteny-mode protein --ref-gff3 reference.gff3
+./dnadis.py -r reference.fasta -q assembly.fasta -o results/ --synteny-mode protein --ref-gff3 reference.gff3
 
 # With all features enabled (protein mode)
-./final_finalizer.py -r ref.fasta -q assembly.fasta -o results/ \
+./dnadis.py -r ref.fasta -q assembly.fasta -o results/ \
     --synteny-mode protein --ref-gff3 ref.gff3 \
     --reads hifi.fastq.gz \
     --centrifuger-idx /path/to/index \
@@ -59,26 +59,26 @@ pytest -m "not integration"
 
 # Multi-assembly mode: analyze multiple assemblies against a common reference
 # Using a file-of-filenames (TSV with columns: path, name, reads)
-./final_finalizer.py -r ref.fasta --ref-gff3 ref.gff3 \
+./dnadis.py -r ref.fasta --ref-gff3 ref.gff3 \
     --fofn assemblies.tsv -o multi_output/
 
 # Multi-assembly mode: scan a directory of FASTA files
-./final_finalizer.py -r ref.fasta --ref-gff3 ref.gff3 \
+./dnadis.py -r ref.fasta --ref-gff3 ref.gff3 \
     --assembly-dir /path/to/assemblies/ -o multi_output/
 
 # Distributed mode: submit compute phases as SLURM jobs via executorlib
-./final_finalizer.py -r ref.fasta -q assembly.fasta -o results/ --ref-gff3 ref.gff3 \
+./dnadis.py -r ref.fasta -q assembly.fasta -o results/ --ref-gff3 ref.gff3 \
     --cluster --partition cpuq --max-threads-dist 32 --max-mem-dist 64
 
 # Multi-assembly + distributed: assemblies run concurrently, each phase is a SLURM job
-./final_finalizer.py -r ref.fasta --ref-gff3 ref.gff3 \
+./dnadis.py -r ref.fasta --ref-gff3 ref.gff3 \
     --fofn assemblies.tsv -o multi_output/ --cluster
 
 # Dump config template
-./final_finalizer.py --dump-config > config.toml
+./dnadis.py --dump-config > config.toml
 
 # Run with config file
-./final_finalizer.py --config config.toml
+./dnadis.py --config config.toml
 ```
 
 ### Code style
@@ -92,7 +92,7 @@ pytest -m "not integration"
 ### Package Structure
 
 ```
-final_finalizer/
+dnadis/
 ├── models.py              # Data models (ReferenceContext, Block, Chain, ContigClassification, etc.)
 ├── cli.py                 # Main entry point: prepare_reference(), run_assembly(), main()
 ├── data/                  # Bundled reference data
@@ -256,7 +256,7 @@ The rDNA consensus module (`rdna_consensus.py`) uses internal "Step 1-4" numberi
 - Works well for both within-species and cross-species comparisons
 - Chains through homopolymer runs, tandem repeats, and ambiguous regions that would otherwise fragment alignments
 - Produces clean chromosome-scale blocks suitable for compositional analysis and visualization
-- Is appropriate for final_finalizer's goal (chromosome classification and architecture) rather than fine-scale SV detection
+- Is appropriate for dnadis's goal (chromosome classification and architecture) rather than fine-scale SV detection
 
 The permissive parameters are balanced by downstream filtering (identity thresholds, minimum alignment length, gate filtering) to prevent spurious assignments.
 

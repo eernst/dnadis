@@ -1,8 +1,8 @@
-# final_finalizer
+# dnadis
 
 **Genome assembly finalization tool for contig classification and quality control**
 
-`final_finalizer` classifies contigs from a *de novo* genome assembly into biological categories (chromosomes, organelles, rDNA, contaminants, debris) using nucleotide or protein-anchored synteny with a reference, organelle/rDNA alignments, and taxonomic classification. Beyond classification, it evaluates assembly quality through BUSCO completeness scoring (via compleasm), syntenic block coverage, and alignment identity metrics. It detects organelles, rDNA loci, and contaminants, and produces rich interactive HTML reports for both individual assemblies and multi-assembly comparisons. Multi-assembly mode aggregates individual assessments for easy comparisons between various assemblies of the same individual, between different individuals of the same species, or even between multiple species.
+`dnadis` classifies contigs from a *de novo* genome assembly into biological categories (chromosomes, organelles, rDNA, contaminants, debris) using nucleotide or protein-anchored synteny with a reference, organelle/rDNA alignments, and taxonomic classification. Beyond classification, it evaluates assembly quality through BUSCO completeness scoring (via compleasm), syntenic block coverage, and alignment identity metrics. It detects organelles, rDNA loci, and contaminants, and produces rich interactive HTML reports for both individual assemblies and multi-assembly comparisons. Multi-assembly mode aggregates individual assessments for easy comparisons between various assemblies of the same individual, between different individuals of the same species, or even between multiple species.
 
 ## Features
 
@@ -46,11 +46,11 @@ A contig is classified as **full-length** when its syntenic coverage of the refe
 
 Subgenome labels (`_B`, `_C`, …) are inferred by clustering query contigs that all map to the same reference chromosome by sequence-identity similarity. The label letters are assigned in order of cluster size (largest cluster = A, or inherits the reference subgenome letter when the reference already carries one, e.g., `chr1A` → `chr1A_B` means the new subgenome differs from subgenome A).
 
-The authoritative implementation is `final_finalizer/classification/classifier.py:generate_contig_names()`. See [Output Formats](docs/output_formats.md#contig_summarytsv) for the corresponding `contig` TSV column.
+The authoritative implementation is `dnadis/classification/classifier.py:generate_contig_names()`. See [Output Formats](docs/output_formats.md#contig_summarytsv) for the corresponding `contig` TSV column.
 
 ## Query Subgenome Segmentation
 
-When multiple contigs from the query assembly map to the same reference chromosome — as is expected for polyploid genomes where two or more homeologous chromosome sets are present — `final_finalizer` automatically attempts to assign each contig to a distinct query subgenome. The result appears in the contig name as a subgenome suffix (`_B`, `_C`, …) or, when segmentation is not possible, as a copy suffix (`_c1`, `_c2`, …).
+When multiple contigs from the query assembly map to the same reference chromosome — as is expected for polyploid genomes where two or more homeologous chromosome sets are present — `dnadis` automatically attempts to assign each contig to a distinct query subgenome. The result appears in the contig name as a subgenome suffix (`_B`, `_C`, …) or, when segmentation is not possible, as a copy suffix (`_c1`, `_c2`, …).
 
 ### How it works
 
@@ -81,7 +81,7 @@ No user configuration is required. The feature runs automatically whenever multi
 ## Installation
 
 ### Dependencies
-[![CI](https://github.com/eernst/final_finalizer/actions/workflows/ci.yml/badge.svg)](https://github.com/eernst/final_finalizer/actions/workflows/ci.yml)
+[![CI](https://github.com/eernst/dnadis/actions/workflows/ci.yml/badge.svg)](https://github.com/eernst/dnadis/actions/workflows/ci.yml)
 
 **Required:**
 - Python 3.11+
@@ -110,7 +110,7 @@ An `environment.yml` is provided for the full installation:
 
 ```bash
 conda env create -f environment.yml
-conda activate final_finalizer
+conda activate dnadis
 ```
 
 Alternatively, create the environment manually:
@@ -118,7 +118,7 @@ Alternatively, create the environment manually:
 **Minimal** — core classification pipeline with interactive HTML reports:
 
 ```bash
-conda create -n final_finalizer -c conda-forge -c bioconda \
+conda create -n dnadis -c conda-forge -c bioconda \
     python=3.11 intervaltree \
     miniprot gffread blast mm2plus \
     r-base r-ggplot2 r-dplyr r-readr r-stringr r-tibble r-tidyr \
@@ -126,13 +126,13 @@ conda create -n final_finalizer -c conda-forge -c bioconda \
     r-gt r-gtextras r-svglite r-xml2 r-rmarkdown r-ggridges \
     r-colorspace r-ggokabeito r-ggrepel r-showtext r-sysfonts \
     r-systemfonts freetype libxml2 xz pandoc
-conda activate final_finalizer
+conda activate dnadis
 ```
 
 **Full** — all features including reports, contaminant screening, read depth, rDNA annotation, SLURM distribution, and taxonomic lineage:
 
 ```bash
-conda create -n final_finalizer -c conda-forge -c bioconda \
+conda create -n dnadis -c conda-forge -c bioconda \
     python=3.11 intervaltree \
     miniprot gffread blast mm2plus \
     samtools mosdepth rasusa \
@@ -143,7 +143,7 @@ conda create -n final_finalizer -c conda-forge -c bioconda \
     r-gt r-gtextras r-svglite r-xml2 r-rmarkdown r-ggridges \
     r-colorspace r-ggokabeito r-ggrepel r-showtext r-sysfonts \
     r-systemfonts freetype libxml2 xz pandoc
-conda activate final_finalizer
+conda activate dnadis
 ```
 
 **Compleasm** (BUSCO completeness evaluation) — must be in a **separate conda environment** due to dependency conflicts (dendropy version clash):
@@ -166,8 +166,8 @@ Without taxonkit or the database, contaminant tables show species names only.
 
 To run the test suite:
 ```bash
-conda install -n final_finalizer -c conda-forge pytest pytest-cov
-conda run -n final_finalizer pytest -q
+conda install -n dnadis -c conda-forge pytest pytest-cov
+conda run -n dnadis pytest -q
 ```
 
 Latest tested conda package versions (CI):
@@ -183,7 +183,7 @@ Latest tested conda package versions (CI):
 ## Quick Start
 
 ```bash
-./final_finalizer.py \
+./dnadis.py \
     -r reference.fasta \
     -q assembly.fasta \
     -o output/ \
@@ -313,7 +313,7 @@ When `--scaffold` is enabled, chromosome-assigned contigs are grouped by referen
 
 **Requires [executorlib](https://github.com/pyiron/executorlib) and mpi4py:**
 ```bash
-conda install -n final_finalizer -c conda-forge executorlib mpi4py
+conda install -n dnadis -c conda-forge executorlib mpi4py
 ```
 
 When `--cluster` is enabled, compute-intensive phases (synteny alignment, BLAST detection, debris detection, contaminant screening, read depth, compleasm) are submitted as individual SLURM jobs with per-job resource control. In multi-assembly mode, assemblies run concurrently with each submitting its own SLURM jobs. Without `--cluster`, all phases run locally.
@@ -431,7 +431,7 @@ By default, the tool builds a species-specific consensus 45S rDNA sequence from 
 5. Write GFF3 file with hierarchical feature structure (rRNA_gene parent with rRNA and ITS children)
 
 **Sub-feature annotation:**
-Uses Infernal covariance models from Rfam 15.0 for structure-based rRNA boundary detection. Provides accurate gene boundaries based on conserved secondary structure. Bundled models (5S, 5.8S, 18S, 28S) are stored in `final_finalizer/data/rfam/euk-rrna.cm` and automatically pressed (indexed) on first use.
+Uses Infernal covariance models from Rfam 15.0 for structure-based rRNA boundary detection. Provides accurate gene boundaries based on conserved secondary structure. Bundled models (5S, 5.8S, 18S, 28S) are stored in `dnadis/data/rfam/euk-rrna.cm` and automatically pressed (indexed) on first use.
 
 **Output files:**
 - `*.rdna_annotations.gff3`: Hierarchical GFF3 with proper Sequence Ontology terms (SO:0001637 for rRNA_gene, SO:0000252 for rRNA, SO:0000635 for ITS)
@@ -558,12 +558,12 @@ All gate criteria must be satisfied for chromosome assignment (AND logic). The s
 
 ## Configuration Files
 
-`final_finalizer` supports TOML configuration files for managing complex parameter sets and reproducible analysis workflows.
+`dnadis` supports TOML configuration files for managing complex parameter sets and reproducible analysis workflows.
 
 ### Generating a config template
 
 ```bash
-./final_finalizer.py --dump-config > my_config.toml
+./dnadis.py --dump-config > my_config.toml
 ```
 
 This creates a complete configuration file with all parameters and their current default values. Edit this file to customize your analysis.
@@ -571,14 +571,14 @@ This creates a complete configuration file with all parameters and their current
 ### Using a config file
 
 ```bash
-./final_finalizer.py --config my_config.toml
+./dnadis.py --config my_config.toml
 ```
 
 **Important:** Command-line arguments override config file values. This allows you to have a base configuration but adjust specific parameters via CLI:
 
 ```bash
 # Use config but override threads
-./final_finalizer.py --config my_config.toml -t 64
+./dnadis.py --config my_config.toml -t 64
 ```
 
 ### Example config file
@@ -620,7 +620,7 @@ assign_min_ratio = 1.25
 ### Basic chromosome assignment (protein mode)
 
 ```bash
-./final_finalizer.py \
+./dnadis.py \
     -r TAIR10.fasta \
     -q my_assembly.fasta \
     -o results/ \
@@ -635,7 +635,7 @@ assign_min_ratio = 1.25
 Use nucleotide mode when you want to detect chromosome-scale structural features like fusions, translocations, or homeologous exchanges. Nucleotide mode is the default and uses whole-genome nucleotide alignment; it is suitable for both within-species and cross-species comparisons.
 
 ```bash
-./final_finalizer.py \
+./dnadis.py \
     -r reference.fasta \
     -q assembly.fasta \
     -o results/ \
@@ -648,7 +648,7 @@ Note: Nucleotide mode does not require `--ref-gff3`, but if provided, gene count
 ### Polyploid genome with contaminant screening
 
 ```bash
-./final_finalizer.py \
+./dnadis.py \
     -r wheat_ref.fasta \
     -q wheat_assembly.fasta \
     -o results/ \
@@ -662,7 +662,7 @@ Note: Nucleotide mode does not require `--ref-gff3`, but if provided, gene count
 ### Non-polyploid with subgenome suffix
 
 ```bash
-./final_finalizer.py \
+./dnadis.py \
     -r rice_ref.fasta \
     -q rice_assembly.fasta \
     -o results/ \
@@ -674,7 +674,7 @@ Note: Nucleotide mode does not require `--ref-gff3`, but if provided, gene count
 ### With reference-guided scaffolding
 
 ```bash
-./final_finalizer.py \
+./dnadis.py \
     -r reference.fasta \
     -q assembly.fasta \
     -o results/ \
@@ -688,7 +688,7 @@ This produces `*.scaffolded.fasta` (chromosome pseudomolecules) and `*.scaffolde
 ### With read depth analysis (HiFi reads)
 
 ```bash
-./final_finalizer.py \
+./dnadis.py \
     -r reference.fasta \
     -q assembly.fasta \
     -o results/ \
@@ -701,7 +701,7 @@ This produces `*.scaffolded.fasta` (chromosome pseudomolecules) and `*.scaffolde
 ### With pre-aligned BAM for depth analysis
 
 ```bash
-./final_finalizer.py \
+./dnadis.py \
     -r reference.fasta \
     -q assembly.fasta \
     -o results/ \
@@ -714,12 +714,12 @@ This produces `*.scaffolded.fasta` (chromosome pseudomolecules) and `*.scaffolde
 
 ```bash
 # Generate config template
-./final_finalizer.py --dump-config > wheat_config.toml
+./dnadis.py --dump-config > wheat_config.toml
 
 # Edit wheat_config.toml to set paths and parameters
 
 # Run with config and verbose logging
-./final_finalizer.py \
+./dnadis.py \
     --config wheat_config.toml \
     --verbose \
     --log-file wheat_analysis.log
@@ -728,7 +728,7 @@ This produces `*.scaffolded.fasta` (chromosome pseudomolecules) and `*.scaffolde
 ### With downsampled reads for faster depth analysis
 
 ```bash
-./final_finalizer.py \
+./dnadis.py \
     -r reference.fasta \
     -q assembly.fasta \
     -o results/ \
@@ -743,7 +743,7 @@ This produces `*.scaffolded.fasta` (chromosome pseudomolecules) and `*.scaffolde
 ### With BUSCO completeness evaluation
 
 ```bash
-./final_finalizer.py \
+./dnadis.py \
     -r reference.fasta \
     -q assembly.fasta \
     -o results/ \
@@ -759,7 +759,7 @@ Analyze multiple assemblies against a shared reference. The TSV file has columns
 
 ```bash
 # assemblies.tsv: path <tab> name [<tab> reads]
-./final_finalizer.py \
+./dnadis.py \
     -r reference.fasta \
     --ref-gff3 reference.gff3 \
     --fofn assemblies.tsv \
@@ -773,7 +773,7 @@ Cross-assembly outputs (`comparison_summary.tsv`, `chromosome_completeness.tsv`,
 ### Multi-assembly mode with SLURM cluster
 
 ```bash
-./final_finalizer.py \
+./dnadis.py \
     -r reference.fasta \
     --ref-gff3 reference.gff3 \
     --fofn assemblies.tsv \
@@ -866,7 +866,7 @@ The chain score determines ranking for `--assign-chain-topk` (default: top 3 cha
 
 ### Subgenome discrimination
 
-For polyploid genomes (e.g., wheat with A, B, D subgenomes), final_finalizer discriminates between chromosome sets using alignment identity distributions.
+For polyploid genomes (e.g., wheat with A, B, D subgenomes), dnadis discriminates between chromosome sets using alignment identity distributions.
 
 **How it works:**
 1. Reference chromosomes are labeled with subgenome suffixes (chr1A, chr1B, chr1D)
@@ -892,7 +892,7 @@ Two complementary approaches:
 
 ### Contaminant visualization
 
-When contaminants are detected (with `--centrifuger-idx`) and plotting is enabled (the default; disable with `--skip-plot`), final_finalizer generates a **contaminant table** (`*.contaminant_table.html`): an interactive HTML table showing top contaminants ranked by abundance (depth × length if depth data available, otherwise total length). Features include species-level aggregation with binomial names, inline gradient bars for Total Mb and Depth columns, colored domain badges, family grouping, and min-max spread values for multi-contig entries. HTML-only output (CSS gradients don't render to PDF).
+When contaminants are detected (with `--centrifuger-idx`) and plotting is enabled (the default; disable with `--skip-plot`), dnadis generates a **contaminant table** (`*.contaminant_table.html`): an interactive HTML table showing top contaminants ranked by abundance (depth × length if depth data available, otherwise total length). Features include species-level aggregation with binomial names, inline gradient bars for Total Mb and Depth columns, colored domain badges, family grouping, and min-max spread values for multi-contig entries. HTML-only output (CSS gradients don't render to PDF).
 
 The table filters to high-confidence contaminants (coverage ≥ `--contaminant-min-coverage`, default 0.50) to reduce noise from conserved gene matches. See [docs/output_formats.md](docs/output_formats.md#contaminant-table-visualization-html) for detailed documentation on the table format and interpretation.
 

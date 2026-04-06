@@ -1,30 +1,22 @@
 # TODO
 
-## Current PR: Reporting Improvements
-
-* [x] Reference alignment coordinates in the synteny plot: merged consecutive same-connection ribbon tooltips into aggregate spans with total bp, block count, and median identity.
+## Reporting Improvements
 
 * [ ] Add branding to the top of the report index/nav at left (only to be completed after renaming the software: current leader is "Trommel")
 
-* [x] Add a legend to the Chromosome Assignments compound plot — explains T2T/telomere shapes, fill intensity = mean identity, red border = off-target synteny, multi-contig counts.
-
 * [ ] Comparison report: show reference-relative aggregate homologous chromosome stats, e.g. a table with box plots of lengths for each chromosome and min/med/max text next to it, rDNA array presence/absence/mixed as full/empty/half-filled circle, rearrangements detected. Anything else?
-
-* [x] Assembly sort order flag: `--assembly-sort-order input|identity` controls assembly ordering in comparison report.
-
-* [x] rDNA table improvements: comparison report Arrays split into "Arrays (Chr)" / "Arrays (Other)"; assembly report renamed "rDNA Contig Summary" and "Non-Array rDNA Annotations". Remaining: identity column still NA, arrays info not yet in contig table, coverage not shown.
 
 ---
 
 ## Future PRs
 
-### Rename app to "trommel"
+### Rename app
 
-* [ ] **Rename from final_finalizer to trommel**
+* [ ] **Rename from dnadis to dnadis**
 
 ### Pipeline architecture
 
-* [ ] **Snakemake migration**: executorlib is pretty flaky - moving to snakemake could simplify installation (as it handles conda dependencies in a more user-transparent fashion), simplify SLURM cluster execution, possibly make the pipeline more robust, and support more platforms. Need to look at pros/cons, but pretty sure this needs to happen. If it does, we'll want to use final_finalizer.py as a convenience wrapper around snakemake (and retain our current flags). This will be a big refactor.
+* [ ] **Snakemake migration**: executorlib is pretty flaky - moving to snakemake could simplify installation (as it handles conda dependencies in a more user-transparent fashion), simplify SLURM cluster execution, possibly make the pipeline more robust, and support more platforms. Need to look at pros/cons, but pretty sure this needs to happen. If it does, we'll want to use dnadis.py as a convenience wrapper around snakemake (and retain our current flags). This will be a big refactor.
 
 * [ ] **Subcommands**: There are an overwhelming number of command line options available, some of which only apply to one or the other synteny mode. Look into the potential benefit of splitting these two modes of operation into subcommands, opening up the possibility of partitioning other use cases in the same way.
 

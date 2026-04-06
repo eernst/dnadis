@@ -32,18 +32,18 @@ This avoids duplicating any plot code while preserving full interactivity. Stand
 
 ## Files to create
 
-### 1. `final_finalizer/output/unified_report.tmpl.Rmd`
+### 1. `dnadis/output/unified_report.tmpl.Rmd`
 
 The main R Markdown template with all report sections.
 
 ## Files to modify
 
-### 2. `final_finalizer/output/plotting.py` — Add `run_unified_report()`
-### 3. `final_finalizer/output/chromosome_overview.tmpl.R` — Add `saveRDS()`
-### 4. `final_finalizer/output/classification_summary_bar.tmpl.R` — Add `saveRDS()`
-### 5. `final_finalizer/output/depth_overview.tmpl.R` — Add `saveRDS()`
-### 6. `final_finalizer/output/contaminant_table.tmpl.R` — Save gt object as `.rds`
-### 7. `final_finalizer/cli.py` — Call `run_unified_report()`
+### 2. `dnadis/output/plotting.py` — Add `run_unified_report()`
+### 3. `dnadis/output/chromosome_overview.tmpl.R` — Add `saveRDS()`
+### 4. `dnadis/output/classification_summary_bar.tmpl.R` — Add `saveRDS()`
+### 5. `dnadis/output/depth_overview.tmpl.R` — Add `saveRDS()`
+### 6. `dnadis/output/contaminant_table.tmpl.R` — Save gt object as `.rds`
+### 7. `dnadis/cli.py` — Call `run_unified_report()`
 ### 8. `refresh_plots.py` — Add Rmd support
 ### 9. `docs/output_formats.md` — Document new output
 

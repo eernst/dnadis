@@ -1,12 +1,12 @@
-# Conda environment for final_finalizer (full installation)
+# Conda environment for dnadis (full installation)
 #
 # Create with:  conda env create -f environment.yml
-# Activate:     conda activate final_finalizer
+# Activate:     conda activate dnadis
 #
 # No version pins — uses the latest compatible versions.
 # For compleasm, create a separate environment (see README.md).
 
-name: final_finalizer
+name: dnadis
 
 channels:
   - conda-forge

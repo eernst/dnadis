@@ -10,7 +10,7 @@ The pipeline detects individual 45S rDNA repeat copies (`RdnaLocus` objects) by 
 
 ### 1. Add `RdnaArray` dataclass, modify `RdnaLocus`
 
-**File**: `final_finalizer/models.py`
+**File**: `dnadis/models.py`
 
 Add `RdnaArray` dataclass after `RdnaLocus` (~line 309):
 ```python
@@ -46,7 +46,7 @@ def is_nor_candidate(self) -> bool:
 
 ### 2. Replace `_mark_nor_candidates` with `_detect_arrays`
 
-**File**: `final_finalizer/detection/rdna_consensus.py`
+**File**: `dnadis/detection/rdna_consensus.py`
 
 Replace `_mark_nor_candidates()` with:
 
@@ -66,7 +66,7 @@ Update `build_rdna_consensus()`:
 
 ### 3. Update TSV and GFF3 output
 
-**File**: `final_finalizer/output/tsv_output.py`
+**File**: `dnadis/output/tsv_output.py`
 
 **Per-locus TSV** (`write_rdna_annotations_tsv`):
 - Replace `is_nor_candidate` column with `array_id` (empty string if None)
@@ -83,19 +83,19 @@ Update `build_rdna_consensus()`:
 
 ### 4. Wire up CLI and plotting
 
-**File**: `final_finalizer/cli.py`
+**File**: `dnadis/cli.py`
 - Unpack 3-tuple from `build_rdna_consensus()`
 - Write `*.rdna_arrays.tsv` via `write_rdna_arrays_tsv()`
 - Pass `arrays` to `write_rdna_annotations_gff3()`
 - Pass `rdna_arrays_tsv` path to `run_unified_report()` and `run_plot()`
 
-**File**: `final_finalizer/output/plotting.py`
+**File**: `dnadis/output/plotting.py`
 - Add `rdna_arrays_tsv: Optional[Path] = None` parameter to `run_unified_report()` and `run_plot()`
 - Pass through as `__RDNA_ARRAYS__` placeholder
 
 ### 5. Update report template
 
-**File**: `final_finalizer/output/unified_report.tmpl.Rmd`
+**File**: `dnadis/output/unified_report.tmpl.Rmd`
 
 - Add `rdna_arrays_tsv: "__RDNA_ARRAYS__"` to YAML params
 - Load arrays TSV in data setup chunk
@@ -104,12 +104,12 @@ Update `build_rdna_consensus()`:
 - Update "Other Annotations" tab to filter by `array_id` instead of `is_nor_candidate`
 - Update `rdna_annot` col_types to use `array_id` instead of `is_nor_candidate`
 
-**File**: `final_finalizer/output/chromosome_overview.tmpl.R` (line 156)
+**File**: `dnadis/output/chromosome_overview.tmpl.R` (line 156)
 - Update col_types: `is_nor_candidate` -> `array_id`
 
 ### 6. Add tests
 
-**File**: `tests/test_final_finalizer.py`
+**File**: `tests/test_dnadis.py`
 
 - `test_detect_arrays_basic`: 5 loci on same contig within gap -> 1 array, correct metrics
 - `test_detect_arrays_multiple_on_contig`: 2 clusters separated by large gap -> 2 arrays
@@ -126,11 +126,11 @@ Update `build_rdna_consensus()`:
 4. `plotting.py` -- Add `rdna_arrays_tsv` parameter
 5. `cli.py` -- Wire everything together
 6. `unified_report.tmpl.Rmd` + `chromosome_overview.tmpl.R` -- Update templates
-7. `tests/test_final_finalizer.py` -- Add tests
+7. `tests/test_dnadis.py` -- Add tests
 
 ## Verification
 
-1. `conda activate final_finalizer && pytest tests/test_final_finalizer.py -v` -- all tests pass
+1. `conda activate dnadis && pytest tests/test_dnadis.py -v` -- all tests pass
 2. Render on a dataset with `--build-rdna-consensus --plot --plot-html`:
    - Verify "45S rDNA Arrays" tab appears with array summary
    - Verify `*.rdna_arrays.tsv` has correct columns and array data

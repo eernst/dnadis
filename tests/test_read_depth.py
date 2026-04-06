@@ -9,13 +9,13 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from final_finalizer.analysis.read_depth import (
+from dnadis.analysis.read_depth import (
     ReadFormat,
     detect_read_format,
     get_minimap2_preset,
     parse_mosdepth_regions,
 )
-from final_finalizer.models import DepthStats
+from dnadis.models import DepthStats
 
 
 def test_detect_read_format_fastq(tmp_path):

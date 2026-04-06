@@ -330,12 +330,12 @@ def main():
     parser.add_argument(
         "run_dir",
         type=Path,
-        help="Path to a final_finalizer output/run folder",
+        help="Path to a dnadis output/run folder",
     )
     parser.add_argument(
         "--template-dir",
         type=Path,
-        default=Path(__file__).resolve().parent / "final_finalizer" / "output" / "reports",
+        default=Path(__file__).resolve().parent / "dnadis" / "output" / "reports",
         help="Path to directory containing .tmpl.Rmd files (default: auto-detect from script location)",
     )
     parser.add_argument(

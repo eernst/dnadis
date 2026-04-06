@@ -2,7 +2,7 @@
 
 ## Context
 
-final_finalizer processes genome assemblies sequentially, both across assemblies (multi-assembly mode) and within each assembly (tool phases). On SLURM clusters, this leaves significant capacity unused. This plan adds optional distributed execution via [executorlib](https://github.com/pyiron/executorlib), which provides a `concurrent.futures`-compatible interface that transparently submits Python functions as SLURM jobs with per-job resource control. When `--cluster` is not set, behavior is identical to current code.
+dnadis processes genome assemblies sequentially, both across assemblies (multi-assembly mode) and within each assembly (tool phases). On SLURM clusters, this leaves significant capacity unused. This plan adds optional distributed execution via [executorlib](https://github.com/pyiron/executorlib), which provides a `concurrent.futures`-compatible interface that transparently submits Python functions as SLURM jobs with per-job resource control. When `--cluster` is not set, behavior is identical to current code.
 
 ## Design Overview
 
@@ -22,7 +22,7 @@ final_finalizer processes genome assemblies sequentially, both across assemblies
 
 ## New Files
 
-### 1. `final_finalizer/utils/distributed.py` (~150 lines)
+### 1. `dnadis/utils/distributed.py` (~150 lines)
 
 Core executor abstraction:
 
@@ -33,7 +33,7 @@ Core executor abstraction:
 - **`LocalExecutor`**: Synchronous executor using `LocalFuture`. Context manager. Used when `--cluster` is not set — zero overhead, identical behavior to current code
 - **`create_executor(config)`**: Factory function. Returns `LocalExecutor` if cluster disabled. Returns `SlurmClusterExecutor` if executorlib available. Falls back to `LocalExecutor` with warning if executorlib not installed
 
-### 2. `final_finalizer/utils/resource_estimation.py` (~200 lines)
+### 2. `dnadis/utils/resource_estimation.py` (~200 lines)
 
 Functions that estimate ResourceSpec per phase based on input sizes:
 
@@ -51,7 +51,7 @@ All estimates are capped by `clamp_resources()` against `--max-threads-dist`, `-
 
 ## Modified Files
 
-### 3. `final_finalizer/cli.py` — Pipeline restructuring
+### 3. `dnadis/cli.py` — Pipeline restructuring
 
 **`parse_args()`** — Add new argument group:
 
@@ -122,7 +122,7 @@ with create_executor(cluster_config) as executor:
             result = run_assembly(...)
 ```
 
-### 4. `final_finalizer/utils/config.py`
+### 4. `dnadis/utils/config.py`
 
 Add to `CONFIG_SCHEMA`:
 ```python

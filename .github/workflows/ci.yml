@@ -19,14 +19,14 @@ jobs:
         uses: mamba-org/setup-micromamba@v1
         with:
           micromamba-version: "latest"
-          environment-name: final_finalizer
+          environment-name: dnadis
           create-args: >-
             python=${{ matrix.python-version }}
             intervaltree
             miniprot gffread blast minimap2 centrifuger pytest pytest-cov
             -c conda-forge -c bioconda
       - name: Run tests
-        run: micromamba run -n final_finalizer pytest -q --cov=final_finalizer --cov-report=xml --cov-report=term-missing
+        run: micromamba run -n dnadis pytest -q --cov=dnadis --cov-report=xml --cov-report=term-missing
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
