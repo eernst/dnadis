@@ -32,9 +32,9 @@ output:
 knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE,
                       fig.width = 10, dpi = 150)
 
-# Optional chunk timing: set FINAL_FINALIZER_PROFILE=1 to log per-chunk
+# Optional chunk timing: set DNADIS_PROFILE=1 to log per-chunk
 # elapsed time to stderr (shown by refresh_reports.py).
-if (nzchar(Sys.getenv("FINAL_FINALIZER_PROFILE"))) {
+if (nzchar(Sys.getenv("DNADIS_PROFILE"))) {
   .chunk_timers <- new.env(parent = emptyenv())
   .setup_t0 <- proc.time()["elapsed"]
   knitr::knit_hooks$set(chunk_timer = function(before, options, envir) {

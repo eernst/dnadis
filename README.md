@@ -1,8 +1,8 @@
 # dnadis
 
-**Genome assembly finalization tool for contig classification and quality control**
+**Genome assembly post-processing tool for contig classification, homology assignment, and quality control** - the *de novo* assembly disambiguator
 
-`dnadis` classifies contigs from a *de novo* genome assembly into biological categories (chromosomes, organelles, rDNA, contaminants, debris) using nucleotide or protein-anchored synteny with a reference, organelle/rDNA alignments, and taxonomic classification. Beyond classification, it evaluates assembly quality through BUSCO completeness scoring (via compleasm), syntenic block coverage, and alignment identity metrics. It detects organelles, rDNA loci, and contaminants, and produces rich interactive HTML reports for both individual assemblies and multi-assembly comparisons. Multi-assembly mode aggregates individual assessments for easy comparisons between various assemblies of the same individual, between different individuals of the same species, or even between multiple species.
+`dnadis` classifies contigs from a *de novo* genome assembly into biological categories (chromosomes, organelles, rDNA, contaminants, debris) using nucleotide or protein-anchored synteny with a reference, organelle/rDNA alignments, and taxonomic classification. Beyond classification, it evaluates assembly quality through BUSCO completeness scoring (via compleasm), syntenic block coverage, and alignment identity metrics, and produces rich interactive HTML reports for both individual assemblies and multi-assembly comparisons. Multi-assembly mode aggregates individual assessments for easy comparisons between various assemblies of the same individual, between different individuals of the same species, or even between multiple species.
 
 ## Features
 
@@ -24,7 +24,7 @@
 - **Read depth analysis** (optional) with automated downsampling and caching
 - **Multi-assembly mode**: analyze multiple assemblies concurrently against a shared reference via `--fofn` (file-of-filenames TSV) or `--assembly-dir` (directory scan)
 - **Cross-assembly comparison reports**: interactive HTML tables (via gt) aggregating classification and BUSCO completeness results across all assemblies
-- **Interactive HTML reports** per assembly with chromosome overview, classification summary, read depth, and contaminant table (enabled by default; requires rmarkdown + pandoc). Reports are non-self-contained by default (HTML + companion `_files/` directory); use `--self-contained-html` for a single portable file
+- **Interactive HTML reports** per assembly with chromosome overview, classification summary, read depth, and contaminant table (enabled by default; requires rmarkdown + pandoc). Reports are self-contained by default (single portable file); use `--no-self-contained-html` for HTML + companion `_files/` directory (faster rendering)
 - **Distributed SLURM execution** (optional) via executorlib: compute-intensive phases submitted as individual SLURM jobs with automatic resource estimation
 
 ## Contig Naming Scheme
@@ -42,7 +42,7 @@ Chromosome-assigned contigs are renamed using the pattern `chr<ref>(_<subgenome>
 
 Suffixes compose left-to-right: subgenome first, then copy/fragment. For example, `chr1A_B_f1` is the longest fragment of chr1A from query subgenome B.
 
-A contig is classified as **full-length** when its syntenic coverage of the reference chromosome meets `--full-length-ref-coverage` (default: 0.85) and/or it has telomeres at both ends. The `_f` suffix therefore flags genuine assembly fragmentation rather than short contigs of arbitrary origin.
+A contig is classified as **full-length** when its syntenic coverage of the reference chromosome meets `--full-length-ref-coverage` (default: 0.70) and/or it has telomeres at both ends. The `_f` suffix therefore flags genuine assembly fragmentation rather than short contigs of arbitrary origin.
 
 Subgenome labels (`_B`, `_C`, …) are inferred by clustering query contigs that all map to the same reference chromosome by sequence-identity similarity. The label letters are assigned in order of cluster size (largest cluster = A, or inherits the reference subgenome letter when the reference already carries one, e.g., `chr1A` → `chr1A_B` means the new subgenome differs from subgenome A).
 
@@ -207,11 +207,11 @@ Latest tested conda package versions (CI):
 
 | Argument | Description |
 |----------|-------------|
-| `--fofn` | Tab-separated file-of-filenames with columns: `path`, `name`, and (optionally) `reads`. One assembly per row. |
-| `--assembly-dir` | Directory to scan for FASTA files (`.fasta`, `.fa`, `.fasta.gz`, `.fa.gz`). Assembly names are derived from filenames. |
+| `--fofn` | Tab-separated file-of-filenames with column `path` and optional columns `name` and `reads`. One assembly per row. |
+| `--assembly-dir` | Directory to scan for FASTA files (`.fasta`, `.fa`, `.fna`, `.fasta.gz`, `.fa.gz`, `.fna.gz`). Assembly names are derived from filenames. |
 | `--assembly-name` | Override the assembly name for the single-assembly (`-q`) case (default: derived from query filename stem). |
 
-`--fofn` and `--assembly-dir` are mutually exclusive and cannot be combined with `-q`. When ≥2 assemblies complete, cross-assembly comparison outputs (`comparison_summary.tsv`, `chromosome_completeness.tsv`, and an interactive comparison HTML report) are written to the top-level output directory.
+`--fofn` and `--assembly-dir` are mutually exclusive and cannot be combined with `-q`. When ≥2 assemblies complete, cross-assembly comparison outputs (summary TSV, chromosome completeness TSV, and an interactive comparison HTML report) are written to the top-level output directory (see [Multi-assembly outputs](#multi-assembly-outputs)).
 
 ### Common options
 
@@ -219,7 +219,7 @@ Latest tested conda package versions (CI):
 |----------|-------------|---------|
 | `-t, --threads` | Number of threads | 8 |
 | `--skip-plot` | Skip unified HTML report generation | off |
-| `--self-contained-html` | Embed all resources (JS, CSS, SVG) into a single portable HTML file. Slower and produces larger files; suitable for sharing. Default produces HTML + companion `_files/` directory, which loads faster. | off |
+| `--no-self-contained-html` | Produce non-self-contained HTML reports (HTML + companion `_files/` directory). Faster rendering and smaller files. Default: self-contained (all resources embedded in a single portable file). | off |
 | `-v, --verbose` | Enable verbose (DEBUG level) logging | off |
 | `--quiet` | Suppress INFO messages (only warnings and errors) | off |
 | `--log-file` | Write logs to file (in addition to stderr) | none |
@@ -255,7 +255,7 @@ The `--reads` option accepts:
 - Pre-aligned BAM/CRAM files (used directly)
 
 Read type to minimap2 preset mapping:
-- `lrhq` → `-x lr:hqae` (PacBio HiFi, ONT R10); high-quality long reads with error rate < 1%)
+- `lrhq` → `-x lr:hqae` (PacBio HiFi, ONT R10; high-quality long reads with error rate < 1%)
 - `r9` → `-x map-ont` (ONT R9 reads, standard accuracy)
 - `sr` → `-x sr` (Illumina short reads)
 
@@ -290,7 +290,7 @@ Read type to minimap2 preset mapping:
 | `--compleasm-path` | Path to compleasm executable. If unset, auto-detects from a `compleasm` conda environment or `PATH`. | auto-detect |
 | `--skip-compleasm` | Skip compleasm even if `--compleasm-lineage` is specified | off |
 
-When `--compleasm-lineage` is set, phase 17 runs compleasm on two FASTA subsets: chromosome-assigned contigs (`*.chrs.fasta`) and non-chromosome contigs (`*.non_chrs.fasta`, combining debris + unclassified + contaminants). Both runs are submitted in parallel. Results are included in the per-assembly unified HTML report and in the multi-assembly `comparison_summary.tsv`.
+When `--compleasm-lineage` is set, phase 18 runs compleasm on two FASTA subsets: chromosome-assigned contigs (`*.chrs.fasta`) and non-chromosome contigs (`*.non_chrs.fasta`, combining debris + unclassified + contaminants). Both runs are submitted in parallel. Results are included in the per-assembly unified HTML report and in the multi-assembly `comparison_summary.tsv`.
 
 ### Scaffolding options
 
@@ -311,9 +311,9 @@ When `--scaffold` is enabled, chromosome-assigned contigs are grouped by referen
 | `--max-mem-dist` | Max memory (GB) per distributed job | 128 |
 | `--max-time-dist` | Max wall time (minutes) per distributed job | 720 |
 
-**Requires [executorlib](https://github.com/pyiron/executorlib) and mpi4py:**
+**Requires [executorlib](https://github.com/pyiron/executorlib), [pysqa](https://github.com/pyiron/pysqa), and [h5py](https://github.com/h5py/h5py):**
 ```bash
-conda install -n dnadis -c conda-forge executorlib mpi4py
+conda install -n dnadis -c conda-forge executorlib pysqa h5py
 ```
 
 When `--cluster` is enabled, compute-intensive phases (synteny alignment, BLAST detection, debris detection, contaminant screening, read depth, compleasm) are submitted as individual SLURM jobs with per-job resource control. In multi-assembly mode, assemblies run concurrently with each submitting its own SLURM jobs. Without `--cluster`, all phases run locally.
@@ -355,13 +355,13 @@ When `--cluster` is enabled, compute-intensive phases (synteny alignment, BLAST 
 
 ### Multi-assembly outputs
 
-Produced in the top-level output directory when ≥2 assemblies complete:
+Produced in the top-level output directory when ≥2 assemblies complete. File names are prefixed with `--comparison-name` (default: `comparison`):
 
 | File | Description |
 |------|-------------|
-| `comparison_summary.tsv` | Per-assembly classification counts and BUSCO completeness scores (S/D/F/I/M) for chromosome and non-chromosome contig sets |
-| `chromosome_completeness.tsv` | Per-reference-chromosome coverage and completeness across all assemblies |
-| `comparison_report.html` | Interactive HTML comparison report with gt tables summarizing classification and BUSCO results across assemblies |
+| `{prefix}_summary.tsv` | Per-assembly classification counts and BUSCO completeness scores (S/D/F/I/M) for chromosome and non-chromosome contig sets |
+| `{prefix}_chromosome_completeness.tsv` | Per-reference-chromosome coverage and completeness across all assemblies |
+| `{prefix}.comparison_report.html` | Interactive HTML comparison report with gt tables summarizing classification and BUSCO results across assemblies |
 
 ### Key columns in `contig_summary.tsv`
 
@@ -391,9 +391,9 @@ Enabled by default; skip with `--skip-plot` (requires R with ggplot2 and related
 
 | File | Description |
 |------|-------------|
-| `*.unified_report.html` | HTML report per assembly with all plots (chromosome overview, classification bar, read depth overview, contaminant table). Non-self-contained by default: a companion `*.unified_report_files/` directory holds JS/CSS resources. Use `--self-contained-html` to embed all resources into a single portable file. |
-| `*.chromosome_overview.pdf` | Multi-panel plot showing contig composition, subgenome support, and alignment identity (exported from the unified report) |
-| `*.depth_overview.pdf` | Read depth visualization by classification and chromosome (if `--reads` provided; exported from the unified report) |
+| `*.assembly_report.html` | HTML report per assembly with all plots (chromosome overview, classification bar, read depth overview, contaminant table). Self-contained by default (all resources embedded). Use `--no-self-contained-html` to produce HTML + companion `*_files/` directory for faster rendering. |
+| `*.chromosome_overview.pdf` | Multi-panel plot showing contig composition, subgenome support, and alignment identity (exported from the assembly report) |
+| `*.depth_overview.pdf` | Read depth visualization by classification and chromosome (if `--reads` provided; exported from the assembly report) |
 
 ## Classification Pipeline
 
@@ -412,12 +412,13 @@ Reference preparation runs first: read reference genome, compute GC statistics, 
 | 9 | **Orientation determination** — determine strand for chromosome contigs based on synteny votes |
 | 10 | **Telomere detection** — scan contig ends for telomeric repeats (skip with `--skip-telomeres`) |
 | 11 | **Classification** — assign all contigs to categories with confidence levels; rename contigs to reference-based names (e.g., `chr1A`, `chr1A_f1`, `contig_1`) |
-| 12 | **Read depth analysis** — align reads and compute per-contig depth metrics (optional, requires `--reads`) |
-| 13 | **rDNA consensus building** — build species-specific 45S rDNA consensus and annotate rRNA sub-features (skip with `--skip-rdna-consensus`) |
-| 14 | **Reference-guided scaffolding** — order and orient contigs into chromosome-scale pseudomolecules with AGP output (optional, `--scaffold`) |
-| 15 | **Write FASTA outputs** — classified FASTA files (chromosomes, organelles, rDNA, etc.) |
-| 16 | **Write summary TSV** — per-contig classification table, evidence summaries, and visualizations |
-| 17 | **BUSCO completeness evaluation** — compleasm run on `*.chrs.fasta` and `*.non_chrs.fasta` in parallel (optional, requires `--compleasm-lineage`; skip with `--skip-compleasm`) |
+| 12 | **Rearrangement detection** — identify contigs with evidence from multiple reference chromosomes |
+| 13 | **Read depth analysis** — align reads and compute per-contig depth metrics (optional, requires `--reads`) |
+| 14 | **rDNA consensus building** — build species-specific 45S rDNA consensus and annotate rRNA sub-features (skip with `--skip-rdna-consensus`) |
+| 15 | **Reference-guided scaffolding** — order and orient contigs into chromosome-scale pseudomolecules with AGP output (optional, `--scaffold`) |
+| 16 | **Write FASTA outputs** — classified FASTA files (chromosomes, organelles, rDNA, etc.) |
+| 17 | **Write summary TSV** — per-contig classification table, evidence summaries, and visualizations |
+| 18 | **BUSCO completeness evaluation** — compleasm run on `*.chrs.fasta` and `*.non_chrs.fasta` in parallel (optional, requires `--compleasm-lineage`; skip with `--skip-compleasm`) |
 
 ## rDNA Consensus and Annotation
 
@@ -768,7 +769,7 @@ Analyze multiple assemblies against a shared reference. The TSV file has columns
     -t 32
 ```
 
-Cross-assembly outputs (`comparison_summary.tsv`, `chromosome_completeness.tsv`, `comparison_report.html`) are written to `multi_output/` once all assemblies complete.
+Cross-assembly outputs (`comparison_summary.tsv`, `comparison_chromosome_completeness.tsv`, `comparison.comparison_report.html`) are written to `multi_output/` once all assemblies complete.
 
 ### Multi-assembly mode with SLURM cluster
 
@@ -788,17 +789,11 @@ Assemblies run concurrently; each submits its own SLURM jobs for compute-intensi
 
 ## Algorithm Details
 
-### Synteny Mode Selection
+### Synteny Mode Details
 
-The tool supports two complementary synteny modes:
+See [Synteny mode selection](#synteny-mode-selection) for an overview of the two modes.
 
-#### Nucleotide mode (default)
-
-Uses whole-genome nucleotide alignment for structural composition analysis:
-- Detects actual sequence-level identity and synteny
-- Ideal for identifying structural features (fusions, translocations, homeologous exchanges)
-- Works for both within-species and cross-species comparisons
-- Creates megabase-scale synteny blocks for chromosome architecture analysis
+#### Nucleotide mode chaining
 
 Minimap2 alignments use permissive chaining parameters to create continuous chromosome-scale blocks:
 - `--max-chain-skip=300`: Chain through repetitive regions
@@ -807,13 +802,7 @@ Minimap2 alignments use permissive chaining parameters to create continuous chro
 
 This permissive approach chains through homopolymer runs, tandem repeats, and ambiguous regions that would otherwise fragment alignments. The resulting megabase-scale blocks are suitable for chromosome classification and compositional analysis, balanced by downstream filtering (identity thresholds, minimum alignment length, gate filtering) to prevent spurious assignments.
 
-#### Protein mode
-
-Uses protein homology as the primary evidence source because:
-- Proteins are more conserved than nucleotide sequences
-- Works across distantly related species
-- Robust to repetitive sequences
-- Provides gene-level resolution for functional assessment
+#### Protein mode pipeline
 
 Miniprot alignments are:
 1. Filtered by alignment quality and identity
@@ -825,17 +814,7 @@ Miniprot alignments are:
 
 ### Gate-based assignment
 
-Contigs must pass "gates" to be assigned:
-- Minimum number of synteny segments
-- Minimum contig span covered
-- Minimum unique genes aligned
-
-This prevents spurious assignments from:
-- Single conserved genes
-- Repetitive sequences
-- Low-complexity regions
-
-**Gate threshold differences**: Nucleotide mode requires ≥1 segment (vs. ≥5 for protein mode) because perfect full-length nucleotide alignments produce fewer segments than fragmented protein hits.
+Contigs must satisfy ALL gate criteria to be assigned to a chromosome (AND logic). This prevents spurious assignments from single conserved genes, repetitive sequences, or low-complexity regions. See [Chromosome assignment thresholds](#chromosome-assignment) for the full parameter list and mode-specific defaults.
 
 ### Reference assignment scoring
 
@@ -892,7 +871,7 @@ Two complementary approaches:
 
 ### Contaminant visualization
 
-When contaminants are detected (with `--centrifuger-idx`) and plotting is enabled (the default; disable with `--skip-plot`), dnadis generates a **contaminant table** (`*.contaminant_table.html`): an interactive HTML table showing top contaminants ranked by abundance (depth × length if depth data available, otherwise total length). Features include species-level aggregation with binomial names, inline gradient bars for Total Mb and Depth columns, colored domain badges, family grouping, and min-max spread values for multi-contig entries. HTML-only output (CSS gradients don't render to PDF).
+When contaminants are detected (with `--centrifuger-idx`) and plotting is enabled (the default; disable with `--skip-plot`), dnadis includes a **contaminant table** in the assembly report (`*.assembly_report.html`): an interactive HTML table showing top contaminants ranked by abundance (depth × length if depth data available, otherwise total length). Features include species-level aggregation with binomial names, inline gradient bars for Total Mb and Depth columns, colored domain badges, family grouping, and min-max spread values for multi-contig entries. HTML-only output (CSS gradients don't render to PDF).
 
 The table filters to high-confidence contaminants (coverage ≥ `--contaminant-min-coverage`, default 0.50) to reduce noise from conserved gene matches. See [docs/output_formats.md](docs/output_formats.md#contaminant-table-visualization-html) for detailed documentation on the table format and interpretation.
 

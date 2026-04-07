@@ -20,7 +20,7 @@ Classification confidence is determined by multiple lines of evidence:
 
 Read depth analysis (optional):
 - Auto-detects read format (FASTQ, BAM, CRAM)
-- Downsamples to target coverage before alignment (default 20X)
+- Downsamples to target coverage before alignment (optional, disabled by default)
 - Aligns with minimap2 using appropriate preset for read type
 - Computes depth statistics with mosdepth (mean, median, std, breadth)
 
@@ -1948,7 +1948,7 @@ def main():
     dist_grp.add_argument(
         "--cluster", action="store_true",
         help="Enable distributed execution via executorlib (submits phases as SLURM jobs). "
-             "Requires: conda install -c conda-forge executorlib mpi4py",
+             "Requires: conda install -c conda-forge executorlib pysqa h5py",
     )
     dist_grp.add_argument(
         "--max-threads-dist", type=int, default=64,
