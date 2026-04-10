@@ -8,6 +8,7 @@ params:
   assembly_names: "__ASM_NAMES__"
   per_assembly_macro_blocks_tsvs: "__PER_ASM_MACRO_TSVS__"
   per_assembly_rdna_arrays_tsvs: "__PER_ASM_RDNA_TSVS__"
+  per_assembly_rearrangements_tsvs: "__PER_ASM_REARR_TSVS__"
   per_assembly_contaminants_tsvs: "__PER_ASM_CONTAM_TSVS__"
   per_assembly_agp_tsvs: "__PER_ASM_AGP_TSVS__"
   pairwise_macro_blocks_tsvs: "__PAIRWISE_MACRO_TSVS__"
@@ -188,6 +189,26 @@ for (i in seq_along(rdna_arrays_paths)) {
 }
 all_rdna_arrays_df <- if (length(rdna_arrays_list) > 0) bind_rows(rdna_arrays_list) else NULL
 has_rdna_arrays <- !is.null(all_rdna_arrays_df) && nrow(all_rdna_arrays_df) > 0
+
+# ---------------------------------------------------------------------------
+# Load per-assembly rearrangement TSVs (for chromosome summary section)
+# ---------------------------------------------------------------------------
+rearr_paths <- if (nzchar(params$per_assembly_rearrangements_tsvs))
+  strsplit(params$per_assembly_rearrangements_tsvs, ";")[[1]] else character(0)
+
+rearr_list <- list()
+for (i in seq_along(rearr_paths)) {
+  p <- rearr_paths[i]
+  if (nzchar(p) && file.exists(p)) {
+    df <- read_tsv(p, show_col_types = FALSE)
+    if (nrow(df) > 0) {
+      df$assembly <- asm_name_list[i]
+      rearr_list[[i]] <- df
+    }
+  }
+}
+all_rearr_df <- if (length(rearr_list) > 0) bind_rows(rearr_list) else NULL
+has_rearrangements <- !is.null(all_rearr_df) && nrow(all_rearr_df) > 0
 
 # ---------------------------------------------------------------------------
 # Load per-assembly contaminants TSVs (for Top Taxa section)
@@ -840,13 +861,13 @@ if (has_any_chrom) {
     summarise(x_min = min(x_center), x_max = max(x_center),
               x_mid = mean(x_center), .groups = "drop")
   y_grid_top   <- min(y_positions$y_center) - 0.5
-  chr_label_y1 <- y_grid_top - 0.10   # odd-numbered chromosomes (closer to grid)
-  chr_label_y2 <- y_grid_top - 0.35   # even-numbered chromosomes (staggered up)
+  chr_label_y1 <- y_grid_top - 0.20   # odd-numbered chromosomes (closer to grid)
+  chr_label_y2 <- y_grid_top - 0.52   # even-numbered chromosomes (staggered up)
   x_positions  <- x_positions %>%
     mutate(label_y = ifelse(as.numeric(chrom_label) %% 2 == 0,
                             chr_label_y2, chr_label_y1))
-  sep_line_y   <- y_grid_top - 0.65
-  sg_label_y   <- y_grid_top - 0.90
+  sep_line_y   <- y_grid_top - 1.00
+  sg_label_y   <- y_grid_top - 1.30
 
   # =====================================================================
   # Compose ggplot
@@ -882,7 +903,7 @@ if (has_any_chrom) {
     p_hm <- p_hm +
       geom_text(data = multi_df,
                 aes(x = x_center, y = y_center, label = multi_label),
-                size = base_font_pt / .pt * 0.8, color = "white",
+                size = (base_font_pt - 1) / .pt * 0.8, color = "white",
                 fontface = "bold", family = base_family)
   }
 
@@ -908,7 +929,7 @@ if (has_any_chrom) {
   p_hm <- p_hm +
     geom_text(data = x_positions,
               aes(x = x_center, y = label_y, label = chrom_label),
-              size = base_font_pt / .pt, family = base_family,
+              size = base_font_pt / .pt * 0.8, family = base_family,
               hjust = 0.5)
 
   # 6. Assembly labels (left of grid)
@@ -916,7 +937,7 @@ if (has_any_chrom) {
   p_hm <- p_hm +
     geom_text(data = y_positions,
               aes(x = x_left_edge, y = y_center, label = assembly),
-              size = base_font_pt / .pt, hjust = 1, family = base_family)
+              size = base_font_pt / .pt * 0.8, hjust = 1, family = base_family)
 
   # Scales and theme
   p_hm <- p_hm +
@@ -928,7 +949,7 @@ if (has_any_chrom) {
     )) +
     theme_void(base_size = base_font_pt, base_family = base_family) +
     theme(
-      plot.margin = margin(8, 2, 5,
+      plot.margin = margin(0, 2, 2,
                            max(25, max(nchar(as.character(asm_names))) * 3)),
       plot.caption = element_text(size = 6, hjust = 0, color = "#666")
     )
@@ -939,9 +960,14 @@ if (has_any_chrom) {
   hm_width  <- max(6, n_chroms * 0.45 + n_sg_gaps * 0.8 + 2.5)
   hm_height <- max(3, n_asm * 0.5 + 2.0)
 
-  save_pdf(pdf_heatmap, p_hm, width = min(7.2, hm_width), height = hm_height)
+  pdf_w  <- min(7.2, hm_width)
+  html_w <- min(13, hm_width * 1.4)
+  # Scale PDF height to match HTML aspect ratio so pills keep the same proportions
+  pdf_h  <- max(3, pdf_w * hm_height / html_w)
+
+  save_pdf(pdf_heatmap, p_hm, width = pdf_w, height = pdf_h)
   girafe_styled(ggobj = p_hm,
-                width_svg = min(13, hm_width * 1.4),
+                width_svg = html_w,
                 height_svg = hm_height)
 } else {
   cat("No chromosome-assigned contigs found in any assembly.")
@@ -1108,6 +1134,175 @@ for (sg_val in compl_sg_levels) {
 cat("No chromosome-assigned contigs found in any assembly.")
 ```
 
+`r if (has_any_chrom) "## Chromosome Summary"`
+
+```{r chrom_summary_setup, eval=has_any_chrom, include=FALSE}
+# =========================================================================
+# Chromosome Summary: one row per reference chromosome, aggregated across
+# all assemblies.  Shows length distribution sparkline, full-length and
+# telomere counts, rDNA array presence, and rearrangement counts.
+# =========================================================================
+
+n_asm <- length(asm_name_list)
+
+# --- helper: inline sparkline from a numeric vector -----------------------
+make_sparkline <- function(values, unit = "Mb", divisor = 1e6) {
+  vals <- values[values > 0]
+  if (length(vals) == 0) return("\u2014")
+  blocks <- c("\u2581", "\u2582", "\u2583", "\u2584",
+              "\u2585", "\u2586", "\u2587", "\u2588")
+  vmin <- min(vals); vmax <- max(vals)
+  if (vmax == vmin) {
+    spark <- paste(rep(blocks[4], min(length(vals), 12)), collapse = "")
+  } else {
+    idx <- pmin(8L, pmax(1L, ceiling((vals - vmin) / (vmax - vmin) * 7) + 1L))
+    # Sort values for the sparkline display
+    idx <- idx[order(vals)]
+    spark <- paste(blocks[idx], collapse = "")
+  }
+  stats <- sprintf("%.1f / %.1f / %.1f %s",
+                   min(vals) / divisor, median(vals) / divisor,
+                   max(vals) / divisor, unit)
+  paste0('<span style="font-size:14px; letter-spacing:1px;">', spark,
+         '</span>&ensp;<span style="font-size:9px; color:#666;">',
+         stats, '</span>')
+}
+
+# --- aggregate completeness per ref_id ------------------------------------
+chrom_agg <- compl_df %>%
+  filter(!grepl("^chr[CM]$|^chrPt$|^chrMt$", ref_id)) %>%
+  group_by(ref_id) %>%
+  summarise(
+    ref_length     = first(ref_length),
+    sparkline      = make_sparkline(total_assigned_bp),
+    n_full_length  = sum(is_full_length == "yes", na.rm = TRUE),
+    n_both_telo    = sum(has_both_telomeres == "yes", na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    `Ref (Mb)`      = round(ref_length / 1e6, 1),
+    `Length distribution` = sparkline,
+    `Full-length`   = paste0(n_full_length, "/", n_asm),
+    `Both telo`     = paste0(n_both_telo, "/", n_asm)
+  )
+
+# --- rDNA array presence per chromosome -----------------------------------
+if (has_rdna_arrays) {
+  # Map rDNA array contigs to assigned_ref_id via the per-assembly summary
+  rdna_chrom <- all_rdna_arrays_df %>%
+    left_join(
+      all_summary_df %>% select(assembly, original_name, assigned_ref_id),
+      by = c("assembly", "contig" = "original_name")
+    ) %>%
+    filter(!is.na(assigned_ref_id) & assigned_ref_id != "NA") %>%
+    distinct(assembly, assigned_ref_id) %>%
+    count(assigned_ref_id, name = "n_asm_rdna")
+
+  chrom_agg <- chrom_agg %>%
+    left_join(rdna_chrom, by = c("ref_id" = "assigned_ref_id"))
+} else {
+  chrom_agg$n_asm_rdna <- NA_integer_
+}
+
+chrom_agg <- chrom_agg %>%
+  mutate(
+    rDNA = case_when(
+      is.na(n_asm_rdna) | n_asm_rdna == 0 ~ "",
+      n_asm_rdna == n_asm                  ~ "\u25cf",
+      TRUE                                 ~ "\u25d0"
+    )
+  )
+
+# --- rearrangement counts per chromosome ----------------------------------
+if (has_rearrangements) {
+  rearr_chrom <- all_rearr_df %>%
+    distinct(assembly, assigned_ref_id) %>%
+    count(assigned_ref_id, name = "n_asm_rearr")
+
+  chrom_agg <- chrom_agg %>%
+    left_join(rearr_chrom, by = c("ref_id" = "assigned_ref_id"))
+} else {
+  chrom_agg$n_asm_rearr <- NA_integer_
+}
+
+chrom_agg <- chrom_agg %>%
+  mutate(Rearr = ifelse(is.na(n_asm_rearr) | n_asm_rearr == 0, "", as.character(n_asm_rearr)))
+
+# --- add subgenome + natural sort -----------------------------------------
+chrom_agg <- chrom_agg %>%
+  left_join(ref_lengths %>% select(ref_id, subgenome), by = "ref_id") %>%
+  mutate(
+    sg = if (has_subgenomes) subgenome else "G",
+    chrom_num = as.numeric(str_extract(ref_id, "\\d+"))
+  ) %>%
+  arrange(sg, chrom_num)
+
+chrom_sg_levels <- if (has_subgenomes) sort(unique(chrom_agg$sg)) else "G"
+
+# --- gt table builder -----------------------------------------------------
+make_chrom_summary_gt <- function(df, title) {
+  df %>%
+    select(ref_id, `Ref (Mb)`, `Length distribution`, `Full-length`,
+           `Both telo`, rDNA, Rearr) %>%
+    gt() %>%
+    gt_theme() %>%
+    tab_header(title = title) %>%
+    cols_label(
+      ref_id = "Chromosome",
+      `Ref (Mb)` = "Ref (Mb)",
+      `Length distribution` = "Assigned length across assemblies",
+      `Full-length` = "Full-length",
+      `Both telo` = "Both telo",
+      rDNA = "rDNA",
+      Rearr = "Rearr"
+    ) %>%
+    fmt_markdown(columns = `Length distribution`) %>%
+    cols_align(align = "right", columns = `Ref (Mb)`) %>%
+    cols_align(align = "center", columns = c(`Full-length`, `Both telo`, rDNA, Rearr)) %>%
+    # Column widths via CSS instead of cols_width(), which generates <colgroup>
+    # HTML that breaks pandoc's --section-divs closure inside {.tabset} sections.
+    opt_css(css = paste0(
+      "th:nth-child(1), td:nth-child(1) { width: 80px; }",
+      "th:nth-child(2), td:nth-child(2) { width: 70px; }",
+      "th:nth-child(3), td:nth-child(3) { width: 320px; }",
+      "th:nth-child(4), td:nth-child(4) { width: 80px; }",
+      "th:nth-child(5), td:nth-child(5) { width: 80px; }",
+      "th:nth-child(6), td:nth-child(6) { width: 50px; }",
+      "th:nth-child(7), td:nth-child(7) { width: 50px; }"
+    ))
+}
+
+# Source note for the single-table (non-polyploid) case.
+chrom_summary_note <- paste0(
+  '<p style="font-size:90%; color:#555; margin-top:2px;">',
+  '<em>n</em>\u2009=\u2009', n_asm, ' assemblies. ',
+  'Sparkline shows sorted assigned lengths (min / median / max). ',
+  'rDNA: \u25cf\u2009=\u2009all assemblies, \u25d0\u2009=\u2009some, blank\u2009=\u2009none. ',
+  'Rearr\u2009=\u2009assemblies with \u22651 rearrangement on this chromosome.',
+  '</p>')
+
+```
+
+```{r chrom_summary_single, eval=(has_any_chrom && !(has_subgenomes && length(chrom_sg_levels) >= 2)), results='asis'}
+gt_out <- make_chrom_summary_gt(chrom_agg, "Chromosome Summary Across Assemblies")
+cat(as.character(as_raw_html(gt_out)))
+cat(chrom_summary_note)
+cat("\n\n")
+```
+
+```{r chrom_summary_tabset, eval=(has_any_chrom && has_subgenomes && length(chrom_sg_levels) >= 2), results='asis'}
+# Render subgenome tables stacked (no ### headings / {.tabset}).
+# Pandoc's --section-divs fails to close section divs when non-<div> HTML
+# (e.g. <p>, <tfoot>) follows a gt table inside a results='asis' chunk;
+# the gt title already identifies each subgenome.
+for (sg_val in chrom_sg_levels) {
+  sg_df <- chrom_agg %>% filter(sg == sg_val)
+  gt_out <- make_chrom_summary_gt(sg_df,
+    sprintf("Chromosome Summary \u2014 Subgenome %s", sg_val))
+  cat(as.character(as_raw_html(gt_out)))
+  cat("\n\n")
+}
+```
 
 ```{r synteny_pre, eval=has_synteny_data, include=FALSE}
 # Pre-compute subgenome count before the section header so we can
@@ -2094,19 +2289,6 @@ build_synteny_plot <- function(sg) {
 }
 ```
 
-```{r synteny_description, eval=has_synteny_data, results='asis'}
-cat('<p class="section-intro">\n')
-cat(sprintf("Chromosome synteny between the reference and each assembly (%s mode). ",
-            params$synteny_mode))
-if (n_subgenomes > 1) {
-  cat("Each subgenome is shown in a separate tab. ")
-}
-cat("Ribbons connect syntenic macro-blocks between adjacent rows. ")
-cat("Color indicates the reference chromosome; opacity reflects alignment identity. ")
-cat("Crossed ribbons indicate inversions.\n")
-cat("</p>\n")
-```
-
 ```{r synteny_riparian, eval=has_synteny_data, results='asis'}
 for (sg_i in seq_along(subgenome_order)) {
   sg <- subgenome_order[sg_i]
@@ -2114,6 +2296,21 @@ for (sg_i in seq_along(subgenome_order)) {
   # Emit tab header for polyploid
   if (n_subgenomes > 1) {
     cat(sprintf("\n## Subgenome %s\n\n", sg))
+  }
+
+  # Emit section description at the top of the first panel (inside the
+  # tab, not between the {.tabset} heading and the first ## sub-heading,
+  # which would create an adventitious phantom tab).
+  if (sg_i == 1) {
+    cat('<p class="section-intro">\n')
+    cat(sprintf(
+      "Chromosome synteny between the reference and each assembly (%s mode). ",
+      params$synteny_mode))
+    if (n_subgenomes > 1) cat("Each subgenome is shown in a separate tab. ")
+    cat("Ribbons connect syntenic macro-blocks between adjacent rows. ")
+    cat("Color indicates the reference chromosome; opacity reflects alignment identity. ")
+    cat("Crossed ribbons indicate inversions.\n")
+    cat("</p>\n")
   }
 
   result <- build_synteny_plot(sg)

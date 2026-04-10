@@ -251,6 +251,12 @@ def run_comparison_report(
         for r in assembly_results
     )
 
+    # Per-assembly rearrangement TSVs (for chromosome summary section)
+    per_asm_rearr_tsvs = ";".join(
+        _abs_esc(r.rearrangements_tsv) if r.rearrangements_tsv and r.rearrangements_tsv.exists() else ""
+        for r in assembly_results
+    )
+
     # Per-assembly AGP files (for scaffold join indicators in synteny plot)
     per_asm_agp_tsvs = ";".join(
         _abs_esc(r.agp_tsv) if r.agp_tsv and r.agp_tsv.exists() else ""
@@ -275,6 +281,7 @@ def run_comparison_report(
         .replace("__PER_ASM_MACRO_TSVS__", per_asm_macro_tsvs)
         .replace("__PER_ASM_RDNA_TSVS__", per_asm_rdna_tsvs)
         .replace("__PER_ASM_CONTAM_TSVS__", per_asm_contam_tsvs)
+        .replace("__PER_ASM_REARR_TSVS__", per_asm_rearr_tsvs)
         .replace("__PER_ASM_AGP_TSVS__", per_asm_agp_tsvs)
         .replace("__PAIRWISE_MACRO_TSVS__", pw_macro_str)
         .replace("__PAIRWISE_NAMES__", pw_names_str)
