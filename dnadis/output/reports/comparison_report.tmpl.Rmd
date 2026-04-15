@@ -1139,33 +1139,34 @@ cat("No chromosome-assigned contigs found in any assembly.")
 ```{r chrom_summary_setup, eval=has_any_chrom, include=FALSE}
 # =========================================================================
 # Chromosome Summary: one row per reference chromosome, aggregated across
-# all assemblies.  Shows length distribution sparkline, full-length and
-# telomere counts, rDNA array presence, and rearrangement counts.
+# all assemblies.  Shows assigned-length boxplot, full-length and telomere
+# counts as "n/N [bar]", rDNA array presence, and rearrangement counts.
+# Boxplot/bar colors follow the subgenome palette.
 # =========================================================================
 
 n_asm <- length(asm_name_list)
 
-# --- helper: inline sparkline from a numeric vector -----------------------
-make_sparkline <- function(values, unit = "Mb", divisor = 1e6) {
-  vals <- values[values > 0]
-  if (length(vals) == 0) return("\u2014")
-  blocks <- c("\u2581", "\u2582", "\u2583", "\u2584",
-              "\u2585", "\u2586", "\u2587", "\u2588")
-  vmin <- min(vals); vmax <- max(vals)
-  if (vmax == vmin) {
-    spark <- paste(rep(blocks[4], min(length(vals), 12)), collapse = "")
-  } else {
-    idx <- pmin(8L, pmax(1L, ceiling((vals - vmin) / (vmax - vmin) * 7) + 1L))
-    # Sort values for the sparkline display
-    idx <- idx[order(vals)]
-    spark <- paste(blocks[idx], collapse = "")
-  }
-  stats <- sprintf("%.1f / %.1f / %.1f %s",
-                   min(vals) / divisor, median(vals) / divisor,
-                   max(vals) / divisor, unit)
-  paste0('<span style="font-size:14px; letter-spacing:1px;">', spark,
-         '</span>&ensp;<span style="font-size:9px; color:#666;">',
-         stats, '</span>')
+# --- helper: "n/N" text followed by a small bar on the right -------------
+gt_inline_value_bar <- function(value, max_val, color = oi[5],
+                                bar_width = 36, height = "10px") {
+  if (is.na(value) || is.na(max_val) || max_val == 0) return("")
+  pct <- min(100, round(value / max_val * 100, 1))
+  label <- sprintf("%d/%d", value, max_val)
+  bar <- paste0(
+    sprintf('<div style="position:relative;display:inline-block;width:%dpx;height:%s;border-radius:2px;background:#f0f0f0;vertical-align:middle;margin-left:6px;">',
+            bar_width, height),
+    sprintf('<div style="position:absolute;inset:0;width:%.1f%%;background-color:%s;border-radius:2px;"></div>',
+            pct, oi_rgba(color, 0.6)),
+    '</div>'
+  )
+  paste0('<span style="display:inline-block;min-width:28px;text-align:right;">',
+         label, '</span>', bar)
+}
+
+# --- helper: format min / median / max for Mb values ---------------------
+.med_range_mb <- function(x) {
+  if (length(x) == 0) return("\u2014")
+  sprintf("%.1f / %.1f / %.1f", min(x), median(x), max(x))
 }
 
 # --- aggregate completeness per ref_id ------------------------------------
@@ -1174,16 +1175,14 @@ chrom_agg <- compl_df %>%
   group_by(ref_id) %>%
   summarise(
     ref_length     = first(ref_length),
-    sparkline      = make_sparkline(total_assigned_bp),
+    length_dist    = list(total_assigned_bp[total_assigned_bp > 0] / 1e6),
     n_full_length  = sum(is_full_length == "yes", na.rm = TRUE),
     n_both_telo    = sum(has_both_telomeres == "yes", na.rm = TRUE),
     .groups = "drop"
   ) %>%
   mutate(
-    `Ref (Mb)`      = round(ref_length / 1e6, 1),
-    `Length distribution` = sparkline,
-    `Full-length`   = paste0(n_full_length, "/", n_asm),
-    `Both telo`     = paste0(n_both_telo, "/", n_asm)
+    `Ref (Mb)`  = round(ref_length / 1e6, 1),
+    length_text = vapply(length_dist, .med_range_mb, character(1))
   )
 
 # --- rDNA array presence per chromosome -----------------------------------
@@ -1240,68 +1239,110 @@ chrom_agg <- chrom_agg %>%
 chrom_sg_levels <- if (has_subgenomes) sort(unique(chrom_agg$sg)) else "G"
 
 # --- gt table builder -----------------------------------------------------
-make_chrom_summary_gt <- function(df, title) {
-  df %>%
-    select(ref_id, `Ref (Mb)`, `Length distribution`, `Full-length`,
-           `Both telo`, rDNA, Rearr) %>%
+# sg_color drives the boxplot line/fill and the inline bars for full-length
+# and both-telomere counts.  For haploid references the default (oi[5], the
+# "G" entry in sg_cols_dark) is used.
+make_chrom_summary_gt <- function(df, title, sg_color = oi[5]) {
+  sg_color_light <- lighten(sg_color, amount = 0.5)
+  df2 <- df %>%
+    mutate(
+      full_cell = vapply(n_full_length,
+                         function(v) gt_inline_value_bar(v, n_asm, color = sg_color),
+                         character(1)),
+      telo_cell = vapply(n_both_telo,
+                         function(v) gt_inline_value_bar(v, n_asm, color = sg_color),
+                         character(1))
+    )
+  df2 %>%
+    select(ref_id, `Ref (Mb)`, length_text, length_dist,
+           full_cell, telo_cell, rDNA, Rearr) %>%
     gt() %>%
     gt_theme() %>%
     tab_header(title = title) %>%
     cols_label(
-      ref_id = "Chromosome",
-      `Ref (Mb)` = "Ref (Mb)",
-      `Length distribution` = "Assigned length across assemblies",
-      `Full-length` = "Full-length",
-      `Both telo` = "Both telo",
-      rDNA = "rDNA",
-      Rearr = "Rearr"
+      ref_id      = "Chromosome",
+      `Ref (Mb)`  = "Ref (Mb)",
+      length_text = "Assigned Mb (min / med / max)",
+      length_dist = "",
+      full_cell   = "Full-length",
+      telo_cell   = "Both telo",
+      rDNA        = "rDNA",
+      Rearr       = "Rearr"
     ) %>%
-    fmt_markdown(columns = `Length distribution`) %>%
-    cols_align(align = "right", columns = `Ref (Mb)`) %>%
-    cols_align(align = "center", columns = c(`Full-length`, `Both telo`, rDNA, Rearr)) %>%
+    gt_plt_dist(length_dist, type = "boxplot",
+                line_color = sg_color, fill_color = sg_color_light) %>%
+    # Place the boxplot to the right of the "min / med / max" text, matching
+    # the value + bar pattern used for the Full-length and Both telo columns.
+    cols_move(columns = length_dist, after = length_text) %>%
+    fmt(columns = c(full_cell, telo_cell), fns = function(x) x) %>%
+    cols_align(align = "right",  columns = `Ref (Mb)`) %>%
+    cols_align(align = "left",   columns = c(full_cell, telo_cell)) %>%
+    cols_align(align = "center", columns = c(rDNA, Rearr)) %>%
     # Column widths via CSS instead of cols_width(), which generates <colgroup>
     # HTML that breaks pandoc's --section-divs closure inside {.tabset} sections.
     opt_css(css = paste0(
-      "th:nth-child(1), td:nth-child(1) { width: 80px; }",
+      "th:nth-child(1), td:nth-child(1) { width: 90px; }",
       "th:nth-child(2), td:nth-child(2) { width: 70px; }",
-      "th:nth-child(3), td:nth-child(3) { width: 320px; }",
-      "th:nth-child(4), td:nth-child(4) { width: 80px; }",
-      "th:nth-child(5), td:nth-child(5) { width: 80px; }",
-      "th:nth-child(6), td:nth-child(6) { width: 50px; }",
-      "th:nth-child(7), td:nth-child(7) { width: 50px; }"
+      "th:nth-child(3), td:nth-child(3) { width: 180px; }",
+      "th:nth-child(4), td:nth-child(4) { width: 120px; }",
+      "th:nth-child(5), td:nth-child(5) { width: 100px; }",
+      "th:nth-child(6), td:nth-child(6) { width: 100px; }",
+      "th:nth-child(7), td:nth-child(7) { width: 50px; }",
+      "th:nth-child(8), td:nth-child(8) { width: 50px; }"
     ))
 }
 
-# Source note for the single-table (non-polyploid) case.
-chrom_summary_note <- paste0(
-  '<p style="font-size:90%; color:#555; margin-top:2px;">',
-  '<em>n</em>\u2009=\u2009', n_asm, ' assemblies. ',
-  'Sparkline shows sorted assigned lengths (min / median / max). ',
-  'rDNA: \u25cf\u2009=\u2009all assemblies, \u25d0\u2009=\u2009some, blank\u2009=\u2009none. ',
-  'Rearr\u2009=\u2009assemblies with \u22651 rearrangement on this chromosome.',
-  '</p>')
+# Shared legend for glyphs and bar semantics, rendered after the table(s).
+chrom_summary_legend <- paste0(
+  '<div class="legend-box">',
+  '<b>Assigned Mb</b>: boxplot of per-assembly assigned length for this ',
+  'chromosome (zero-length assemblies omitted); text shows min / median / max.&emsp;',
+  '<b>Full-length</b> / <b>Both telo</b>: count of assemblies with a contig ',
+  'spanning the full reference / carrying both telomeres (<em>n</em>\u2009=\u2009',
+  n_asm, ' assemblies); bar length is the fraction.&emsp;',
+  '<b>rDNA</b>: \u25cf\u2009=\u2009all assemblies have an rDNA array on this chromosome, ',
+  '\u25d0\u2009=\u2009some, blank\u2009=\u2009none.&emsp;',
+  '<b>Rearr</b>: number of assemblies with \u22651 rearrangement on this chromosome ',
+  '(blank = none).&emsp;',
+  'Boxplot and bar colors follow the subgenome palette.',
+  '</div>')
 
 ```
 
 ```{r chrom_summary_single, eval=(has_any_chrom && !(has_subgenomes && length(chrom_sg_levels) >= 2)), results='asis'}
-gt_out <- make_chrom_summary_gt(chrom_agg, "Chromosome Summary Across Assemblies")
+# Wrap each gt table plus the trailing legend in a pandoc raw-attribute
+# fence (```{=html}...```) so pandoc parses them as a single raw-HTML
+# block.  Otherwise, raw HTML emitted here confuses pandoc's
+# --section-divs state and the surrounding level-2 and level-1 sections
+# fail to close before the next "# Macro Synteny" heading.
+gt_out <- make_chrom_summary_gt(chrom_agg, "Chromosome Summary Across Assemblies",
+                                sg_color = sg_cols_dark[[1]])
+cat("\n```{=html}\n")
 cat(as.character(as_raw_html(gt_out)))
-cat(chrom_summary_note)
-cat("\n\n")
+cat("\n")
+cat(chrom_summary_legend)
+cat("\n```\n\n")
 ```
 
 ```{r chrom_summary_tabset, eval=(has_any_chrom && has_subgenomes && length(chrom_sg_levels) >= 2), results='asis'}
 # Render subgenome tables stacked (no ### headings / {.tabset}).
-# Pandoc's --section-divs fails to close section divs when non-<div> HTML
-# (e.g. <p>, <tfoot>) follows a gt table inside a results='asis' chunk;
-# the gt title already identifies each subgenome.
+# The gt title already identifies each subgenome.  All tables plus the
+# shared legend are wrapped in a single ```{=html}``` fence so pandoc
+# treats them as one raw-HTML block and still closes the surrounding
+# level-2 and level-1 sections before the next heading.
+cat("\n```{=html}\n")
 for (sg_val in chrom_sg_levels) {
   sg_df <- chrom_agg %>% filter(sg == sg_val)
+  sg_color <- sg_cols_dark[[sg_val]]
+  if (is.null(sg_color) || is.na(sg_color)) sg_color <- oi[5]
   gt_out <- make_chrom_summary_gt(sg_df,
-    sprintf("Chromosome Summary \u2014 Subgenome %s", sg_val))
+    sprintf("Chromosome Summary \u2014 Subgenome %s", sg_val),
+    sg_color = sg_color)
   cat(as.character(as_raw_html(gt_out)))
-  cat("\n\n")
+  cat("\n")
 }
+cat(chrom_summary_legend)
+cat("\n```\n\n")
 ```
 
 ```{r synteny_pre, eval=has_synteny_data, include=FALSE}
