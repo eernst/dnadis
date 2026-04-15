@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 from typing import List, Optional
 
+from dnadis import __version__ as _DNADIS_VERSION
 from dnadis.utils.logging_config import get_logger
 
 logger = get_logger("plotting")
@@ -153,6 +154,7 @@ def run_assembly_report(
         .replace("__COMMON_R__", _esc(_COMMON_R))
         .replace("__COMMON_CSS__", _esc(_COMMON_CSS))
         .replace("__SELF_CONTAINED__", "true" if self_contained else "false")
+        .replace("__DNADIS_VERSION__", _DNADIS_VERSION)
     )
 
     with report_rmd.open("w", encoding="utf-8") as fh:
@@ -293,6 +295,7 @@ def run_comparison_report(
         .replace("__COMMON_CSS__", _esc(_COMMON_CSS))
         .replace("__SELF_CONTAINED__", "true" if self_contained else "false")
         .replace("__ASM_SORT_ORDER__", str(assembly_sort_order))
+        .replace("__DNADIS_VERSION__", _DNADIS_VERSION)
     )
 
     with report_rmd.open("w", encoding="utf-8") as fh:

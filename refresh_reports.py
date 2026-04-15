@@ -127,6 +127,30 @@ def esc(s: Path | str) -> str:
     return str(s).replace("\\", "/")
 
 
+def _dnadis_version() -> str:
+    """Best-effort lookup of the dnadis package version.
+
+    Tries the installed package first (importlib.metadata), then falls back
+    to parsing the sibling ``dnadis/__init__.py`` if this script is run from
+    a source checkout without the package installed.
+    """
+    try:
+        from importlib.metadata import version as _v
+        return _v("dnadis")
+    except Exception:
+        pass
+    try:
+        init_path = Path(__file__).resolve().parent / "dnadis" / "__init__.py"
+        if init_path.exists():
+            for line in init_path.read_text(encoding="utf-8").splitlines():
+                if line.strip().startswith("__version__"):
+                    # __version__ = "X.Y.Z"
+                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+    except Exception:
+        pass
+    return "unknown"
+
+
 def build_placeholder_values(
     suffix: str,
     prefix: Path,
@@ -221,6 +245,7 @@ def build_placeholder_values(
         "__PLOTHTML__": "TRUE",
         "__TOP_N__": "10",
         "__SELF_CONTAINED__": "true",
+        "__DNADIS_VERSION__": _dnadis_version(),
     }
     for placeholder, default in defaults.items():
         if placeholder in template_text:

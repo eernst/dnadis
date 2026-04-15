@@ -7,6 +7,9 @@ protein-anchored synteny evidence, organelle detection, and taxonomic screening.
 """
 from __future__ import annotations
 
+# Package version.  Keep in sync with pyproject.toml.
+__version__ = "0.1.0"
+
 # Re-export everything from the original module during the modularization process.
 # This allows existing code using `import dnadis as ff` to continue working.
 # As modules are extracted, imports will be updated to use the new locations.

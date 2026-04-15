@@ -21,3 +21,23 @@ h2 { font-size: 16px; }
   line-height: 1.5;
 }
 .section-intro { font-size: 13px; color: #555; margin-bottom: 12px; }
+
+/* dnadis brand shown at the top of the TOC sidebar; inserted by a small
+   inline script in each report template.  The "dn" is wrapped in <i> so it
+   renders in bold italics while "adis" stays upright. */
+.dnadis-brand {
+  display: block;
+  font-size: 24px;
+  font-weight: 700;
+  color: #2c3e50;
+  text-decoration: none;
+  padding: 6px 10px 10px 10px;
+  margin: 0 0 10px 0;
+  border-bottom: 1px solid #ddd;
+  letter-spacing: 0.5px;
+}
+.dnadis-brand i { font-style: italic; }
+.dnadis-brand:hover, .dnadis-brand:focus {
+  color: #1a5276;
+  text-decoration: none;
+}
