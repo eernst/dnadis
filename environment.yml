@@ -1,0 +1,75 @@
+# Conda environment for dnadis (full installation)
+#
+# Create with:  conda env create -f environment.yml
+# Activate:     conda activate dnadis
+#
+# No version pins — uses the latest compatible versions.
+# For compleasm, create a separate environment (see README.md).
+
+name: dnadis
+
+channels:
+  - conda-forge
+  - bioconda
+
+dependencies:
+  # --- Python ---
+  - python >=3.11
+  - intervaltree
+
+  # --- Alignment & synteny ---
+  - miniprot
+  - gffread
+  - blast
+  - mm2plus
+
+  # --- Read depth & BAM handling ---
+  - samtools
+  - mosdepth
+  - rasusa
+
+  # --- Contaminant & rDNA detection ---
+  - centrifuger
+  - taxonkit
+  - infernal
+
+  # --- Distributed computing (optional) ---
+  - executorlib
+  - pysqa
+  - h5py
+
+  # --- R base + visualization ---
+  - r-base
+  - r-ggplot2
+  - r-dplyr
+  - r-readr
+  - r-stringr
+  - r-tibble
+  - r-tidyr
+  - r-patchwork
+  - r-ggnewscale
+  - r-pacman
+  - r-ggiraph
+  - r-htmlwidgets
+  - r-scales
+  - r-gt
+  - r-gtextras
+  - r-svglite
+  - r-xml2
+  - r-rmarkdown
+  - r-ggridges
+  - r-colorspace
+  - r-ggokabeito
+  - r-ggrepel
+  - r-showtext
+  - r-sysfonts
+  - r-systemfonts
+
+  # --- System libraries ---
+  - freetype
+  - libxml2
+  - xz
+  - pandoc
+
+  # --- Testing ---
+  - pytest

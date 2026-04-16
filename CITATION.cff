@@ -1,0 +1,31 @@
+cff-version: 1.2.0
+title: "dnadis: genome assembly comprehension and curation tool for contig classification, homology assignment, and quality control"
+message: "If you use this software, please cite it using the metadata from this file."
+type: software
+authors:
+  - family-names: Ernst
+    given-names: Evan
+    email: eernst@cshl.edu
+    affiliation: Cold Spring Harbor Laboratory
+version: 0.1.0
+date-released: 2026-04-15
+license: BSD-3-Clause
+repository-code: "https://github.com/eernst/dnadis"
+url: "https://github.com/eernst/dnadis"
+abstract: >
+  dnadis is a genome assembly comprehension and curation tool that classifies
+  contigs from de novo genome assemblies into biological categories
+  (chromosomes, organelles, rDNA, contaminants, debris) using nucleotide or
+  protein-anchored synteny with a reference, organelle/rDNA alignments, and
+  taxonomic classification. It evaluates assembly quality through BUSCO
+  completeness scoring, syntenic block coverage, and alignment identity
+  metrics, and produces rich interactive HTML reports for both individual
+  assemblies and multi-assembly comparisons.
+keywords:
+  - bioinformatics
+  - genome-assembly
+  - synteny
+  - contig-classification
+  - polyploid
+  - genomics
+  - assembly-qc

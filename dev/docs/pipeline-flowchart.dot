@@ -1,0 +1,177 @@
+// dnadis pipeline flowchart — top-to-bottom, centered
+// Okabe Ito palette:
+//   orange=#E69F00  sky_blue=#56B4E9  green=#009E73  yellow=#F0E442
+//   blue=#0072B2    vermillion=#D55E00  purple=#CC79A7  black=#000000
+
+digraph dnadis {
+    rankdir=TB;
+    fontname="Helvetica";
+    node [fontname="Helvetica", fontsize=10, style="filled,rounded", shape=box,
+          color="#333333", penwidth=1.0, margin="0.12,0.06"];
+    edge [fontname="Helvetica", fontsize=8, color="#555555", arrowsize=0.6];
+    bgcolor="white";
+    newrank=true;
+    compound=true;
+    nodesep=0.12;
+    ranksep=0.40;
+    pad="0.3";
+    center=true;
+
+    // ===== ROW 0: INPUTS =====
+    node [fillcolor="#F0E442", fontcolor="#000000"];
+    ref_gff3    [label="Reference\nGFF3", style="filled,rounded,dashed"];
+    ref_fasta   [label="Reference\nFASTA"];
+    query_fasta [label="Query\nAssembly"];
+
+    { rank=same; ref_gff3; ref_fasta; query_fasta; }
+    ref_gff3 -> ref_fasta -> query_fasta [style=invis, weight=100];
+
+    // ===== ROW 1: REFERENCE PREPARATION =====
+    node [fillcolor="#0072B2", fontcolor="white"];
+    prep_ref [label="prepare_reference()\nBuild ref ID maps · Compute ref GC · Extract organelle/rDNA refs · Extract proteins (protein mode)"];
+
+    // ===== ROW 2: REFERENCE CONTEXT + Phase 1 =====
+    node [fillcolor="#56B4E9", fontcolor="#000000"];
+    ref_ctx [label="ReferenceContext  (shared, immutable)", shape=parallelogram, style="filled"];
+
+    // ===== ROW 3: Phase 1 + Phase 2 =====
+    node [fillcolor="#E69F00", fontcolor="#000000"];
+    phase1 [label="Phase 1\nRead Query"];
+    phase2 [label="Phase 2 · Synteny Analysis\nminimap2 WGA · miniprot\n→ chains → macro-blocks"];
+
+    { rank=same; phase1; phase2; }
+
+    // ===== ROW 4: Detection =====
+    node [fillcolor="#009E73", fontcolor="white"];
+    phase3 [label="Phase 3\nOrganelle\n(BLAST)"];
+    phase4 [label="Phase 4\nrDNA\n(BLAST)"];
+    phase5 [label="Phase 5\nChr Debris\n(minimap2)"];
+    phase6 [label="Phase 6\nContaminant\n(centrifuger)"];
+    node [fillcolor="#F0E442", fontcolor="#000000"];
+    cent_idx [label="Centrifuger\nIndex", style="filled,rounded,dashed"];
+
+    { rank=same; phase3; phase4; phase5; phase6; cent_idx; }
+    phase3 -> phase4 -> phase5 -> phase6 -> cent_idx [style=invis, weight=100];
+
+    // ===== ROW 5: Pre-classification =====
+    node [fillcolor="#D55E00", fontcolor="white"];
+    phase7  [label="Phase 7\nDebris /\nUnclassified"];
+    phase8  [label="Phase 8\nGene Counts"];
+    phase9  [label="Phase 9\nOrientation"];
+    phase10 [label="Phase 10\nTelomeres"];
+
+    { rank=same; phase7; phase8; phase9; phase10; }
+    phase7 -> phase8 -> phase9 -> phase10 [style=invis, weight=100];
+
+    // ===== ROW 6: Classification =====
+    node [fillcolor="#D55E00", fontcolor="white"];
+    phase11 [label="Phase 11 · Classification\nGate-based chr assignment · Full-length vs fragment · Subgenome inference (GMM) · Confidence · Naming"];
+
+    // ===== ROW 7: Post-classification + Write =====
+    node [fillcolor="#F0E442", fontcolor="#000000"];
+    reads [label="Reads\n(FASTQ/BAM)", style="filled,rounded,dashed"];
+    node [fillcolor="#CC79A7", fontcolor="white"];
+    phase12 [label="Phase 12\nRead Depth"];
+    phase13 [label="Phase 13\nrDNA Consensus"];
+    phase14 [label="Phase 14\nScaffolding"];
+    node [fillcolor="#56B4E9", fontcolor="#000000"];
+    phase15 [label="Phase 15\nWrite FASTAs"];
+    phase16 [label="Phase 16\nWrite TSVs"];
+    phase17 [label="Phase 17\nCompleasm\n(BUSCO)"];
+
+    { rank=same; reads; phase12; phase13; phase14; }
+    reads -> phase12 -> phase13 -> phase14 [style=invis, weight=100];
+
+    { rank=same; phase15; phase16; phase17; }
+    phase15 -> phase16 -> phase17 [style=invis, weight=100];
+
+    // ===== ROW 8: Outputs + Cross-assembly =====
+    node [fillcolor="#F0E442", fontcolor="#000000", shape=note];
+    out_fasta  [label="Classified FASTAs\nchrs · organelles · rDNA\ncontaminants · debris"];
+    node [fillcolor="#0072B2", fontcolor="white", shape=box];
+    pairwise   [label="Pairwise\nSynteny"];
+    node [fillcolor="#F0E442", fontcolor="#000000", shape=note];
+    out_tsv    [label="Summary TSVs\ncontig_summary\nevidence · segments"];
+    node [fillcolor="#0072B2", fontcolor="white", shape=box];
+    comparison [label="Cross-Assembly\nComparison"];
+    node [fillcolor="#F0E442", fontcolor="#000000", shape=note];
+    out_comp   [label="Comparison\nReport\ncompleteness\nsynteny"];
+    out_report [label="Assembly\nReport\n(HTML)"];
+
+    // Per-assembly outputs
+    { rank=same; out_fasta; out_tsv; out_report; }
+    out_fasta -> out_tsv -> out_report [style=invis, weight=100];
+
+    // Cross-assembly outputs
+    { rank=same; pairwise; comparison; out_comp; }
+    pairwise -> comparison -> out_comp [style=invis, weight=100];
+
+    // ===== EDGES =====
+
+    ref_fasta -> prep_ref;
+    ref_gff3 -> prep_ref [style=dashed];
+    prep_ref -> ref_ctx;
+
+    ref_ctx -> phase1;
+    query_fasta -> phase1;
+    phase1 -> phase2;
+
+    phase2 -> phase3;
+    phase2 -> phase4;
+    phase2 -> phase5;
+    cent_idx -> phase6 [style=dashed];
+
+    phase5 -> phase7;
+
+    phase7 -> phase8;
+    phase8 -> phase9;
+    phase9 -> phase10;
+    phase10 -> phase11;
+
+    phase11 -> phase12;
+    phase11 -> phase13;
+    phase11 -> phase14;
+    reads -> phase12 [style=dashed];
+
+    phase14 -> phase15;
+    phase15 -> phase16;
+    phase16 -> phase17;
+
+    phase15 -> out_fasta;
+    phase16 -> out_tsv;
+    phase17 -> out_report [label="per-asm"];
+
+    out_fasta -> pairwise [label="≥2 asm", style=dashed];
+    pairwise -> comparison;
+    out_tsv -> comparison [style=dashed];
+    comparison -> out_comp;
+
+    // ===== LEGEND (top-right, single row, compact) =====
+    subgraph cluster_legend {
+        label="";
+        style="rounded";
+        color="#CCCCCC";
+        bgcolor="#FAFAFA";
+        margin="4";
+        node [shape=box, margin="0.04,0.02", fontsize=7, penwidth=0.6, height=0.22];
+
+        { rank=same;
+          leg_req   [label="required", shape=plaintext, fillcolor="#FAFAFA"];
+          leg_opt   [label="optional", shape=plaintext, fillcolor="#FAFAFA"];
+          leg_input [label="Input/Output", fillcolor="#F0E442", fontcolor="#000000"];
+          leg_ref   [label="Ref Prep", fillcolor="#0072B2", fontcolor="white"];
+          leg_syn   [label="Synteny", fillcolor="#E69F00", fontcolor="#000000"];
+          leg_det   [label="Detection", fillcolor="#009E73", fontcolor="white"];
+          leg_cls   [label="Classif.", fillcolor="#D55E00", fontcolor="white"];
+          leg_post  [label="Analysis", fillcolor="#CC79A7", fontcolor="white"];
+          leg_wrt   [label="Output", fillcolor="#56B4E9", fontcolor="#000000"];
+        }
+
+        leg_req -> leg_opt [style=dashed, color="#555555"];
+        leg_opt -> leg_input -> leg_ref -> leg_syn -> leg_det -> leg_cls -> leg_post -> leg_wrt [style=invis];
+    }
+
+    // Anchor legend to top-right: same rank as inputs, pushed right
+    { rank=same; ref_gff3; ref_fasta; query_fasta; leg_req; }
+    query_fasta -> leg_req [style=invis, minlen=8];
+}

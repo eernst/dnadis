@@ -1,0 +1,11 @@
+# Sub-feature coordinates for Arabidopsis thaliana 45S rDNA reference (athal-45s-ref.fa)
+# Reference: CP002686.1:14195483-14204860 (9378 bp)
+# Coordinates are 1-based, inclusive (BED-like 0-based would be start-1)
+# Based on Gruendler et al. 1989; Unfried et al. 1989; Unfried and Gruendler 1990; Cokus et al. 2008
+# Note: In plants the large subunit rRNA is 25S (equivalent to 28S in mammals)
+#feature	start	end
+18S	2195	4002
+ITS1	4003	4270
+5.8S	4271	4434
+ITS2	4435	4622
+25S	4623	8009

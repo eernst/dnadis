@@ -1,0 +1,49 @@
+/* common.css — shared styles for assembly and comparison reports */
+body {
+  font-family: "Helvetica Neue", Helvetica, "Liberation Sans", Arial, sans-serif;
+  font-size: 13px;
+  max-width: 1800px;
+  margin: auto;
+}
+h1.title { font-size: 24px; margin-bottom: 4px; }
+h1 { font-size: 20px; border-bottom: 2px solid #2c3e50; padding-bottom: 4px; }
+h2 { font-size: 16px; }
+.gt_table { font-size: 11px !important; }
+.gt_col_heading { font-size: 10px !important; font-weight: bold !important; }
+.widget-container { margin: 16px 0; }
+.note-box {
+  background: #f8f9fa; border-left: 4px solid #6c757d;
+  padding: 10px 14px; margin: 12px 0; font-size: 12px; color: #495057;
+}
+.legend-box {
+  background: #f8f9fa; border-left: 4px solid #6c757d;
+  padding: 6px 10px; margin: 8px 0; font-size: 10px; color: #666;
+  line-height: 1.5;
+}
+.section-intro { font-size: 13px; color: #555; margin-bottom: 12px; }
+
+/* dnadis brand shown at the top of the TOC sidebar; inserted by a small
+   inline script in each report template as the first child of #TOC so it
+   travels with tocify's fixed/sticky positioning and remains visible on
+   scroll.  The "dn" is wrapped in <i> so it renders in bold italics while
+   "adis" stays upright. */
+.dnadis-brand {
+  display: block;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  font-size: 24px;
+  font-weight: 700;
+  color: #2c3e50;
+  text-decoration: none;
+  padding: 6px 10px 10px 10px;
+  margin: 0 0 10px 0;
+  border-bottom: 1px solid #ddd;
+  letter-spacing: 0.5px;
+  background: #fff;
+}
+.dnadis-brand i { font-style: italic; }
+.dnadis-brand:hover, .dnadis-brand:focus {
+  color: #1a5276;
+  text-decoration: none;
+}
