@@ -22,7 +22,7 @@ jobs:
           create-args: >-
             python=${{ matrix.python-version }}
             intervaltree
-            miniprot gffread blast minimap2 centrifuger pytest
+            miniprot gffread blast mm2plus centrifuger pytest
             -c conda-forge -c bioconda
       - name: Run tests
         run: micromamba run -n dnadis pytest -q
@@ -69,7 +69,7 @@ jobs:
           create-args: >-
             python=${{ steps.latest.outputs.python }}
             intervaltree
-            miniprot gffread blast minimap2 centrifuger pytest
+            miniprot gffread blast mm2plus centrifuger pytest
             -c conda-forge -c bioconda
       - name: Capture conda versions
         if: steps.latest.outputs.python != ''
@@ -80,7 +80,7 @@ jobs:
         run: |
           python scripts/update_readme_python.py --python "${{ steps.latest.outputs.python }}"
           python scripts/update_readme_conda_versions.py \
-            --packages python miniprot gffread blast minimap2 centrifuger \
+            --packages python miniprot gffread blast mm2plus centrifuger \
             --conda-list conda-list.txt
       - name: Create PR for README updates
         if: steps.latest.outputs.python != ''

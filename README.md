@@ -178,7 +178,7 @@ Latest tested conda package versions (CI):
 - miniprot: unknown
 - gffread: unknown
 - blast: unknown
-- minimap2: unknown
+- mm2plus: unknown
 - centrifuger: unknown
 <!-- conda-versions-end -->
 
