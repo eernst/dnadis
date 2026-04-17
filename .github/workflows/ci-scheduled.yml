@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.14"]
+        python-version: ["3.11", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - name: Setup micromamba
@@ -22,7 +22,7 @@ jobs:
           create-args: >-
             python=${{ matrix.python-version }}
             intervaltree
-            miniprot gffread blast mm2plus centrifuger pytest
+            miniprot gffread blast mm2plus ragtag centrifuger pytest
             -c conda-forge -c bioconda
       - name: Run tests
         run: micromamba run -n dnadis pytest -q
@@ -72,7 +72,7 @@ jobs:
           create-args: >-
             python=${{ steps.latest.outputs.python }}
             intervaltree
-            miniprot gffread blast mm2plus centrifuger pytest
+            miniprot gffread blast mm2plus ragtag centrifuger pytest
             -c conda-forge -c bioconda
       - name: Capture conda versions
         if: steps.latest.outputs.python != ''
@@ -83,7 +83,7 @@ jobs:
         run: |
           python scripts/update_readme_python.py --python "${{ steps.latest.outputs.python }}"
           python scripts/update_readme_conda_versions.py \
-            --packages python miniprot gffread blast mm2plus centrifuger \
+            --packages python miniprot gffread blast mm2plus ragtag centrifuger \
             --conda-list conda-list.txt
       - name: Create PR for README updates
         if: steps.latest.outputs.python != ''
