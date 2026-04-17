@@ -704,7 +704,9 @@ if (has_brackets) {
   has_conf_cols <- all(c("scaffold_location_confidence",
                          "scaffold_orientation_confidence") %in% names(summary_df))
   bracket_with_conf <- scaffold_brackets %>%
-    inner_join(df_slots %>% select(original_name, y_plot), by = c("component" = "original_name"))
+    inner_join(df_slots %>% select(original_name, dnadis_name = contig, y_plot),
+               by = c("component" = "original_name")) %>%
+    mutate(dnadis_name = as.character(dnadis_name))
   if (has_conf_cols) {
     bracket_with_conf <- bracket_with_conf %>%
       left_join(summary_df %>% select(original_name, scaffold_location_confidence,
@@ -717,12 +719,13 @@ if (has_brackets) {
               n_components = n(),
               tooltip = {
                 hdr <- paste0("Scaffold: ", first(scaffold), " (", n(), " contigs)")
+                comp_label <- paste0(component, " (", dnadis_name, ")")
                 if (has_conf_cols) {
-                  lines <- paste0(component, ": loc=",
+                  lines <- paste0(comp_label, ": loc=",
                     ifelse(is.na(scaffold_location_confidence), "?", sprintf("%.3f", scaffold_location_confidence)),
                     ", orient=",
                     ifelse(is.na(scaffold_orientation_confidence), "?", sprintf("%.3f", scaffold_orientation_confidence)))
-                } else lines <- component
+                } else lines <- comp_label
                 paste(c(hdr, lines), collapse = "\n")
               }, .groups = "drop") %>%
     filter(n_components > 1)
@@ -794,16 +797,22 @@ ref_lines <- ref_lines_data %>%
   mutate(y_ref = y_top + pill_yw/2 + ref_tick_offset + (sg_idx - 1) * 0.04 * 2)
 
 # Segment/macro plot data (with coordinate flipping for reversed contigs)
+# `blocks$contig` holds the ORIGINAL contig name (as written to segments/
+# macro_blocks TSVs before renaming); `slot_data$contig` is the dnadis-
+# assigned name (e.g. chr1A, chr1A_f2).  Pull both into the joined frame
+# so tooltips can show "original (dnadis)".
 prep_blocks <- function(blocks, slot_data) {
   blocks %>%
     filter(contig %in% slot_data$original_name) %>%
     mutate(qstart_mb = qstart / 1e6, qend_mb = qend / 1e6, contig_len_mb = contig_len / 1e6) %>%
-    left_join(slot_data %>% select(original_name, assigned_chrom_id = chrom_id, y_plot,
+    left_join(slot_data %>% select(original_name, dnadis_name = contig,
+                                    assigned_chrom_id = chrom_id, y_plot,
                                     contig_len_mb_slot = contig_len_mb, is_reversed),
               by = c("contig" = "original_name")) %>%
     filter(!is.na(y_plot)) %>%
     mutate(
       assigned_chrom_id = as.character(assigned_chrom_id),
+      dnadis_name = as.character(dnadis_name),
       off_target = (target_chrom_id != assigned_chrom_id),
       max_len_mb = if_else(is.na(contig_len_mb_slot), contig_len_mb, contig_len_mb_slot),
       qstart_flip = if_else(is_reversed, max_len_mb - qend_mb, qstart_mb),
@@ -815,13 +824,15 @@ prep_blocks <- function(blocks, slot_data) {
 }
 
 seg_plot <- prep_blocks(seg, df_slots) %>%
-  mutate(tooltip = paste0("contig: ", contig, "\nassigned: ", assigned_chrom_id,
+  mutate(tooltip = paste0("contig: ", contig, " (", dnadis_name, ")",
+    "\nassigned: ", assigned_chrom_id,
     "\nsegment: ", target_chrom_id, " ", target_subgenome,
     "\nqstart: ", sprintf("%.3f", qstart_mb), " Mbp",
     "\nqend: ", sprintf("%.3f", qend_mb), " Mbp", "\nchain: ", chain_id))
 
 macro_plot <- prep_blocks(macro, df_slots) %>%
-  mutate(tooltip = paste0("contig: ", contig, "\nassigned: ", assigned_chrom_id,
+  mutate(tooltip = paste0("contig: ", contig, " (", dnadis_name, ")",
+    "\nassigned: ", assigned_chrom_id,
     "\nmacro: ", target_chrom_id, " ", target_subgenome,
     "\nqstart: ", sprintf("%.3f", qstart_mb), " Mbp",
     "\nqend: ", sprintf("%.3f", qend_mb), " Mbp",
@@ -833,10 +844,12 @@ rdna_plot <- if (nrow(rdna_annot) > 0) {
   rdna_annot %>%
     filter(contig %in% df_slots$original_name) %>%
     mutate(start_mb = start / 1e6, end_mb = end / 1e6) %>%
-    left_join(df_slots %>% select(original_name, y_plot, contig_len_mb, is_reversed),
+    left_join(df_slots %>% select(original_name, dnadis_name = contig,
+                                    y_plot, contig_len_mb, is_reversed),
               by = c("contig" = "original_name")) %>%
     filter(!is.na(y_plot)) %>%
     mutate(
+      dnadis_name = as.character(dnadis_name),
       start_flip = if_else(is_reversed, contig_len_mb - end_mb, start_mb),
       end_flip = if_else(is_reversed, contig_len_mb - start_mb, end_mb),
       start_mb = pmax(0, pmin(start_flip, contig_len_mb)),
@@ -844,7 +857,7 @@ rdna_plot <- if (nrow(rdna_annot) > 0) {
     ) %>% filter(end_mb > start_mb) %>%
     mutate(ymin = y_plot - pill_yw/2, ymax = y_plot + pill_yw/2,
            xmin = start_mb, xmax = end_mb,
-           tooltip = paste0("rDNA full copy\ncontig: ", contig,
+           tooltip = paste0("rDNA full copy\ncontig: ", contig, " (", dnadis_name, ")",
              "\nstart: ", sprintf("%.3f", start_mb), " Mbp",
              "\nend: ", sprintf("%.3f", end_mb), " Mbp",
              "\nidentity: ", sprintf("%.4f", identity),
@@ -863,14 +876,16 @@ p_comp <- ggplot() +
     data = df_slots[df_slots$has_5p_telo, ],
     aes(x = -0.02, xend = 0.02,
         y = y_plot, yend = y_plot,
-        tooltip = paste0(original_name, "\n5' telomere detected")),
+        tooltip = paste0(original_name, " (", as.character(contig), ")",
+                         "\n5' telomere detected")),
     lineend = "round", linewidth = telo_size,
     color = "grey75", show.legend = FALSE) +
   ggiraph::geom_segment_interactive(
     data = df_slots[df_slots$has_3p_telo, ],
     aes(x = contig_len_mb - 0.02, xend = contig_len_mb + 0.02,
         y = y_plot, yend = y_plot,
-        tooltip = paste0(original_name, "\n3' telomere detected")),
+        tooltip = paste0(original_name, " (", as.character(contig), ")",
+                         "\n3' telomere detected")),
     lineend = "round", linewidth = telo_size,
     color = "grey75", show.legend = FALSE) +
   # Pill backgrounds

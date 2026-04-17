@@ -930,14 +930,10 @@ if (has_any_chrom) {
       scale_linewidth_identity()
   }
 
-  # 3. Multi-contig count labels (small number inside pill)
-  if (nrow(multi_df) > 0) {
-    p_hm <- p_hm +
-      geom_text(data = multi_df,
-                aes(x = x_center, y = y_center, label = multi_label),
-                size = (base_font_pt - 1) / .pt * 0.8, color = "white",
-                fontface = "bold", family = base_family)
-  }
+  # 3. Multi-contig count labels (small number inside pill).  Added below
+  #    as a final layer so PDF and HTML can use distinct font sizes — the
+  #    HTML heatmap renders ~1.4x wider, and the PDF-tuned size becomes
+  #    unreadable in the browser.  See layering below.
 
   # 4. Subgenome separator lines + labels (polyploid only)
   if (has_subgenomes && n_sg_groups >= 2) {
@@ -997,8 +993,21 @@ if (has_any_chrom) {
   # Scale PDF height to match HTML aspect ratio so pills keep the same proportions
   pdf_h  <- max(3, pdf_w * hm_height / html_w)
 
-  save_pdf(pdf_heatmap, p_hm, width = pdf_w, height = pdf_h)
-  girafe_styled(ggobj = p_hm,
+  # Multi-contig count labels: bigger font in HTML (larger pill area)
+  # than in PDF (compact print layout).  Sizes are in ggplot text units
+  # (inches * .pt), not SVG pixels.
+  add_multi_labels <- function(p, size_pt) {
+    if (nrow(multi_df) == 0) return(p)
+    p + geom_text(data = multi_df,
+                  aes(x = x_center, y = y_center, label = multi_label),
+                  size = size_pt / .pt, color = "white",
+                  fontface = "bold", family = base_family)
+  }
+  p_hm_pdf  <- add_multi_labels(p_hm, (base_font_pt - 1) * 0.8)
+  p_hm_html <- add_multi_labels(p_hm, base_font_pt + 2)
+
+  save_pdf(pdf_heatmap, p_hm_pdf, width = pdf_w, height = pdf_h)
+  girafe_styled(ggobj = p_hm_html,
                 width_svg = html_w,
                 height_svg = hm_height)
 } else {
@@ -1048,7 +1057,7 @@ si_df <- scatter_df %>% filter(!is.na(seq_identity_vs_ref))
 p_si <- ggplot(si_df, aes(x = length_mb, y = seq_identity_vs_ref * 100,
                            color = assembly)) +
   geom_point_interactive(
-    aes(tooltip = paste0(assembly, "\n", contig, "\n",
+    aes(tooltip = paste0(assembly, "\n", original_name, " (", contig, ")\n",
                          ifelse(!is.na(assigned_ref_id),
                                 paste0("Assigned: ", assigned_ref_id, "\n"), ""),
                          sprintf("%.1f Mb, %.2f%% identity", length_mb,
@@ -1078,7 +1087,7 @@ sc_df <- scatter_df %>% filter(!is.na(ref_coverage))
 
 p_sc <- ggplot(sc_df, aes(x = length_mb, y = ref_coverage * 100, color = assembly)) +
   geom_point_interactive(
-    aes(tooltip = paste0(assembly, "\n", contig, "\n",
+    aes(tooltip = paste0(assembly, "\n", original_name, " (", contig, ")\n",
                          ifelse(!is.na(assigned_ref_id),
                                 paste0("Assigned: ", assigned_ref_id, "\n"), ""),
                          sprintf("%.1f Mb, %.1f%% ref coverage", length_mb,
@@ -1456,6 +1465,8 @@ if (!is.null(all_agp_df) && nrow(all_agp_df) > 0 && nrow(asm_lookup_df) > 0) {
 }
 
 # --- Fix pairwise macro_blocks: map original contig names -> renamed names ---
+# Preserve the original names in parallel columns (orig_ref_id / orig_contig)
+# so ribbon tooltips can show "original (dnadis)" like the assembly report.
 if (!is.null(pairwise_macro_df) && nrow(asm_lookup_df) > 0) {
   left_map <- asm_lookup_df %>%
     distinct(assembly, original_name, .keep_all = TRUE) %>%
@@ -1464,12 +1475,16 @@ if (!is.null(pairwise_macro_df) && nrow(asm_lookup_df) > 0) {
     distinct(assembly, original_name, .keep_all = TRUE) %>%
     select(right_assembly = assembly, original_name, new_contig = contig)
   pairwise_macro_df <- pairwise_macro_df %>%
+    mutate(orig_ref_id = ref_id, orig_contig = contig) %>%
     left_join(left_map, by = c("left_assembly", "ref_id" = "original_name")) %>%
     mutate(ref_id = coalesce(new_ref_id, ref_id)) %>%
     select(-new_ref_id) %>%
     left_join(right_map, by = c("right_assembly", "contig" = "original_name")) %>%
     mutate(contig = coalesce(new_contig, contig)) %>%
     select(-new_contig)
+} else if (!is.null(pairwise_macro_df)) {
+  pairwise_macro_df <- pairwise_macro_df %>%
+    mutate(orig_ref_id = ref_id, orig_contig = contig)
 }
 
 # --- Reference-origin lookup for pairwise ribbon coloring ---
@@ -1745,12 +1760,19 @@ build_synteny_plot <- function(sg) {
         scaffold_len <- max(sc_agp$end)
         scaffold_w <- scaffold_len / x_scale
         n_components <- sum(sc_agp$type == "W")
-        component_names <- paste(
-          sc_agp %>% filter(type == "W") %>% pull(component),
-          collapse = ", ")
+        # Component labels: pair each original AGP component name with its
+        # dnadis-assigned contig name (e.g. "ctg_17 (chr1A_f2)") for tooltip
+        # consistency with the per-assembly report.
+        comp_rows <- sc_agp %>% filter(type == "W")
+        comp_dnadis <- asm_lookup_df$contig[match(
+          paste(asm, comp_rows$component, sep = "\x01"),
+          paste(asm_lookup_df$assembly, asm_lookup_df$original_name, sep = "\x01"))]
+        component_labels <- ifelse(is.na(comp_dnadis),
+                                   comp_rows$component,
+                                   paste0(comp_rows$component, " (", comp_dnadis, ")"))
+        component_names <- paste(component_labels, collapse = ", ")
         # Track the original component names for exclusion from fragment pills
-        scaffolded_contigs <- c(scaffolded_contigs,
-          sc_agp %>% filter(type == "W") %>% pull(component))
+        scaffolded_contigs <- c(scaffolded_contigs, comp_rows$component)
 
         # Compute pill x-position: use column center for primary, offset for secondary
         n_scaffolds <- length(scaffold_names)
@@ -1824,7 +1846,9 @@ build_synteny_plot <- function(sg) {
             x_center = x_cursor + ctg_w / 2,
             x_left = x_cursor, x_right = x_cursor + ctg_w,
             y_center = y_asm, pill_width = ctg_w,
-            tooltip = sprintf("%s\n%s\n%.2f Mb", asm, ctg$contig, ctg$length / 1e6)
+            tooltip = sprintf("%s\n%s (%s)\n%.2f Mb",
+                              asm, ctg$original_name, ctg$contig,
+                              ctg$length / 1e6)
           )
           x_cursor <- x_cursor + ctg_w + pill_gap
         }
@@ -1972,6 +1996,13 @@ build_synteny_plot <- function(sg) {
     ms_ref_id    <- as.character(macro_src$ref_id)
     ms_contig_new <- if ("contig_new" %in% names(macro_src)) as.character(macro_src$contig_new) else NULL
     ms_contig    <- as.character(macro_src$contig)
+    # Original (pre-rename) contig names for tooltip "input (dnadis)" display.
+    # orig_ref_id / orig_contig exist on pairwise macros (see :1467); for
+    # per-assembly macros the `contig` column is already the original.
+    ms_orig_ref_id <- if ("orig_ref_id" %in% names(macro_src))
+      as.character(macro_src$orig_ref_id) else NULL
+    ms_orig_contig <- if ("orig_contig" %in% names(macro_src))
+      as.character(macro_src$orig_contig) else ms_contig
     ms_ref_start <- as.numeric(macro_src$ref_start)
     ms_ref_end   <- as.numeric(macro_src$ref_end)
     ms_qstart    <- as.numeric(macro_src$qstart)
@@ -2085,6 +2116,8 @@ build_synteny_plot <- function(sg) {
         ribbon_meta[[ribbon_idx]] <- list(
           top_row = gm$top_row, top_ctg = tp$contig[1],
           bot_row = gm$bot_row, bot_ctg = bp$contig[1],
+          top_orig = if (!is.null(ms_orig_ref_id)) ms_orig_ref_id[b] else b_ref_id,
+          bot_orig = ms_orig_contig[b],
           cid = cid, l_start = seg_l_start, l_end = seg_l_end,
           r_start = seg_r_start, r_end = seg_r_end,
           union_bp = ms_union_bp[b],
@@ -2134,6 +2167,10 @@ build_synteny_plot <- function(sg) {
       # Pre-extract column vectors
       pd_ref_id   <- as.character(pair_df$ref_id)
       pd_contig   <- as.character(pair_df$contig)
+      pd_orig_ref_id <- if ("orig_ref_id" %in% names(pair_df))
+        as.character(pair_df$orig_ref_id) else pd_ref_id
+      pd_orig_contig <- if ("orig_contig" %in% names(pair_df))
+        as.character(pair_df$orig_contig) else pd_contig
       pd_ref_start <- as.numeric(pair_df$ref_start)
       pd_ref_end  <- as.numeric(pair_df$ref_end)
       pd_qstart   <- as.numeric(pair_df$qstart)
@@ -2193,6 +2230,8 @@ build_synteny_plot <- function(sg) {
         ribbon_meta[[ribbon_idx]] <- list(
           top_row = r_top_asm, top_ctg = tp$contig[1],
           bot_row = r_bot_asm, bot_ctg = bp$contig[1],
+          top_orig = pd_orig_ref_id[b],
+          bot_orig = pd_orig_contig[b],
           cid = cid, l_start = l_start, l_end = l_end,
           r_start = r_start, r_end = r_end,
           union_bp = pd_union_bp[b],
@@ -2231,11 +2270,20 @@ build_synteny_plot <- function(sg) {
         med_ident <- median(vapply(grp, function(g) g$ident, numeric(1)))
         n_blocks <- length(grp)
         cid <- m$cid
+        # Show "original (dnadis)" when the renamed pill name differs from
+        # the original input name (always true for assembly contigs after
+        # classification; reference chromosomes stay single-name).
+        fmt_ctg <- function(orig, dnadis) {
+          if (is.null(orig) || is.na(orig) || !nzchar(orig) || identical(orig, dnadis))
+            dnadis
+          else
+            paste0(orig, " (", dnadis, ")")
+        }
         tip <- sprintf(
           "%s %s\n  %s  %.2f\u2013%.2f Mb\n\u2192\n%s %s\n  %s  %.2f\u2013%.2f Mb\n%.2f Mb | %d block(s) | Identity: %.1f%%",
-          m$top_row, m$top_ctg,
+          m$top_row, fmt_ctg(m$top_orig, m$top_ctg),
           if (!is.na(cid)) cid else "", agg_l_min / 1e6, agg_l_max / 1e6,
-          m$bot_row, m$bot_ctg,
+          m$bot_row, fmt_ctg(m$bot_orig, m$bot_ctg),
           if (!is.na(cid)) cid else "", agg_r_min / 1e6, agg_r_max / 1e6,
           agg_bp / 1e6, n_blocks, med_ident * 100
         )
