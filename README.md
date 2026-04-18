@@ -121,7 +121,7 @@ Alternatively, create the environment manually:
 
 ```bash
 conda create -n dnadis -c conda-forge -c bioconda \
-    python=3.14 intervaltree \
+    python=3.13 intervaltree \
     miniprot gffread blast mm2plus \
     r-base r-ggplot2 r-dplyr r-readr r-stringr r-tibble r-tidyr \
     r-patchwork r-ggnewscale r-pacman r-ggiraph r-htmlwidgets r-scales \
@@ -131,12 +131,13 @@ conda create -n dnadis -c conda-forge -c bioconda \
 conda activate dnadis
 ```
 
-**Full** — all features including reports, contaminant screening, read depth, rDNA annotation, SLURM distribution, and taxonomic lineage:
+**Full** — all features including reports, contaminant screening, read depth, rDNA annotation, reference-guided scaffolding, SLURM distribution, and taxonomic lineage:
 
 ```bash
 conda create -n dnadis -c conda-forge -c bioconda \
-    python=3.14 intervaltree \
+    python=3.13 intervaltree \
     miniprot gffread blast mm2plus \
+    ragtag \
     samtools mosdepth rasusa \
     centrifuger taxonkit infernal \
     executorlib pysqa h5py \

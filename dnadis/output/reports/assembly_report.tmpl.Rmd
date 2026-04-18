@@ -735,13 +735,26 @@ if (has_brackets) {
 if (has_brackets) {
   max_len <- max(df_slots$contig_len_mb, na.rm = TRUE)
   bracket_x <- -max_len * 0.035; foot_xend <- -max_len * 0.015
+  # One horizontal leg per scaffold member (at the member's pill center),
+  # plus a single vertical spine spanning from the topmost to the bottommost
+  # member.  Using per-member legs instead of only top/bottom feet makes
+  # scaffold membership unambiguous when a non-scaffold pill is interleaved
+  # in the y-layout — without legs at its y, an intervening pill is clearly
+  # not part of the scaffold.
+  bracket_members <- bracket_with_conf %>%
+    filter(scaffold %in% bracket_data$scaffold) %>%
+    left_join(bracket_data %>% select(scaffold, scaffold_tooltip = tooltip),
+              by = "scaffold")
   bracket_segments <- bind_rows(
+    # Spine runs exactly between the outermost legs (y_min..y_max are pill
+    # centers of the top/bottom scaffold members) — no overhang past the
+    # legs.
     bracket_data %>% transmute(x = bracket_x, xend = bracket_x,
-      y = y_min - pill_yw/6, yend = y_max + pill_yw/6, scaffold, tooltip),
-    bracket_data %>% transmute(x = bracket_x, xend = foot_xend,
-      y = y_max + pill_yw/6, yend = y_max + pill_yw/6, scaffold, tooltip),
-    bracket_data %>% transmute(x = bracket_x, xend = foot_xend,
-      y = y_min - pill_yw/6, yend = y_min - pill_yw/6, scaffold, tooltip))
+      y = y_min, yend = y_max, scaffold, tooltip),
+    bracket_members %>% transmute(
+      x = bracket_x, xend = foot_xend,
+      y = y_plot, yend = y_plot,
+      scaffold, tooltip = scaffold_tooltip))
   bracket_labels <- bracket_data %>%
     transmute(x = bracket_x - max_len * 0.008, y = y_mid, label = "S", scaffold, tooltip)
 }
