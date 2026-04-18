@@ -746,8 +746,11 @@ if (has_brackets) {
     left_join(bracket_data %>% select(scaffold, scaffold_tooltip = tooltip),
               by = "scaffold")
   bracket_segments <- bind_rows(
+    # Spine runs exactly between the outermost legs (y_min..y_max are pill
+    # centers of the top/bottom scaffold members) — no overhang past the
+    # legs.
     bracket_data %>% transmute(x = bracket_x, xend = bracket_x,
-      y = y_min - pill_yw/6, yend = y_max + pill_yw/6, scaffold, tooltip),
+      y = y_min, yend = y_max, scaffold, tooltip),
     bracket_members %>% transmute(
       x = bracket_x, xend = foot_xend,
       y = y_plot, yend = y_plot,
