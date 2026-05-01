@@ -336,11 +336,11 @@ def _run_ragtag_scaffold(
     contigs_fasta: Path,
     work_dir: Path,
     threads: int,
-) -> Tuple[Optional[Path], Optional[Path]]:
+) -> Optional[Path]:
     """Run ragtag.py scaffold for a single reference chromosome.
 
     Returns:
-        Tuple of (agp_path, fasta_path) or (None, None) on failure.
+        Path to ragtag.scaffold.agp, or None on failure.
     """
     # Clean any stale output from previous runs.  RagTag caches intermediate
     # alignments (*.paf) and skips re-alignment when they exist, which causes
@@ -367,51 +367,110 @@ def _run_ragtag_scaffold(
         )
         if result.returncode != 0:
             logger.warning(f"RagTag failed (rc={result.returncode}): {result.stderr[:500]}")
-            return None, None
+            return None
     except subprocess.TimeoutExpired:
         logger.warning("RagTag timed out after 3600s")
-        return None, None
+        return None
     except FileNotFoundError:
         logger.warning("ragtag.py not found in PATH")
-        return None, None
+        return None
 
+    # Only the AGP is needed downstream: dnadis assembles the scaffold
+    # sequence itself from `query_seqs` using the AGP coordinates.  This
+    # avoids ragtag.scaffold.fasta, whose writer (ragtag_agp2fa.py) crashes
+    # on pysam >= 0.23 because it calls .decode() on a str.
     agp_path = work_dir / "ragtag.scaffold.agp"
-    fasta_path = work_dir / "ragtag.scaffold.fasta"
-
-    if agp_path.exists() and fasta_path.exists():
-        return agp_path, fasta_path
-    return None, None
+    if agp_path.exists():
+        return agp_path
+    return None
 
 
-def _parse_ragtag_agp(
+def _scaffold_from_ragtag_agp(
     agp_path: Path,
+    query_seqs: Dict[str, str],
     scaffold_name: str,
-) -> List[str]:
-    """Parse RagTag AGP output and rename scaffold to our naming convention.
+    gap_size: int,
+) -> Tuple[Optional[str], List[str], List[str]]:
+    """Build scaffold sequence + dnadis-style AGP lines from RagTag's AGP.
+
+    Bypasses RagTag's own FASTA writer (``ragtag_agp2fa.py``), which is
+    broken on pysam >= 0.23 (it calls ``.decode('utf-8')`` on a ``str``).
+    Reads only the placed-scaffold rows (scaffold name suffix ``_RagTag``)
+    and reconstructs the sequence from the in-memory contig map using the
+    AGP component coordinates and orientations.  Gap rows in the RagTag
+    AGP are normalized to the caller's ``gap_size`` (RagTag's default 100
+    is preserved if the caller passes 100).
 
     Args:
-        agp_path: Path to RagTag's ragtag.scaffold.agp.
-        scaffold_name: Desired scaffold name (e.g., 'chr1A').
+        agp_path: Path to ``ragtag.scaffold.agp``.
+        query_seqs: Read-only dict of all query sequences.
+        scaffold_name: Output scaffold name (replaces RagTag's
+            ``<refchr>_RagTag`` name).
+        gap_size: Number of Ns between adjacent components.
 
     Returns:
-        List of AGP lines with scaffold renamed.
+        Tuple of (scaffold_seq, agp_lines, unplaced).
+        - ``scaffold_seq`` is None if no placed components were resolved.
+        - ``agp_lines`` are dnadis-style AGP rows for the placed scaffold.
+        - ``unplaced`` lists component names that RagTag emitted as their
+          own scaffolds (i.e. could not place under ``-u``).  Reported so
+          the caller can decide whether to surface them as trivial
+          scaffolds; the current caller logs and drops them.
     """
-    agp_lines: List[str] = []
+    placed: List[Tuple[str, str, int, int, str]] = []
+    unplaced: List[str] = []
     with agp_path.open() as fh:
         for line in fh:
-            if line.startswith("#"):
+            if line.startswith("#") or not line.strip():
                 continue
-            line = line.rstrip("\n")
-            if not line:
-                continue
-            fields = line.split("\t")
+            fields = line.rstrip("\n").split("\t")
             if len(fields) < 9:
                 continue
-            # Replace RagTag scaffold name with our name
-            # RagTag names scaffolds like "refname_RagTag"
-            fields[0] = scaffold_name
-            agp_lines.append("\t".join(fields))
-    return agp_lines
+            scaf, kind = fields[0], fields[4]
+            if not scaf.endswith("_RagTag"):
+                if kind == "W":
+                    unplaced.append(fields[5])
+                continue
+            if kind == "W":
+                placed.append(("W", fields[5], int(fields[6]), int(fields[7]), fields[8]))
+            elif kind in {"N", "U"}:
+                placed.append(("N", "", 0, 0, ""))
+
+    if not any(r[0] == "W" for r in placed):
+        return None, [], unplaced
+
+    parts: List[str] = []
+    agp_lines: List[str] = []
+    pos = 1
+    part_num = 0
+    for kind, comp, beg, end, orient in placed:
+        if kind == "N":
+            if not parts:
+                continue  # don't lead with a gap
+            part_num += 1
+            gap_end = pos + gap_size - 1
+            agp_lines.append(_agp_gap_line(scaffold_name, pos, gap_end, part_num, gap_size))
+            parts.append("N" * gap_size)
+            pos = gap_end + 1
+        else:
+            seq = query_seqs.get(comp, "")
+            if not seq:
+                continue
+            sub = seq[beg - 1:end]
+            if orient == "-":
+                sub = reverse_complement(sub)
+            part_num += 1
+            comp_end = pos + len(sub) - 1
+            agp_lines.append(_agp_component_line(
+                scaffold_name, pos, comp_end, part_num,
+                comp, beg, end, orient,
+            ))
+            parts.append(sub)
+            pos = comp_end + 1
+
+    if not parts:
+        return None, [], unplaced
+    return "".join(parts), agp_lines, unplaced
 
 
 def _parse_ragtag_confidence(
@@ -446,28 +505,6 @@ def _parse_ragtag_confidence(
                 continue
             result[contig] = (grouping, location, orientation)
     return result
-
-
-def _extract_ragtag_scaffold_seq(
-    fasta_path: Path,
-) -> Optional[str]:
-    """Extract the main scaffold sequence from RagTag output.
-
-    RagTag produces a FASTA with the scaffold and possibly unplaced contigs.
-    The scaffold is the first sequence ending in '_RagTag'.
-
-    Returns:
-        Scaffold sequence string, or None if not found.
-    """
-    seqs = read_fasta_sequences(fasta_path)
-    # Find the scaffold sequence (ends with _RagTag)
-    for name, seq in seqs.items():
-        if name.endswith("_RagTag"):
-            return seq
-    # Fall back to first sequence
-    if seqs:
-        return next(iter(seqs.values()))
-    return None
 
 
 def _emit_trivial_scaffold(
@@ -596,24 +633,30 @@ def _scaffold_group(
             if contigs_fai.exists():
                 contigs_fai.unlink()
 
-            # Run RagTag
+            # Run RagTag (we use only its AGP; see _scaffold_from_ragtag_agp)
             ragtag_dir = chr_work / "ragtag_out"
-            agp_path, fasta_path = _run_ragtag_scaffold(
+            agp_path = _run_ragtag_scaffold(
                 ref_chr_fasta, contigs_fasta, ragtag_dir, threads,
             )
 
-            if agp_path and fasta_path:
-                agp_lines = _parse_ragtag_agp(agp_path, scaffold_name)
-                scaffold_seq = _extract_ragtag_scaffold_seq(fasta_path)
+            if agp_path:
+                scaffold_seq, agp_lines, unplaced = _scaffold_from_ragtag_agp(
+                    agp_path, query_seqs, scaffold_name, gap_size,
+                )
                 if scaffold_seq and agp_lines:
+                    if unplaced:
+                        logger.warning(
+                            f"{scaffold_name}: RagTag could not place "
+                            f"{len(unplaced)} contig(s): {', '.join(unplaced)} "
+                            f"(dropped from scaffolded output)"
+                        )
                     result.scaffold_seq = scaffold_seq
                     result.agp_lines = agp_lines
-                    # Parse RagTag confidence scores
                     conf_path = ragtag_dir / "ragtag.scaffold.confidence.txt"
                     result.confidences = _parse_ragtag_confidence(conf_path)
                     return result
                 else:
-                    logger.warning(f"{scaffold_name}: RagTag produced empty output, falling back")
+                    logger.warning(f"{scaffold_name}: RagTag AGP had no placed components, falling back")
             else:
                 logger.warning(f"{scaffold_name}: RagTag failed, falling back to built-in scaffolder")
         else:
