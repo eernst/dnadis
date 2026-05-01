@@ -656,7 +656,7 @@ def run_assembly(
         ref_id: str,
         clen: int,
         min_seg: int,
-        min_span_bp: int,
+        min_synteny_span: int,
         min_span_frac: float,
         min_gen: int,
     ) -> tuple[bool, int, int, float, int]:
@@ -667,7 +667,7 @@ def run_assembly(
         ngen = int(ev.qr_gene_count.get(key, 0) or 0)
 
         # Gate: contig must meet all thresholds to be assigned
-        ok = (nseg >= min_seg) and (spbp >= min_span_bp) and (spfrac >= min_span_frac) and (ngen >= min_gen)
+        ok = (nseg >= min_seg) and (spbp >= min_synteny_span) and (spfrac >= min_span_frac) and (ngen >= min_gen)
         return ok, nseg, spbp, spfrac, ngen
 
     # Gate-aware reranking over candidate refs
@@ -727,7 +727,7 @@ def run_assembly(
                 ref_id,
                 clen,
                 min_segments,
-                args.min_span_bp,
+                args.min_synteny_span,
                 args.min_span_frac,
                 min_genes,
             )
@@ -770,7 +770,8 @@ def run_assembly(
     n_passing = n_with_candidates - n_demoted
     logger.info(f"Gate filtering: {n_total} contigs, {n_with_candidates} with candidates, "
                 f"{n_passing} passing gates, {n_demoted} demoted, {n_switched} switched")
-    logger.info(f"Gate thresholds: min_segments={min_segments}, min_span_bp={args.min_span_bp}, "
+    logger.info(f"Gate thresholds: min_segments={min_segments}, "
+                f"min_synteny_span={args.min_synteny_span}, "
                 f"min_span_frac={args.min_span_frac}, min_genes={min_genes}")
 
     # Resolve reciprocal translocations: when two contigs are both assigned
@@ -1541,7 +1542,7 @@ def main():
             chain_r_gap=400000, chain_diag_slop=150000, assign_chain_min_bp=0,
             assign_chain_score="matches", assign_chain_topk=3, assign_ref_score="all",
             miniprot_min_genes=3, miniprot_min_segments=5, min_span_frac=0.20,
-            min_span_bp=50000, organelle_min_cov=0.80, chrC_len_tolerance=0.05,
+            min_synteny_span=50000, organelle_min_cov=0.80, chrC_len_tolerance=0.05,
             chrM_len_tolerance=0.20, rdna_min_cov=0.50,
             skip_rdna_consensus=False, rdna_ref_features=None,
             chr_debris_min_cov=0.80,
@@ -1815,8 +1816,10 @@ def main():
         help="Min span fraction of contig for chromosome assignment (both modes) [0.20]",
     )
     prot_thresh.add_argument(
-        "--min-span-bp", type=int, default=50_000,
-        help="Min absolute span in bp for chromosome assignment (both modes) [50000]",
+        "--min-synteny-span", type=int, default=50_000,
+        help="Min synteny-block span in bp for chromosome assignment gates "
+             "(both modes); also sets the minimum detectable rearrangement size "
+             "[50000]",
     )
 
     # =========================================================================
