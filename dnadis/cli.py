@@ -1553,6 +1553,7 @@ def main():
             fofn=None, assembly_dir=None,
             cluster=False, max_threads_dist=64, max_mem_dist=128.0,
             max_time_dist=720, partition="cpuq", qos="",
+            keep_executor_cache=False,
         )
         print(dump_config_template(defaults))
         sys.exit(0)
@@ -1973,6 +1974,11 @@ def main():
         "--qos", type=str, default="",
         help="SLURM QOS for distributed jobs [unset — use cluster default]",
     )
+    dist_grp.add_argument(
+        "--keep-executor-cache", action="store_true",
+        help="Retain the per-run executorlib cache directory "
+             "(default: removed on clean exit)",
+    )
 
     # =========================================================================
     # Scaffolding options
@@ -2075,6 +2081,7 @@ def main():
         max_time_minutes=args.max_time_dist,
         partition=args.partition,
         qos=args.qos,
+        keep_cache=args.keep_executor_cache,
     )
 
     # --- Resolve assembly list (single-assembly is a 1-element list) ---
