@@ -121,7 +121,7 @@ Alternatively, create the environment manually:
 
 ```bash
 conda create -n dnadis -c conda-forge -c bioconda \
-    python=3.13 intervaltree \
+    python=3.14 intervaltree \
     miniprot gffread blast mm2plus \
     r-base r-ggplot2 r-dplyr r-readr r-stringr r-tibble r-tidyr \
     r-patchwork r-ggnewscale r-pacman r-ggiraph r-htmlwidgets r-scales \
@@ -135,7 +135,7 @@ conda activate dnadis
 
 ```bash
 conda create -n dnadis -c conda-forge -c bioconda \
-    python=3.13 intervaltree \
+    python=3.14 intervaltree \
     miniprot gffread blast mm2plus \
     ragtag \
     samtools mosdepth rasusa \
@@ -180,7 +180,8 @@ Latest tested conda package versions (CI):
 - gffread: 0.12.9
 - blast: 2.17.0
 - mm2plus: 1.2
-- centrifuger: 1.1.0
+- ragtag: 2.1.0
+- centrifuger: 1.1.1
 <!-- conda-versions-end -->
 
 ## Quick Start
