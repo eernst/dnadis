@@ -94,13 +94,33 @@ class TestParseFofn:
         result = parse_fofn(fofn)
         assert result[0][0] == asm.resolve()
 
-    def test_missing_path_column(self, tmp_path):
-        """FOFN without 'path' column raises ValueError."""
-        fofn = tmp_path / "bad.tsv"
-        fofn.write_text("name\tfile\nsample\tasm.fa\n")
+    def test_headerless_path_only(self, tmp_path):
+        """Headerless FOFN with just paths (one per line)."""
+        asm1 = tmp_path / "asm1.fasta"
+        asm2 = tmp_path / "asm2.fa"
+        _make_fasta(asm1)
+        _make_fasta(asm2)
 
-        with pytest.raises(ValueError, match="'path' column"):
-            parse_fofn(fofn)
+        fofn = tmp_path / "list.tsv"
+        fofn.write_text(f"{asm1}\n{asm2}\n")
+
+        result = parse_fofn(fofn)
+        assert len(result) == 2
+        assert result[0] == (asm1, "asm1", None)
+        assert result[1] == (asm2, "asm2", None)
+
+    def test_headerless_with_name_and_reads(self, tmp_path):
+        """Headerless FOFN where columns 1 and 2 are interpreted as name/reads."""
+        asm = tmp_path / "raw.fasta"
+        reads = tmp_path / "reads.fastq"
+        _make_fasta(asm)
+        reads.write_text("@read1\nACGT\n+\nIIII\n")
+
+        fofn = tmp_path / "list.tsv"
+        fofn.write_text(f"{asm}\tcool_asm\t{reads}\n")
+
+        result = parse_fofn(fofn)
+        assert result[0] == (asm, "cool_asm", reads)
 
     def test_missing_file(self, tmp_path):
         """FOFN referencing a non-existent file raises ValueError."""

@@ -1583,7 +1583,7 @@ def main():
     multi = p.add_argument_group("Multi-assembly mode")
     multi.add_argument(
         "--fofn", type=_validate_input_path, default=None,
-        help="File-of-filenames: TSV with columns [path] and optional [name], [reads]",
+        help="File-of-filenames: TSV with optional header (column [path] required, [name]/[reads] optional). Without a header, columns are read positionally as path, name, reads.",
     )
     multi.add_argument(
         "--assembly-dir", type=_validate_input_dir, default=None,
