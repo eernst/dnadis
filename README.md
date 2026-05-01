@@ -210,7 +210,7 @@ Latest tested conda package versions (CI):
 
 | Argument | Description |
 |----------|-------------|
-| `--fofn` | Tab-separated file-of-filenames with column `path` and optional columns `name` and `reads`. One assembly per row. |
+| `--fofn` | Tab-separated file-of-filenames with column `path` and optional columns `name` and `reads`. The header row is optional — without a header, columns are read positionally as `path`, `name`, `reads`. One assembly per row. |
 | `--assembly-dir` | Directory to scan for FASTA files (`.fasta`, `.fa`, `.fna`, `.fasta.gz`, `.fa.gz`, `.fna.gz`). Assembly names are derived from filenames. |
 | `--assembly-name` | Override the assembly name for the single-assembly (`-q`) case (default: derived from query filename stem). |
 

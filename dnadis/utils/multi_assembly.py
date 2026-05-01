@@ -45,9 +45,14 @@ def _strip_fasta_extension(name: str) -> str:
 def parse_fofn(fofn_path: Path) -> List[AssemblySpec]:
     """Parse a file-of-filenames TSV listing assemblies.
 
-    The TSV must have a header row.  Required column: ``path``.
-    Optional columns: ``name`` (default: filename stem), ``reads``
-    (default: None).
+    A header row is optional.  When present, ``path`` is required and
+    ``name`` / ``reads`` are optional, in any column order.  When absent,
+    columns are taken positionally: column 0 = path (required), column 1
+    = name (optional), column 2 = reads (optional).
+
+    A header is detected when the first non-blank, non-comment line's
+    first column is exactly ``path`` (case-insensitive).  Anything else
+    is treated as the first data row and the file is read headerless.
 
     Args:
         fofn_path: Path to the TSV file.
@@ -56,86 +61,96 @@ def parse_fofn(fofn_path: Path) -> List[AssemblySpec]:
         List of (assembly_path, name, reads_path) tuples.
 
     Raises:
-        ValueError: On missing columns, duplicate names, or missing files.
+        ValueError: On duplicate names or missing files.
     """
     fofn_path = Path(fofn_path).resolve()
     fofn_dir = fofn_path.parent
 
-    results: List[AssemblySpec] = []
-    seen_names: dict[str, int] = {}
-
+    # Read all data-bearing lines (skip blanks and comments) up front so
+    # we can decide whether the first one is a header.
+    raw_lines: List[Tuple[int, str]] = []
     with open(fofn_path) as fh:
-        header_line = fh.readline().strip()
-        if not header_line:
-            raise ValueError(f"FOFN file is empty: {fofn_path}")
-        columns = header_line.split("\t")
-        col_idx = {c.strip().lower(): i for i, c in enumerate(columns)}
+        for lineno, line in enumerate(fh, start=1):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            raw_lines.append((lineno, stripped))
 
-        if "path" not in col_idx:
-            raise ValueError(
-                f"FOFN must have a 'path' column in header. "
-                f"Found columns: {columns}"
-            )
+    if not raw_lines:
+        raise ValueError(f"FOFN file is empty: {fofn_path}")
 
+    first_cols = [c.strip() for c in raw_lines[0][1].split("\t")]
+    has_header = bool(first_cols) and first_cols[0].lower() == "path"
+
+    if has_header:
+        col_idx = {c.lower(): i for i, c in enumerate(first_cols)}
         path_idx = col_idx["path"]
         name_idx = col_idx.get("name")
         reads_idx = col_idx.get("reads")
+        data_rows = raw_lines[1:]
+    else:
+        # Headerless: positional columns.  name/reads are read when the
+        # row has enough columns and skipped otherwise.
+        path_idx = 0
+        name_idx = 1
+        reads_idx = 2
+        data_rows = raw_lines
 
-        for lineno, line in enumerate(fh, start=2):
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            fields = line.split("\t")
-            if len(fields) <= path_idx:
-                raise ValueError(
-                    f"FOFN line {lineno}: not enough columns "
-                    f"(expected >= {path_idx + 1}, got {len(fields)})"
-                )
+    results: List[AssemblySpec] = []
+    seen_names: dict[str, int] = {}
 
-            # Resolve assembly path (relative to FOFN directory)
-            raw_path = fields[path_idx].strip()
-            asm_path = Path(raw_path)
-            if not asm_path.is_absolute():
-                asm_path = (fofn_dir / asm_path).resolve()
-            else:
-                asm_path = asm_path.resolve()
-            if not asm_path.exists():
-                raise ValueError(f"FOFN line {lineno}: assembly not found: {asm_path}")
-            if not asm_path.is_file():
-                raise ValueError(f"FOFN line {lineno}: not a file: {asm_path}")
+    for lineno, line in data_rows:
+        fields = line.split("\t")
+        if len(fields) <= path_idx:
+            raise ValueError(
+                f"FOFN line {lineno}: not enough columns "
+                f"(expected >= {path_idx + 1}, got {len(fields)})"
+            )
 
-            # Name
-            if name_idx is not None and len(fields) > name_idx:
-                name = fields[name_idx].strip()
-            else:
-                name = ""
-            if not name:
-                name = _strip_fasta_extension(asm_path.name)
+        # Resolve assembly path (relative to FOFN directory)
+        raw_path = fields[path_idx].strip()
+        asm_path = Path(raw_path)
+        if not asm_path.is_absolute():
+            asm_path = (fofn_dir / asm_path).resolve()
+        else:
+            asm_path = asm_path.resolve()
+        if not asm_path.exists():
+            raise ValueError(f"FOFN line {lineno}: assembly not found: {asm_path}")
+        if not asm_path.is_file():
+            raise ValueError(f"FOFN line {lineno}: not a file: {asm_path}")
 
-            # Reads
-            reads_path: Optional[Path] = None
-            if reads_idx is not None and len(fields) > reads_idx:
-                reads_raw = fields[reads_idx].strip()
-                if reads_raw:
-                    reads_path = Path(reads_raw)
-                    if not reads_path.is_absolute():
-                        reads_path = (fofn_dir / reads_path).resolve()
-                    else:
-                        reads_path = reads_path.resolve()
-                    if not reads_path.exists():
-                        raise ValueError(
-                            f"FOFN line {lineno}: reads file not found: {reads_path}"
-                        )
+        # Name
+        if name_idx is not None and len(fields) > name_idx:
+            name = fields[name_idx].strip()
+        else:
+            name = ""
+        if not name:
+            name = _strip_fasta_extension(asm_path.name)
 
-            # Track duplicates
-            if name in seen_names:
-                raise ValueError(
-                    f"FOFN has duplicate assembly name '{name}' "
-                    f"(lines {seen_names[name]} and {lineno})"
-                )
-            seen_names[name] = lineno
+        # Reads
+        reads_path: Optional[Path] = None
+        if reads_idx is not None and len(fields) > reads_idx:
+            reads_raw = fields[reads_idx].strip()
+            if reads_raw:
+                reads_path = Path(reads_raw)
+                if not reads_path.is_absolute():
+                    reads_path = (fofn_dir / reads_path).resolve()
+                else:
+                    reads_path = reads_path.resolve()
+                if not reads_path.exists():
+                    raise ValueError(
+                        f"FOFN line {lineno}: reads file not found: {reads_path}"
+                    )
 
-            results.append((asm_path, name, reads_path))
+        # Track duplicates
+        if name in seen_names:
+            raise ValueError(
+                f"FOFN has duplicate assembly name '{name}' "
+                f"(lines {seen_names[name]} and {lineno})"
+            )
+        seen_names[name] = lineno
+
+        results.append((asm_path, name, reads_path))
 
     if not results:
         raise ValueError(f"FOFN contains no assembly entries: {fofn_path}")
