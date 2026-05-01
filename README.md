@@ -519,7 +519,7 @@ Each contig is assigned a confidence level (`high`, `medium`, or `low`) indicati
 | `--assign-min-frac` | 0.10 | Min synteny coverage of contig |
 | `--assign-min-ratio` | 1.25 | Min best/second score ratio |
 | `--min-span-frac` | 0.20 | Min span fraction of contig |
-| `--min-span-bp` | 50000 | Min absolute span in bp |
+| `--min-synteny-span` | 50000 | Min absolute synteny-block span in bp (also sets the minimum detectable rearrangement size) |
 
 **Protein mode specific:**
 

@@ -7,9 +7,10 @@ per contig from macro_block alignment evidence.  All detection is pure Python
 analysis of existing macro_block data — no external tools are required.
 
 Detection inherits the pipeline's existing macro_block minimum span
-(controlled by --min-span-bp, default 50 kb).  Any macro_block that survived
-chain parsing is already credible alignment evidence.  Confidence tiers
-describe trust in the biological interpretation, not the alignment quality.
+(controlled by --min-synteny-span, default 50 kb).  Any macro_block that
+survived chain parsing is already credible alignment evidence.  Confidence
+tiers describe trust in the biological interpretation, not the alignment
+quality.
 """
 from __future__ import annotations
 

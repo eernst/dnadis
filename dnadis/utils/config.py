@@ -103,7 +103,7 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
         "miniprot_min_genes": "miniprot_min_genes",
         "miniprot_min_segments": "miniprot_min_segments",
         "min_span_frac": "min_span_frac",
-        "min_span_bp": "min_span_bp",
+        "min_synteny_span": "min_synteny_span",
     },
     "thresholds_organelle": {
         "organelle_min_cov": "organelle_min_cov",

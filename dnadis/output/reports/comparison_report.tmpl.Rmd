@@ -59,6 +59,18 @@ pacman::p_load(ggridges)
 # ---------------------------------------------------------------------------
 fmt_pct <- function(x) ifelse(is.na(x), "\u2014", sprintf("%.1f%%", x * 100))
 
+# Render an assembly name as a relative <a> link to that assembly's individual
+# report.  The comparison report lives at {output_dir}/{cmp_name}.comparison_report.html
+# and assembly reports at {output_dir}/{name}/{name}.assembly_report.html, so the
+# href is just "{name}/{name}.assembly_report.html".
+asm_report_link <- function(name) {
+  s <- as.character(name)
+  enc <- vapply(s, URLencode, character(1), reserved = TRUE)
+  ifelse(is.na(s) | !nzchar(s), s,
+         sprintf('<a href="%s/%s.assembly_report.html">%s</a>',
+                 enc, enc, htmltools::htmlEscape(s)))
+}
+
 # Assembly color palette (one color per assembly)
 asm_pal <- c(oi[5], oi[1], oi[3], oi[6], oi[7], oi[4], oi[2], oi[8], oi[9])
 
@@ -403,6 +415,7 @@ clf_gt_df %>%
   { if (length(zero_mb) > 0) select(., -all_of(zero_mb)) else . } %>%
   gt() %>%
   fmt(columns = bar, fns = function(x) lapply(x, html)) %>%
+  fmt(columns = Assembly, fns = function(x) lapply(asm_report_link(x), html)) %>%
   fmt_number(columns = any_of(nonzero_mb), decimals = 1) %>%
   cols_label(.list = col_labels[c("bar", nonzero_mb)]) %>%
   cols_width(bar ~ px(220)) %>%
@@ -491,6 +504,7 @@ lineage_name <- comp_df$compleasm_lineage[!is.na(comp_df$compleasm_lineage) &
 busco_df %>%
   gt() %>%
   fmt(columns = c(chrs_bar, non_bar), fns = function(x) lapply(x, html)) %>%
+  fmt(columns = Assembly, fns = function(x) lapply(asm_report_link(x), html)) %>%
   fmt_number(columns = c(chrs_S, chrs_D, chrs_F, chrs_I, chrs_M,
                           non_S, non_D, non_F, non_I, non_M),
              decimals = 1) %>%
@@ -565,6 +579,7 @@ tbl <- comp_df %>%
 
 gt_obj <- tbl %>%
   gt() %>%
+  fmt(columns = Assembly, fns = function(x) lapply(asm_report_link(x), html)) %>%
   gt_theme() %>%
   tab_header(title = "Assembly Comparison Summary") %>%
   cols_align(align = "right", columns = where(is.numeric)) %>%
@@ -1136,6 +1151,7 @@ if (has_any_chrom) {
       select(ref_id, assembly, n_contigs, `Assigned (Mb)`, `Ref cov (%)`,
              `Identity (%)`, `Full-length`, `Both telo`) %>%
       gt(groupname_col = "ref_id") %>%
+      fmt(columns = assembly, fns = function(x) lapply(asm_report_link(x), html)) %>%
       gt_theme() %>%
       tab_header(title = title) %>%
       cols_label(
@@ -2722,6 +2738,7 @@ rdna_tbl %>%
          `Arrays (Chr)` = arrays_chr, `Arrays (Other)` = arrays_other) %>%
   gt() %>%
   fmt(columns = `Total (Mb)`, fns = function(x) lapply(x, html)) %>%
+  fmt(columns = Assembly, fns = function(x) lapply(asm_report_link(x), html)) %>%
   cols_align(align = "right", columns = c(Contigs, `Arrays (Chr)`, `Arrays (Other)`)) %>%
   cols_width(`Total (Mb)` ~ px(140)) %>%
   tab_style(
@@ -2850,6 +2867,7 @@ if (show_chrC_org) {
   org_gt_df %>%
     gt() %>%
     fmt(columns = c(chrC_size, chrM_size), fns = function(x) lapply(x, html)) %>%
+    fmt(columns = Assembly, fns = function(x) lapply(asm_report_link(x), html)) %>%
     cols_label(
       chrC_contig = "Contig", chrC_size = chrC_size_label,
       chrM_contig = "Contig", chrM_size = chrM_col_label
@@ -2868,6 +2886,7 @@ if (show_chrC_org) {
     select(Assembly, chrM_contig, chrM_size) %>%
     gt() %>%
     fmt(columns = chrM_size, fns = function(x) lapply(x, html)) %>%
+    fmt(columns = Assembly, fns = function(x) lapply(asm_report_link(x), html)) %>%
     cols_label(chrM_contig = "Contig", chrM_size = chrM_col_label) %>%
     cols_width(chrM_size ~ px(140)) %>%
     tab_spanner(label = "Mitochondria", columns = c(chrM_contig, chrM_size)) %>%
@@ -2909,6 +2928,7 @@ contam_tbl %>%
   select(Assembly, `Total (Mb)`, Contigs, Species) %>%
   gt() %>%
   fmt(columns = `Total (Mb)`, fns = function(x) lapply(x, html)) %>%
+  fmt(columns = Assembly, fns = function(x) lapply(asm_report_link(x), html)) %>%
   cols_align(align = "right", columns = c(Contigs, Species)) %>%
   cols_width(`Total (Mb)` ~ px(140)) %>%
   tab_style(
