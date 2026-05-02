@@ -162,6 +162,7 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
         "max_time_dist": "max_time_dist",
         "partition": "partition",
         "qos": "qos",
+        "keep_executor_cache": "keep_executor_cache",
     },
 }
 

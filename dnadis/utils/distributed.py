@@ -49,6 +49,7 @@ class ClusterConfig:
     max_time_minutes: int = 720
     partition: str = "cpuq"
     qos: str = ""
+    keep_cache: bool = False
 
 
 def clamp_resources(spec: ResourceSpec, config: ClusterConfig) -> ResourceSpec:
@@ -164,9 +165,16 @@ class _ExecutorlibWrapper:
     #: Maximum seconds to wait for executorlib to shut down before giving up.
     SHUTDOWN_TIMEOUT: int = 60
 
-    def __init__(self, executor: Any) -> None:
+    def __init__(
+        self,
+        executor: Any,
+        cache_dir: Path | None = None,
+        keep_cache: bool = False,
+    ) -> None:
         self._executor = executor
         self._submit_lock = __import__("threading").Lock()
+        self._cache_dir = cache_dir
+        self._keep_cache = keep_cache
 
     def submit(
         self,
@@ -197,12 +205,30 @@ class _ExecutorlibWrapper:
         )
         t.start()
         t.join(timeout=self.SHUTDOWN_TIMEOUT)
-        if t.is_alive():
+        clean_shutdown = not t.is_alive()
+        if not clean_shutdown:
             logger.warning(
                 f"executorlib shutdown did not complete within "
                 f"{self.SHUTDOWN_TIMEOUT}s — proceeding anyway.  "
                 f"This is a known issue with SlurmClusterExecutor cleanup."
             )
+
+        # Skip cache cleanup if shutdown hung — the daemon thread may still
+        # be writing to it.
+        if (
+            clean_shutdown
+            and not self._keep_cache
+            and self._cache_dir is not None
+            and self._cache_dir.is_dir()
+        ):
+            import shutil
+            try:
+                shutil.rmtree(self._cache_dir)
+                logger.info(f"Removed executor cache: {self._cache_dir}")
+            except OSError as e:
+                logger.warning(
+                    f"Could not remove executor cache {self._cache_dir}: {e}"
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -314,6 +340,11 @@ def create_executor(
     ``{output_dir}/.executorlib_cache_{pid}/`` so that (a) different analyses
     never collide and (b) each run gets a fresh cache — our own file-based
     caching via :func:`file_exists_and_valid` handles reuse decisions.
+
+    The cache directory is removed on a clean exit unless
+    ``config.keep_cache`` is set.  Cleanup is skipped when executorlib's
+    shutdown hangs past :attr:`_ExecutorlibWrapper.SHUTDOWN_TIMEOUT`,
+    because the daemon thread may still be writing to it.
     """
     if not config.enabled:
         return LocalExecutor()
@@ -335,19 +366,21 @@ def create_executor(
     # previous runs.  executorlib defaults to ./executorlib_cache/ which
     # causes collisions between analyses sharing a working directory and
     # returns cached "success" even when output files have been deleted.
+    cache_path: Path | None = None
     if output_dir is not None:
         import os
-        cache_dir = str(output_dir / f".executorlib_cache_{os.getpid()}")
-    else:
-        cache_dir = None  # fall back to executorlib default
+        cache_path = output_dir / f".executorlib_cache_{os.getpid()}"
+    cache_arg = str(cache_path) if cache_path is not None else None
 
     try:
-        inner = SlurmClusterExecutor(cache_directory=cache_dir)
+        inner = SlurmClusterExecutor(cache_directory=cache_arg)
         logger.info(
             "Distributed mode: executorlib SlurmClusterExecutor "
             f"(partition={config.partition}, qos={config.qos})"
         )
-        return _ExecutorlibWrapper(inner)
+        return _ExecutorlibWrapper(
+            inner, cache_dir=cache_path, keep_cache=config.keep_cache,
+        )
     except Exception as exc:
         logger.error(f"Failed to initialise SlurmClusterExecutor: {exc}")
         raise SystemExit(1) from exc
