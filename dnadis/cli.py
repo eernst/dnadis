@@ -1606,8 +1606,8 @@ def main():
     common.add_argument(
         "--assembly-sort-order",
         choices=["input", "identity"],
-        default="input",
-        help="Assembly ordering in comparison report: 'input' preserves FOFN/directory order (default), 'identity' sorts by descending median sequence identity vs reference",
+        default="identity",
+        help="Assembly ordering in comparison report: 'identity' sorts by descending median sequence identity vs reference (default), 'input' preserves FOFN/directory order",
     )
     common.add_argument("-v", "--verbose", action="store_true", help="Enable verbose (DEBUG level) logging")
     common.add_argument("--quiet", action="store_true", help="Suppress INFO messages (only show warnings and errors)")
