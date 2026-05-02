@@ -108,7 +108,9 @@ for (i in seq_along(asm_tsv_paths)) {
 all_summary_df <- if (length(per_asm_summaries) > 0) bind_rows(per_asm_summaries) else NULL
 has_per_asm <- !is.null(all_summary_df) && nrow(all_summary_df) > 0
 
-# Re-sort assemblies by identity if requested
+# Re-sort assemblies by identity if requested.  Apply the resulting order
+# uniformly to comp_df rows, asm_name_list, and asm_tsv_paths so that
+# tables and the riparian plot all follow the same order as bar plots.
 if (params$assembly_sort_order == "identity" && has_per_asm) {
   ident_sort <- all_summary_df %>%
     filter(classification == "chrom_assigned", !is.na(seq_identity_vs_ref)) %>%
@@ -118,6 +120,16 @@ if (params$assembly_sort_order == "identity" && has_per_asm) {
   asm_names <- c(intersect(ident_sort$assembly, asm_names),
                  setdiff(asm_names, ident_sort$assembly))
   asm_colors <- setNames(rep_len(asm_pal, n_asm), asm_names)
+
+  # Permute the paired asm_name_list / asm_tsv_paths vectors together so the
+  # i-th entry of each still corresponds to the same assembly.
+  perm <- match(asm_names, asm_name_list)
+  perm <- perm[!is.na(perm)]
+  asm_name_list <- asm_name_list[perm]
+  asm_tsv_paths <- asm_tsv_paths[perm]
+
+  # Reorder comp_df rows to match.
+  comp_df <- comp_df[match(asm_names, comp_df$assembly), , drop = FALSE]
 }
 
 has_any_chrom <- any(comp_df$n_chrom_assigned > 0, na.rm = TRUE)
@@ -802,7 +814,8 @@ if (has_any_chrom) {
     if (sg_i < n_sg_groups) x_cursor <- x_cursor + x_group_gap
   }
 
-  # Y-axis layout
+  # Y-axis layout.  scale_y_reverse() is applied below, so asm_names[1]
+  # (lowest y) ends up at the top of the panel.
   y_spacing <- 1.0
   y_positions <- tibble(assembly = asm_names,
                          y_center = seq_along(asm_names) * y_spacing)
@@ -1659,6 +1672,8 @@ build_synteny_plot <- function(sg) {
   n_chroms <- length(sg_chrom_nums)
 
   # --- Row names: Reference + assemblies ---
+  # scale_y_reverse() is applied later, so row_names[1] (Reference) lands
+  # at the top of the panel and assemblies follow below in asm_names order.
   row_names <- c("Reference", sg_asms)
   n_rows <- length(row_names)
   row_spacing <- 1
