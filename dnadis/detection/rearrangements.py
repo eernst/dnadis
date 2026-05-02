@@ -23,8 +23,28 @@ from dnadis.utils.logging_config import get_logger
 
 logger = get_logger("rearrangements")
 
-# Minimum off-target span (bp) to consider as translocation evidence.
+# Minimum off-target query span (bp) to consider as translocation evidence.
+# Span here is genomic (qend - qstart, merged across chains); in protein mode
+# this is inflated by introns, so it is paired with the union/gene/segment
+# gates below to require real aligned content.
 _MIN_OFF_TARGET_SPAN_BP = 50_000
+# Minimum aligned content (sum of chain union_bp) on the off-target reference.
+# Guards against single intron-spanning protein hits whose qspan_bp is large
+# but whose actual matched/aligned content is tiny.
+_MIN_OFF_TARGET_UNION_BP = 10_000
+# Minimum number of distinct genes (summed gene_count across off-target chains)
+# required to call a translocation.  Single- or two-gene off-target evidence
+# is too thin to support a structural-variant interpretation.
+_MIN_OFF_TARGET_GENES = 3
+# Minimum number of underlying segments (summed n_segments across off-target
+# chains).  Genuine arm-scale evidence produces many segments.
+_MIN_OFF_TARGET_SEGMENTS = 3
+# Whole-arm terminal test: off-target evidence must start (5') or end (3')
+# within this distance of the contig terminus.  Capped at an absolute distance
+# so long chromosome-scale contigs do not get a multi-Mb permissive window,
+# and floored at a small fraction so short contigs are not over-constrained.
+_TERMINAL_MAX_DISTANCE_BP = 100_000
+_TERMINAL_MAX_FRACTION = 0.02
 # Minimum span (bp) for high-confidence calls.
 _HIGH_CONFIDENCE_SPAN_BP = 1_000_000
 # Minimum fraction of contig covered by a second ref to call a fusion.
@@ -112,6 +132,8 @@ def _unpack_row(row: Tuple) -> dict:
         "ref_end": int(ref_end) if ref_end != "" else 0,
         "score": float(score),
         "identity": float(identity),
+        "n_segments": int(n_segments) if n_segments != "" else 0,
+        "gene_count_chain": int(gene_count_chain) if gene_count_chain != "" else 0,
     }
 
 
@@ -151,11 +173,26 @@ def _detect_translocations(
 ) -> List[RearrangementCall]:
     """Detect translocation events for a single contig.
 
-    For each off-target reference with total span >= threshold:
-    - Check if off-target blocks are at one end (whole-arm) vs interstitial
-    - Check for reciprocal pattern
+    For each off-target reference, evidence must clear four gates:
+    - genomic span (``_MIN_OFF_TARGET_SPAN_BP``)
+    - aligned content / union_bp (``_MIN_OFF_TARGET_UNION_BP``)
+    - gene count (``_MIN_OFF_TARGET_GENES``)
+    - segment count (``_MIN_OFF_TARGET_SEGMENTS``)
+
+    The aligned-content/gene/segment gates prevent spurious calls in protein
+    mode where a single intron-spanning gene can otherwise inflate qspan_bp
+    past the 50 kb genomic-span gate.
+
+    For evidence that clears the gates, classification is:
+    - whole-arm if blocks are tightly anchored to one contig terminus
+    - reciprocal if the partner contig shows reciprocal off-target evidence
+    - generic translocation otherwise
     """
     calls: List[RearrangementCall] = []
+
+    terminal_threshold = min(
+        _TERMINAL_MAX_DISTANCE_BP, int(contig_len * _TERMINAL_MAX_FRACTION)
+    )
 
     for ref_id, blocks in blocks_by_ref.items():
         if ref_id == assigned_ref:
@@ -165,14 +202,27 @@ def _detect_translocations(
         if total_span < _MIN_OFF_TARGET_SPAN_BP:
             continue
 
+        total_union_bp = sum(b["union_bp"] for b in blocks)
+        total_genes = sum(b["gene_count_chain"] for b in blocks)
+        total_segments = sum(b["n_segments"] for b in blocks)
+        if (
+            total_union_bp < _MIN_OFF_TARGET_UNION_BP
+            or total_genes < _MIN_OFF_TARGET_GENES
+            or total_segments < _MIN_OFF_TARGET_SEGMENTS
+        ):
+            continue
+
         q_min, q_max, r_min, r_max = _block_bounds(blocks)
         strand = blocks[0]["strand"]
 
         is_reciprocal = ref_id in reciprocal_partners
 
-        # Check if it's at one end of the contig (whole-arm)
-        at_start = q_min < contig_len * 0.10
-        at_end = q_max > contig_len * 0.90
+        # Whole-arm test: leftmost (or rightmost) off-target block must reach
+        # within terminal_threshold bp of the contig terminus, exclusively at
+        # one end (XOR).  Looser thresholds let interstitial blocks deep
+        # inside the contig be miscalled as terminal.
+        at_start = q_min < terminal_threshold
+        at_end = (contig_len - q_max) < terminal_threshold
         is_terminal = (at_start or at_end) and not (at_start and at_end)
 
         if is_reciprocal:
