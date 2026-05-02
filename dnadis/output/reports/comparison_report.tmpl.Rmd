@@ -814,7 +814,8 @@ if (has_any_chrom) {
     if (sg_i < n_sg_groups) x_cursor <- x_cursor + x_group_gap
   }
 
-  # Y-axis layout
+  # Y-axis layout.  scale_y_reverse() is applied below, so asm_names[1]
+  # (lowest y) ends up at the top of the panel.
   y_spacing <- 1.0
   y_positions <- tibble(assembly = asm_names,
                          y_center = seq_along(asm_names) * y_spacing)
@@ -1671,6 +1672,8 @@ build_synteny_plot <- function(sg) {
   n_chroms <- length(sg_chrom_nums)
 
   # --- Row names: Reference + assemblies ---
+  # scale_y_reverse() is applied later, so row_names[1] (Reference) lands
+  # at the top of the panel and assemblies follow below in asm_names order.
   row_names <- c("Reference", sg_asms)
   n_rows <- length(row_names)
   row_spacing <- 1

@@ -2130,18 +2130,23 @@ def main():
                 )
 
             with _ThreadPoolExecutor(max_workers=n_total) as pool:
+                # Map future → (FOFN index, name) so results can be ordered
+                # by input order rather than non-deterministic completion order.
                 futs = {
-                    pool.submit(_run_one, (i, asm)): asm[1]
+                    pool.submit(_run_one, (i, asm)): (i, asm[1])
                     for i, asm in enumerate(assemblies)
                 }
+                indexed_results: list[tuple[int, "AssemblyResult"]] = []
                 for fut in _as_completed(futs):
-                    name = futs[fut]
+                    idx, name = futs[fut]
                     try:
-                        results.append(fut.result())
+                        indexed_results.append((idx, fut.result()))
                         n_ok += 1
                     except Exception as e:
                         logger.error(f"Assembly '{name}' failed: {e}\n{traceback.format_exc()}")
                         failures.append((name, str(e)))
+                indexed_results.sort(key=lambda x: x[0])
+                results.extend(r for _, r in indexed_results)
         else:
             for i, (asm_path, asm_name, asm_reads) in enumerate(assemblies):
                 logger.phase(f"=== Assembly: {asm_name} ({i + 1}/{n_total}) ===")
