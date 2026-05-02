@@ -266,6 +266,66 @@ def test_off_target_at_3prime_terminus_is_whole_arm():
     assert wa and "3'" in wa[0].evidence
 
 
+def test_nucleotide_mode_skips_gene_and_segment_gates():
+    """Nucleotide mode never has gene IDs (gene_count=0) and a perfect
+    full-length alignment can produce a single segment.  Gene/segment gates
+    must be skipped — only span and union_bp gates apply.
+    """
+    contig_len = 16_000_000
+    rows = [
+        (
+            "ctg1", contig_len, "chrA", "chrA", "NA", "+", 1,
+            0, 14_000_000, 14_000_000, 4_000_000,
+            4_000_000, 4_000_000, "0.990000", 4_000_000.0,
+            1, 0,  # n_segments=1, gene_count=0 — typical nucleotide mode
+            0, 14_000_000,
+        ),
+        (
+            "ctg1", contig_len, "chrB", "chrB", "NA", "+", 1,
+            14_500_000, 15_990_000, 1_490_000, 600_000,
+            600_000, 600_000, "0.990000", 600_000.0,
+            1, 0,  # one segment, zero genes
+            0, 1_490_000,
+        ),
+    ]
+    calls = detect_rearrangements(
+        macro_block_rows=rows,
+        best_ref={"ctg1": "chrA"},
+        ref_lengths={"chrA": 16_000_000, "chrB": 15_000_000},
+        query_lengths={"ctg1": contig_len},
+        synteny_mode="nucleotide",
+    )
+    chrB_calls = [c for c in calls if c.partner_ref_id == "chrB"]
+    assert chrB_calls
+    assert any(c.rearrangement_type == "whole_arm_translocation" for c in chrB_calls)
+
+
+def test_nucleotide_mode_still_enforces_union_bp_gate():
+    """In nucleotide mode the union_bp gate must still reject thin evidence."""
+    contig_len = 10_000_000
+    rows = [
+        _macro_row(
+            "ctg1", contig_len, "chrA",
+            qstart=0, qend=8_000_000,
+            union_bp=2_000_000, n_segments=10, gene_count=0,
+        ),
+        # 60 kb genomic span, only 2 kb aligned — too thin even in nt mode.
+        _macro_row(
+            "ctg1", contig_len, "chrB",
+            qstart=4_000_000, qend=4_060_000,
+            union_bp=2_000, n_segments=1, gene_count=0,
+        ),
+    ]
+    calls = detect_rearrangements(
+        macro_block_rows=rows,
+        best_ref={"ctg1": "chrA"},
+        ref_lengths={"chrA": 10_000_000, "chrB": 10_000_000},
+        query_lengths={"ctg1": contig_len},
+        synteny_mode="nucleotide",
+    )
+    assert all(c.partner_ref_id != "chrB" for c in calls)
+
+
 def test_off_target_spanning_both_ends_not_terminal():
     """Off-target evidence touching both ends should not be 'terminal' (XOR)."""
     contig_len = 16_000_000

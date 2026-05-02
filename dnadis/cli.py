@@ -1110,6 +1110,7 @@ def run_assembly(
         ref_lengths=ref_lengths,
         query_lengths=qry_lengths,
         classifications=classifications,
+        synteny_mode=args.synteny_mode,
     )
     rearrangements_tsv: Optional[Path] = None
     if rearrangement_calls:

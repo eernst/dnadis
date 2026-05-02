@@ -170,18 +170,30 @@ def _detect_translocations(
     assigned_ref: str,
     blocks_by_ref: Dict[str, List[dict]],
     reciprocal_partners: Set[str],
+    synteny_mode: str = "protein",
 ) -> List[RearrangementCall]:
     """Detect translocation events for a single contig.
 
-    For each off-target reference, evidence must clear four gates:
+    For each off-target reference, evidence must clear:
     - genomic span (``_MIN_OFF_TARGET_SPAN_BP``)
     - aligned content / union_bp (``_MIN_OFF_TARGET_UNION_BP``)
-    - gene count (``_MIN_OFF_TARGET_GENES``)
-    - segment count (``_MIN_OFF_TARGET_SEGMENTS``)
 
-    The aligned-content/gene/segment gates prevent spurious calls in protein
-    mode where a single intron-spanning gene can otherwise inflate qspan_bp
-    past the 50 kb genomic-span gate.
+    In protein mode, two additional gates apply:
+    - gene count (``_MIN_OFF_TARGET_GENES``) — single- or two-gene off-target
+      evidence is too thin to support a structural-variant interpretation.
+    - segment count (``_MIN_OFF_TARGET_SEGMENTS``) — guards against single
+      intron-spanning protein hits whose qspan_bp is large but whose actual
+      matched content is tiny.
+
+    These gates are skipped in nucleotide mode.  Nucleotide-mode
+    macro-blocks come from minimap2 PAF, which carries no gene IDs
+    (chain_parsing sets ``gene_id=None`` for every block), so
+    ``gene_count_chain`` is always 0 even when ``--ref-gff3`` is supplied
+    (the GFF3 is used downstream for ref-side gene density only).
+    Segment counts are also unreliable in nucleotide mode because a
+    single perfect alignment can produce just one segment.  The
+    ``union_bp`` gate alone provides strong evidence in nucleotide mode
+    (10 kb of actual aligned sequence).
 
     For evidence that clears the gates, classification is:
     - whole-arm if blocks are tightly anchored to one contig terminus
@@ -193,6 +205,7 @@ def _detect_translocations(
     terminal_threshold = min(
         _TERMINAL_MAX_DISTANCE_BP, int(contig_len * _TERMINAL_MAX_FRACTION)
     )
+    apply_gene_segment_gates = synteny_mode == "protein"
 
     for ref_id, blocks in blocks_by_ref.items():
         if ref_id == assigned_ref:
@@ -203,14 +216,17 @@ def _detect_translocations(
             continue
 
         total_union_bp = sum(b["union_bp"] for b in blocks)
-        total_genes = sum(b["gene_count_chain"] for b in blocks)
-        total_segments = sum(b["n_segments"] for b in blocks)
-        if (
-            total_union_bp < _MIN_OFF_TARGET_UNION_BP
-            or total_genes < _MIN_OFF_TARGET_GENES
-            or total_segments < _MIN_OFF_TARGET_SEGMENTS
-        ):
+        if total_union_bp < _MIN_OFF_TARGET_UNION_BP:
             continue
+
+        if apply_gene_segment_gates:
+            total_genes = sum(b["gene_count_chain"] for b in blocks)
+            total_segments = sum(b["n_segments"] for b in blocks)
+            if (
+                total_genes < _MIN_OFF_TARGET_GENES
+                or total_segments < _MIN_OFF_TARGET_SEGMENTS
+            ):
+                continue
 
         q_min, q_max, r_min, r_max = _block_bounds(blocks)
         strand = blocks[0]["strand"]
@@ -484,6 +500,7 @@ def detect_rearrangements(
     ref_lengths: Dict[str, int],
     query_lengths: Dict[str, int],
     classifications: Optional[List] = None,
+    synteny_mode: str = "protein",
 ) -> List[RearrangementCall]:
     """Detect structural rearrangements from macro_block evidence.
 
@@ -499,6 +516,10 @@ def detect_rearrangements(
             map renamed contig names back to originals.  When provided, the
             ``contig`` field in returned calls uses the renamed name and
             ``original_name`` is set from the classification.
+        synteny_mode: ``"protein"`` or ``"nucleotide"``.  Controls whether
+            gene-count and segment-count off-target gates apply (protein only,
+            since nucleotide mode lacks gene IDs and a single full-length
+            alignment can produce just one segment).
 
     Returns:
         List of RearrangementCall instances sorted by contig then query_start.
@@ -581,6 +602,7 @@ def detect_rearrangements(
         all_calls.extend(_detect_translocations(
             contig, contig_len, assigned, ref_blocks,
             reciprocal_partners.get(contig, set()),
+            synteny_mode=synteny_mode,
         ))
 
         # Inversion detection (on-target blocks only)
