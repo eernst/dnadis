@@ -2171,17 +2171,31 @@ def main():
                     failures.append((asm_name, str(e)))
 
         # If the user asked for identity ordering in the comparison report,
-        # sort `results` by mean_identity (descending) here so that
-        # FOFN-adjacent pairs computed below match the identity-adjacent
-        # rows the riparian plot draws ribbons between.  Without this, the
-        # report submits e.g. "lm9252_vs_lm7210" but the riparian (with
-        # lm7210 on top) looks up "lm7210\x01lm9252" — different key, no
-        # ribbons.  Assemblies missing mean_identity are pushed to the end.
+        # sort `results` by the same key the report uses (median of
+        # seq_identity_vs_ref over chrom_assigned contigs, descending) so
+        # that FOFN-adjacent pairs computed below match the identity-
+        # adjacent rows the riparian plot draws ribbons between.  Using the
+        # mean instead of the median can produce a different order for
+        # closely-ranked assemblies (the mean is sensitive to outlier
+        # contigs), causing the riparian to look up pair keys that were
+        # never submitted.  Assemblies with no chrom_assigned identities
+        # are pushed to the end.
         if args.assembly_sort_order == "identity" and len(results) >= 2:
+            from statistics import median as _stats_median
+
+            def _median_chrom_identity(r) -> Optional[float]:
+                vals = [
+                    c.seq_identity_vs_ref for c in r.classifications
+                    if c.classification == "chrom_assigned"
+                    and c.seq_identity_vs_ref is not None
+                ]
+                return _stats_median(vals) if vals else None
+
+            sort_keys = {id(r): _median_chrom_identity(r) for r in results}
             results.sort(
                 key=lambda r: (
-                    r.mean_identity is None,
-                    -(r.mean_identity if r.mean_identity is not None else 0.0),
+                    sort_keys[id(r)] is None,
+                    -(sort_keys[id(r)] if sort_keys[id(r)] is not None else 0.0),
                 )
             )
 
