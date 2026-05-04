@@ -2170,15 +2170,28 @@ def main():
                     logger.error(f"Assembly '{asm_name}' failed: {e}")
                     failures.append((asm_name, str(e)))
 
-        # Pairwise assembly-vs-assembly synteny via minimap2 on each pair's
-        # chrs.fasta.  Runs regardless of --synteny-mode: even when the main
-        # ref-vs-query phase used miniprot (protein mode), nucleotide
-        # alignment between query assemblies is still meaningful for closely
-        # related genomes and supplies the asm-vs-asm ribbons in the
-        # comparison report's riparian plot.  If divergence is too high,
-        # blocks fail the min_span gate and ribbons stay sparse — graceful
-        # degradation, no error.  Runs inside executor context because it
-        # submits SLURM jobs.
+        # If the user asked for identity ordering in the comparison report,
+        # sort `results` by mean_identity (descending) here so that
+        # FOFN-adjacent pairs computed below match the identity-adjacent
+        # rows the riparian plot draws ribbons between.  Without this, the
+        # report submits e.g. "lm9252_vs_lm7210" but the riparian (with
+        # lm7210 on top) looks up "lm7210\x01lm9252" — different key, no
+        # ribbons.  Assemblies missing mean_identity are pushed to the end.
+        if args.assembly_sort_order == "identity" and len(results) >= 2:
+            results.sort(
+                key=lambda r: (
+                    r.mean_identity is None,
+                    -(r.mean_identity if r.mean_identity is not None else 0.0),
+                )
+            )
+
+        # Pairwise assembly-vs-assembly synteny via minimap2 (nucleotide
+        # mode) or miniprot-derived shared-protein anchors (protein mode)
+        # on each pair's chrs.fasta.  Runs regardless of --synteny-mode:
+        # nucleotide alignment between divergent assemblies degrades
+        # gracefully (sparse ribbons) and protein-mode pairwise reuses the
+        # shared-protein-anchor philosophy of the per-assembly phase.
+        # Runs inside executor context because it submits SLURM jobs.
         if n_total > 1 and results and len(results) >= 2:
             from dnadis.alignment.pairwise import compute_pairwise_synteny
             from dnadis.utils.resource_estimation import estimate_pairwise_resources
