@@ -156,6 +156,101 @@ class TestComputePairwiseSynteny:
         assert result.exists()
 
 
+class TestModeAwareCache:
+    """Tests for cache validation across synteny_mode changes."""
+
+    def _make_pair(self, tmp_path):
+        left_fasta = tmp_path / "left" / "left.chrs.fasta"
+        right_fasta = tmp_path / "right" / "right.chrs.fasta"
+        left_fasta.parent.mkdir(parents=True)
+        right_fasta.parent.mkdir(parents=True)
+        left_fasta.write_text(">chr1\nACGT\n")
+        right_fasta.write_text(">chr1\nACGT\n")
+        pair_prefix = tmp_path / "pairwise" / "left_vs_right"
+        pair_prefix.parent.mkdir(parents=True)
+        macro_tsv = Path(str(pair_prefix) + ".macro_blocks.tsv")
+        macro_tsv.write_text("contig\tcontig_len\tref_id\n")
+        return left_fasta, right_fasta, pair_prefix, macro_tsv
+
+    def test_protein_mode_invalidates_nucleotide_cache(self, tmp_path):
+        """When the cached TSV came from minimap2 (.paf.gz present, no
+        .left.miniprot.paf.gz), a protein-mode rerun must invalidate the
+        cache instead of reusing it."""
+        left_fasta, right_fasta, pair_prefix, macro_tsv = self._make_pair(tmp_path)
+        # Stamp the prior nucleotide intermediate.
+        Path(str(pair_prefix) + ".paf.gz").write_bytes(b"stub")
+
+        # No proteins_faa → protein dispatch returns None after invalidation.
+        result = compute_pairwise_synteny(
+            left_fasta=left_fasta,
+            right_fasta=right_fasta,
+            left_name="left",
+            right_name="right",
+            outprefix=pair_prefix,
+            threads=1,
+            synteny_mode="protein",
+            proteins_faa=None,
+            **{k: v for k, v in _CHAIN_KWARGS.items() if k != "preset"},
+            preset=_CHAIN_KWARGS["preset"],
+        )
+        # Protein dispatch returned None due to missing proteins_faa, but
+        # the stale TSV must have been removed first.
+        assert result is None
+        assert not macro_tsv.exists()
+
+    def test_nucleotide_mode_invalidates_protein_cache(self, tmp_path):
+        """A protein-mode cache must be invalidated when running in
+        nucleotide mode.  Verified via a sentinel string in the cached
+        TSV — after invalidation the file is either deleted or rewritten,
+        but the sentinel must not survive.
+        """
+        left_fasta, right_fasta, pair_prefix, macro_tsv = self._make_pair(tmp_path)
+        sentinel = "STALE_PROTEIN_CACHE_DO_NOT_REUSE"
+        macro_tsv.write_text(f"{sentinel}\n")
+        # Stamp prior protein intermediates only.
+        Path(str(pair_prefix) + ".left.miniprot.paf.gz").write_bytes(b"stub")
+        Path(str(pair_prefix) + ".right.miniprot.paf.gz").write_bytes(b"stub")
+
+        try:
+            compute_pairwise_synteny(
+                left_fasta=left_fasta,
+                right_fasta=right_fasta,
+                left_name="left",
+                right_name="right",
+                outprefix=pair_prefix,
+                threads=1,
+                synteny_mode="nucleotide",
+                **_CHAIN_KWARGS,
+            )
+        except Exception:
+            pass
+        # Sentinel content must not survive (file deleted or rewritten).
+        if macro_tsv.exists():
+            assert sentinel not in macro_tsv.read_text()
+
+    def test_protein_cache_reused_when_intermediates_present(self, tmp_path):
+        """A protein-mode cache should be reused when both miniprot PAFs
+        are present alongside the macro_blocks TSV."""
+        left_fasta, right_fasta, pair_prefix, macro_tsv = self._make_pair(tmp_path)
+        Path(str(pair_prefix) + ".left.miniprot.paf.gz").write_bytes(b"x")
+        Path(str(pair_prefix) + ".right.miniprot.paf.gz").write_bytes(b"x")
+
+        result = compute_pairwise_synteny(
+            left_fasta=left_fasta,
+            right_fasta=right_fasta,
+            left_name="left",
+            right_name="right",
+            outprefix=pair_prefix,
+            threads=1,
+            synteny_mode="protein",
+            proteins_faa=Path("/dev/null"),  # not consulted on cache hit
+            **{k: v for k, v in _CHAIN_KWARGS.items() if k != "preset"},
+            preset=_CHAIN_KWARGS["preset"],
+        )
+        assert result == macro_tsv
+        assert macro_tsv.exists()
+
+
 class TestProteinPairwise:
     """Tests for protein-mode dispatch in compute_pairwise_synteny()."""
 

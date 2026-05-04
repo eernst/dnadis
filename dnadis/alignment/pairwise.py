@@ -115,8 +115,36 @@ def compute_pairwise_synteny(
     outprefix.parent.mkdir(parents=True, exist_ok=True)
     macro_blocks_tsv = Path(str(outprefix) + ".macro_blocks.tsv")
     if file_exists_and_valid(macro_blocks_tsv):
-        logger.info(f"Pairwise macro_blocks exists, reusing: {macro_blocks_tsv}")
-        return macro_blocks_tsv
+        # Mode-aware cache validation.  Only invalidate when the
+        # intermediate file from the *other* synteny_mode is present and the
+        # one from the requested mode is missing — that's positive evidence
+        # the cached TSV came from the wrong mode.  If neither intermediate
+        # is present (e.g. a hand-staged TSV), preserve the prior behavior
+        # and reuse the cache.
+        nuc_paf = Path(str(outprefix) + ".paf.gz")
+        prot_left = Path(str(outprefix) + ".left.miniprot.paf.gz")
+        prot_right = Path(str(outprefix) + ".right.miniprot.paf.gz")
+        nuc_intermediate = file_exists_and_valid(nuc_paf)
+        prot_intermediate = (
+            file_exists_and_valid(prot_left)
+            and file_exists_and_valid(prot_right)
+        )
+
+        if synteny_mode == "protein":
+            wrong_mode_cache = nuc_intermediate and not prot_intermediate
+        else:
+            wrong_mode_cache = prot_intermediate and not nuc_intermediate
+
+        if wrong_mode_cache:
+            logger.info(
+                f"Pairwise {left_name} vs {right_name}: cached macro_blocks "
+                f"was produced by a different --synteny-mode; recomputing "
+                f"for {synteny_mode} mode"
+            )
+            macro_blocks_tsv.unlink()
+        else:
+            logger.info(f"Pairwise macro_blocks exists, reusing: {macro_blocks_tsv}")
+            return macro_blocks_tsv
 
     if synteny_mode == "protein":
         if proteins_faa is None or not file_exists_and_valid(proteins_faa):
