@@ -91,9 +91,22 @@ n_asm <- nrow(comp_df)
 asm_names <- comp_df$assembly
 asm_colors <- setNames(rep_len(asm_pal, n_asm), asm_names)
 
-# Load per-assembly summary TSVs
+# Load per-assembly summary TSVs.  These six path vectors are paired with
+# asm_name_list by index — i.e. asm_name_list[i] is the assembly that
+# produced asm_tsv_paths[i], per_asm_macro_paths[i], etc.  Declared
+# together here so the identity-sort permutation below can apply uniformly.
 asm_tsv_paths <- strsplit(params$per_assembly_summary_tsvs, ";")[[1]]
 asm_name_list <- strsplit(params$assembly_names, ";")[[1]]
+per_asm_macro_paths <- if (nzchar(params$per_assembly_macro_blocks_tsvs))
+  strsplit(params$per_assembly_macro_blocks_tsvs, ";")[[1]] else character(0)
+rdna_arrays_paths <- if (nzchar(params$per_assembly_rdna_arrays_tsvs))
+  strsplit(params$per_assembly_rdna_arrays_tsvs, ";")[[1]] else character(0)
+rearr_paths <- if (nzchar(params$per_assembly_rearrangements_tsvs))
+  strsplit(params$per_assembly_rearrangements_tsvs, ";")[[1]] else character(0)
+contam_tsv_paths <- if (nzchar(params$per_assembly_contaminants_tsvs))
+  strsplit(params$per_assembly_contaminants_tsvs, ";")[[1]] else character(0)
+agp_paths <- if (nzchar(params$per_assembly_agp_tsvs))
+  strsplit(params$per_assembly_agp_tsvs, ";")[[1]] else character(0)
 
 per_asm_summaries <- list()
 for (i in seq_along(asm_tsv_paths)) {
@@ -109,8 +122,9 @@ all_summary_df <- if (length(per_asm_summaries) > 0) bind_rows(per_asm_summaries
 has_per_asm <- !is.null(all_summary_df) && nrow(all_summary_df) > 0
 
 # Re-sort assemblies by identity if requested.  Apply the resulting order
-# uniformly to comp_df rows, asm_name_list, and asm_tsv_paths so that
-# tables and the riparian plot all follow the same order as bar plots.
+# uniformly to comp_df rows and every per-assembly path vector so tables,
+# the riparian plot, and per-assembly tag-by-index loops below all follow
+# the same order as the bar plots.
 if (params$assembly_sort_order == "identity" && has_per_asm) {
   ident_sort <- all_summary_df %>%
     filter(classification == "chrom_assigned", !is.na(seq_identity_vs_ref)) %>%
@@ -121,12 +135,21 @@ if (params$assembly_sort_order == "identity" && has_per_asm) {
                  setdiff(asm_names, ident_sort$assembly))
   asm_colors <- setNames(rep_len(asm_pal, n_asm), asm_names)
 
-  # Permute the paired asm_name_list / asm_tsv_paths vectors together so the
-  # i-th entry of each still corresponds to the same assembly.
+  # Permute every paired-by-index vector together.  Helper guards against
+  # length mismatches (some optional path vectors may be shorter than
+  # asm_name_list when no per-assembly file was emitted).
   perm <- match(asm_names, asm_name_list)
   perm <- perm[!is.na(perm)]
-  asm_name_list <- asm_name_list[perm]
-  asm_tsv_paths <- asm_tsv_paths[perm]
+  permute_if_paired <- function(v) {
+    if (length(v) == length(asm_name_list)) v[perm] else v
+  }
+  asm_name_list      <- asm_name_list[perm]
+  asm_tsv_paths      <- permute_if_paired(asm_tsv_paths)
+  per_asm_macro_paths <- permute_if_paired(per_asm_macro_paths)
+  rdna_arrays_paths  <- permute_if_paired(rdna_arrays_paths)
+  rearr_paths        <- permute_if_paired(rearr_paths)
+  contam_tsv_paths   <- permute_if_paired(contam_tsv_paths)
+  agp_paths          <- permute_if_paired(agp_paths)
 
   # Reorder comp_df rows to match.
   comp_df <- comp_df[match(asm_names, comp_df$assembly), , drop = FALSE]
@@ -143,10 +166,12 @@ pdf_classbar <- paste0(params$out_prefix, ".classification_comparison.pdf")
 pdf_heatmap  <- paste0(params$out_prefix, ".chromosome_completeness.pdf")
 
 # ---------------------------------------------------------------------------
-# Load per-assembly macro_blocks and pairwise macro_blocks for synteny plot
+# Load per-assembly macro_blocks and pairwise macro_blocks for synteny plot.
+# per_asm_macro_paths is declared (and identity-permuted, if requested)
+# above with the other per-assembly path vectors.  pairwise paths are
+# tagged from the pair name embedded in the filename, not from
+# asm_name_list, so they are not permuted by index.
 # ---------------------------------------------------------------------------
-per_asm_macro_paths <- if (nzchar(params$per_assembly_macro_blocks_tsvs))
-  strsplit(params$per_assembly_macro_blocks_tsvs, ";")[[1]] else character(0)
 pairwise_macro_paths <- if (nzchar(params$pairwise_macro_blocks_tsvs))
   strsplit(params$pairwise_macro_blocks_tsvs, ";")[[1]] else character(0)
 pairwise_pair_names <- if (nzchar(params$pairwise_names))
@@ -196,11 +221,8 @@ pairwise_macro_df <- if (length(pairwise_macro_list) > 0) bind_rows(pairwise_mac
 has_synteny_data <- !is.null(per_asm_macro_df) && nrow(per_asm_macro_df) > 0
 
 # ---------------------------------------------------------------------------
-# Load per-assembly rDNA arrays TSVs
+# Load per-assembly rDNA arrays TSVs (rdna_arrays_paths declared above)
 # ---------------------------------------------------------------------------
-rdna_arrays_paths <- if (nzchar(params$per_assembly_rdna_arrays_tsvs))
-  strsplit(params$per_assembly_rdna_arrays_tsvs, ";")[[1]] else character(0)
-
 rdna_arrays_list <- list()
 for (i in seq_along(rdna_arrays_paths)) {
   p <- rdna_arrays_paths[i]
@@ -216,11 +238,8 @@ all_rdna_arrays_df <- if (length(rdna_arrays_list) > 0) bind_rows(rdna_arrays_li
 has_rdna_arrays <- !is.null(all_rdna_arrays_df) && nrow(all_rdna_arrays_df) > 0
 
 # ---------------------------------------------------------------------------
-# Load per-assembly rearrangement TSVs (for chromosome summary section)
+# Load per-assembly rearrangement TSVs (rearr_paths declared above)
 # ---------------------------------------------------------------------------
-rearr_paths <- if (nzchar(params$per_assembly_rearrangements_tsvs))
-  strsplit(params$per_assembly_rearrangements_tsvs, ";")[[1]] else character(0)
-
 rearr_list <- list()
 for (i in seq_along(rearr_paths)) {
   p <- rearr_paths[i]
@@ -236,11 +255,8 @@ all_rearr_df <- if (length(rearr_list) > 0) bind_rows(rearr_list) else NULL
 has_rearrangements <- !is.null(all_rearr_df) && nrow(all_rearr_df) > 0
 
 # ---------------------------------------------------------------------------
-# Load per-assembly contaminants TSVs (for Top Taxa section)
+# Load per-assembly contaminants TSVs (contam_tsv_paths declared above)
 # ---------------------------------------------------------------------------
-contam_tsv_paths <- if (nzchar(params$per_assembly_contaminants_tsvs))
-  strsplit(params$per_assembly_contaminants_tsvs, ";")[[1]] else character(0)
-
 contam_detail_list <- list()
 for (i in seq_along(contam_tsv_paths)) {
   p <- contam_tsv_paths[i]
@@ -256,11 +272,8 @@ all_contam_detail_df <- if (length(contam_detail_list) > 0) bind_rows(contam_det
 has_contam_detail <- !is.null(all_contam_detail_df) && nrow(all_contam_detail_df) > 0
 
 # ---------------------------------------------------------------------------
-# Load per-assembly AGP files (for scaffold join indicators in synteny plot)
+# Load per-assembly AGP files (agp_paths declared above)
 # ---------------------------------------------------------------------------
-agp_paths <- if (nzchar(params$per_assembly_agp_tsvs))
-  strsplit(params$per_assembly_agp_tsvs, ";")[[1]] else character(0)
-
 # Parse AGP into a single dataframe with scaffold component and gap info
 agp_list <- list()
 for (i in seq_along(agp_paths)) {
