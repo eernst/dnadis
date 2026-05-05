@@ -37,6 +37,7 @@ from dnadis.models import Block, Chain, ChainEvidenceResult
 from dnadis.utils.io_utils import merge_intervals, open_maybe_gzip
 from dnadis.utils.logging_config import get_logger
 from dnadis.utils.reference_utils import (
+    is_nuclear_chromosome,
     normalize_ref_id,
     paf_tag_value,
     split_chrom_subgenome,
@@ -891,14 +892,29 @@ def _chains_to_evidence_and_segments(
     # This normalises for reference chromosome size, preventing bias toward
     # larger chromosomes in translocation cases.  Falls back to raw score
     # when reference lengths are unavailable (protein mode).
+    #
+    # Exclude organelle references (chrC/chrM) from best_ref scoring: their
+    # short reference length (often <300 kb) inflates span_frac so that even
+    # a small NUMT/NUPT-like alignment outscores legitimate megabase-scale
+    # alignments to nuclear chromosomes.  Real organelle contigs are detected
+    # separately via the BLAST organelle pipeline, so dropping them here only
+    # affects nuclear contigs that would otherwise be misassigned.
     qr_span_frac: dict[tuple[str, str], float] = {}
     if rlens_from_paf:
         for (q, ref_id), ref_span in qr_ref_span_bp.items():
+            if not is_nuclear_chromosome(ref_id):
+                continue
             rlen = rlens_from_paf.get(ref_id, 0)
             if rlen > 0:
                 qr_span_frac[(q, ref_id)] = ref_span / rlen
 
-    scoring = qr_span_frac if qr_span_frac else qr_ref_score
+    if qr_span_frac:
+        scoring = qr_span_frac
+    else:
+        scoring = {
+            k: v for k, v in qr_ref_score.items()
+            if is_nuclear_chromosome(k[1])
+        }
 
     best_ref = defaultdict(str)
     best_score = defaultdict(float)
