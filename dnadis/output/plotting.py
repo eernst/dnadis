@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import functools
 import subprocess
+import sys
+from collections import deque
 from pathlib import Path
 from typing import List, Optional
 
@@ -11,6 +13,65 @@ from dnadis import __version__ as _DNADIS_VERSION
 from dnadis.utils.logging_config import get_logger
 
 logger = get_logger("plotting")
+
+
+def _render_rmd(report_rmd: Path, report_html: Path, kind: str) -> bool:
+    """Render an Rmd to HTML, streaming R output to dnadis stderr.
+
+    R's stdout/stderr are streamed line-by-line to ``sys.stderr`` (each
+    line tagged ``[R]``) so the user can watch the render in real time and
+    so the dnadis stderr log captures any pandoc/knitr warnings.  The
+    final ~50 lines are also retained so they can be surfaced via the
+    project logger if the render fails (non-zero exit) or produces no
+    output HTML.
+
+    Args:
+        report_rmd: Path to the rendered .Rmd file.
+        report_html: Expected output HTML path (used to verify success).
+        kind: Short label used in warning messages (e.g. "comparison",
+            "assembly").
+
+    Returns:
+        True iff Rscript exited 0 and ``report_html`` exists.
+    """
+    cmd = [
+        "Rscript", "-e",
+        f"rmarkdown::render('{_esc(report_rmd)}', quiet = TRUE)",
+    ]
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    tail: deque[str] = deque(maxlen=50)
+    assert proc.stdout is not None  # guaranteed by stdout=PIPE
+    for raw in proc.stdout:
+        line = raw.rstrip()
+        if not line:
+            continue
+        sys.stderr.write(f"  [R] {line}\n")
+        sys.stderr.flush()
+        tail.append(line)
+    rc = proc.wait()
+
+    if rc != 0:
+        logger.warning(
+            f"Rscript failed with code {rc}; {kind} report not generated."
+        )
+        for line in tail:
+            logger.warning(f"  R: {line}")
+        return False
+    if not report_html.exists():
+        logger.warning(
+            f"Rscript completed but {kind} report HTML was not produced "
+            f"at {report_html}."
+        )
+        for line in tail:
+            logger.warning(f"  R: {line}")
+        return False
+    return True
 
 # --- Module-level constants ---
 _REPORTS_DIR = Path(__file__).resolve().parent / "reports"
@@ -161,22 +222,10 @@ def run_assembly_report(
         fh.write(filled)
 
     logger.info(f"Rendering assembly report: {report_html}")
-    try:
-        subprocess.run(
-            ["Rscript", "-e", f"rmarkdown::render('{_esc(report_rmd)}', quiet = TRUE)"],
-            check=True, capture_output=True, text=True,
-        )
-    except subprocess.CalledProcessError as e:
-        logger.warning(f"Rscript failed with code {e.returncode}; assembly report not generated.")
-        if e.stderr:
-            for line in e.stderr.strip().splitlines()[-20:]:
-                logger.warning(f"  R: {line}")
+    if not _render_rmd(report_rmd, report_html, kind="assembly"):
         return False
-    else:
-        if report_html.exists():
-            logger.done(f"Assembly report written to: {report_html}")
-            return True
-        return False
+    logger.done(f"Assembly report written to: {report_html}")
+    return True
 
 
 def run_comparison_report(
@@ -302,19 +351,7 @@ def run_comparison_report(
         fh.write(filled)
 
     logger.info(f"Rendering comparison report: {report_html}")
-    try:
-        subprocess.run(
-            ["Rscript", "-e", f"rmarkdown::render('{_esc(report_rmd)}', quiet = TRUE)"],
-            check=True, capture_output=True, text=True,
-        )
-    except subprocess.CalledProcessError as e:
-        logger.warning(f"Rscript failed with code {e.returncode}; comparison report not generated.")
-        if e.stderr:
-            for line in e.stderr.strip().splitlines()[-20:]:
-                logger.warning(f"  R: {line}")
+    if not _render_rmd(report_rmd, report_html, kind="comparison"):
         return False
-    else:
-        if report_html.exists():
-            logger.done(f"Comparison report written to: {report_html}")
-            return True
-        return False
+    logger.done(f"Comparison report written to: {report_html}")
+    return True
