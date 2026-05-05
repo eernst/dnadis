@@ -145,6 +145,23 @@ def build_assembly_result(
     identities = [c.seq_identity_vs_ref for c in chrom_assigned if c.seq_identity_vs_ref is not None]
     mean_identity = sum(identities) / len(identities) if identities else None
 
+    # Aligned-bp-weighted identity over chrom_assigned contigs.  Weight each
+    # contig's identity by best_ref_union_bp (bp on the contig aligned to its
+    # assigned reference), then divide by total chrom_assigned contig length.
+    # This treats unmapped query bp as 0 identity, so divergent assemblies
+    # whose few aligned regions are at high identity score appropriately low.
+    weighted_ident_num = 0.0
+    weighted_ident_den = 0
+    for c in chrom_assigned:
+        if c.seq_identity_vs_ref is None:
+            continue
+        union_bp = int(ev.best_bp.get(c.original_name, 0) or 0)
+        weighted_ident_num += c.seq_identity_vs_ref * union_bp
+        weighted_ident_den += c.contig_len
+    weighted_identity = (
+        weighted_ident_num / weighted_ident_den if weighted_ident_den > 0 else None
+    )
+
     collinearities = [c.collinearity_score for c in chrom_assigned if c.collinearity_score is not None]
     mean_collinearity = sum(collinearities) / len(collinearities) if collinearities else None
 
@@ -241,6 +258,7 @@ def build_assembly_result(
         mean_ref_coverage=mean_ref_coverage,
         n_chimeric=n_chimeric,
         mean_identity=mean_identity,
+        weighted_identity=weighted_identity,
         mean_collinearity=mean_collinearity,
         mean_gc_deviation=mean_gc_deviation,
         n_contaminants=n_contaminants,
@@ -296,6 +314,7 @@ def write_comparison_summary_tsv(
         "mean_ref_coverage",
         "n_chimeric",
         "mean_identity",
+        "weighted_identity",
         "mean_collinearity",
         "mean_gc_deviation",
         "n_contaminants",
@@ -354,6 +373,7 @@ def write_comparison_summary_tsv(
                 _fmt(r.mean_ref_coverage),
                 str(r.n_chimeric),
                 _fmt(r.mean_identity),
+                _fmt(r.weighted_identity),
                 _fmt(r.mean_collinearity),
                 _fmt(r.mean_gc_deviation),
                 str(r.n_contaminants),

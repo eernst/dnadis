@@ -1609,7 +1609,7 @@ def main():
         "--assembly-sort-order",
         choices=["input", "identity"],
         default="identity",
-        help="Assembly ordering in comparison report: 'identity' sorts by descending median sequence identity vs reference (default), 'input' preserves FOFN/directory order",
+        help="Assembly ordering in comparison report: 'identity' sorts by descending aligned-bp-weighted identity vs reference (default; weights each chrom_assigned contig's identity by its aligned span on the assigned reference and normalizes by total contig length, so divergent assemblies with sparse high-identity hits sort below close relatives), 'input' preserves FOFN/directory order",
     )
     common.add_argument("-v", "--verbose", action="store_true", help="Enable verbose (DEBUG level) logging")
     common.add_argument("--quiet", action="store_true", help="Suppress INFO messages (only show warnings and errors)")
@@ -2171,27 +2171,17 @@ def main():
                     failures.append((asm_name, str(e)))
 
         # If the user asked for identity ordering in the comparison report,
-        # sort `results` by the same key the report uses (median of
-        # seq_identity_vs_ref over chrom_assigned contigs, descending) so
-        # that FOFN-adjacent pairs computed below match the identity-
-        # adjacent rows the riparian plot draws ribbons between.  Using the
-        # mean instead of the median can produce a different order for
-        # closely-ranked assemblies (the mean is sensitive to outlier
-        # contigs), causing the riparian to look up pair keys that were
-        # never submitted.  Assemblies with no chrom_assigned identities
-        # are pushed to the end.
+        # sort `results` by the same key the report uses (aligned-bp-weighted
+        # identity over chrom_assigned contigs, descending) so that FOFN-
+        # adjacent pairs computed below match the identity-adjacent rows the
+        # riparian plot draws ribbons between.  The bp-weighted formula
+        #   sum(seq_identity_vs_ref * best_ref_union_bp) / sum(contig_len)
+        # treats unmapped query bp as 0 identity, so divergent assemblies
+        # whose few aligned regions are at high identity sort below close
+        # relatives whose aligned span covers most of the assembly.
+        # Assemblies with no chrom_assigned identities are pushed to the end.
         if args.assembly_sort_order == "identity" and len(results) >= 2:
-            from statistics import median as _stats_median
-
-            def _median_chrom_identity(r) -> Optional[float]:
-                vals = [
-                    c.seq_identity_vs_ref for c in r.classifications
-                    if c.classification == "chrom_assigned"
-                    and c.seq_identity_vs_ref is not None
-                ]
-                return _stats_median(vals) if vals else None
-
-            sort_keys = {id(r): _median_chrom_identity(r) for r in results}
+            sort_keys = {id(r): r.weighted_identity for r in results}
             results.sort(
                 key=lambda r: (
                     sort_keys[id(r)] is None,

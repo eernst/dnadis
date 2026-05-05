@@ -540,6 +540,12 @@ class AssemblyResult:
 
     # Quality (chrom_assigned contigs)
     mean_identity: Optional[float]
+    # Aligned-bp-weighted identity, normalized by total chrom_assigned contig
+    # length so unmapped query bp count as 0 identity.  Used for sort ordering
+    # because it penalizes divergent assemblies whose few aligned regions are
+    # at high identity but cover a small fraction of the assembly.
+    #   sum(seq_identity_vs_ref * best_ref_union_bp) / sum(contig_len)
+    weighted_identity: Optional[float]
     mean_collinearity: Optional[float]
     mean_gc_deviation: Optional[float]
 

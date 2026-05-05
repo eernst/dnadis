@@ -127,11 +127,23 @@ has_per_asm <- !is.null(all_summary_df) && nrow(all_summary_df) > 0
 # the riparian plot, and per-assembly tag-by-index loops below all follow
 # the same order as the bar plots.
 if (params$assembly_sort_order == "identity" && has_per_asm) {
+  # Aligned-bp-weighted identity, normalized by total chrom_assigned contig
+  # length so unmapped query bp count as 0 identity.  Mirrors the formula in
+  # comparison.py:build_assembly_result() so this R-side ordering matches the
+  # Python-side `results` ordering used for FOFN-adjacent pairwise jobs.
+  #   sum(seq_identity_vs_ref * best_ref_union_bp) / sum(length)
   ident_sort <- all_summary_df %>%
     filter(classification == "chrom_assigned", !is.na(seq_identity_vs_ref)) %>%
     group_by(assembly) %>%
-    summarise(med_ident = median(seq_identity_vs_ref, na.rm = TRUE), .groups = "drop") %>%
-    arrange(desc(med_ident))
+    summarise(
+      weighted_ident = sum(seq_identity_vs_ref *
+                             ifelse(is.na(best_ref_union_bp), 0,
+                                    as.numeric(best_ref_union_bp)),
+                           na.rm = TRUE) /
+                       sum(as.numeric(length), na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    arrange(desc(weighted_ident))
   asm_names <- c(intersect(ident_sort$assembly, asm_names),
                  setdiff(asm_names, ident_sort$assembly))
   asm_colors <- setNames(rep_len(asm_pal, n_asm), asm_names)
@@ -2536,23 +2548,86 @@ if (has_subgenomes && "assigned_subgenome" %in% names(chrom_df)) {
 
 has_identity <- "seq_identity_vs_ref" %in% names(chrom_df) &&
                 !all(is.na(chrom_df$seq_identity_vs_ref))
+has_weighted_ident <- has_identity &&
+                "best_ref_union_bp" %in% names(chrom_df) &&
+                "length" %in% names(chrom_df)
 has_collin   <- "collinearity_score" %in% names(chrom_df) &&
                 !all(is.na(chrom_df$collinearity_score))
 has_gc_dev   <- "gc_deviation" %in% names(chrom_df) &&
                 !all(is.na(chrom_df$gc_deviation))
 
-# Compute composite sort key for assembly ordering
-# Primary: median identity across first subgenome, secondary: others
-asm_sort_key <- chrom_df %>%
-  filter(!is.na(seq_identity_vs_ref)) %>%
-  group_by(assembly) %>%
-  summarise(median_ident = median(seq_identity_vs_ref, na.rm = TRUE),
-            .groups = "drop") %>%
-  arrange(desc(median_ident))
-asm_quality_order <- if (nrow(asm_sort_key) > 0) asm_sort_key$assembly else asm_names
+# Per-plot row ordering: each ridgeline below sorts assemblies by the
+# metric it actually plots (best at top), so visual ranking matches the
+# x-axis quantity.  Helper accepts the per-contig metric column and a
+# direction flag, and falls back to `asm_names` when no data is available.
+asm_order_by <- function(df, metric_expr, descending = TRUE) {
+  s <- df %>%
+    filter(!is.na({{ metric_expr }})) %>%
+    group_by(assembly) %>%
+    summarise(.sort_val = median({{ metric_expr }}, na.rm = TRUE),
+              .groups = "drop")
+  s <- if (descending) s %>% arrange(desc(.sort_val)) else s %>% arrange(.sort_val)
+  if (nrow(s) > 0) s$assembly else asm_names
+}
 
 n_sg_facets <- length(unique(chrom_df$sg))
 ridge_h <- max(3, n_asm * 0.3 + 1.5)
+```
+
+```{r quality_weighted_identity, eval=(has_any_chrom && has_per_asm && exists("has_weighted_ident") && has_weighted_ident), results='asis'}
+cat("## Weighted Identity\n\n")
+```
+
+```{r quality_weighted_identity_plot, eval=(has_any_chrom && has_per_asm && exists("has_weighted_ident") && has_weighted_ident), fig.width=10, fig.height=ridge_h}
+# Per-contig aligned-bp-weighted identity: seq_identity scaled by the fraction
+# of the contig that aligns to its assigned reference.  Treats unmapped query
+# bp as 0 identity, so contigs with sparse high-identity hits drop toward 0%.
+# This is the per-contig analog of the assembly-level weighted_identity used
+# for sort ordering — the assembly's bp-weighted mean of these values equals
+# `weighted_identity` in comparison_summary.tsv.
+wident_df <- chrom_df %>%
+  filter(!is.na(seq_identity_vs_ref),
+         !is.na(best_ref_union_bp), !is.na(length), length > 0) %>%
+  mutate(value = seq_identity_vs_ref *
+                 pmin(1.0, as.numeric(best_ref_union_bp) / as.numeric(length)) *
+                 100)
+# Sort assemblies by the bp-weighted aggregate rather than the median of the
+# per-contig values; this matches comparison_summary.tsv's `weighted_identity`.
+wident_order <- wident_df %>%
+  group_by(assembly) %>%
+  summarise(.sort_val = sum(seq_identity_vs_ref *
+                              as.numeric(best_ref_union_bp), na.rm = TRUE) /
+                        sum(as.numeric(length), na.rm = TRUE),
+            .groups = "drop") %>%
+  arrange(desc(.sort_val))
+wident_order <- if (nrow(wident_order) > 0) wident_order$assembly else asm_names
+wident_df <- wident_df %>%
+  mutate(assembly = factor(assembly, levels = rev(wident_order)))
+
+p_wident <- ggplot(wident_df, aes(x = value, y = assembly, fill = sg, color = sg)) +
+  geom_density_ridges(alpha = 0.6, scale = 1.4, linewidth = 0.4,
+                      rel_min_height = 0.01,
+                      quantile_lines = TRUE, quantiles = 2,
+                      from = 0, to = 100) +
+  { if (has_subgenomes && n_sg_facets > 1) {
+    list(
+      facet_wrap(~ sg, ncol = n_sg_facets),
+      scale_fill_manual(values = sg_cols_light, guide = "none"),
+      scale_color_manual(values = sg_cols_dark, guide = "none")
+    )
+  } else {
+    list(
+      scale_fill_manual(values = c("All" = lighten(oi[5], 0.4)), guide = "none"),
+      scale_color_manual(values = c("All" = oi[5]), guide = "none")
+    )
+  }} +
+  labs(x = "Per-contig weighted identity (%)\n(seq identity × fraction of contig aligned to assigned reference)",
+       y = NULL) +
+  theme_minimal(base_size = base_font_pt, base_family = base_family) +
+  axis_theme +
+  theme(panel.grid.major.y = element_blank())
+
+girafe_styled(ggobj = p_wident, height_svg = ridge_h)  # girafe for SVG device (ggridges renders poorly with R's svg())
 ```
 
 ```{r quality_identity, eval=(has_any_chrom && has_per_asm && exists("has_identity") && has_identity), results='asis'}
@@ -2562,8 +2637,10 @@ cat("## Sequence Identity\n\n")
 ```{r quality_identity_plot, eval=(has_any_chrom && has_per_asm && exists("has_identity") && has_identity), fig.width=10, fig.height=ridge_h}
 ident_df <- chrom_df %>%
   filter(!is.na(seq_identity_vs_ref)) %>%
-  mutate(assembly = factor(assembly, levels = rev(asm_quality_order)),
-         value = seq_identity_vs_ref * 100)
+  mutate(value = seq_identity_vs_ref * 100)
+ident_order <- asm_order_by(ident_df, value, descending = TRUE)
+ident_df <- ident_df %>%
+  mutate(assembly = factor(assembly, levels = rev(ident_order)))
 
 p_ident <- ggplot(ident_df, aes(x = value, y = assembly, fill = sg, color = sg)) +
   geom_density_ridges(alpha = 0.6, scale = 1.4, linewidth = 0.4,
@@ -2597,8 +2674,10 @@ cat("## Collinearity\n\n")
 ```{r quality_collinearity_plot, eval=(has_any_chrom && has_per_asm && exists("has_collin") && has_collin), fig.width=10, fig.height=ridge_h}
 collin_df <- chrom_df %>%
   filter(!is.na(collinearity_score)) %>%
-  mutate(assembly = factor(assembly, levels = rev(asm_quality_order)),
-         value = collinearity_score * 100)
+  mutate(value = collinearity_score * 100)
+collin_order <- asm_order_by(collin_df, value, descending = TRUE)
+collin_df <- collin_df %>%
+  mutate(assembly = factor(assembly, levels = rev(collin_order)))
 
 p_collin <- ggplot(collin_df, aes(x = value, y = assembly, fill = sg, color = sg)) +
   geom_density_ridges(alpha = 0.6, scale = 1.4, linewidth = 0.4,
@@ -2632,8 +2711,12 @@ cat("## GC Deviation\n\n")
 ```{r quality_gc_plot, eval=(has_any_chrom && has_per_asm && exists("has_gc_dev") && has_gc_dev), fig.width=10, fig.height=ridge_h}
 gc_df <- chrom_df %>%
   filter(!is.na(gc_deviation)) %>%
-  mutate(assembly = factor(assembly, levels = rev(asm_quality_order)),
-         value = abs(gc_deviation))
+  mutate(value = abs(gc_deviation))
+# Lower |GC deviation| is "better"; sort ascending so the cleanest assembly
+# appears at the top of the ridgeline.
+gc_order <- asm_order_by(gc_df, value, descending = FALSE)
+gc_df <- gc_df %>%
+  mutate(assembly = factor(assembly, levels = rev(gc_order)))
 
 p_gc <- ggplot(gc_df, aes(x = value, y = assembly, fill = sg, color = sg)) +
   geom_density_ridges(alpha = 0.6, scale = 1.4, linewidth = 0.4,
