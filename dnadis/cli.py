@@ -2441,7 +2441,20 @@ def main():
             write_comparison_summary_tsv,
             write_chromosome_completeness_tsv,
         )
-        cmp_name = args.comparison_name
+        from dnadis.utils.io_utils import sanitize_filename_component
+
+        # The original comparison name may contain whitespace/punctuation
+        # that downstream tools (notably rmarkdown::render) mishandle in
+        # filenames — they silently emit output to a normalized path in
+        # the cwd, breaking the dnadis output layout.  Use a sanitized
+        # form for files; pass the original through to the report so it
+        # appears verbatim in the header.
+        cmp_name_display = args.comparison_name
+        cmp_name = sanitize_filename_component(cmp_name_display)
+        if cmp_name != cmp_name_display:
+            logger.info(
+                f"Sanitized comparison filename: '{cmp_name_display}' -> '{cmp_name}'"
+            )
         comparison_tsv = output_dir / f"{cmp_name}_summary.tsv"
         completeness_tsv = output_dir / f"{cmp_name}_chromosome_completeness.tsv"
         write_comparison_summary_tsv(comparison_tsv, results)
@@ -2460,6 +2473,7 @@ def main():
                 chr_like_minlen=ref_ctx.chr_like_minlen,
                 synteny_mode=args.synteny_mode,
                 reference_name=args.reference_name,
+                comparison_name=cmp_name_display,
                 pairwise_pairs=pairwise_pairs,
                 self_contained=not args.no_self_contained_html,
                 assembly_sort_order=args.assembly_sort_order,

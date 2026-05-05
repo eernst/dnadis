@@ -237,6 +237,7 @@ def run_comparison_report(
     chr_like_minlen: int,
     synteny_mode: str,
     reference_name: str = "",
+    comparison_name: str = "",
     pairwise_pairs: Optional[List[tuple]] = None,
     self_contained: bool = False,
     assembly_sort_order: str = "input",
@@ -337,6 +338,7 @@ def run_comparison_report(
         .replace("__PAIRWISE_MACRO_TSVS__", pw_macro_str)
         .replace("__PAIRWISE_NAMES__", pw_names_str)
         .replace("__REFNAME__", str(reference_name).replace('"', '\\"'))
+        .replace("__CMP_NAME__", str(comparison_name).replace('"', '\\"'))
         .replace("__SYNTENY_MODE__", str(synteny_mode))
         .replace("__CHRLIKE__", str(int(chr_like_minlen)))
         .replace("__OUTPREFIX__", _abs_esc(outprefix))

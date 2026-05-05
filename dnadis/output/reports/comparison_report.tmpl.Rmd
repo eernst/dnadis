@@ -14,6 +14,7 @@ params:
   pairwise_macro_blocks_tsvs: "__PAIRWISE_MACRO_TSVS__"
   pairwise_names: "__PAIRWISE_NAMES__"
   reference_name: "__REFNAME__"
+  comparison_name: "__CMP_NAME__"
   synteny_mode: "__SYNTENY_MODE__"
   chr_like_minlen: "__CHRLIKE__"
   out_prefix: "__OUTPREFIX__"
@@ -320,6 +321,7 @@ if (exists(".setup_t0")) {
 ---
 
 <p class="section-intro">
+`r if (nchar(params$comparison_name) > 0) sprintf("**Comparison**: %s &emsp;", params$comparison_name) else ""`
 **Reference**: `r if (nchar(params$reference_name) > 0) params$reference_name else "\u2014"` &emsp;
 **Synteny mode**: `r params$synteny_mode` &emsp;
 **Assemblies**: `r n_asm` &emsp;
