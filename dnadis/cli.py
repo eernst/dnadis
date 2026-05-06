@@ -686,13 +686,28 @@ def run_assembly(
 
     # Use reference span fraction for candidate ranking when ref lengths are
     # available.  Matches the primary assignment in chain parsing.
+    #
+    # Exclude organelle references from candidate ranking for the same reason
+    # as in chain_parsing.py: their short reference length inflates span_frac
+    # so a tiny NUMT/NUPT-like alignment can outrank a megabase-scale
+    # alignment to a nuclear chromosome whose chains are fragmented across
+    # the reference.  Real organelle contigs are detected via the BLAST
+    # organelle pipeline (phase 3).
     qr_span_frac: Dict[Tuple[str, str], float] = {}
     if ev.qr_ref_span_bp and ref_lengths:
         for (q, rid), ref_span in ev.qr_ref_span_bp.items():
+            if not is_nuclear_chromosome(rid):
+                continue
             rlen = ref_lengths.get(rid, 0)
             if rlen > 0:
                 qr_span_frac[(q, rid)] = ref_span / rlen
-    ranking_score = qr_span_frac if qr_span_frac else qr_ref_score
+    if qr_span_frac:
+        ranking_score = qr_span_frac
+    else:
+        ranking_score = {
+            k: v for k, v in qr_ref_score.items()
+            if is_nuclear_chromosome(k[1])
+        }
 
     candidates_by_contig = defaultdict(list)
     for (q, ref_id), sc in ranking_score.items():
