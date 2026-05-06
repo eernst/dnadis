@@ -222,6 +222,46 @@ def test_parse_paf_chain_evidence_for_subgenome_assignment(tmp_path):
     assert ev.contig_total["contigA"] == 550
 
 
+def test_parse_paf_chain_evidence_excludes_organelles_from_best_ref(tmp_path):
+    """Organelle references must not win best_ref by span_frac inflation.
+
+    A 27 Mb nuclear contig with a megabase-scale alignment to a 24 Mb nuclear
+    chromosome should never lose to the same contig's tiny NUMT-like alignment
+    against a 240 kb mitochondrial reference, even though the mitochondrion's
+    span_frac (alignment_bp / ref_len) would otherwise be much higher.
+    """
+    paf_path = tmp_path / "organelle_bias.paf"
+    paf_path.write_text(
+        textwrap.dedent(
+            """
+            contig1\t27000000\t0\t1000000\t+\tchr3\t24000000\t0\t1000000\t950000\t1000000\t60\ttp:A:P
+            contig1\t27000000\t1500000\t2500000\t+\tchr3\t24000000\t1500000\t2500000\t950000\t1000000\t60\ttp:A:P
+            contig1\t27000000\t5000000\t5050000\t+\tchrM\t240000\t10000\t60000\t49000\t50000\t60\ttp:A:P
+            """
+        ).strip()
+        + "\n"
+    )
+    ev = dnadis.parse_paf_chain_evidence_and_segments(
+        paf_gz_path=paf_path,
+        contig_lengths={"contig1": 27_000_000},
+        assign_minlen=1000,
+        assign_minmapq=20,
+        assign_tp="P",
+        chain_q_gap=1_000_000,
+        chain_r_gap=1_000_000,
+        chain_diag_slop=10_000,
+        assign_min_ident=0.8,
+        assign_chain_topk=1,
+        assign_chain_score="matches",
+        assign_chain_min_bp=10_000,
+        assign_ref_score="topk",
+    )
+    assert ev.best_ref["contig1"] == "chr3"
+    # Without the organelle filter chrM's span_frac (50000/240000 ≈ 0.21)
+    # would beat chr3's (2_000_000/24_000_000 ≈ 0.083).  Cross-check:
+    assert (50_000 / 240_000) > (2_000_000 / 24_000_000)
+
+
 def test_filter_overlapping_hits_by_identity():
     """Test that overlapping hits are filtered, keeping highest identity."""
     # Create overlapping blocks from two different ref_ids (simulating homeologs)

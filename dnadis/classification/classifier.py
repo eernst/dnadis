@@ -764,7 +764,7 @@ def _select_subgenome_k(
     all_idents: List[float],
     ref_to_clfs: Dict[str, List['ContigClassification']],
     ref_ids: List[str],
-    qr_best_chain_ident: Dict[Tuple[str, str], float],
+    qr_cluster_score: Dict[Tuple[str, str], float],
     min_consistency: float = 0.70,
 ) -> Tuple[int, List[float], List[float]]:
     """Select the number of query subgenomes using GMM + paired validation.
@@ -783,10 +783,11 @@ def _select_subgenome_k(
     segmentations for closely related ancestral subgenomes.
 
     Args:
-        all_idents: All identity values from multi-copy chromosomes.
+        all_idents: All cluster scores from multi-copy chromosomes.
         ref_to_clfs: Dict mapping ref_id -> list of ContigClassifications.
         ref_ids: Reference chromosome IDs in this subgenome group.
-        qr_best_chain_ident: Dict of (contig, ref_id) -> best chain identity.
+        qr_cluster_score: Dict of (contig, ref_id) -> per-contig score used
+            for clustering (same definition as values in ``all_idents``).
         min_consistency: Minimum fraction of 2-copy chromosomes that must
             have their copies in different clusters (default 0.70).
 
@@ -819,7 +820,7 @@ def _select_subgenome_k(
                 continue
             n_testable += 1
             copy_idents = [
-                qr_best_chain_ident.get((clf.original_name, ref_id), 0.0)
+                qr_cluster_score.get((clf.original_name, ref_id), 0.0)
                 for clf in ref_clfs
             ]
             labels = _assign_labels(copy_idents, sorted_means)
@@ -878,26 +879,31 @@ def _select_subgenome_k(
 def infer_query_subgenomes(
     classifications: List[ContigClassification],
     qr_best_chain_ident: Dict[Tuple[str, str], float],
+    qr_cluster_score: Optional[Dict[Tuple[str, str], float]] = None,
     subgenome_k: float = 1.0,
 ) -> None:
     """Infer query subgenomes when multiple contigs map to the same reference.
 
     Uses a two-stage approach:
-    1. **Global GMM + paired validation**: Collect alignment identities from
-       all multi-copy reference chromosomes within each reference subgenome,
+    1. **Global GMM + paired validation**: Collect cluster scores from all
+       multi-copy reference chromosomes within each reference subgenome,
        fit a 1-D Gaussian Mixture Model.  Model selection uses BIC as a
        first pass, then validates (or rescues) via per-chromosome pairing:
        for chromosomes with exactly k copies, each copy should land in a
-       different cluster.  This leverages the biological structure (paired
-       subgenomic copies) to detect subgenomes even when the marginal
-       identity distributions overlap substantially.
+       different cluster.
     2. **Per-chromosome assignment**: Use the global cluster means to assign
        each contig to a query subgenome.  Single-copy chromosomes are left
        unsuffixed (group 1).
 
     Args:
         classifications: List of ContigClassification objects (modified in place)
-        qr_best_chain_ident: Dict of (contig, ref_id) -> best chain identity
+        qr_best_chain_ident: Dict of (contig, ref_id) -> best chain identity.
+            Used only to populate ``seq_identity_vs_ref`` on each contig.
+        qr_cluster_score: Optional dict of (contig, ref_id) -> per-contig
+            score used for GMM clustering and ranking.  Defaults to
+            ``qr_best_chain_ident``.  Pass a coverage-weighted metric (e.g.
+            ``ident × union_bp / contig_len``) to spread near-tied homeologous
+            copies whose chain identities agree to several decimal places.
         subgenome_k: Not used by GMM (kept for API compatibility)
     """
     # Collect identities for all chromosome-assigned contigs
@@ -905,6 +911,9 @@ def infer_query_subgenomes(
 
     if not chrom_clfs:
         return
+
+    if qr_cluster_score is None:
+        qr_cluster_score = qr_best_chain_ident
 
     # Set seq_identity_vs_ref for all contigs
     for clf in chrom_clfs:
@@ -926,19 +935,19 @@ def infer_query_subgenomes(
         _, ref_sg = split_chrom_subgenome(ref_id)
         ref_sg_to_multi_refs[ref_sg].append(ref_id)
 
-    # Per reference subgenome: run global GMM on all multi-copy identities
+    # Per reference subgenome: run global GMM on all multi-copy cluster scores.
     # Maps ref_subgenome -> (best_k, ordered_cluster_means)
-    # Cluster ordering: sorted by mean identity descending so cluster 0 = primary
+    # Cluster ordering: sorted by mean score descending so cluster 0 = primary
     ref_sg_gmm: Dict[Optional[str], Tuple[int, List[float]]] = {}
 
     for ref_sg, ref_ids in ref_sg_to_multi_refs.items():
-        # Collect all identities from multi-copy chromosomes in this ref subgenome
+        # Collect all cluster scores from multi-copy chromosomes in this ref subgenome
         all_idents = []
         for ref_id in ref_ids:
             for clf in ref_to_clfs[ref_id]:
-                ident = qr_best_chain_ident.get((clf.original_name, ref_id), 0.0)
-                if ident > 0:
-                    all_idents.append(ident)
+                score = qr_cluster_score.get((clf.original_name, ref_id), 0.0)
+                if score > 0:
+                    all_idents.append(score)
 
         if len(all_idents) < 4:
             # Too few data points for meaningful clustering
@@ -951,7 +960,7 @@ def infer_query_subgenomes(
 
         # Fit candidate GMMs (k=1..3)
         best_k, sorted_means, sorted_stds = _select_subgenome_k(
-            all_idents, ref_to_clfs, ref_ids, qr_best_chain_ident,
+            all_idents, ref_to_clfs, ref_ids, qr_cluster_score,
         )
 
         ref_sg_gmm[ref_sg] = (best_k, sorted_means)
@@ -991,19 +1000,19 @@ def infer_query_subgenomes(
                 clf.query_subgenome_grp = 1
             continue
 
-        # Sort contigs by identity descending
+        # Sort contigs by cluster score descending
         ref_clfs.sort(
-            key=lambda c: qr_best_chain_ident.get((c.original_name, ref_id), 0.0),
+            key=lambda c: qr_cluster_score.get((c.original_name, ref_id), 0.0),
             reverse=True,
         )
 
         # Assign each contig to the nearest GMM cluster (by mean)
         assignments: List[int] = []  # 0-based cluster per contig
         for clf in ref_clfs:
-            ident = qr_best_chain_ident.get((clf.original_name, ref_id), 0.0)
+            score = qr_cluster_score.get((clf.original_name, ref_id), 0.0)
             best_cluster = min(
                 range(gmm_k),
-                key=lambda j: abs(ident - sorted_means[j]),
+                key=lambda j: abs(score - sorted_means[j]),
             )
             assignments.append(best_cluster)
 
@@ -1694,11 +1703,21 @@ def classify_all_contigs(
                 classification_confidence="low",
             ))
 
-    # Infer query subgenomes when multiple contigs map to same reference
+    # Infer query subgenomes when multiple contigs map to same reference.
+    # Cluster score = identity × (union_bp / contig_len) so the GMM separates
+    # copies by alignment coverage in addition to chain identity.
     if ev.qr_best_chain_ident:
+        qr_cluster_score: Dict[Tuple[str, str], float] = {}
+        for (q, ref_id), ident in ev.qr_best_chain_ident.items():
+            qlen = query_lengths.get(q, 0)
+            if qlen <= 0 or ident <= 0:
+                continue
+            union_bp = int(ev.qr_union_bp.get((q, ref_id), 0) or 0)
+            qr_cluster_score[(q, ref_id)] = ident * (union_bp / qlen)
         infer_query_subgenomes(
             classifications=classifications,
             qr_best_chain_ident=ev.qr_best_chain_ident,
+            qr_cluster_score=qr_cluster_score,
             subgenome_k=subgenome_k,
         )
 

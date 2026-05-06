@@ -217,6 +217,39 @@ class TestBuildAssemblyResult:
         assert r.mean_collinearity == pytest.approx(0.95)
         assert r.mean_gc_deviation == pytest.approx(0.5)
 
+    def test_weighted_identity_full_coverage(self, tmp_path):
+        """When every chrom_assigned contig is fully aligned (best_bp == contig_len),
+        weighted_identity collapses to mean_identity."""
+        r = _make_assembly_result(tmp_path=tmp_path)
+        assert r.weighted_identity == pytest.approx(0.98)
+
+    def test_weighted_identity_penalizes_sparse_alignment(self, tmp_path):
+        """A divergent assembly with high identity but sparse mapping should get
+        a much lower weighted_identity than its mean_identity."""
+        # 100 Mb chrom_assigned contig, 99% identity over only 5 Mb of aligned span
+        clfs = [_make_classification("ctg1", "chrom_assigned", 100_000_000, "chr1",
+                                     seq_identity=0.99)]
+        ev = _make_empty_ev()
+        ev.contig_total["ctg1"] = 5_000_000
+        ev.contig_refs["ctg1"] = {"chr1"}
+        ev.best_bp["ctg1"] = 5_000_000
+
+        r = build_assembly_result(
+            assembly_name="sparse", assembly_path=tmp_path / "sparse.fa",
+            outprefix=tmp_path / "sparse" / "sparse",
+            classifications=clfs, qry_lengths={"ctg1": 100_000_000},
+            ref_lengths_norm={"chr1": 100_000_000},
+            ev=ev, contaminants_filtered={},
+            chrC_contig=None, chrM_contig=None, rdna_arrays=[], depth_stats={},
+            chimera_primary_frac=0.8, chimera_secondary_frac=0.2,
+            summary_tsv=tmp_path / "s.tsv", segments_tsv=tmp_path / "seg.tsv",
+            evidence_tsv=tmp_path / "ev.tsv", macro_blocks_tsv=tmp_path / "mb.tsv",
+        )
+        assert r.mean_identity == pytest.approx(0.99)
+        # 0.99 * 5e6 / 100e6 = 0.0495
+        assert r.weighted_identity == pytest.approx(0.0495)
+        assert r.weighted_identity < r.mean_identity
+
     def test_no_chrom_assigned(self, tmp_path):
         """Assembly with no chrom_assigned contigs."""
         clfs = [

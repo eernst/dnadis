@@ -540,6 +540,10 @@ class AssemblyResult:
 
     # Quality (chrom_assigned contigs)
     mean_identity: Optional[float]
+    # Aligned-bp-weighted identity used for sort ordering:
+    #   sum(seq_identity_vs_ref * best_ref_union_bp) / sum(contig_len)
+    # Unmapped query bp contribute 0 to the numerator.
+    weighted_identity: Optional[float]
     mean_collinearity: Optional[float]
     mean_gc_deviation: Optional[float]
 

@@ -685,14 +685,24 @@ def run_assembly(
     qr_ref_score = ev.qr_weight_all if args.assign_ref_score == "all" else ev.qr_score_topk
 
     # Use reference span fraction for candidate ranking when ref lengths are
-    # available.  Matches the primary assignment in chain parsing.
+    # available.  Matches the primary assignment in chain parsing, including
+    # the organelle exclusion (see chain_parsing._chains_to_evidence_and_segments
+    # for rationale).
     qr_span_frac: Dict[Tuple[str, str], float] = {}
     if ev.qr_ref_span_bp and ref_lengths:
         for (q, rid), ref_span in ev.qr_ref_span_bp.items():
+            if not is_nuclear_chromosome(rid):
+                continue
             rlen = ref_lengths.get(rid, 0)
             if rlen > 0:
                 qr_span_frac[(q, rid)] = ref_span / rlen
-    ranking_score = qr_span_frac if qr_span_frac else qr_ref_score
+    if qr_span_frac:
+        ranking_score = qr_span_frac
+    else:
+        ranking_score = {
+            k: v for k, v in qr_ref_score.items()
+            if is_nuclear_chromosome(k[1])
+        }
 
     candidates_by_contig = defaultdict(list)
     for (q, ref_id), sc in ranking_score.items():
@@ -1609,7 +1619,7 @@ def main():
         "--assembly-sort-order",
         choices=["input", "identity"],
         default="identity",
-        help="Assembly ordering in comparison report: 'identity' sorts by descending median sequence identity vs reference (default), 'input' preserves FOFN/directory order",
+        help="Assembly ordering in comparison report: 'identity' (default) sorts by descending aligned-bp-weighted identity vs reference (sum(seq_identity_vs_ref * best_ref_union_bp) / sum(contig_len) over chrom_assigned contigs); 'input' preserves FOFN/directory order",
     )
     common.add_argument("-v", "--verbose", action="store_true", help="Enable verbose (DEBUG level) logging")
     common.add_argument("--quiet", action="store_true", help="Suppress INFO messages (only show warnings and errors)")
@@ -2170,15 +2180,27 @@ def main():
                     logger.error(f"Assembly '{asm_name}' failed: {e}")
                     failures.append((asm_name, str(e)))
 
-        # Pairwise assembly-vs-assembly synteny via minimap2 on each pair's
-        # chrs.fasta.  Runs regardless of --synteny-mode: even when the main
-        # ref-vs-query phase used miniprot (protein mode), nucleotide
-        # alignment between query assemblies is still meaningful for closely
-        # related genomes and supplies the asm-vs-asm ribbons in the
-        # comparison report's riparian plot.  If divergence is too high,
-        # blocks fail the min_span gate and ribbons stay sparse — graceful
-        # degradation, no error.  Runs inside executor context because it
-        # submits SLURM jobs.
+        # Sort `results` by AssemblyResult.weighted_identity (descending) when
+        # the user asked for identity ordering, matching the report's sort key
+        # so FOFN-adjacent pairs computed below match the identity-adjacent
+        # rows the riparian plot draws ribbons between.  Assemblies with no
+        # chrom_assigned identities are pushed to the end.
+        if args.assembly_sort_order == "identity" and len(results) >= 2:
+            sort_keys = {id(r): r.weighted_identity for r in results}
+            results.sort(
+                key=lambda r: (
+                    sort_keys[id(r)] is None,
+                    -(sort_keys[id(r)] if sort_keys[id(r)] is not None else 0.0),
+                )
+            )
+
+        # Pairwise assembly-vs-assembly synteny via minimap2 (nucleotide
+        # mode) or miniprot-derived shared-protein anchors (protein mode)
+        # on each pair's chrs.fasta.  Runs regardless of --synteny-mode:
+        # nucleotide alignment between divergent assemblies degrades
+        # gracefully (sparse ribbons) and protein-mode pairwise reuses the
+        # shared-protein-anchor philosophy of the per-assembly phase.
+        # Runs inside executor context because it submits SLURM jobs.
         if n_total > 1 and results and len(results) >= 2:
             from dnadis.alignment.pairwise import compute_pairwise_synteny
             from dnadis.utils.resource_estimation import estimate_pairwise_resources
@@ -2414,7 +2436,20 @@ def main():
             write_comparison_summary_tsv,
             write_chromosome_completeness_tsv,
         )
-        cmp_name = args.comparison_name
+        from dnadis.utils.io_utils import sanitize_filename_component
+
+        # The original comparison name may contain whitespace/punctuation
+        # that downstream tools (notably rmarkdown::render) mishandle in
+        # filenames — they silently emit output to a normalized path in
+        # the cwd, breaking the dnadis output layout.  Use a sanitized
+        # form for files; pass the original through to the report so it
+        # appears verbatim in the header.
+        cmp_name_display = args.comparison_name
+        cmp_name = sanitize_filename_component(cmp_name_display)
+        if cmp_name != cmp_name_display:
+            logger.info(
+                f"Sanitized comparison filename: '{cmp_name_display}' -> '{cmp_name}'"
+            )
         comparison_tsv = output_dir / f"{cmp_name}_summary.tsv"
         completeness_tsv = output_dir / f"{cmp_name}_chromosome_completeness.tsv"
         write_comparison_summary_tsv(comparison_tsv, results)
@@ -2433,6 +2468,7 @@ def main():
                 chr_like_minlen=ref_ctx.chr_like_minlen,
                 synteny_mode=args.synteny_mode,
                 reference_name=args.reference_name,
+                comparison_name=cmp_name_display,
                 pairwise_pairs=pairwise_pairs,
                 self_contained=not args.no_self_contained_html,
                 assembly_sort_order=args.assembly_sort_order,

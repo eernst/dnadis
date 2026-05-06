@@ -14,6 +14,7 @@ params:
   pairwise_macro_blocks_tsvs: "__PAIRWISE_MACRO_TSVS__"
   pairwise_names: "__PAIRWISE_NAMES__"
   reference_name: "__REFNAME__"
+  comparison_name: "__CMP_NAME__"
   synteny_mode: "__SYNTENY_MODE__"
   chr_like_minlen: "__CHRLIKE__"
   out_prefix: "__OUTPREFIX__"
@@ -91,9 +92,22 @@ n_asm <- nrow(comp_df)
 asm_names <- comp_df$assembly
 asm_colors <- setNames(rep_len(asm_pal, n_asm), asm_names)
 
-# Load per-assembly summary TSVs
+# Load per-assembly summary TSVs.  These six path vectors are paired with
+# asm_name_list by index — i.e. asm_name_list[i] is the assembly that
+# produced asm_tsv_paths[i], per_asm_macro_paths[i], etc.  Declared
+# together here so the identity-sort permutation below can apply uniformly.
 asm_tsv_paths <- strsplit(params$per_assembly_summary_tsvs, ";")[[1]]
 asm_name_list <- strsplit(params$assembly_names, ";")[[1]]
+per_asm_macro_paths <- if (nzchar(params$per_assembly_macro_blocks_tsvs))
+  strsplit(params$per_assembly_macro_blocks_tsvs, ";")[[1]] else character(0)
+rdna_arrays_paths <- if (nzchar(params$per_assembly_rdna_arrays_tsvs))
+  strsplit(params$per_assembly_rdna_arrays_tsvs, ";")[[1]] else character(0)
+rearr_paths <- if (nzchar(params$per_assembly_rearrangements_tsvs))
+  strsplit(params$per_assembly_rearrangements_tsvs, ";")[[1]] else character(0)
+contam_tsv_paths <- if (nzchar(params$per_assembly_contaminants_tsvs))
+  strsplit(params$per_assembly_contaminants_tsvs, ";")[[1]] else character(0)
+agp_paths <- if (nzchar(params$per_assembly_agp_tsvs))
+  strsplit(params$per_assembly_agp_tsvs, ";")[[1]] else character(0)
 
 per_asm_summaries <- list()
 for (i in seq_along(asm_tsv_paths)) {
@@ -109,24 +123,44 @@ all_summary_df <- if (length(per_asm_summaries) > 0) bind_rows(per_asm_summaries
 has_per_asm <- !is.null(all_summary_df) && nrow(all_summary_df) > 0
 
 # Re-sort assemblies by identity if requested.  Apply the resulting order
-# uniformly to comp_df rows, asm_name_list, and asm_tsv_paths so that
-# tables and the riparian plot all follow the same order as bar plots.
+# uniformly to comp_df rows and every per-assembly path vector so tables,
+# the riparian plot, and per-assembly tag-by-index loops below all follow
+# the same order as the bar plots.
 if (params$assembly_sort_order == "identity" && has_per_asm) {
+  # Mirrors comparison.py:build_assembly_result() so the R ordering matches
+  # the Python ordering used for FOFN-adjacent pairwise jobs:
+  #   sum(seq_identity_vs_ref * best_ref_union_bp) / sum(length)
   ident_sort <- all_summary_df %>%
     filter(classification == "chrom_assigned", !is.na(seq_identity_vs_ref)) %>%
     group_by(assembly) %>%
-    summarise(med_ident = median(seq_identity_vs_ref, na.rm = TRUE), .groups = "drop") %>%
-    arrange(desc(med_ident))
+    summarise(
+      weighted_ident = sum(seq_identity_vs_ref *
+                             ifelse(is.na(best_ref_union_bp), 0,
+                                    as.numeric(best_ref_union_bp)),
+                           na.rm = TRUE) /
+                       sum(as.numeric(length), na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    arrange(desc(weighted_ident))
   asm_names <- c(intersect(ident_sort$assembly, asm_names),
                  setdiff(asm_names, ident_sort$assembly))
   asm_colors <- setNames(rep_len(asm_pal, n_asm), asm_names)
 
-  # Permute the paired asm_name_list / asm_tsv_paths vectors together so the
-  # i-th entry of each still corresponds to the same assembly.
+  # Permute every paired-by-index vector together.  Helper guards against
+  # length mismatches (some optional path vectors may be shorter than
+  # asm_name_list when no per-assembly file was emitted).
   perm <- match(asm_names, asm_name_list)
   perm <- perm[!is.na(perm)]
-  asm_name_list <- asm_name_list[perm]
-  asm_tsv_paths <- asm_tsv_paths[perm]
+  permute_if_paired <- function(v) {
+    if (length(v) == length(asm_name_list)) v[perm] else v
+  }
+  asm_name_list      <- asm_name_list[perm]
+  asm_tsv_paths      <- permute_if_paired(asm_tsv_paths)
+  per_asm_macro_paths <- permute_if_paired(per_asm_macro_paths)
+  rdna_arrays_paths  <- permute_if_paired(rdna_arrays_paths)
+  rearr_paths        <- permute_if_paired(rearr_paths)
+  contam_tsv_paths   <- permute_if_paired(contam_tsv_paths)
+  agp_paths          <- permute_if_paired(agp_paths)
 
   # Reorder comp_df rows to match.
   comp_df <- comp_df[match(asm_names, comp_df$assembly), , drop = FALSE]
@@ -143,10 +177,12 @@ pdf_classbar <- paste0(params$out_prefix, ".classification_comparison.pdf")
 pdf_heatmap  <- paste0(params$out_prefix, ".chromosome_completeness.pdf")
 
 # ---------------------------------------------------------------------------
-# Load per-assembly macro_blocks and pairwise macro_blocks for synteny plot
+# Load per-assembly macro_blocks and pairwise macro_blocks for synteny plot.
+# per_asm_macro_paths is declared (and identity-permuted, if requested)
+# above with the other per-assembly path vectors.  pairwise paths are
+# tagged from the pair name embedded in the filename, not from
+# asm_name_list, so they are not permuted by index.
 # ---------------------------------------------------------------------------
-per_asm_macro_paths <- if (nzchar(params$per_assembly_macro_blocks_tsvs))
-  strsplit(params$per_assembly_macro_blocks_tsvs, ";")[[1]] else character(0)
 pairwise_macro_paths <- if (nzchar(params$pairwise_macro_blocks_tsvs))
   strsplit(params$pairwise_macro_blocks_tsvs, ";")[[1]] else character(0)
 pairwise_pair_names <- if (nzchar(params$pairwise_names))
@@ -196,11 +232,8 @@ pairwise_macro_df <- if (length(pairwise_macro_list) > 0) bind_rows(pairwise_mac
 has_synteny_data <- !is.null(per_asm_macro_df) && nrow(per_asm_macro_df) > 0
 
 # ---------------------------------------------------------------------------
-# Load per-assembly rDNA arrays TSVs
+# Load per-assembly rDNA arrays TSVs (rdna_arrays_paths declared above)
 # ---------------------------------------------------------------------------
-rdna_arrays_paths <- if (nzchar(params$per_assembly_rdna_arrays_tsvs))
-  strsplit(params$per_assembly_rdna_arrays_tsvs, ";")[[1]] else character(0)
-
 rdna_arrays_list <- list()
 for (i in seq_along(rdna_arrays_paths)) {
   p <- rdna_arrays_paths[i]
@@ -216,11 +249,8 @@ all_rdna_arrays_df <- if (length(rdna_arrays_list) > 0) bind_rows(rdna_arrays_li
 has_rdna_arrays <- !is.null(all_rdna_arrays_df) && nrow(all_rdna_arrays_df) > 0
 
 # ---------------------------------------------------------------------------
-# Load per-assembly rearrangement TSVs (for chromosome summary section)
+# Load per-assembly rearrangement TSVs (rearr_paths declared above)
 # ---------------------------------------------------------------------------
-rearr_paths <- if (nzchar(params$per_assembly_rearrangements_tsvs))
-  strsplit(params$per_assembly_rearrangements_tsvs, ";")[[1]] else character(0)
-
 rearr_list <- list()
 for (i in seq_along(rearr_paths)) {
   p <- rearr_paths[i]
@@ -236,11 +266,8 @@ all_rearr_df <- if (length(rearr_list) > 0) bind_rows(rearr_list) else NULL
 has_rearrangements <- !is.null(all_rearr_df) && nrow(all_rearr_df) > 0
 
 # ---------------------------------------------------------------------------
-# Load per-assembly contaminants TSVs (for Top Taxa section)
+# Load per-assembly contaminants TSVs (contam_tsv_paths declared above)
 # ---------------------------------------------------------------------------
-contam_tsv_paths <- if (nzchar(params$per_assembly_contaminants_tsvs))
-  strsplit(params$per_assembly_contaminants_tsvs, ";")[[1]] else character(0)
-
 contam_detail_list <- list()
 for (i in seq_along(contam_tsv_paths)) {
   p <- contam_tsv_paths[i]
@@ -256,11 +283,8 @@ all_contam_detail_df <- if (length(contam_detail_list) > 0) bind_rows(contam_det
 has_contam_detail <- !is.null(all_contam_detail_df) && nrow(all_contam_detail_df) > 0
 
 # ---------------------------------------------------------------------------
-# Load per-assembly AGP files (for scaffold join indicators in synteny plot)
+# Load per-assembly AGP files (agp_paths declared above)
 # ---------------------------------------------------------------------------
-agp_paths <- if (nzchar(params$per_assembly_agp_tsvs))
-  strsplit(params$per_assembly_agp_tsvs, ";")[[1]] else character(0)
-
 # Parse AGP into a single dataframe with scaffold component and gap info
 agp_list <- list()
 for (i in seq_along(agp_paths)) {
@@ -307,6 +331,7 @@ if (exists(".setup_t0")) {
 ---
 
 <p class="section-intro">
+`r if (nchar(params$comparison_name) > 0) sprintf("**Comparison**: %s &emsp;", params$comparison_name) else ""`
 **Reference**: `r if (nchar(params$reference_name) > 0) params$reference_name else "\u2014"` &emsp;
 **Synteny mode**: `r params$synteny_mode` &emsp;
 **Assemblies**: `r n_asm` &emsp;
@@ -1686,10 +1711,77 @@ build_synteny_plot <- function(sg) {
   max_ref_len <- max(sg_chr$ref_len)
   x_scale <- max_ref_len / 0.8  # ref pill up to 0.8 units for the largest chrom
 
-  # Pre-compute per-chromosome column width: max of ref_len and the widest
-  # assembly (sum of contig lengths + inter-pill gaps for all contigs assigned
-  # to that ref_id)
   pill_gap <- 0.40  # gap between adjacent pills within the same column
+
+  # Build a unified spec list of pills for an (asm, rid) cell so that
+  # multi-component scaffolds and non-scaffolded contigs are laid out
+  # side-by-side rather than overlapping at the column center.  Returns a
+  # list of pill specs each with $kind, $name, and $length (bp); scaffold
+  # specs additionally carry $sa (the scaffold's AGP rows) and the list of
+  # AGP-component names in $components.
+  build_pill_specs <- function(asm, rid, lk) {
+    specs <- list()
+    scaffolded_components <- character(0)
+
+    scaffold_names <- character(0)
+    if (!is.null(agp_idx)) {
+      if (!is.null(agp_idx[[paste(asm, rid, sep = "\x01")]]))
+        scaffold_names <- c(scaffold_names, rid)
+      qs_suffixes <- unique(lk$contig)
+      qs_bases <- unique(sub("_[fc]\\d+$", "", qs_suffixes))
+      qs_bases <- setdiff(qs_bases, rid)
+      for (qb in qs_bases) {
+        if (!is.null(agp_idx[[paste(asm, qb, sep = "\x01")]]))
+          scaffold_names <- c(scaffold_names, qb)
+      }
+    }
+
+    for (sn in scaffold_names) {
+      sa <- agp_idx[[paste(asm, sn, sep = "\x01")]]
+      if (is.null(sa) || nrow(sa) <= 1) next
+      comp_rows <- sa %>% filter(type == "W")
+      scaffolded_components <- c(scaffolded_components, comp_rows$component)
+      specs[[length(specs) + 1]] <- list(
+        kind = "scaffold", name = sn, length = max(sa$end),
+        sa = sa, components = comp_rows$component
+      )
+    }
+
+    if (length(scaffolded_components) > 0) {
+      lk <- lk %>% filter(!(original_name %in% scaffolded_components))
+    }
+    if (nrow(lk) > 0) {
+      lk_o <- lk %>% arrange(contig)
+      for (ci in seq_len(nrow(lk_o))) {
+        r <- lk_o[ci, ]
+        specs[[length(specs) + 1]] <- list(
+          kind = "fragment", name = as.character(r$contig),
+          length = r$length, original_name = r$original_name,
+          reversed = r$reversed
+        )
+      }
+    }
+
+    # Sort all specs (scaffolds + fragments together) by their displayed
+    # name using natural-numeric sort, so layout order matches the order
+    # users see in contig names rather than scaffolds-first-fragments-last.
+    if (length(specs) > 1) {
+      ord <- str_order(vapply(specs, function(s) s$name, character(1)),
+                       numeric = TRUE)
+      specs <- specs[ord]
+    }
+    specs
+  }
+
+  # Total layout width consumed by a list of pill specs.
+  specs_total_width <- function(specs) {
+    if (length(specs) == 0) return(0)
+    sum(vapply(specs, function(s) s$length / x_scale, numeric(1))) +
+      (length(specs) - 1) * pill_gap
+  }
+
+  # Pre-compute per-chromosome column width: max of ref_len and the widest
+  # assembly's combined pill row for that column.
   col_widths <- numeric(length(sg_chrom_nums))
   for (cn_i in seq_along(sg_chrom_nums)) {
     cn <- sg_chrom_nums[cn_i]
@@ -1698,18 +1790,11 @@ build_synteny_plot <- function(sg) {
     ref_w <- ref_row$ref_len[1] / x_scale
     max_asm_w <- ref_w
     for (asm in sg_asms) {
-      # Check for scaffold — use scaffold length instead of fragment sum
-      asm_agp_w <- if (!is.null(agp_idx)) agp_idx[[paste(asm, rid, sep = "\x01")]] else NULL
-      if (!is.null(asm_agp_w) && nrow(asm_agp_w) > 1) {
-        total_w <- max(asm_agp_w$end) / x_scale
-      } else {
-        asm_contigs <- asm_lookup_df %>%
-          filter(assembly == asm, assigned_ref_id == rid)
-        n_ctg <- nrow(asm_contigs)
-        total_w <- sum(asm_contigs$length) / x_scale +
-                   max(0, n_ctg - 1) * pill_gap
-      }
-      max_asm_w <- max(max_asm_w, total_w)
+      lk <- asm_lookup_df %>%
+        filter(assembly == asm, assigned_ref_id == rid) %>%
+        mutate(contig = factor(contig, levels = str_sort(contig, numeric = TRUE)))
+      specs <- build_pill_specs(asm, rid, lk)
+      max_asm_w <- max(max_asm_w, specs_total_width(specs))
     }
     col_widths[cn_i] <- max_asm_w
   }
@@ -1754,135 +1839,74 @@ build_synteny_plot <- function(sg) {
       tooltip = sprintf("Reference\n%s\n%.2f Mb", rid, ref_len / 1e6)
     )
 
-    # Assembly pills
+    # Assembly pills.  Scaffolds and non-scaffolded contigs share one
+    # left-to-right cursor centered on the column so they cannot overlap.
     for (asm in sg_asms) {
       y_asm <- row_centers[[asm]]
       lk <- asm_lookup_df %>%
         filter(assembly == asm, assigned_ref_id == rid) %>%
-        mutate(contig = factor(contig, levels = str_sort(contig, numeric = TRUE))) %>%
-        arrange(contig)
-      if (nrow(lk) == 0) next
+        mutate(contig = factor(contig, levels = str_sort(contig, numeric = TRUE)))
+      if (nrow(lk) == 0 &&
+          (is.null(agp_idx) || is.null(agp_idx[[paste(asm, rid, sep = "\x01")]])))
+        next
 
-      # Check if this assembly has AGP scaffold(s) for this chromosome.
-      # The scaffold name may be the ref_id itself (e.g., "chr7A") or include
-      # a query subgenome suffix (e.g., "chr7A_B" for scaffolded fragments
-      # of the secondary subgenome).  Collect all matching scaffolds.
-      scaffold_names <- character(0)
-      if (!is.null(agp_idx)) {
-        # Direct match: scaffold == rid (primary or single copy)
-        if (!is.null(agp_idx[[paste(asm, rid, sep = "\x01")]]))
-          scaffold_names <- c(scaffold_names, rid)
-        # Query subgenome variants: rid_B, rid_C, etc.
-        qs_suffixes <- unique(lk$contig)
-        qs_bases <- unique(sub("_[fc]\\d+$", "", qs_suffixes))
-        qs_bases <- setdiff(qs_bases, rid)  # exclude primary (already checked)
-        for (qb in qs_bases) {
-          if (!is.null(agp_idx[[paste(asm, qb, sep = "\x01")]]))
-            scaffold_names <- c(scaffold_names, qb)
-        }
-      }
+      specs <- build_pill_specs(asm, rid, lk)
+      if (length(specs) == 0) next
 
-      # Render scaffolded pills (one per scaffold with >1 component)
-      scaffolded_contigs <- character(0)  # track which contigs are in scaffolds
-      for (sc_name in scaffold_names) {
-        sc_agp <- agp_idx[[paste(asm, sc_name, sep = "\x01")]]
-        if (is.null(sc_agp) || nrow(sc_agp) <= 1) next
+      total_w <- specs_total_width(specs)
+      x_cursor <- x_pos - total_w / 2
 
-        scaffold_len <- max(sc_agp$end)
-        scaffold_w <- scaffold_len / x_scale
-        n_components <- sum(sc_agp$type == "W")
-        # Component labels: pair each original AGP component name with its
-        # dnadis-assigned contig name (e.g. "ctg_17 (chr1A_f2)") for tooltip
-        # consistency with the per-assembly report.
-        comp_rows <- sc_agp %>% filter(type == "W")
-        comp_dnadis <- asm_lookup_df$contig[match(
-          paste(asm, comp_rows$component, sep = "\x01"),
-          paste(asm_lookup_df$assembly, asm_lookup_df$original_name, sep = "\x01"))]
-        component_labels <- ifelse(is.na(comp_dnadis),
-                                   comp_rows$component,
-                                   paste0(comp_rows$component, " (", comp_dnadis, ")"))
-        component_names <- paste(component_labels, collapse = ", ")
-        # Track the original component names for exclusion from fragment pills
-        scaffolded_contigs <- c(scaffolded_contigs, comp_rows$component)
+      for (sp in specs) {
+        sp_w <- sp$length / x_scale
+        sp_x <- x_cursor + sp_w / 2
 
-        # Compute pill x-position: use column center for primary, offset for secondary
-        n_scaffolds <- length(scaffold_names)
-        sc_idx <- which(scaffold_names == sc_name)
-        if (n_scaffolds == 1) {
-          sc_x <- x_pos
-        } else {
-          # Stack multiple scaffolds left-to-right within the column
-          total_w_all <- sum(vapply(scaffold_names, function(sn) {
-            sa <- agp_idx[[paste(asm, sn, sep = "\x01")]]
-            if (is.null(sa) || nrow(sa) <= 1) return(0)
-            max(sa$end) / x_scale
-          }, numeric(1))) + max(0, n_scaffolds - 1) * pill_gap
-          # Recalculate per-scaffold position
-          sc_cursor <- x_pos - total_w_all / 2
-          for (si in seq_along(scaffold_names)) {
-            sa <- agp_idx[[paste(asm, scaffold_names[si], sep = "\x01")]]
-            sw <- if (!is.null(sa) && nrow(sa) > 1) max(sa$end) / x_scale else 0
-            if (scaffold_names[si] == sc_name) {
-              sc_x <- sc_cursor + sw / 2
-              break
-            }
-            sc_cursor <- sc_cursor + sw + pill_gap
-          }
-        }
+        if (identical(sp$kind, "scaffold")) {
+          sa <- sp$sa
+          comp_rows <- sa %>% filter(type == "W")
+          comp_dnadis <- asm_lookup_df$contig[match(
+            paste(asm, comp_rows$component, sep = "\x01"),
+            paste(asm_lookup_df$assembly, asm_lookup_df$original_name, sep = "\x01"))]
+          component_labels <- ifelse(is.na(comp_dnadis),
+                                     comp_rows$component,
+                                     paste0(comp_rows$component, " (", comp_dnadis, ")"))
+          component_names <- paste(component_labels, collapse = ", ")
+          n_components <- nrow(comp_rows)
 
-        pills_list[[length(pills_list) + 1]] <- tibble(
-          row_name = asm, is_ref = FALSE,
-          ref_id = rid, chrom_id = cid, chrom_num = cn, subgenome = sg,
-          contig = sc_name, contig_len = scaffold_len, reversed = FALSE,
-          x_center = sc_x, x_left = sc_x - scaffold_w/2,
-          x_right = sc_x + scaffold_w/2,
-          y_center = y_asm, pill_width = scaffold_w,
-          tooltip = sprintf("%s\n%s (scaffold, %d components)\n%.2f Mb\n%s",
-                            asm, sc_name, n_components, scaffold_len / 1e6,
-                            component_names)
-        )
-
-        # Gap positions → red join indicators
-        gaps <- sc_agp[sc_agp$type %in% c("U", "N"), , drop = FALSE]
-        if (nrow(gaps) > 0) {
-          for (gi in seq_len(nrow(gaps))) {
-            gap_mid <- (gaps$start[gi] + gaps$end[gi]) / 2
-            gap_x <- sc_x - scaffold_w/2 + (gap_mid / scaffold_len) * scaffold_w
-            join_indicators[[length(join_indicators) + 1]] <- tibble(
-              x = gap_x, y_center = y_asm, row_name = asm, chrom_id = cid
-            )
-          }
-        }
-      }
-
-      # Exclude contigs that were rendered as part of a scaffold
-      if (length(scaffolded_contigs) > 0) {
-        lk <- lk %>% filter(!(original_name %in% scaffolded_contigs))
-      }
-
-      if (nrow(lk) > 0) {
-        # Fragment mode: stack left-to-right, centered on column
-        n_ctg <- nrow(lk)
-        total_w <- sum(lk$length) / x_scale + max(0, n_ctg - 1) * pill_gap
-        x_cursor <- x_pos - total_w / 2
-
-        for (ci in seq_len(n_ctg)) {
-          ctg <- lk[ci, ]
-          ctg_w <- ctg$length / x_scale
           pills_list[[length(pills_list) + 1]] <- tibble(
             row_name = asm, is_ref = FALSE,
             ref_id = rid, chrom_id = cid, chrom_num = cn, subgenome = sg,
-            contig = ctg$contig, contig_len = ctg$length,
-            reversed = ctg$reversed,
-            x_center = x_cursor + ctg_w / 2,
-            x_left = x_cursor, x_right = x_cursor + ctg_w,
-            y_center = y_asm, pill_width = ctg_w,
-            tooltip = sprintf("%s\n%s (%s)\n%.2f Mb",
-                              asm, ctg$original_name, ctg$contig,
-                              ctg$length / 1e6)
+            contig = sp$name, contig_len = sp$length, reversed = FALSE,
+            x_center = sp_x, x_left = sp_x - sp_w/2, x_right = sp_x + sp_w/2,
+            y_center = y_asm, pill_width = sp_w,
+            tooltip = sprintf("%s\n%s (scaffold, %d components)\n%.2f Mb\n%s",
+                              asm, sp$name, n_components, sp$length / 1e6,
+                              component_names)
           )
-          x_cursor <- x_cursor + ctg_w + pill_gap
+
+          gaps <- sa[sa$type %in% c("U", "N"), , drop = FALSE]
+          if (nrow(gaps) > 0) {
+            for (gi in seq_len(nrow(gaps))) {
+              gap_mid <- (gaps$start[gi] + gaps$end[gi]) / 2
+              gap_x <- sp_x - sp_w/2 + (gap_mid / sp$length) * sp_w
+              join_indicators[[length(join_indicators) + 1]] <- tibble(
+                x = gap_x, y_center = y_asm, row_name = asm, chrom_id = cid
+              )
+            }
+          }
+        } else {
+          # fragment
+          pills_list[[length(pills_list) + 1]] <- tibble(
+            row_name = asm, is_ref = FALSE,
+            ref_id = rid, chrom_id = cid, chrom_num = cn, subgenome = sg,
+            contig = sp$name, contig_len = sp$length, reversed = sp$reversed,
+            x_center = sp_x, x_left = sp_x - sp_w/2, x_right = sp_x + sp_w/2,
+            y_center = y_asm, pill_width = sp_w,
+            tooltip = sprintf("%s\n%s (%s)\n%.2f Mb",
+                              asm, sp$original_name, sp$name,
+                              sp$length / 1e6)
+          )
         }
+        x_cursor <- x_cursor + sp_w + pill_gap
       }
     }
   }
@@ -2521,23 +2545,85 @@ if (has_subgenomes && "assigned_subgenome" %in% names(chrom_df)) {
 
 has_identity <- "seq_identity_vs_ref" %in% names(chrom_df) &&
                 !all(is.na(chrom_df$seq_identity_vs_ref))
+has_weighted_ident <- has_identity &&
+                "best_ref_union_bp" %in% names(chrom_df) &&
+                "length" %in% names(chrom_df)
 has_collin   <- "collinearity_score" %in% names(chrom_df) &&
                 !all(is.na(chrom_df$collinearity_score))
 has_gc_dev   <- "gc_deviation" %in% names(chrom_df) &&
                 !all(is.na(chrom_df$gc_deviation))
 
-# Compute composite sort key for assembly ordering
-# Primary: median identity across first subgenome, secondary: others
-asm_sort_key <- chrom_df %>%
-  filter(!is.na(seq_identity_vs_ref)) %>%
-  group_by(assembly) %>%
-  summarise(median_ident = median(seq_identity_vs_ref, na.rm = TRUE),
-            .groups = "drop") %>%
-  arrange(desc(median_ident))
-asm_quality_order <- if (nrow(asm_sort_key) > 0) asm_sort_key$assembly else asm_names
+# Per-plot row ordering: each ridgeline below sorts assemblies by the
+# metric it actually plots (best at top), so visual ranking matches the
+# x-axis quantity.  Helper accepts the per-contig metric column and a
+# direction flag, and falls back to `asm_names` when no data is available.
+asm_order_by <- function(df, metric_expr, descending = TRUE) {
+  s <- df %>%
+    filter(!is.na({{ metric_expr }})) %>%
+    group_by(assembly) %>%
+    summarise(.sort_val = median({{ metric_expr }}, na.rm = TRUE),
+              .groups = "drop")
+  s <- if (descending) s %>% arrange(desc(.sort_val)) else s %>% arrange(.sort_val)
+  if (nrow(s) > 0) s$assembly else asm_names
+}
 
 n_sg_facets <- length(unique(chrom_df$sg))
 ridge_h <- max(3, n_asm * 0.3 + 1.5)
+```
+
+```{r quality_weighted_identity, eval=(has_any_chrom && has_per_asm && exists("has_weighted_ident") && has_weighted_ident), results='asis'}
+cat("## Weighted Identity\n\n")
+```
+
+```{r quality_weighted_identity_plot, eval=(has_any_chrom && has_per_asm && exists("has_weighted_ident") && has_weighted_ident), fig.width=10, fig.height=ridge_h}
+# Per-contig aligned-bp-weighted identity:
+#   seq_identity_vs_ref * (best_ref_union_bp / length)
+# Per-contig analog of the assembly-level weighted_identity used for sort
+# ordering; the bp-weighted mean across an assembly's chrom_assigned contigs
+# matches `weighted_identity` in comparison_summary.tsv.
+wident_df <- chrom_df %>%
+  filter(!is.na(seq_identity_vs_ref),
+         !is.na(best_ref_union_bp), !is.na(length), length > 0) %>%
+  mutate(value = seq_identity_vs_ref *
+                 pmin(1.0, as.numeric(best_ref_union_bp) / as.numeric(length)) *
+                 100)
+# Sort by the bp-weighted aggregate (matches comparison_summary.tsv's
+# `weighted_identity`) rather than the median of the per-contig values.
+wident_order <- wident_df %>%
+  group_by(assembly) %>%
+  summarise(.sort_val = sum(seq_identity_vs_ref *
+                              as.numeric(best_ref_union_bp), na.rm = TRUE) /
+                        sum(as.numeric(length), na.rm = TRUE),
+            .groups = "drop") %>%
+  arrange(desc(.sort_val))
+wident_order <- if (nrow(wident_order) > 0) wident_order$assembly else asm_names
+wident_df <- wident_df %>%
+  mutate(assembly = factor(assembly, levels = rev(wident_order)))
+
+p_wident <- ggplot(wident_df, aes(x = value, y = assembly, fill = sg, color = sg)) +
+  geom_density_ridges(alpha = 0.6, scale = 1.4, linewidth = 0.4,
+                      rel_min_height = 0.01,
+                      quantile_lines = TRUE, quantiles = 2,
+                      from = 0, to = 100) +
+  { if (has_subgenomes && n_sg_facets > 1) {
+    list(
+      facet_wrap(~ sg, ncol = n_sg_facets),
+      scale_fill_manual(values = sg_cols_light, guide = "none"),
+      scale_color_manual(values = sg_cols_dark, guide = "none")
+    )
+  } else {
+    list(
+      scale_fill_manual(values = c("All" = lighten(oi[5], 0.4)), guide = "none"),
+      scale_color_manual(values = c("All" = oi[5]), guide = "none")
+    )
+  }} +
+  labs(x = "Per-contig weighted identity (%)\n(seq identity × fraction of contig aligned to assigned reference)",
+       y = NULL) +
+  theme_minimal(base_size = base_font_pt, base_family = base_family) +
+  axis_theme +
+  theme(panel.grid.major.y = element_blank())
+
+girafe_styled(ggobj = p_wident, height_svg = ridge_h)  # girafe for SVG device (ggridges renders poorly with R's svg())
 ```
 
 ```{r quality_identity, eval=(has_any_chrom && has_per_asm && exists("has_identity") && has_identity), results='asis'}
@@ -2547,8 +2633,10 @@ cat("## Sequence Identity\n\n")
 ```{r quality_identity_plot, eval=(has_any_chrom && has_per_asm && exists("has_identity") && has_identity), fig.width=10, fig.height=ridge_h}
 ident_df <- chrom_df %>%
   filter(!is.na(seq_identity_vs_ref)) %>%
-  mutate(assembly = factor(assembly, levels = rev(asm_quality_order)),
-         value = seq_identity_vs_ref * 100)
+  mutate(value = seq_identity_vs_ref * 100)
+ident_order <- asm_order_by(ident_df, value, descending = TRUE)
+ident_df <- ident_df %>%
+  mutate(assembly = factor(assembly, levels = rev(ident_order)))
 
 p_ident <- ggplot(ident_df, aes(x = value, y = assembly, fill = sg, color = sg)) +
   geom_density_ridges(alpha = 0.6, scale = 1.4, linewidth = 0.4,
@@ -2582,8 +2670,10 @@ cat("## Collinearity\n\n")
 ```{r quality_collinearity_plot, eval=(has_any_chrom && has_per_asm && exists("has_collin") && has_collin), fig.width=10, fig.height=ridge_h}
 collin_df <- chrom_df %>%
   filter(!is.na(collinearity_score)) %>%
-  mutate(assembly = factor(assembly, levels = rev(asm_quality_order)),
-         value = collinearity_score * 100)
+  mutate(value = collinearity_score * 100)
+collin_order <- asm_order_by(collin_df, value, descending = TRUE)
+collin_df <- collin_df %>%
+  mutate(assembly = factor(assembly, levels = rev(collin_order)))
 
 p_collin <- ggplot(collin_df, aes(x = value, y = assembly, fill = sg, color = sg)) +
   geom_density_ridges(alpha = 0.6, scale = 1.4, linewidth = 0.4,
@@ -2617,8 +2707,11 @@ cat("## GC Deviation\n\n")
 ```{r quality_gc_plot, eval=(has_any_chrom && has_per_asm && exists("has_gc_dev") && has_gc_dev), fig.width=10, fig.height=ridge_h}
 gc_df <- chrom_df %>%
   filter(!is.na(gc_deviation)) %>%
-  mutate(assembly = factor(assembly, levels = rev(asm_quality_order)),
-         value = abs(gc_deviation))
+  mutate(value = abs(gc_deviation))
+# Sort ascending: smaller |GC deviation| at the top of the ridgeline.
+gc_order <- asm_order_by(gc_df, value, descending = FALSE)
+gc_df <- gc_df %>%
+  mutate(assembly = factor(assembly, levels = rev(gc_order)))
 
 p_gc <- ggplot(gc_df, aes(x = value, y = assembly, fill = sg, color = sg)) +
   geom_density_ridges(alpha = 0.6, scale = 1.4, linewidth = 0.4,

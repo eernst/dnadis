@@ -7,10 +7,29 @@ Contains functions for file handling, gzip operations, and subprocess management
 from __future__ import annotations
 
 import gzip
+import re
 import shutil
 import stat as stat_module
 import subprocess
 from pathlib import Path
+
+
+_FILENAME_UNSAFE_RE = re.compile(r"[\s/\\]+")
+
+
+def sanitize_filename_component(name: str, fallback: str = "comparison") -> str:
+    """Return a filename-safe version of ``name``.
+
+    Replaces runs of whitespace and path separators with a single ``_``,
+    strips leading/trailing ``_``, and falls back to ``fallback`` if the
+    result is empty.  Other characters are left intact so users can keep
+    Unicode or punctuation that downstream tools handle (rmarkdown, in
+    particular, mishandles spaces in input filenames — those are the
+    ones we have to fix).
+    """
+    cleaned = _FILENAME_UNSAFE_RE.sub("_", name).strip("_")
+    return cleaned or fallback
+
 
 
 def open_maybe_gzip(path: Path, mode: str):
