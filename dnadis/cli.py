@@ -2170,18 +2170,40 @@ def main():
                     logger.error(f"Assembly '{asm_name}' failed: {e}")
                     failures.append((asm_name, str(e)))
 
-        # Pairwise assembly-vs-assembly synteny (nucleotide mode only)
-        # Runs inside executor context because it submits SLURM jobs.
-        if n_total > 1 and results and args.synteny_mode == "nucleotide" and len(results) >= 2:
+        # Pairwise assembly-vs-assembly synteny via minimap2 on each pair's
+        # chrs.fasta.  Runs regardless of --synteny-mode: even when the main
+        # ref-vs-query phase used miniprot (protein mode), nucleotide
+        # alignment between query assemblies is still meaningful for closely
+        # related genomes and supplies the asm-vs-asm ribbons in the
+        # comparison report's riparian plot.  If divergence is too high,
+        # blocks fail the min_span gate and ribbons stay sparse — graceful
+        # degradation, no error.  Runs inside executor context because it
+        # submits SLURM jobs.
+        if n_total > 1 and results and len(results) >= 2:
             from dnadis.alignment.pairwise import compute_pairwise_synteny
             from dnadis.utils.resource_estimation import estimate_pairwise_resources
 
             # Build chain-parsing kwargs once (all plain types, serializable)
+            # Pairwise synteny uses the same synteny_mode as the main run.
+            # In protein mode, anchors come from reference proteins shared
+            # between the two assemblies' miniprot PAFs, so individual
+            # blocks are short (sub-kb to a few kb).  Lower assign_minlen so
+            # those anchors are not dropped at the block-level gate; the
+            # downstream chain min_bp gate still enforces meaningful
+            # cumulative span.
+            pairwise_assign_minlen = (
+                100 if args.synteny_mode == "protein" else args.assign_minlen
+            )
             chain_kwargs = dict(
+                synteny_mode=args.synteny_mode,
+                proteins_faa=ref_ctx.proteins_faa
+                if args.synteny_mode == "protein" else None,
+                miniprot_exe=args.miniprot,
+                miniprot_args=args.miniprot_args,
                 preset=args.preset,
                 kmer=args.kmer,
                 window=args.window,
-                assign_minlen=args.assign_minlen,
+                assign_minlen=pairwise_assign_minlen,
                 assign_minmapq=args.assign_minmapq,
                 assign_tp=args.assign_tp,
                 chain_q_gap=args.chain_q_gap,
@@ -2214,7 +2236,7 @@ def main():
                     for v in sg_assemblies.values() if len(v) >= 2
                 )
                 logger.phase(
-                    f"Per-subgenome pairwise synteny (nucleotide mode): "
+                    f"Per-subgenome pairwise synteny (minimap2): "
                     f"{n_pw_total} pairs across {len(sg_assemblies)} subgenome(s)"
                 )
 
@@ -2253,7 +2275,7 @@ def main():
                             pairwise_futures.append((pair_name, fut))
             else:
                 logger.phase(
-                    f"Pairwise assembly synteny (nucleotide mode): "
+                    f"Pairwise assembly synteny (minimap2): "
                     f"{len(results) - 1} pairs"
                 )
                 pairwise_dir = output_dir / "pairwise"
