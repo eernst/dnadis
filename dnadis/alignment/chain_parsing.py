@@ -889,16 +889,12 @@ def _chains_to_evidence_and_segments(
         raise ValueError(f"Unknown assign_ref_score: {assign_ref_score}")
 
     # Assign best_ref using reference span fraction (ref_span_bp / ref_length).
-    # This normalises for reference chromosome size, preventing bias toward
-    # larger chromosomes in translocation cases.  Falls back to raw score
-    # when reference lengths are unavailable (protein mode).
-    #
-    # Exclude organelle references (chrC/chrM) from best_ref scoring: their
-    # short reference length (often <300 kb) inflates span_frac so that even
-    # a small NUMT/NUPT-like alignment outscores legitimate megabase-scale
-    # alignments to nuclear chromosomes.  Real organelle contigs are detected
-    # separately via the BLAST organelle pipeline, so dropping them here only
-    # affects nuclear contigs that would otherwise be misassigned.
+    # Falls back to raw score when reference lengths are unavailable (protein
+    # mode).  Organelle references are excluded from the candidate set: their
+    # short ref_len inflates span_frac so a small NUMT/NUPT-like alignment can
+    # outrank a megabase-scale alignment to a nuclear chromosome whose chains
+    # are fragmented across the reference.  Organelle contigs are classified
+    # by the BLAST organelle pipeline rather than by best_ref.
     qr_span_frac: dict[tuple[str, str], float] = {}
     if rlens_from_paf:
         for (q, ref_id), ref_span in qr_ref_span_bp.items():

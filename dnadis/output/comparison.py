@@ -145,11 +145,10 @@ def build_assembly_result(
     identities = [c.seq_identity_vs_ref for c in chrom_assigned if c.seq_identity_vs_ref is not None]
     mean_identity = sum(identities) / len(identities) if identities else None
 
-    # Aligned-bp-weighted identity over chrom_assigned contigs.  Weight each
-    # contig's identity by best_ref_union_bp (bp on the contig aligned to its
-    # assigned reference), then divide by total chrom_assigned contig length.
-    # This treats unmapped query bp as 0 identity, so divergent assemblies
-    # whose few aligned regions are at high identity score appropriately low.
+    # Aligned-bp-weighted identity over chrom_assigned contigs:
+    #   sum(seq_identity_vs_ref * best_ref_union_bp) / sum(contig_len)
+    # Unmapped query bp contribute 0, so the metric reflects both alignment
+    # breadth and identity rather than identity within aligned regions only.
     weighted_ident_num = 0.0
     weighted_ident_den = 0
     for c in chrom_assigned:

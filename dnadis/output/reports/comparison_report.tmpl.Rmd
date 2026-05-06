@@ -127,10 +127,8 @@ has_per_asm <- !is.null(all_summary_df) && nrow(all_summary_df) > 0
 # the riparian plot, and per-assembly tag-by-index loops below all follow
 # the same order as the bar plots.
 if (params$assembly_sort_order == "identity" && has_per_asm) {
-  # Aligned-bp-weighted identity, normalized by total chrom_assigned contig
-  # length so unmapped query bp count as 0 identity.  Mirrors the formula in
-  # comparison.py:build_assembly_result() so this R-side ordering matches the
-  # Python-side `results` ordering used for FOFN-adjacent pairwise jobs.
+  # Mirrors comparison.py:build_assembly_result() so the R ordering matches
+  # the Python ordering used for FOFN-adjacent pairwise jobs:
   #   sum(seq_identity_vs_ref * best_ref_union_bp) / sum(length)
   ident_sort <- all_summary_df %>%
     filter(classification == "chrom_assigned", !is.na(seq_identity_vs_ref)) %>%
@@ -1763,6 +1761,15 @@ build_synteny_plot <- function(sg) {
         )
       }
     }
+
+    # Sort all specs (scaffolds + fragments together) by their displayed
+    # name using natural-numeric sort, so layout order matches the order
+    # users see in contig names rather than scaffolds-first-fragments-last.
+    if (length(specs) > 1) {
+      ord <- str_order(vapply(specs, function(s) s$name, character(1)),
+                       numeric = TRUE)
+      specs <- specs[ord]
+    }
     specs
   }
 
@@ -2569,20 +2576,19 @@ cat("## Weighted Identity\n\n")
 ```
 
 ```{r quality_weighted_identity_plot, eval=(has_any_chrom && has_per_asm && exists("has_weighted_ident") && has_weighted_ident), fig.width=10, fig.height=ridge_h}
-# Per-contig aligned-bp-weighted identity: seq_identity scaled by the fraction
-# of the contig that aligns to its assigned reference.  Treats unmapped query
-# bp as 0 identity, so contigs with sparse high-identity hits drop toward 0%.
-# This is the per-contig analog of the assembly-level weighted_identity used
-# for sort ordering — the assembly's bp-weighted mean of these values equals
-# `weighted_identity` in comparison_summary.tsv.
+# Per-contig aligned-bp-weighted identity:
+#   seq_identity_vs_ref * (best_ref_union_bp / length)
+# Per-contig analog of the assembly-level weighted_identity used for sort
+# ordering; the bp-weighted mean across an assembly's chrom_assigned contigs
+# matches `weighted_identity` in comparison_summary.tsv.
 wident_df <- chrom_df %>%
   filter(!is.na(seq_identity_vs_ref),
          !is.na(best_ref_union_bp), !is.na(length), length > 0) %>%
   mutate(value = seq_identity_vs_ref *
                  pmin(1.0, as.numeric(best_ref_union_bp) / as.numeric(length)) *
                  100)
-# Sort assemblies by the bp-weighted aggregate rather than the median of the
-# per-contig values; this matches comparison_summary.tsv's `weighted_identity`.
+# Sort by the bp-weighted aggregate (matches comparison_summary.tsv's
+# `weighted_identity`) rather than the median of the per-contig values.
 wident_order <- wident_df %>%
   group_by(assembly) %>%
   summarise(.sort_val = sum(seq_identity_vs_ref *
@@ -2702,8 +2708,7 @@ cat("## GC Deviation\n\n")
 gc_df <- chrom_df %>%
   filter(!is.na(gc_deviation)) %>%
   mutate(value = abs(gc_deviation))
-# Lower |GC deviation| is "better"; sort ascending so the cleanest assembly
-# appears at the top of the ridgeline.
+# Sort ascending: smaller |GC deviation| at the top of the ridgeline.
 gc_order <- asm_order_by(gc_df, value, descending = FALSE)
 gc_df <- gc_df %>%
   mutate(assembly = factor(assembly, levels = rev(gc_order)))

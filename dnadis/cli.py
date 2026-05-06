@@ -685,14 +685,9 @@ def run_assembly(
     qr_ref_score = ev.qr_weight_all if args.assign_ref_score == "all" else ev.qr_score_topk
 
     # Use reference span fraction for candidate ranking when ref lengths are
-    # available.  Matches the primary assignment in chain parsing.
-    #
-    # Exclude organelle references from candidate ranking for the same reason
-    # as in chain_parsing.py: their short reference length inflates span_frac
-    # so a tiny NUMT/NUPT-like alignment can outrank a megabase-scale
-    # alignment to a nuclear chromosome whose chains are fragmented across
-    # the reference.  Real organelle contigs are detected via the BLAST
-    # organelle pipeline (phase 3).
+    # available.  Matches the primary assignment in chain parsing, including
+    # the organelle exclusion (see chain_parsing._chains_to_evidence_and_segments
+    # for rationale).
     qr_span_frac: Dict[Tuple[str, str], float] = {}
     if ev.qr_ref_span_bp and ref_lengths:
         for (q, rid), ref_span in ev.qr_ref_span_bp.items():
@@ -1624,7 +1619,7 @@ def main():
         "--assembly-sort-order",
         choices=["input", "identity"],
         default="identity",
-        help="Assembly ordering in comparison report: 'identity' sorts by descending aligned-bp-weighted identity vs reference (default; weights each chrom_assigned contig's identity by its aligned span on the assigned reference and normalizes by total contig length, so divergent assemblies with sparse high-identity hits sort below close relatives), 'input' preserves FOFN/directory order",
+        help="Assembly ordering in comparison report: 'identity' (default) sorts by descending aligned-bp-weighted identity vs reference (sum(seq_identity_vs_ref * best_ref_union_bp) / sum(contig_len) over chrom_assigned contigs); 'input' preserves FOFN/directory order",
     )
     common.add_argument("-v", "--verbose", action="store_true", help="Enable verbose (DEBUG level) logging")
     common.add_argument("--quiet", action="store_true", help="Suppress INFO messages (only show warnings and errors)")
@@ -2185,16 +2180,11 @@ def main():
                     logger.error(f"Assembly '{asm_name}' failed: {e}")
                     failures.append((asm_name, str(e)))
 
-        # If the user asked for identity ordering in the comparison report,
-        # sort `results` by the same key the report uses (aligned-bp-weighted
-        # identity over chrom_assigned contigs, descending) so that FOFN-
-        # adjacent pairs computed below match the identity-adjacent rows the
-        # riparian plot draws ribbons between.  The bp-weighted formula
-        #   sum(seq_identity_vs_ref * best_ref_union_bp) / sum(contig_len)
-        # treats unmapped query bp as 0 identity, so divergent assemblies
-        # whose few aligned regions are at high identity sort below close
-        # relatives whose aligned span covers most of the assembly.
-        # Assemblies with no chrom_assigned identities are pushed to the end.
+        # Sort `results` by AssemblyResult.weighted_identity (descending) when
+        # the user asked for identity ordering, matching the report's sort key
+        # so FOFN-adjacent pairs computed below match the identity-adjacent
+        # rows the riparian plot draws ribbons between.  Assemblies with no
+        # chrom_assigned identities are pushed to the end.
         if args.assembly_sort_order == "identity" and len(results) >= 2:
             sort_keys = {id(r): r.weighted_identity for r in results}
             results.sort(
