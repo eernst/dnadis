@@ -853,9 +853,31 @@ if (has_any_chrom) {
     left_join(y_positions, by = "assembly")
 
   # =====================================================================
-  # Polygon construction helpers
+  # Figure sizing and pill geometry
   # =====================================================================
-  pill_hw     <- 0.30
+  # Compute figure dimensions up front so pill_hw can be derived from the
+  # pdf width.  Without this, pills stretch to fill the column when n_chroms
+  # is small (a 21-column heatmap at the 7.2-in PDF cap gives 5 mm pills),
+  # but shrink to ~1.7 mm at higher column counts.  Pinning pill width in
+  # absolute inches keeps the heatmap visually consistent regardless of how
+  # many chromosomes / subgenomes are present.
+  n_chroms  <- length(ref_order)
+  n_sg_gaps <- max(0, n_sg_groups - 1)
+  hm_width  <- max(6, n_chroms * 0.45 + n_sg_gaps * 0.8 + 2.5)
+  hm_height <- max(3, n_asm * 0.5 + 2.0)
+  pdf_w     <- min(7.2, hm_width)
+  html_w    <- min(13, hm_width * 1.4)
+  pdf_h     <- max(3, pdf_w * hm_height / html_w)
+
+  # Effective x-extent in plot units (column count + inter-subgenome gaps).
+  x_range_units <- max(x_positions$x_center) - min(x_positions$x_center) + 1.0
+
+  # Target absolute pill width.  ~1.7 mm is the size that lets a 1-2 digit
+  # copy-count label fit comfortably at the multi-label font size below.
+  target_pill_in <- 0.067
+  inches_per_unit_pdf <- pdf_w / x_range_units
+  pill_hw <- min(0.30, target_pill_in / 2 / inches_per_unit_pdf)
+
   rect_hh     <- 0.32   # half-height of core rectangle (straight edges)
   cap_r_val   <- 0.08   # cap extends beyond rect; ratio = 0.32/0.40 = 80%
   jagged_hh   <- 0.34   # slightly taller than rect for zigzag visibility
@@ -1035,16 +1057,10 @@ if (has_any_chrom) {
       plot.caption = element_text(size = 6, hjust = 0, color = "#666")
     )
 
-  # --- Dynamic sizing ---
-  n_chroms <- length(ref_order)
-  n_sg_gaps <- max(0, n_sg_groups - 1)
-  hm_width  <- max(6, n_chroms * 0.45 + n_sg_gaps * 0.8 + 2.5)
-  hm_height <- max(3, n_asm * 0.5 + 2.0)
-
-  pdf_w  <- min(7.2, hm_width)
-  html_w <- min(13, hm_width * 1.4)
-  # Scale PDF height to match HTML aspect ratio so pills keep the same proportions
-  pdf_h  <- max(3, pdf_w * hm_height / html_w)
+  # Figure dimensions (hm_width, pdf_w, html_w, pdf_h) are computed earlier
+  # so pill_hw can be derived from pdf_w; reuse them here.
+  # PDF height is scaled to match HTML aspect ratio so pills keep the same
+  # proportions across the two media.
 
   # Multi-contig count labels: bigger font in HTML (larger pill area)
   # than in PDF (compact print layout).  Sizes are in ggplot text units
