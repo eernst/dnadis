@@ -645,7 +645,11 @@ ref_lines_base <- ref_sg %>%
 df_plot <- summary_df %>%
   mutate(
     contig_len = if_else(is.na(length), 0, as.numeric(length)),
+    # Non-polyploid: map all contigs to "G" so they join cleanly with
+    # ref_lines_base (which sets subgenome = "G" in the else branch above)
+    # — the per-chromosome reference length tick needs this match to draw.
     assigned_subgenome = case_when(
+      !has_subgenomes ~ "G",
       !is.na(assigned_subgenome) & assigned_subgenome %in% plot_levels ~ as.character(assigned_subgenome),
       TRUE ~ "NA"),
     assigned_chrom_id = if_else(assigned_chrom_id %in% chrom_levels, assigned_chrom_id, "Un"),
