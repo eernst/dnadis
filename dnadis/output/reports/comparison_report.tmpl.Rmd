@@ -2544,7 +2544,7 @@ cat("Synteny data available but no ribbon connections could be built. ",
 ```
 
 
-`r if (has_any_chrom && has_per_asm) "# 4. Quality {.tabset}" else ""`
+`r if (has_any_chrom && has_per_asm) "# 4. Similarity {.tabset}" else ""`
 
 ```{r quality_section, eval=(has_any_chrom && has_per_asm)}
 chrom_df <- all_summary_df %>%
