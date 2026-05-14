@@ -76,7 +76,7 @@ th a.asm-link:hover, th a.asm-link:focus {
   position: fixed;
   top: 8px;
   right: 14px;
-  z-index: 10;
+  z-index: 1100;
   color: #94a3b8;
   display: inline-flex;
   align-items: center;
@@ -84,6 +84,7 @@ th a.asm-link:hover, th a.asm-link:focus {
   border-radius: 50%;
   text-decoration: none;
   transition: color 0.15s ease-in-out;
+  pointer-events: auto;
 }
 .docs-link:hover, .docs-link:focus {
   color: #2c3e50;
