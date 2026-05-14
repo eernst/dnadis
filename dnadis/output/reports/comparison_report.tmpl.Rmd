@@ -68,7 +68,7 @@ asm_report_link <- function(name) {
   s <- as.character(name)
   enc <- vapply(s, URLencode, character(1), reserved = TRUE)
   ifelse(is.na(s) | !nzchar(s), s,
-         sprintf('<a href="%s/%s.assembly_report.html">%s</a>',
+         sprintf('<a class="asm-link" href="%s/%s.assembly_report.html">%s</a>',
                  enc, enc, htmltools::htmlEscape(s)))
 }
 

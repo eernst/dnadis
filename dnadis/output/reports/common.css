@@ -47,3 +47,15 @@ h2 { font-size: 16px; }
   color: #1a5276;
   text-decoration: none;
 }
+
+/* Assembly-name links in comparison report tables: no underline at rest,
+   subtle theme color shift on hover/focus with a short fade. */
+a.asm-link {
+  color: inherit;
+  text-decoration: none;
+  transition: color 0.15s ease-in-out;
+}
+a.asm-link:hover, a.asm-link:focus {
+  color: #1a5276;
+  text-decoration: none;
+}
