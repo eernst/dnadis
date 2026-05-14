@@ -359,10 +359,53 @@ function insertDnadisBrand() {
   brand.appendChild(document.createTextNode('adis'));
   toc.insertBefore(brand, toc.firstChild);
 }
+
+// Insert a question-mark-in-circle icon at the top-right of the viewport,
+// linking to the dnadis documentation.  Mirrors the dnadis logo pinned at
+// the top-left of the TOC sidebar.
+function insertDocsLink() {
+  if (document.querySelector('.docs-link')) return;
+  var a = document.createElement('a');
+  a.href = 'https://github.com/eernst/dnadis';
+  a.className = 'docs-link';
+  a.target = '_blank';
+  a.rel = 'noopener';
+  a.setAttribute('aria-label', 'Documentation');
+  a.setAttribute('title', 'Documentation');
+  var ns = 'http://www.w3.org/2000/svg';
+  var svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('width', '24');
+  svg.setAttribute('height', '24');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '2');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  var circle = document.createElementNS(ns, 'circle');
+  circle.setAttribute('cx', '12'); circle.setAttribute('cy', '12'); circle.setAttribute('r', '10');
+  svg.appendChild(circle);
+  var qpath = document.createElementNS(ns, 'path');
+  qpath.setAttribute('d', 'M9.5 9a2.5 2.5 0 0 1 5 0c0 1.5-2.5 2-2.5 3.5');
+  svg.appendChild(qpath);
+  var dot = document.createElementNS(ns, 'line');
+  dot.setAttribute('x1', '12'); dot.setAttribute('y1', '17');
+  dot.setAttribute('x2', '12'); dot.setAttribute('y2', '17.01');
+  svg.appendChild(dot);
+  a.appendChild(svg);
+  document.body.appendChild(a);
+}
+
 // Try on DOMContentLoaded and again on window load to catch tocify's
 // post-ready DOM mutations without racing it.
-document.addEventListener('DOMContentLoaded', insertDnadisBrand);
-window.addEventListener('load', insertDnadisBrand);
+document.addEventListener('DOMContentLoaded', function () {
+  insertDnadisBrand();
+  insertDocsLink();
+});
+window.addEventListener('load', function () {
+  insertDnadisBrand();
+  insertDocsLink();
+});
 </script>
 
 # 1. Assembly Overview {.tabset}

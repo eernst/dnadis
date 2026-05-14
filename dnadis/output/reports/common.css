@@ -59,3 +59,27 @@ a.asm-link:hover, a.asm-link:focus {
   color: #1a5276;
   text-decoration: none;
 }
+
+/* Docs link icon: fixed to the top-right of the viewport, mirroring the
+   dnadis-brand pinned to the top-left of the TOC sidebar.  Inserted by a
+   small inline script in each report template so a strict-CSP audit can
+   still pass (no innerHTML). */
+.docs-link {
+  position: fixed;
+  top: 8px;
+  right: 14px;
+  z-index: 10;
+  color: #94a3b8;
+  display: inline-flex;
+  align-items: center;
+  padding: 4px;
+  border-radius: 50%;
+  text-decoration: none;
+  transition: color 0.15s ease-in-out;
+}
+.docs-link:hover, .docs-link:focus {
+  color: #2c3e50;
+  text-decoration: none;
+  outline: none;
+}
+.docs-link svg { display: block; }
