@@ -49,13 +49,21 @@ h2 { font-size: 16px; }
 }
 
 /* Assembly-name links in comparison report tables: no underline at rest,
-   subtle theme color shift on hover/focus with a short fade. */
-a.asm-link {
+   subtle theme color shift on hover/focus with a short fade.  Selectors
+   include td/th to outrank flatly's `.table a:not(.btn)` rule (which
+   re-introduces an underline) and any other Bootstrap link defaults
+   without resorting to !important. */
+a.asm-link,
+td a.asm-link,
+th a.asm-link {
   color: inherit;
   text-decoration: none;
+  cursor: pointer;
   transition: color 0.15s ease-in-out;
 }
-a.asm-link:hover, a.asm-link:focus {
+a.asm-link:hover, a.asm-link:focus,
+td a.asm-link:hover, td a.asm-link:focus,
+th a.asm-link:hover, th a.asm-link:focus {
   color: #1a5276;
   text-decoration: none;
 }
