@@ -290,7 +290,9 @@ def test_synthetic_rearrangement_detection(tmp_path):
 
     n_asms = int(os.environ.get("DNADIS_SYNTHETIC_N", "10"))
     seed = int(os.environ.get("DNADIS_SYNTHETIC_SEED", str(int(time.time()))))
-    print(f"\n[synthetic-rearr] seed={seed} n_asms={n_asms}")
+    threads = int(os.environ.get("DNADIS_SYNTHETIC_THREADS",
+                                  str(min(8, os.cpu_count() or 4))))
+    print(f"\n[synthetic-rearr] seed={seed} n_asms={n_asms} threads={threads}")
 
     rng = random.Random(seed)
     all_truth: List[Tuple[int, Rearrangement]] = []
@@ -323,7 +325,7 @@ def test_synthetic_rearrangement_detection(tmp_path):
             "--skip-organelles", "--skip-rdna",
             "--skip-telomeres", "--skip-rdna-consensus",
             "--skip-compleasm", "--skip-plot",
-            "-t", "4",
+            "-t", str(threads),
         ]
         try:
             subprocess.run(cmd, check=True, capture_output=True, timeout=1800)
