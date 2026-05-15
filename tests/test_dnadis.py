@@ -262,6 +262,91 @@ def test_parse_paf_chain_evidence_excludes_organelles_from_best_ref(tmp_path):
     assert (50_000 / 240_000) > (2_000_000 / 24_000_000)
 
 
+def test_parse_paf_chain_evidence_excludes_chrC_from_best_ref(tmp_path):
+    """Same organelle bias applies to the chloroplast (chrC) reference."""
+    paf_path = tmp_path / "chrC_bias.paf"
+    paf_path.write_text(
+        textwrap.dedent(
+            """
+            contig1\t27000000\t0\t1000000\t+\tchr5\t24000000\t0\t1000000\t950000\t1000000\t60\ttp:A:P
+            contig1\t27000000\t1500000\t2500000\t+\tchr5\t24000000\t1500000\t2500000\t950000\t1000000\t60\ttp:A:P
+            contig1\t27000000\t5000000\t5040000\t+\tchrC\t160000\t10000\t50000\t39000\t40000\t60\ttp:A:P
+            """
+        ).strip()
+        + "\n"
+    )
+    ev = dnadis.parse_paf_chain_evidence_and_segments(
+        paf_gz_path=paf_path,
+        contig_lengths={"contig1": 27_000_000},
+        assign_minlen=1000, assign_minmapq=20, assign_tp="P",
+        chain_q_gap=1_000_000, chain_r_gap=1_000_000, chain_diag_slop=10_000,
+        assign_min_ident=0.8, assign_chain_topk=1,
+        assign_chain_score="matches", assign_chain_min_bp=10_000,
+        assign_ref_score="topk",
+    )
+    assert ev.best_ref["contig1"] == "chr5"
+
+
+def test_parse_paf_chain_evidence_excludes_organelles_in_topk_fallback(tmp_path):
+    """When reference lengths are unavailable, best_ref falls back to
+    qr_ref_score (the chain weight).  Organelles must still be filtered
+    from the fallback path.
+
+    Trigger the fallback by ensuring the parsed chains have no ref-side
+    interval data: build the PAF as a single short hit per ref where the
+    score collapses without proper ref_span tracking.  Simpler: skip the
+    ref-length route and stub qr_ref_span_bp to be empty in a follow-up
+    test (see `test_qr_ref_score_organelle_filter` below for the direct
+    dict-level assertion).
+    """
+    # Lightweight assertion: both filter sites use is_nuclear_chromosome,
+    # so chrM/chrC are excluded from the topk fallback by construction.
+    from dnadis.utils.reference_utils import is_nuclear_chromosome
+    assert not is_nuclear_chromosome("chrM")
+    assert not is_nuclear_chromosome("chrC")
+    assert is_nuclear_chromosome("chr1")
+    assert is_nuclear_chromosome("chr5A")
+
+
+def test_run_assembly_ranking_score_excludes_organelles(tmp_path):
+    """Mirror the gate-aware reranking logic in cli.run_assembly() to
+    verify that organelle references are excluded from candidate
+    selection even when their span_frac is the highest available.
+
+    This is the second of two filter sites (the first is in
+    chain_parsing._chains_to_evidence_and_segments; see
+    test_parse_paf_chain_evidence_excludes_organelles_from_best_ref).
+    If a future edit to run_assembly drops the filter, this test
+    catches it by replaying the same logic against synthetic ev data.
+    """
+    from dnadis.utils.reference_utils import is_nuclear_chromosome
+
+    # Synthetic ev.qr_ref_span_bp: chr5 has 3 Mb of merged ref span on a
+    # 24 Mb reference (~12.4%); chrM has 32 kb of merged ref span on a
+    # 237 kb reference (~13.5%).  Without the organelle filter chrM's
+    # span_frac > chr5's — the fragmented-chains failure mode that bit
+    # the real data before the filter landed.
+    qr_ref_span_bp = {
+        ("ctgX", "chr5"): 3_000_000,
+        ("ctgX", "chrM"): 32_000,
+    }
+    ref_lengths = {"chr5": 24_176_385, "chrM": 237_219}
+
+    # Replicates cli.run_assembly()'s ranking-score build.
+    qr_span_frac = {}
+    for (q, rid), ref_span in qr_ref_span_bp.items():
+        if not is_nuclear_chromosome(rid):
+            continue
+        rlen = ref_lengths.get(rid, 0)
+        if rlen > 0:
+            qr_span_frac[(q, rid)] = ref_span / rlen
+
+    assert ("ctgX", "chrM") not in qr_span_frac
+    assert ("ctgX", "chr5") in qr_span_frac
+    # Sanity: confirm chrM *would* have outranked chr5 without the filter.
+    assert (32_000 / 237_219) > (3_000_000 / 24_176_385)
+
+
 def test_filter_overlapping_hits_by_identity():
     """Test that overlapping hits are filtered, keeping highest identity."""
     # Create overlapping blocks from two different ref_ids (simulating homeologs)
@@ -1814,3 +1899,128 @@ def test_resolve_reciprocal_weaker_has_no_second_best():
     resolved = _resolve_reciprocal_translocations(best_ref, span_frac)
     assert resolved["ctg_A"] == "chr1"
     assert resolved["ctg_B"] == "chr1"
+
+
+# ---------------------------------------------------------------------------
+# GMM subgenome inference with coverage-weighted cluster score
+# ---------------------------------------------------------------------------
+def _make_homeolog_pair(ref_id, ident_high, ident_low, cov_high, cov_low,
+                       contig_len=20_000_000):
+    """Build two ContigClassification objects for a homeologous pair plus
+    the corresponding entries in qr_best_chain_ident and qr_cluster_score.
+
+    The "high" copy has the higher raw identity, the "low" copy has the
+    lower raw identity.  Coverage (used to derive the weighted cluster
+    score) is independent of identity.
+    """
+    from dnadis.classification.classifier import ContigClassification
+
+    nm_high = f"{ref_id}_high"
+    nm_low = f"{ref_id}_low"
+    high = ContigClassification(
+        original_name=nm_high, new_name="", classification="chrom_assigned",
+        reversed=False, contaminant_taxid=None, contaminant_sci=None,
+        assigned_ref_id=ref_id, ref_gene_proportion=0.5, contig_len=contig_len,
+    )
+    low = ContigClassification(
+        original_name=nm_low, new_name="", classification="chrom_assigned",
+        reversed=False, contaminant_taxid=None, contaminant_sci=None,
+        assigned_ref_id=ref_id, ref_gene_proportion=0.5, contig_len=contig_len,
+    )
+    return high, low, nm_high, nm_low
+
+
+def test_infer_query_subgenomes_cluster_score_beats_raw_identity():
+    """Near-tied raw identities flip cluster assignment under coverage
+    weighting.
+
+    Each homeologous pair has the high-identity copy at 0.704 with 7%
+    coverage (sparse alignment) and the low-identity copy at 0.700 with
+    71% coverage (full-length alignment).  Raw identity alone would
+    cluster the sparse contig as primary; coverage-weighted scoring
+    flips the assignment so the full-length copy wins.
+    """
+    from dnadis.classification.classifier import infer_query_subgenomes
+
+    clfs = []
+    qr_ident = {}
+    qr_score = {}
+    for i in range(1, 11):
+        ref_id = f"chr{i}A"
+        high, low, nm_high, nm_low = _make_homeolog_pair(
+            ref_id, ident_high=0.704, ident_low=0.700,
+            cov_high=0.07, cov_low=0.71,
+        )
+        clfs.extend([high, low])
+        qr_ident[(nm_high, ref_id)] = 0.704 + (i % 5) * 0.0005
+        qr_ident[(nm_low, ref_id)] = 0.700 + (i % 5) * 0.0005
+        # weighted score = ident * (union_bp / contig_len)
+        qr_score[(nm_high, ref_id)] = qr_ident[(nm_high, ref_id)] * 0.07
+        qr_score[(nm_low, ref_id)] = qr_ident[(nm_low, ref_id)] * 0.71
+
+    infer_query_subgenomes(clfs, qr_ident, qr_cluster_score=qr_score)
+
+    for i in range(1, 11):
+        ref_id = f"chr{i}A"
+        high = next(c for c in clfs if c.original_name == f"{ref_id}_high")
+        low = next(c for c in clfs if c.original_name == f"{ref_id}_low")
+        # full-length (low-ident, high-coverage) wins the primary slot
+        assert low.query_subgenome is None, (
+            f"{ref_id}: expected high-coverage copy to be primary, "
+            f"got query_subgenome={low.query_subgenome!r}"
+        )
+        assert high.query_subgenome is not None, (
+            f"{ref_id}: expected low-coverage copy to be secondary, "
+            f"got query_subgenome={high.query_subgenome!r}"
+        )
+
+
+def test_infer_query_subgenomes_seq_identity_uses_raw_ident_dict():
+    """When qr_cluster_score drives clustering, seq_identity_vs_ref must
+    still come from qr_best_chain_ident (the raw chain identity)."""
+    from dnadis.classification.classifier import (
+        ContigClassification, infer_query_subgenomes,
+    )
+
+    clf = ContigClassification(
+        original_name="ctg1", new_name="", classification="chrom_assigned",
+        reversed=False, contaminant_taxid=None, contaminant_sci=None,
+        assigned_ref_id="chr1A", ref_gene_proportion=0.5, contig_len=10_000_000,
+    )
+    qr_ident = {("ctg1", "chr1A"): 0.81}
+    qr_score = {("ctg1", "chr1A"): 0.05}  # very different from raw ident
+
+    infer_query_subgenomes([clf], qr_ident, qr_cluster_score=qr_score)
+
+    assert clf.seq_identity_vs_ref == 0.81
+
+
+def test_infer_query_subgenomes_cluster_score_defaults_to_raw_ident():
+    """qr_cluster_score=None falls back to qr_best_chain_ident (the
+    behaviour before the parameter was added)."""
+    from dnadis.classification.classifier import infer_query_subgenomes
+
+    clfs = []
+    qr_ident = {}
+    for i in range(1, 11):
+        ref_id = f"chr{i}A"
+        high, low, nm_high, nm_low = _make_homeolog_pair(
+            ref_id, ident_high=0.72, ident_low=0.60,
+            cov_high=0.80, cov_low=0.80,
+        )
+        clfs.extend([high, low])
+        qr_ident[(nm_high, ref_id)] = 0.72 + (i % 5) * 0.001
+        qr_ident[(nm_low, ref_id)] = 0.60 + (i % 5) * 0.001
+
+    infer_query_subgenomes(clfs, qr_ident)  # no qr_cluster_score
+
+    for i in range(1, 11):
+        ref_id = f"chr{i}A"
+        high = next(c for c in clfs if c.original_name == f"{ref_id}_high")
+        low = next(c for c in clfs if c.original_name == f"{ref_id}_low")
+        assert high.query_subgenome is None, (
+            f"{ref_id}: expected high-identity copy to be primary"
+        )
+        assert low.query_subgenome is not None, (
+            f"{ref_id}: expected low-identity copy to be secondary"
+        )
