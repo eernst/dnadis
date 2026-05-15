@@ -271,11 +271,19 @@ def _matches_truth(detected: dict, truth: Rearrangement,
     """
     dt = detected.get("rearrangement_type", "")
     tt = truth.rearrangement_type
-    translocation_types = {"translocation", "reciprocal_translocation",
-                           "whole_arm_translocation"}
+    # dnadis's detector routinely co-emits more than one inter-chromosomal
+    # label for the same event (e.g. a fusion call AND a whole-arm
+    # translocation call, when one chromosome's full length is appended to
+    # another).  Treat all four inter-chromosomal labels as a single
+    # equivalence class for type-matching: any of {fusion, translocation,
+    # reciprocal_translocation, whole_arm_translocation} satisfies a truth
+    # of any of those types.  Inversion and fission stay strict — their
+    # signatures are distinct and a label swap would indicate a real miss.
+    inter_chrom_types = {"fusion", "translocation",
+                         "reciprocal_translocation", "whole_arm_translocation"}
     type_ok = (
         dt == tt
-        or (tt in translocation_types and dt in translocation_types)
+        or (tt in inter_chrom_types and dt in inter_chrom_types)
     )
     if not type_ok:
         return False
@@ -296,10 +304,11 @@ def _matches_truth(detected: dict, truth: Rearrangement,
     except ValueError:
         return False
 
-    # Fusion has no single reference interval — chrom involvement alone is
-    # the signature.  For everything else, check interval overlap on the
-    # reference side.
-    if tt == "fusion":
+    # Fusion calls (both as truth and as the detection's emitted label)
+    # carry no meaningful single ref interval — dnadis writes ref=[0-0]
+    # for fusions because the event involves two whole chromosomes.  In
+    # those cases chromosome involvement alone is the match signature.
+    if tt == "fusion" or dt == "fusion" or (det_start == 0 and det_end == 0):
         return True
 
     truth_lo = truth.ref_breakpoint
