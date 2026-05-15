@@ -68,23 +68,39 @@ th a.asm-link:hover, th a.asm-link:focus {
   text-decoration: none;
 }
 
-/* Docs link icon: fixed to the top-right of the viewport, mirroring the
-   dnadis-brand pinned to the top-left of the TOC sidebar.  Inserted by a
-   small inline script in each report template so a strict-CSP audit can
-   still pass (no innerHTML). */
+/* TOC header: horizontal flex container holding the dnadis logo on the
+   left and the docs link on the right.  Sticks to the top of the TOC so
+   both pieces stay visible while scrolling.  Inserted by a small inline
+   script in each report template (so a strict-CSP audit can still pass
+   — no innerHTML). */
+.toc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: #fff;
+  border-bottom: 1px solid #ddd;
+  padding: 6px 10px 10px 10px;
+  margin: 0 0 10px 0;
+}
+/* Override the standalone-brand styles so it sits inside .toc-header
+   without its own background / border (those are on .toc-header now). */
+.toc-header .dnadis-brand {
+  position: static;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: transparent;
+}
 .docs-link {
-  position: fixed;
-  top: 8px;
-  right: 14px;
-  z-index: 1100;
   color: #94a3b8;
   display: inline-flex;
   align-items: center;
-  padding: 4px;
-  border-radius: 50%;
+  padding: 2px;
   text-decoration: none;
   transition: color 0.15s ease-in-out;
-  pointer-events: auto;
 }
 .docs-link:hover, .docs-link:focus {
   color: #2c3e50;
