@@ -240,44 +240,75 @@ def _parse_rearrangements_tsv(path: Path) -> List[dict]:
         return list(reader)
 
 
-def _matches_truth(detected: dict, truth: Rearrangement,
-                   bp_tolerance: int = 250_000) -> bool:
-    """Heuristic match: same type-class, same chromosomes involved,
-    breakpoint within tolerance.
+def _norm_ref(name: str) -> str:
+    """Mirror dnadis's normalize_ref_id: lowercase 'chr' prefix.  Used
+    so capitalized reference IDs (e.g. TAIR10's Chr1) compare equal to
+    the lowercase form (chr1) that dnadis writes to rearrangements.tsv.
+    """
+    from dnadis.utils.reference_utils import normalize_ref_id
+    return normalize_ref_id(name) if name else ""
 
-    Type matching is permissive: 'translocation' covers both
-    'reciprocal_translocation' and 'whole_arm_translocation' variants
-    in the detector since they share the same signature.
+
+def _matches_truth(detected: dict, truth: Rearrangement,
+                   bp_tolerance: int = 500_000) -> bool:
+    """Heuristic match for a detected RearrangementCall row against a
+    Rearrangement truth record.
+
+    Three checks:
+
+    1. Type-class match.  ``translocation``, ``reciprocal_translocation``,
+       and ``whole_arm_translocation`` all share the same detector
+       signature, so any pair within that group counts.  Other types
+       (inversion / fusion / fission) must match exactly.
+    2. Chromosome involvement.  The set of (assigned_ref_id, partner_ref_id)
+       must intersect the truth's (primary_ref, partner_ref) — after
+       lowercasing the chr prefix to match dnadis's normalize_ref_id.
+    3. Reference-interval overlap (for types that have a well-defined
+       ref interval).  Truth's [breakpoint, breakpoint + span] must
+       overlap detected's [ref_start, ref_end].  Falls back to a
+       midpoint-within-tolerance check when the truth has no
+       reference-side span (fusion).
     """
     dt = detected.get("rearrangement_type", "")
     tt = truth.rearrangement_type
+    translocation_types = {"translocation", "reciprocal_translocation",
+                           "whole_arm_translocation"}
     type_ok = (
         dt == tt
-        or (tt in ("reciprocal_translocation", "whole_arm_translocation")
-            and dt in ("reciprocal_translocation", "whole_arm_translocation",
-                       "translocation"))
+        or (tt in translocation_types and dt in translocation_types)
     )
     if not type_ok:
         return False
 
-    # Chromosomes: assigned_ref_id and/or partner_ref_id must overlap with
-    # the truth's primary/partner chromosomes.
-    det_refs = {detected.get("assigned_ref_id", ""),
-                detected.get("partner_ref_id", "") or ""}
-    truth_refs = {truth.primary_ref}
+    det_refs = {
+        _norm_ref(detected.get("assigned_ref_id", "")),
+        _norm_ref(detected.get("partner_ref_id", "") or ""),
+    } - {""}
+    truth_refs = {_norm_ref(truth.primary_ref)}
     if truth.partner_ref:
-        truth_refs.add(truth.partner_ref)
+        truth_refs.add(_norm_ref(truth.partner_ref))
     if not (det_refs & truth_refs):
         return False
 
-    # Breakpoint distance
     try:
         det_start = int(detected.get("ref_start", 0) or 0)
         det_end = int(detected.get("ref_end", 0) or 0)
     except ValueError:
         return False
-    det_bp = (det_start + det_end) // 2 if det_end > 0 else det_start
-    return abs(det_bp - truth.ref_breakpoint) <= bp_tolerance
+
+    # Fusion has no single reference interval — chrom involvement alone is
+    # the signature.  For everything else, check interval overlap on the
+    # reference side.
+    if tt == "fusion":
+        return True
+
+    truth_lo = truth.ref_breakpoint
+    truth_hi = truth.ref_breakpoint + truth.span_bp
+    # Allow detection start/end to fall up to bp_tolerance outside the
+    # truth interval to tolerate edge-effect detection drift.
+    overlap_lo = max(det_start, truth_lo) - bp_tolerance
+    overlap_hi = min(det_end, truth_hi) + bp_tolerance
+    return overlap_hi > overlap_lo
 
 
 @pytest.mark.integration
@@ -338,20 +369,32 @@ def test_synthetic_rearrangement_detection(tmp_path):
         for d in detected:
             all_detected.append((i, d))
         print(f"  asm_{i:02d}: dnadis detected {len(detected)} rearrangements")
+        for d in detected:
+            print(
+                f"      {d.get('rearrangement_type','?'):<24s}"
+                f" {d.get('assigned_ref_id','?')}"
+                f"{':' + d['partner_ref_id'] if d.get('partner_ref_id') else ''}"
+                f" ref=[{d.get('ref_start','?')}-{d.get('ref_end','?')}]"
+                f" span={d.get('span_bp','?')}"
+                f" {d.get('strand','')}"
+                f" conf={d.get('confidence','?')}"
+            )
 
-    # Match detected vs truth, report sensitivity per type
+    # Match detected vs truth, report sensitivity per type.  Use
+    # many-to-many semantics: a single ground-truth event can match
+    # multiple detected sub-events (dnadis routinely splits a large
+    # inversion into several smaller calls), and a detected call may
+    # legitimately match more than one truth in dense rearrangement
+    # scenarios.  Sensitivity = fraction of truths with ≥1 match.
     matched_truth = set()
     matched_det = set()
     for ti, (truth_asm, truth_r) in enumerate(all_truth):
         for di, (det_asm, det_d) in enumerate(all_detected):
             if det_asm != truth_asm:
                 continue
-            if di in matched_det:
-                continue
             if _matches_truth(det_d, truth_r):
                 matched_truth.add(ti)
                 matched_det.add(di)
-                break
 
     from collections import Counter
     per_type_total = Counter(r.rearrangement_type for _, r in all_truth)

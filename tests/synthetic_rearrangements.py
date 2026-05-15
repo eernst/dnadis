@@ -256,15 +256,21 @@ def generate_random_assembly(
     if not eligible:
         raise ValueError(f"no chromosomes ≥ {min_chrom_length} bp in {reference_path}")
 
+    # Each chromosome can participate in at most one operation per run.
+    # Compound ops (e.g. inverting a region that's already been
+    # translocated) produce truth records whose ref-side coordinates do
+    # not correspond to the original TAIR10 reference and therefore
+    # cannot be matched against dnadis's detected calls.  Tracking a
+    # "used" set keeps every truth record interpretable in original
+    # reference coordinates.
+    used: set = set()
     rearrangements: List[Rearrangement] = []
     for _ in range(n_rearrangements):
-        # Refresh live set each iteration since fusion/fission rename
-        # chromosomes and reduce/expand the candidate pool.
         live = [c for c in genome
-                if _is_nuclear(c) and len(genome[c]) >= min_chrom_length]
+                if _is_nuclear(c) and c not in used
+                and len(genome[c]) >= min_chrom_length]
         if not live:
             break
-        # Pick an op compatible with current live set.
         compatible = list(op_types)
         if len(live) < 2:
             compatible = [op for op in compatible
@@ -285,6 +291,7 @@ def generate_random_assembly(
             end = rng.randint(start + min_segment_length,
                               seq_len - min_segment_length)
             rearrangements.append(apply_inversion(genome, chrom, start, end))
+            used.add(chrom)
 
         elif op == "reciprocal_translocation":
             c1, c2 = rng.sample(live, 2)
@@ -292,6 +299,8 @@ def generate_random_assembly(
             brk2 = rng.randint(min_segment_length, len(genome[c2]) - min_segment_length)
             rearrangements.extend(
                 apply_reciprocal_translocation(genome, c1, brk1, c2, brk2))
+            used.add(c1)
+            used.add(c2)
 
         elif op == "whole_arm_translocation":
             donor, acceptor = rng.sample(live, 2)
@@ -299,16 +308,26 @@ def generate_random_assembly(
                               len(genome[donor]) - min_segment_length)
             rearrangements.append(
                 apply_whole_arm_translocation(genome, donor, brk, acceptor))
+            used.add(donor)
+            used.add(acceptor)
 
         elif op == "fusion":
             c1, c2 = rng.sample(live, 2)
             rearrangements.append(apply_fusion(genome, c1, c2))
+            # Both chromosomes consumed; their fused product is also
+            # off-limits because it carries the same material.
+            used.add(c1)
+            used.add(c2)
+            used.add(f"fus_{c1}_{c2}")
 
         elif op == "fission":
             chrom = rng.choice(live)
             seq_len = len(genome[chrom])
             brk = rng.randint(min_segment_length, seq_len - min_segment_length)
             rearrangements.append(apply_fission(genome, chrom, brk))
+            used.add(chrom)
+            used.add(f"fis_{chrom}_a")
+            used.add(f"fis_{chrom}_b")
 
     write_genome(genome, output_path)
     return rearrangements
