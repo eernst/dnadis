@@ -326,6 +326,40 @@ def _matches_truth_broad(detected: dict, truth: Rearrangement,
 _matches_truth = _matches_truth_broad
 
 
+def _breakpoint_error(detected: dict, truth: Rearrangement):
+    """Smallest distance (bp) from any boundary in the detected ref
+    interval to any boundary in the truth.  Returns None when the
+    metric is not applicable (fusion-class events, degenerate
+    ref=[0, 0] intervals, or unparseable coordinates).
+
+    Boundary sets:
+      inversion / reciprocal_translocation / whole_arm_translocation:
+        truth = {ref_breakpoint, ref_breakpoint + span_bp}
+        det   = {ref_start, ref_end}
+      fission:
+        truth = {ref_breakpoint}  (the split point)
+        det   = {ref_start, ref_end}
+    """
+    tt = truth.rearrangement_type
+    dt = detected.get("rearrangement_type", "")
+    if tt == "fusion" or dt == "fusion":
+        return None
+    try:
+        det_start = int(detected.get("ref_start", 0) or 0)
+        det_end = int(detected.get("ref_end", 0) or 0)
+    except ValueError:
+        return None
+    if det_start == 0 and det_end == 0:
+        return None
+    det_bounds = [det_start, det_end]
+    if tt == "fission":
+        truth_bounds = [truth.ref_breakpoint]
+    else:
+        truth_bounds = [truth.ref_breakpoint,
+                        truth.ref_breakpoint + truth.span_bp]
+    return min(abs(d - t) for d in det_bounds for t in truth_bounds)
+
+
 @pytest.mark.integration
 def test_synthetic_rearrangement_detection(tmp_path):
     """Generate N permuted Arabidopsis assemblies, run dnadis on each,
@@ -417,6 +451,8 @@ def test_synthetic_rearrangement_detection(tmp_path):
     matched_det_broad: set = set()
     # truth -> set of distinct detection labels that matched it broadly
     truth_emitted_labels: dict = defaultdict(set)
+    # truth -> minimum breakpoint error (bp) across its matching detections
+    truth_best_bp_error: dict = {}
 
     for ti, (truth_asm, truth_r) in enumerate(all_truth):
         for di, (det_asm, det_d) in enumerate(all_detected):
@@ -430,6 +466,11 @@ def test_synthetic_rearrangement_detection(tmp_path):
                 matched_det_broad.add(di)
                 truth_emitted_labels[ti].add(
                     det_d.get("rearrangement_type", "?"))
+                err = _breakpoint_error(det_d, truth_r)
+                if err is not None:
+                    cur = truth_best_bp_error.get(ti)
+                    if cur is None or err < cur:
+                        truth_best_bp_error[ti] = err
 
     per_type_total = Counter(r.rearrangement_type for _, r in all_truth)
     per_type_strict_hit = Counter(
@@ -478,6 +519,43 @@ def test_synthetic_rearrangement_detection(tmp_path):
             continue
         label_str = ", ".join(f"{k}={v}" for k, v in labels.most_common())
         print(f"  {op:<28s} {label_str}")
+
+    # Breakpoint accuracy: for each matched truth, what's the smallest
+    # bp distance from any det boundary to any truth boundary?
+    print("\n  --- Breakpoint accuracy (bp distance from truth boundary) ---")
+    print("  Lower is better.  Best-of detection per truth (when dnadis")
+    print("  emits multiple sub-calls, the closest one wins).  Fusion")
+    print("  events are excluded — they have no single ref breakpoint.")
+    bp_by_type: dict = defaultdict(list)
+    for ti, (_, r) in enumerate(all_truth):
+        err = truth_best_bp_error.get(ti)
+        if err is not None:
+            bp_by_type[r.rearrangement_type].append(err)
+
+    def _stats(vals):
+        if not vals:
+            return None
+        vs = sorted(vals)
+        n = len(vs)
+        med = vs[n // 2] if n % 2 else (vs[n // 2 - 1] + vs[n // 2]) / 2
+        p90 = vs[min(n - 1, int(0.9 * n))]
+        return (vs[0], int(med), p90, vs[-1], n)
+    print(f"  {'type':<28s} {'min':>10s} {'median':>10s} "
+          f"{'p90':>10s} {'max':>10s}  n")
+    for op in sorted(per_type_total):
+        s = _stats(bp_by_type.get(op))
+        if s is None:
+            print(f"  {op:<28s} {'(n/a)':>10s}")
+            continue
+        lo, med, p90, hi, n = s
+        print(f"  {op:<28s} {lo:>10,d} {med:>10,d} "
+              f"{p90:>10,d} {hi:>10,d}  {n}")
+    all_errs = [e for errs in bp_by_type.values() for e in errs]
+    s = _stats(all_errs)
+    if s is not None:
+        lo, med, p90, hi, n = s
+        print(f"  {'OVERALL':<28s} {lo:>10,d} {med:>10,d} "
+              f"{p90:>10,d} {hi:>10,d}  {n}")
 
     # Extras: detections that don't match any truth, even broadly.
     n_extras = len(all_detected) - len(matched_det_broad)
