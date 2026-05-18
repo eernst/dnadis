@@ -595,19 +595,77 @@ def _run_synthetic_rearr_case(
         print(f"  {'OVERALL':<28s} {lo:>10,d} {med:>10,d} "
               f"{p90:>10,d} {hi:>10,d}  {n}")
 
-    # Extras: detections that don't match any truth, even broadly.
-    n_extras = len(all_detected) - len(matched_det_broad)
+    # Recurring extras across assemblies are very likely real
+    # ancestral structural differences between query and reference
+    # (cross-species runs) or known artefacts (in-species runs) —
+    # never the synthetic-truth signal, because each assembly carries
+    # a different random subset of permutations.  Group the extras by
+    # (type-class, normalised chromosome pair, ref-interval bucket) and
+    # report any group that appears in ≥ ceil(n_asms / 2) assemblies.
+    def _type_class(t: str) -> str:
+        return "inter_chrom" if t in INTER_CHROM_TYPES else t
+
+    def _bucket(v: int, size: int = 1_000_000) -> int:
+        return v // size
+
+    recurring: dict = defaultdict(lambda: defaultdict(list))
+    # key -> {asm_idx -> [detected dicts]}; each (key, asm_idx) collects
+    # all matching detections so we can report a representative span.
+    extras_indices = [di for di in range(len(all_detected))
+                      if di not in matched_det_broad]
+    for di in extras_indices:
+        asm, d = all_detected[di]
+        try:
+            rs = int(d.get("ref_start", 0) or 0)
+            re_ = int(d.get("ref_end", 0) or 0)
+        except ValueError:
+            continue
+        refs = tuple(sorted({
+            _norm_ref(d.get("assigned_ref_id", "")),
+            _norm_ref(d.get("partner_ref_id", "") or ""),
+        } - {""}))
+        key = (_type_class(d.get("rearrangement_type", "?")),
+               refs, _bucket(rs), _bucket(re_))
+        recurring[key][asm].append(d)
+
+    recur_threshold = max(2, (n_asms + 1) // 2)
+    recur_rows = [(key, asms) for key, asms in recurring.items()
+                  if len(asms) >= recur_threshold]
+    recur_rows.sort(key=lambda r: (-len(r[1]), r[0]))
+
+    print("\n  --- Recurring detections (ancestral structural differences) ---")
+    print(f"  Extras appearing in ≥{recur_threshold}/{n_asms} assemblies; ")
+    print("  cannot be synthetic-truth signal (each assembly carries a")
+    print("  different random subset of permutations) so these are best")
+    print("  explained by real structural differences between query and")
+    print("  reference (cross-species) or persistent detector artefacts.")
+    if not recur_rows:
+        print("  (none)")
+    else:
+        print(f"  {'type-class':<14s} {'refs':<24s} "
+              f"{'ref start (Mb)':>14s} {'ref end (Mb)':>14s}   n_asms")
+        for (tc, refs, rs_bucket, re_bucket), asms in recur_rows:
+            refs_str = ":".join(refs) if refs else "(none)"
+            print(f"  {tc:<14s} {refs_str:<24s} "
+                  f"{rs_bucket:>14d} {re_bucket:>14d}   {len(asms)}/{n_asms}")
+
+    # Per-assembly extras (the full list — including the recurring ones —
+    # so individual rows are still inspectable when investigating an
+    # unexpected call).
+    n_extras = len(extras_indices)
     print(f"\n  --- Detection stats ---")
     print(f"  total detections: {len(all_detected)}")
     print(f"  detections matching ≥1 truth (broad): "
           f"{len(matched_det_broad)}")
     print(f"  detections matching no truth (extras): {n_extras}")
     if n_extras:
-        print("    (extras may indicate real false positives or detector")
-        print("     behaviour on chromosome boundaries.  Listed below:)")
-        for di, (asm, d) in enumerate(all_detected):
-            if di in matched_det_broad:
-                continue
+        print("    (extras may indicate real false positives, ancestral")
+        print("     structural differences, or detector behaviour on")
+        print("     chromosome boundaries.  See the recurring-detections")
+        print("     section above for groups that span multiple assemblies.")
+        print("     Per-row list:)")
+        for di in extras_indices:
+            asm, d = all_detected[di]
             print(f"      asm_{asm:02d}  {d.get('rearrangement_type','?')}"
                   f" {d.get('assigned_ref_id','?')}"
                   f"{':' + d['partner_ref_id'] if d.get('partner_ref_id') else ''}"
