@@ -356,7 +356,7 @@ def test_synthetic_rearrangement_detection(tmp_path):
         )
         for r in truth:
             all_truth.append((i, r))
-        print(f"  asm_{i:02d}: seed={asm_seed} n_rearr={n_rearr}")
+        print(f"  asm_{i:02d}: seed={asm_seed} n_rearr={n_rearr}", flush=True)
         for r in truth:
             print(f"    {r.rearrangement_type} {r.primary_ref}"
                   f"{':' + r.partner_ref if r.partner_ref else ''}"
@@ -373,17 +373,28 @@ def test_synthetic_rearrangement_detection(tmp_path):
             "--skip-compleasm", "--skip-plot",
             "-t", str(threads),
         ]
+        # Stream stdout/stderr to log files instead of capture_output=True.
+        # subprocess.run with capture_output buffers both pipes in memory
+        # and only reads them after the child exits — on verbose pipelines
+        # the OS pipe buffer (~64 KB) fills up mid-run and the dnadis
+        # child deadlocks waiting for the parent to drain the pipe.
+        stdout_log = asm_dir / "dnadis.stdout.log"
+        stderr_log = asm_dir / "dnadis.stderr.log"
         try:
-            subprocess.run(cmd, check=True, capture_output=True, timeout=1800)
+            with stdout_log.open("w") as so, stderr_log.open("w") as se:
+                subprocess.run(cmd, check=True, stdout=so, stderr=se,
+                               timeout=1800)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-            print(f"  asm_{i:02d}: dnadis failed: {exc}")
+            print(f"  asm_{i:02d}: dnadis failed: {exc} "
+                  f"(see {stderr_log})", flush=True)
             continue
 
         rearr_tsv = out_dir / "permuted" / "permuted.rearrangements.tsv"
         detected = _parse_rearrangements_tsv(rearr_tsv)
         for d in detected:
             all_detected.append((i, d))
-        print(f"  asm_{i:02d}: dnadis detected {len(detected)} rearrangements")
+        print(f"  asm_{i:02d}: dnadis detected {len(detected)} rearrangements",
+              flush=True)
         for d in detected:
             print(
                 f"      {d.get('rearrangement_type','?'):<24s}"
