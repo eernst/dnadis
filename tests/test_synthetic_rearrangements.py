@@ -249,45 +249,30 @@ def _norm_ref(name: str) -> str:
     return normalize_ref_id(name) if name else ""
 
 
-def _matches_truth(detected: dict, truth: Rearrangement,
-                   bp_tolerance: int = 500_000) -> bool:
-    """Heuristic match for a detected RearrangementCall row against a
-    Rearrangement truth record.
+# dnadis emits multiple labels for the same inter-chromosomal event
+# (a whole-arm translocation that moves an entire arm to the end of
+# another chromosome can be described as a fusion, a whole_arm
+# translocation, or both).  The test reports two parallel sensitivity
+# metrics:
+#   * STRICT — exact rearrangement_type match; tracks how often dnadis
+#     applies the same label the ground truth uses.  Improvements to
+#     the detector's labelling show up here.
+#   * BROAD  — any inter-chromosomal label satisfies any inter-chromosomal
+#     truth; tracks whether the underlying event was detected at all.
+#     Inversion and fission stay strict in BROAD too — their signatures
+#     are distinct and a label swap would indicate a real miss.
+INTER_CHROM_TYPES = frozenset({
+    "fusion", "translocation",
+    "reciprocal_translocation", "whole_arm_translocation",
+})
 
-    Three checks:
 
-    1. Type-class match.  ``translocation``, ``reciprocal_translocation``,
-       and ``whole_arm_translocation`` all share the same detector
-       signature, so any pair within that group counts.  Other types
-       (inversion / fusion / fission) must match exactly.
-    2. Chromosome involvement.  The set of (assigned_ref_id, partner_ref_id)
-       must intersect the truth's (primary_ref, partner_ref) — after
-       lowercasing the chr prefix to match dnadis's normalize_ref_id.
-    3. Reference-interval overlap (for types that have a well-defined
-       ref interval).  Truth's [breakpoint, breakpoint + span] must
-       overlap detected's [ref_start, ref_end].  Falls back to a
-       midpoint-within-tolerance check when the truth has no
-       reference-side span (fusion).
+def _chrom_and_interval_ok(detected: dict, truth: Rearrangement,
+                           bp_tolerance: int) -> bool:
+    """Shared check used by both strict and broad matchers: chromosomes
+    overlap and (for non-fusion events with a meaningful ref interval)
+    the intervals overlap within tolerance.
     """
-    dt = detected.get("rearrangement_type", "")
-    tt = truth.rearrangement_type
-    # dnadis's detector routinely co-emits more than one inter-chromosomal
-    # label for the same event (e.g. a fusion call AND a whole-arm
-    # translocation call, when one chromosome's full length is appended to
-    # another).  Treat all four inter-chromosomal labels as a single
-    # equivalence class for type-matching: any of {fusion, translocation,
-    # reciprocal_translocation, whole_arm_translocation} satisfies a truth
-    # of any of those types.  Inversion and fission stay strict — their
-    # signatures are distinct and a label swap would indicate a real miss.
-    inter_chrom_types = {"fusion", "translocation",
-                         "reciprocal_translocation", "whole_arm_translocation"}
-    type_ok = (
-        dt == tt
-        or (tt in inter_chrom_types and dt in inter_chrom_types)
-    )
-    if not type_ok:
-        return False
-
     det_refs = {
         _norm_ref(detected.get("assigned_ref_id", "")),
         _norm_ref(detected.get("partner_ref_id", "") or ""),
@@ -297,27 +282,48 @@ def _matches_truth(detected: dict, truth: Rearrangement,
         truth_refs.add(_norm_ref(truth.partner_ref))
     if not (det_refs & truth_refs):
         return False
-
     try:
         det_start = int(detected.get("ref_start", 0) or 0)
         det_end = int(detected.get("ref_end", 0) or 0)
     except ValueError:
         return False
-
-    # Fusion calls (both as truth and as the detection's emitted label)
-    # carry no meaningful single ref interval — dnadis writes ref=[0-0]
-    # for fusions because the event involves two whole chromosomes.  In
-    # those cases chromosome involvement alone is the match signature.
-    if tt == "fusion" or dt == "fusion" or (det_start == 0 and det_end == 0):
+    # Fusion calls carry no meaningful ref interval; chromosome
+    # involvement is the only signature.
+    if (truth.rearrangement_type == "fusion"
+            or detected.get("rearrangement_type") == "fusion"
+            or (det_start == 0 and det_end == 0)):
         return True
-
     truth_lo = truth.ref_breakpoint
     truth_hi = truth.ref_breakpoint + truth.span_bp
-    # Allow detection start/end to fall up to bp_tolerance outside the
-    # truth interval to tolerate edge-effect detection drift.
     overlap_lo = max(det_start, truth_lo) - bp_tolerance
     overlap_hi = min(det_end, truth_hi) + bp_tolerance
     return overlap_hi > overlap_lo
+
+
+def _matches_truth_strict(detected: dict, truth: Rearrangement,
+                          bp_tolerance: int = 500_000) -> bool:
+    """Detection's rearrangement_type matches the truth's exactly, plus
+    chromosomes overlap and (for non-fusion) reference intervals overlap.
+    """
+    if detected.get("rearrangement_type") != truth.rearrangement_type:
+        return False
+    return _chrom_and_interval_ok(detected, truth, bp_tolerance)
+
+
+def _matches_truth_broad(detected: dict, truth: Rearrangement,
+                         bp_tolerance: int = 500_000) -> bool:
+    """As _matches_truth_strict, but treat all inter-chromosomal labels
+    as a single equivalence class.  Inversion and fission stay strict.
+    """
+    dt = detected.get("rearrangement_type", "")
+    tt = truth.rearrangement_type
+    if not (dt == tt or (tt in INTER_CHROM_TYPES and dt in INTER_CHROM_TYPES)):
+        return False
+    return _chrom_and_interval_ok(detected, truth, bp_tolerance)
+
+
+# Back-compat shim for any external caller.
+_matches_truth = _matches_truth_broad
 
 
 @pytest.mark.integration
@@ -389,46 +395,108 @@ def test_synthetic_rearrangement_detection(tmp_path):
                 f" conf={d.get('confidence','?')}"
             )
 
-    # Match detected vs truth, report sensitivity per type.  Use
-    # many-to-many semantics: a single ground-truth event can match
-    # multiple detected sub-events (dnadis routinely splits a large
-    # inversion into several smaller calls), and a detected call may
-    # legitimately match more than one truth in dense rearrangement
-    # scenarios.  Sensitivity = fraction of truths with ≥1 match.
-    matched_truth = set()
-    matched_det = set()
+    # Compute strict and broad matches separately.  Use many-to-many
+    # semantics under both: a single ground-truth event can match
+    # multiple sub-events (e.g. dnadis splits a fission into two pieces).
+    from collections import Counter, defaultdict
+
+    matched_truth_strict: set = set()
+    matched_det_strict: set = set()
+    matched_truth_broad: set = set()
+    matched_det_broad: set = set()
+    # truth -> set of distinct detection labels that matched it broadly
+    truth_emitted_labels: dict = defaultdict(set)
+
     for ti, (truth_asm, truth_r) in enumerate(all_truth):
         for di, (det_asm, det_d) in enumerate(all_detected):
             if det_asm != truth_asm:
                 continue
-            if _matches_truth(det_d, truth_r):
-                matched_truth.add(ti)
-                matched_det.add(di)
+            if _matches_truth_strict(det_d, truth_r):
+                matched_truth_strict.add(ti)
+                matched_det_strict.add(di)
+            if _matches_truth_broad(det_d, truth_r):
+                matched_truth_broad.add(ti)
+                matched_det_broad.add(di)
+                truth_emitted_labels[ti].add(
+                    det_d.get("rearrangement_type", "?"))
 
-    from collections import Counter
     per_type_total = Counter(r.rearrangement_type for _, r in all_truth)
-    per_type_hit = Counter(
+    per_type_strict_hit = Counter(
         r.rearrangement_type for ti, (_, r) in enumerate(all_truth)
-        if ti in matched_truth
+        if ti in matched_truth_strict
     )
-    print(f"\n[synthetic-rearr] sensitivity report (seed={seed}):")
-    for op in sorted(per_type_total):
-        hit = per_type_hit.get(op, 0)
-        tot = per_type_total[op]
-        pct = (100.0 * hit / tot) if tot else 0
-        print(f"  {op:<28s} {hit:3d}/{tot:<3d}  ({pct:5.1f}%)")
-    overall_hit = sum(per_type_hit.values())
-    overall_tot = sum(per_type_total.values())
-    overall_pct = (100.0 * overall_hit / overall_tot) if overall_tot else 0
-    print(f"  {'OVERALL':<28s} {overall_hit:3d}/{overall_tot:<3d}"
-          f"  ({overall_pct:5.1f}%)")
-    n_false_pos = len(all_detected) - len(matched_det)
-    print(f"  unmatched detections (false positives or extra splits): "
-          f"{n_false_pos}/{len(all_detected)}")
+    per_type_broad_hit = Counter(
+        r.rearrangement_type for ti, (_, r) in enumerate(all_truth)
+        if ti in matched_truth_broad
+    )
 
-    if overall_pct < 70.0:
+    def _fmt_row(label, hit, tot):
+        pct = (100.0 * hit / tot) if tot else 0
+        return f"  {label:<28s} {hit:3d}/{tot:<3d}  ({pct:5.1f}%)"
+
+    print(f"\n[synthetic-rearr] sensitivity report (seed={seed})")
+    print("\n  --- BROAD (any inter-chromosomal label satisfies any "
+          "inter-chromosomal truth) ---")
+    print("  Tracks whether the underlying event was detected at all.")
+    for op in sorted(per_type_total):
+        print(_fmt_row(op, per_type_broad_hit.get(op, 0), per_type_total[op]))
+    overall_broad = sum(per_type_broad_hit.values())
+    overall_tot = sum(per_type_total.values())
+    print(_fmt_row("OVERALL", overall_broad, overall_tot))
+
+    print("\n  --- STRICT (rearrangement_type label must match exactly) ---")
+    print("  Tracks whether the detector emits the correct label.  Lower")
+    print("  than BROAD means dnadis recognised the event but labelled it")
+    print("  with a different (compatible) inter-chromosomal type.")
+    for op in sorted(per_type_total):
+        print(_fmt_row(op, per_type_strict_hit.get(op, 0), per_type_total[op]))
+    overall_strict = sum(per_type_strict_hit.values())
+    print(_fmt_row("OVERALL", overall_strict, overall_tot))
+
+    # Label-confusion view: for each truth type, what labels did the
+    # detector actually emit on matching detections?
+    truth_type_to_label_counts: dict = defaultdict(Counter)
+    for ti, (_, r) in enumerate(all_truth):
+        for lbl in truth_emitted_labels.get(ti, ()):
+            truth_type_to_label_counts[r.rearrangement_type][lbl] += 1
+    print("\n  --- Label confusion (truth_type → emitted labels on matching detections) ---")
+    for op in sorted(per_type_total):
+        labels = truth_type_to_label_counts.get(op, Counter())
+        if not labels:
+            print(f"  {op:<28s} (no matching detections)")
+            continue
+        label_str = ", ".join(f"{k}={v}" for k, v in labels.most_common())
+        print(f"  {op:<28s} {label_str}")
+
+    # Extras: detections that don't match any truth, even broadly.
+    n_extras = len(all_detected) - len(matched_det_broad)
+    print(f"\n  --- Detection stats ---")
+    print(f"  total detections: {len(all_detected)}")
+    print(f"  detections matching ≥1 truth (broad): "
+          f"{len(matched_det_broad)}")
+    print(f"  detections matching no truth (extras): {n_extras}")
+    if n_extras:
+        print("    (extras may indicate real false positives or detector")
+        print("     behaviour on chromosome boundaries.  Listed below:)")
+        for di, (asm, d) in enumerate(all_detected):
+            if di in matched_det_broad:
+                continue
+            print(f"      asm_{asm:02d}  {d.get('rearrangement_type','?')}"
+                  f" {d.get('assigned_ref_id','?')}"
+                  f"{':' + d['partner_ref_id'] if d.get('partner_ref_id') else ''}"
+                  f" ref=[{d.get('ref_start','?')}-{d.get('ref_end','?')}]")
+
+    broad_pct = (100.0 * overall_broad / overall_tot) if overall_tot else 0
+    strict_pct = (100.0 * overall_strict / overall_tot) if overall_tot else 0
+    if broad_pct < 70.0:
         warnings.warn(
-            f"Synthetic-rearrangement sensitivity {overall_pct:.1f}% < 70% "
-            f"threshold (seed={seed}).  Test does not hard-fail; review the "
-            f"per-type breakdown above to identify the regressed type."
+            f"Synthetic-rearrangement BROAD sensitivity {broad_pct:.1f}% < 70% "
+            f"(seed={seed}).  Detection coverage gap; investigate the per-type "
+            f"breakdown above."
+        )
+    if strict_pct < 70.0:
+        warnings.warn(
+            f"Synthetic-rearrangement STRICT sensitivity {strict_pct:.1f}% < 70% "
+            f"(seed={seed}).  Detection works but type labels frequently "
+            f"disagree with truth.  Review the label-confusion table above."
         )
