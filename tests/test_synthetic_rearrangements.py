@@ -229,6 +229,10 @@ TAIR10_FASTA = (
     Path(os.environ["DNADIS_TAIR10_FASTA"])
     if os.environ.get("DNADIS_TAIR10_FASTA") else None
 )
+LYRATA_FASTA = (
+    Path(os.environ["DNADIS_LYRATA_FASTA"])
+    if os.environ.get("DNADIS_LYRATA_FASTA") else None
+)
 DNADIS_PY = Path(__file__).resolve().parents[1] / "dnadis.py"
 
 
@@ -269,9 +273,27 @@ INTER_CHROM_TYPES = frozenset({
 
 def _chrom_and_interval_ok(detected: dict, truth: Rearrangement,
                            bp_tolerance: int) -> bool:
-    """Shared check used by both strict and broad matchers: chromosomes
-    overlap and (for non-fusion events with a meaningful ref interval)
-    the intervals overlap within tolerance.
+    """Shared check used by both strict and broad matchers.
+
+    Accepts a chromosome match by either route:
+
+    1. Reference-ID intersection.  When the query genome shares the
+       reference's namespace (e.g. TAIR10 query permuted from TAIR10),
+       the truth's primary/partner ref names appear directly in the
+       detection's assigned_ref_id / partner_ref_id.  In that case we
+       additionally require the detected ref interval to overlap the
+       truth's [ref_breakpoint, ref_breakpoint + span_bp] within
+       tolerance (skipped for fusion).
+    2. Query-contig name match.  When the query is permuted from a
+       different organism (e.g. lyrata query, Col-0 reference), the
+       ref namespaces do not line up; but the QUERY contig names that
+       carry the rearranged material are still recorded by the
+       generator in truth.query_contigs, and dnadis preserves the
+       input contig name in `original_name`.  Matching on
+       original_name ∈ truth.query_contigs sidesteps cross-species
+       coordinate translation.  Interval checks are skipped on this
+       path — the source-genome breakpoints aren't directly
+       comparable to dnadis's reference-space ref_start/ref_end.
     """
     det_refs = {
         _norm_ref(detected.get("assigned_ref_id", "")),
@@ -280,18 +302,24 @@ def _chrom_and_interval_ok(detected: dict, truth: Rearrangement,
     truth_refs = {_norm_ref(truth.primary_ref)}
     if truth.partner_ref:
         truth_refs.add(_norm_ref(truth.partner_ref))
-    if not (det_refs & truth_refs):
+    ref_match = bool(det_refs & truth_refs)
+    det_orig = detected.get("original_name", "")
+    query_contig_match = bool(det_orig and det_orig in truth.query_contigs)
+    if not (ref_match or query_contig_match):
         return False
     try:
         det_start = int(detected.get("ref_start", 0) or 0)
         det_end = int(detected.get("ref_end", 0) or 0)
     except ValueError:
         return False
-    # Fusion calls carry no meaningful ref interval; chromosome
-    # involvement is the only signature.
+    # Skip the ref-interval overlap check for fusion (no meaningful
+    # single ref breakpoint), for degenerate ref=[0, 0], and for
+    # matches that came only via the query-contig path (cross-species
+    # ref coords don't align directly with source-genome coords).
     if (truth.rearrangement_type == "fusion"
             or detected.get("rearrangement_type") == "fusion"
-            or (det_start == 0 and det_end == 0)):
+            or (det_start == 0 and det_end == 0)
+            or not ref_match):
         return True
     truth_lo = truth.ref_breakpoint
     truth_hi = truth.ref_breakpoint + truth.span_bp
@@ -360,19 +388,29 @@ def _breakpoint_error(detected: dict, truth: Rearrangement):
     return min(abs(d - t) for d in det_bounds for t in truth_bounds)
 
 
-@pytest.mark.integration
-def test_synthetic_rearrangement_detection(tmp_path):
-    """Generate N permuted Arabidopsis assemblies, run dnadis on each,
-    compare detected rearrangements to ground truth.  Per-type sensitivity
-    is logged and warned-on but never hard-fails (see TODO testing item)."""
-    if TAIR10_FASTA is None or not TAIR10_FASTA.exists():
-        pytest.skip("Set DNADIS_TAIR10_FASTA to run synthetic rearrangement tests")
-
+def _run_synthetic_rearr_case(
+    tmp_path: Path,
+    *,
+    reference: Path,
+    query_source: Path,
+    ref_label: str,
+    query_label: str,
+) -> None:
+    """Drive the synthetic-rearrangement evaluation for one (ref, query)
+    pair.  Reads DNADIS_SYNTHETIC_N / DNADIS_SYNTHETIC_SEED /
+    DNADIS_SYNTHETIC_THREADS from the environment.  Logs ref/query
+    identity in the header so logs from different cases stay
+    distinguishable.
+    """
     n_asms = int(os.environ.get("DNADIS_SYNTHETIC_N", "10"))
     seed = int(os.environ.get("DNADIS_SYNTHETIC_SEED", str(int(time.time()))))
     threads = int(os.environ.get("DNADIS_SYNTHETIC_THREADS",
                                   str(min(8, os.cpu_count() or 4))))
-    print(f"\n[synthetic-rearr] seed={seed} n_asms={n_asms} threads={threads}")
+    case_tag = f"{query_label}_vs_{ref_label}"
+    print(f"\n[synthetic-rearr][{case_tag}]")
+    print(f"  query (permuted from): {query_label}  {query_source}")
+    print(f"  reference:             {ref_label}  {reference}")
+    print(f"  seed={seed} n_asms={n_asms} threads={threads}", flush=True)
 
     rng = random.Random(seed)
     all_truth: List[Tuple[int, Rearrangement]] = []
@@ -385,7 +423,7 @@ def test_synthetic_rearrangement_detection(tmp_path):
         asm_fa = asm_dir / "permuted.fasta"
         n_rearr = rng.randint(1, 3)
         truth = generate_random_assembly(
-            TAIR10_FASTA, asm_fa,
+            query_source, asm_fa,
             seed=asm_seed, n_rearrangements=n_rearr,
         )
         for r in truth:
@@ -399,7 +437,7 @@ def test_synthetic_rearrangement_detection(tmp_path):
         out_dir = asm_dir / "out"
         cmd = [
             sys.executable, str(DNADIS_PY),
-            "-r", str(TAIR10_FASTA),
+            "-r", str(reference),
             "-q", str(asm_fa),
             "-o", str(out_dir),
             "--skip-organelles", "--skip-rdna",
@@ -486,7 +524,7 @@ def test_synthetic_rearrangement_detection(tmp_path):
         pct = (100.0 * hit / tot) if tot else 0
         return f"  {label:<28s} {hit:3d}/{tot:<3d}  ({pct:5.1f}%)"
 
-    print(f"\n[synthetic-rearr] sensitivity report (seed={seed})")
+    print(f"\n[synthetic-rearr][{case_tag}] sensitivity report (seed={seed})")
     print("\n  --- BROAD (any inter-chromosomal label satisfies any "
           "inter-chromosomal truth) ---")
     print("  Tracks whether the underlying event was detected at all.")
@@ -579,13 +617,62 @@ def test_synthetic_rearrangement_detection(tmp_path):
     strict_pct = (100.0 * overall_strict / overall_tot) if overall_tot else 0
     if broad_pct < 70.0:
         warnings.warn(
-            f"Synthetic-rearrangement BROAD sensitivity {broad_pct:.1f}% < 70% "
+            f"[{case_tag}] BROAD sensitivity {broad_pct:.1f}% < 70% "
             f"(seed={seed}).  Detection coverage gap; investigate the per-type "
             f"breakdown above."
         )
     if strict_pct < 70.0:
         warnings.warn(
-            f"Synthetic-rearrangement STRICT sensitivity {strict_pct:.1f}% < 70% "
+            f"[{case_tag}] STRICT sensitivity {strict_pct:.1f}% < 70% "
             f"(seed={seed}).  Detection works but type labels frequently "
             f"disagree with truth.  Review the label-confusion table above."
         )
+
+
+@pytest.mark.integration
+def test_synthetic_rearrangement_col0_vs_col0(tmp_path):
+    """In-species (Col-0 → Col-0) synthetic-rearrangement evaluation.
+
+    Permute the TAIR10 Col-0 reference and align the result back to the
+    same reference.  Tracks dnadis's detection sensitivity in the
+    ideal case: no real evolutionary divergence between query and
+    reference, just the synthetic operations.
+
+    Skipped unless ``DNADIS_TAIR10_FASTA`` is set.
+    """
+    if TAIR10_FASTA is None or not TAIR10_FASTA.exists():
+        pytest.skip("Set DNADIS_TAIR10_FASTA to run synthetic rearrangement tests")
+    _run_synthetic_rearr_case(
+        tmp_path,
+        reference=TAIR10_FASTA,
+        query_source=TAIR10_FASTA,
+        ref_label="Col-0",
+        query_label="Col-0",
+    )
+
+
+@pytest.mark.integration
+def test_synthetic_rearrangement_lyrata_vs_col0(tmp_path):
+    """Cross-species (A. lyrata → Col-0) synthetic-rearrangement evaluation.
+
+    Permute the A. lyrata reference and align the result to TAIR10
+    Col-0.  Tests detection against a realistic alignment landscape
+    where the underlying genomes already differ by real evolutionary
+    rearrangements; the synthetic operations sit on top of that
+    background.  Expect a much higher "extras" count from natural
+    cross-species rearrangements that have no synthetic-truth analog.
+
+    Skipped unless both ``DNADIS_TAIR10_FASTA`` and
+    ``DNADIS_LYRATA_FASTA`` are set.
+    """
+    if TAIR10_FASTA is None or not TAIR10_FASTA.exists():
+        pytest.skip("Set DNADIS_TAIR10_FASTA to run synthetic rearrangement tests")
+    if LYRATA_FASTA is None or not LYRATA_FASTA.exists():
+        pytest.skip("Set DNADIS_LYRATA_FASTA to run the lyrata-vs-Col-0 case")
+    _run_synthetic_rearr_case(
+        tmp_path,
+        reference=TAIR10_FASTA,
+        query_source=LYRATA_FASTA,
+        ref_label="Col-0",
+        query_label="lyrata",
+    )
