@@ -241,6 +241,7 @@ def run_comparison_report(
     pairwise_pairs: Optional[List[tuple]] = None,
     self_contained: bool = False,
     assembly_sort_order: str = "input",
+    phylogeny_treefile: Optional[Path] = None,
 ) -> bool:
     """Generate cross-assembly comparison HTML report.
 
@@ -337,6 +338,7 @@ def run_comparison_report(
         .replace("__PER_ASM_AGP_TSVS__", per_asm_agp_tsvs)
         .replace("__PAIRWISE_MACRO_TSVS__", pw_macro_str)
         .replace("__PAIRWISE_NAMES__", pw_names_str)
+        .replace("__PHYLOGENY_TREEFILE__", _abs_esc(phylogeny_treefile) if phylogeny_treefile else "")
         .replace("__REFNAME__", str(reference_name).replace('"', '\\"'))
         .replace("__CMP_NAME__", str(comparison_name).replace('"', '\\"'))
         .replace("__SYNTENY_MODE__", str(synteny_mode))

@@ -344,6 +344,7 @@ All external tools are called via subprocess with proper error handling. Use `ut
 ```
 
 See `docs/output_formats.md` for complete column documentation.
+See `docs/phylogeny.md` for how per-leaf BUSCO single-copy accounting handles the different ploidy combinations (collapsed haploid, polyploid reference, polyploid query, polyploid both).
 
 ## Plot Design Guidelines
 

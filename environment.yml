@@ -27,6 +27,11 @@ dependencies:
   # --- Scaffolding (optional) ---
   - ragtag
 
+  # --- Phylogenetics (optional) ---
+  - mafft
+  - trimal
+  - iqtree
+
   # --- Read depth & BAM handling ---
   - samtools
   - mosdepth
@@ -68,6 +73,7 @@ dependencies:
   - r-showtext
   - r-sysfonts
   - r-systemfonts
+  - bioconductor-ggtree
 
   # --- System libraries ---
   - freetype

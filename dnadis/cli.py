@@ -1565,6 +1565,11 @@ def main():
             cluster=False, max_threads_dist=64, max_mem_dist=128.0,
             max_time_dist=720, partition="cpuq", qos="",
             keep_executor_cache=False,
+            skip_phylogeny=False, phylo_min_busco_completeness=50.0,
+            phylo_outgroup="none", phylo_skip_reference=False,
+            phylo_max_mem_gb=64, phylo_bootstrap_reps=1000,
+            phylo_alrt_reps=1000, phylo_models="LG,WAG,JTT",
+            phylo_msa_chunk_size=256, phylo_msa_inner_threads=4,
         )
         print(dump_config_template(defaults))
         sys.exit(0)
@@ -2025,6 +2030,51 @@ def main():
         help="Skip compleasm even if --compleasm-lineage is specified",
     )
 
+    # =========================================================================
+    # Phylogeny (species tree from BUSCOs) options
+    # =========================================================================
+    phylo_grp = p.add_argument_group("Phylogeny (species tree) options")
+    phylo_grp.add_argument(
+        "--skip-phylogeny", action="store_true",
+        help="Skip species-tree construction from compleasm single-copy BUSCOs",
+    )
+    phylo_grp.add_argument(
+        "--phylo-min-busco-completeness", type=float, default=50.0, metavar="PCT",
+        help="Drop a query subgenome from phylogeny if its single-copy BUSCO percentage is below this. [50.0]",
+    )
+    phylo_grp.add_argument(
+        "--phylo-outgroup", type=str, default="none", metavar="NAME",
+        help="Outgroup for tree rooting: 'none' (unrooted, default), 'reference', a query assembly name, or 'auto' (most-divergent taxon; not biologically conclusive).",
+    )
+    phylo_grp.add_argument(
+        "--phylo-skip-reference", action="store_true",
+        help="Exclude the reference genome as a leaf in the species tree (by default it is included).",
+    )
+    phylo_grp.add_argument(
+        "--phylo-max-mem-gb", type=int, default=64, metavar="GB",
+        help="Memory cap (GB) for IQ-TREE (passed to --mem) and SLURM request when --cluster. [64]",
+    )
+    phylo_grp.add_argument(
+        "--phylo-bootstrap-reps", type=int, default=1000, metavar="N",
+        help="IQ-TREE ultrafast bootstrap replicates (-B). 0 disables. [1000]",
+    )
+    phylo_grp.add_argument(
+        "--phylo-alrt-reps", type=int, default=1000, metavar="N",
+        help="IQ-TREE SH-aLRT replicates (--alrt). 0 disables. [1000]",
+    )
+    phylo_grp.add_argument(
+        "--phylo-models", type=str, default="LG,WAG,JTT", metavar="MODELS",
+        help="Comma-separated protein models for IQ-TREE --mset. [LG,WAG,JTT]",
+    )
+    phylo_grp.add_argument(
+        "--phylo-msa-chunk-size", type=int, default=256, metavar="N",
+        help="In --cluster mode, group per-gene MAFFT/trimAl jobs into chunks of this size; one SLURM job per chunk. Larger chunks reduce SLURM submission pressure (helps when QOSMaxJobsPerUserLimit triggers); smaller chunks parallelize better when the queue is empty. [256]",
+    )
+    phylo_grp.add_argument(
+        "--phylo-msa-inner-threads", type=int, default=4, metavar="N",
+        help="In --cluster mode, cores allocated to each per-gene MSA chunk job; this many genes run concurrently inside one chunk. [4]",
+    )
+
     args = p.parse_args()
 
     # Load config file if provided (CLI args override config)
@@ -2053,6 +2103,17 @@ def main():
 
     if not 0.0 <= args.contaminant_min_coverage <= 1.0:
         sys.exit(f"[error] --contaminant-min-coverage must be between 0.0 and 1.0, got {args.contaminant_min_coverage}")
+
+    if args.phylo_skip_reference and args.phylo_outgroup == "reference":
+        sys.exit(
+            "[error] --phylo-outgroup=reference is incompatible with --phylo-skip-reference; "
+            "the reference cannot be the outgroup if it is excluded from the tree."
+        )
+    if not 0.0 <= args.phylo_min_busco_completeness <= 100.0:
+        sys.exit(
+            f"[error] --phylo-min-busco-completeness must be between 0 and 100, "
+            f"got {args.phylo_min_busco_completeness}"
+        )
 
     # --- Logging setup ---
     output_dir = Path(args.output_dir).resolve()
@@ -2426,6 +2487,34 @@ def main():
                 except Exception as e:
                     logger.error(f"Pairwise '{pair_name}' failed: {e}")
 
+        # --- Cross-assembly phylogeny (still inside executor scope) ---
+        # Runs after all per-assembly compleasm results are available.
+        # Submits the reference compleasm and IQ-TREE jobs through the
+        # executor so SLURM submission works in --cluster mode.
+        phylogeny_result = None
+        if (
+            n_total >= 2
+            and not args.skip_phylogeny
+            and args.compleasm_lineage
+            and not args.skip_compleasm
+            and results
+        ):
+            from dnadis.phylogeny.pipeline import run_phylogeny
+            try:
+                phylogeny_result = run_phylogeny(
+                    args=args,
+                    ref_ctx=ref_ctx,
+                    results=results,
+                    output_dir=output_dir,
+                    executor=executor,
+                    cluster_config=cluster_config,
+                    reference_name=args.reference_name or Path(args.ref).stem,
+                )
+            except Exception as e:
+                logger.error(f"Phylogeny pipeline failed: {e}")
+        elif n_total >= 2 and not args.skip_phylogeny and not args.compleasm_lineage:
+            logger.info("Phylogeny skipped (no --compleasm-lineage)")
+
     # --- executor is now closed ---
 
     # --- Cross-assembly comparison (only with ≥2 assemblies) ---
@@ -2472,6 +2561,7 @@ def main():
                 pairwise_pairs=pairwise_pairs,
                 self_contained=not args.no_self_contained_html,
                 assembly_sort_order=args.assembly_sort_order,
+                phylogeny_treefile=(phylogeny_result.treefile if phylogeny_result else None),
             ):
                 logger.error("Comparison report generation failed.")
 

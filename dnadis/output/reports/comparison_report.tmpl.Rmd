@@ -1507,7 +1507,12 @@ if (has_named_subgenomes) {
 }
 ```
 
-`r if (has_synteny_data && exists("n_subgenomes_pre") && n_subgenomes_pre > 1) "# 3. Macro Synteny {.tabset}" else if (has_synteny_data) "# 3. Macro Synteny" else ""`
+```{r phylo_setup, include=FALSE}
+phylo_treefile <- "__PHYLOGENY_TREEFILE__"
+has_phylo_tree <- (phylo_treefile != "" && file.exists(phylo_treefile))
+```
+
+`r if (has_synteny_data || has_phylo_tree) "# 3. Phylogenetics {.tabset}" else ""`
 
 ```{r synteny_setup, eval=has_synteny_data, include=FALSE}
 # =========================================================================
@@ -2521,9 +2526,12 @@ build_synteny_plot <- function(sg) {
 for (sg_i in seq_along(subgenome_order)) {
   sg <- subgenome_order[sg_i]
 
-  # Emit tab header for polyploid
+  # Emit tab header; Phylogenetics {.tabset} requires a level-2 heading
+  # before any content so Synteny appears as its own tab alongside Tree.
   if (n_subgenomes > 1) {
-    cat(sprintf("\n## Subgenome %s\n\n", sg))
+    cat(sprintf("\n## Synteny: Subgenome %s\n\n", sg))
+  } else if (sg_i == 1) {
+    cat("\n## Synteny\n\n")
   }
 
   # Emit section description at the top of the first panel (inside the
@@ -2574,11 +2582,56 @@ for (sg_i in seq_along(subgenome_order)) {
 }
 ```
 
-```{r synteny_empty, eval=(has_synteny_data && length(subgenome_order) == 0)}
+```{r synteny_empty, eval=(has_synteny_data && length(subgenome_order) == 0), results='asis'}
+cat("\n## Synteny\n\n")
 cat("Synteny data available but no ribbon connections could be built. ",
     "This may indicate that assemblies have very different chromosome structures.")
 ```
 
+`r if (has_phylo_tree) "## Tree" else ""`
+
+```{r phylo_tree_panel, eval=has_phylo_tree, results='asis'}
+cat('<p class="section-intro">\n')
+cat("Maximum-likelihood species tree built from single-copy BUSCOs that are ",
+    "present in every retained query subgenome (and the reference, unless ",
+    "--phylo-skip-reference). Per-gene protein alignments were generated with ",
+    "MAFFT L-INS-i and trimmed with trimAl -gappyout, then concatenated into a ",
+    "supermatrix on which IQ-TREE was run. Branch labels show ",
+    "<b>SH-aLRT / UFBoot</b> support values.\n")
+cat("</p>\n")
+
+has_ape    <- requireNamespace("ape",    quietly = TRUE)
+has_ggtree <- requireNamespace("ggtree", quietly = TRUE)
+
+if (!has_ape || !has_ggtree) {
+  cat(sprintf(
+    "\n<p>R packages <code>ape</code> and/or <code>ggtree</code> are not installed; ",
+    "tree visualization is skipped. Newick file: <code>%s</code></p>\n",
+    phylo_treefile))
+} else {
+  tree <- ape::read.tree(phylo_treefile)
+  if (is.null(tree) || length(tree$tip.label) < 2) {
+    cat("<p>Tree could not be read or has fewer than 2 tips.</p>\n")
+  } else {
+    n_tips <- length(tree$tip.label)
+    plot_w <- 7
+    plot_h <- max(3, 0.45 * n_tips + 1)
+    p <- ggtree::ggtree(tree) +
+      ggtree::geom_tiplab(size = 3.2, hjust = -0.05) +
+      ggplot2::theme_void() +
+      ggplot2::theme(plot.margin = ggplot2::margin(8, 80, 8, 8)) +
+      ggplot2::xlim(0, max(ggtree::fortify(tree)$x) * 1.4)
+    has_support <- !is.null(tree$node.label) && any(nzchar(tree$node.label))
+    if (has_support) {
+      p <- p + ggtree::geom_nodelab(size = 2.6, hjust = 1.1, vjust = -0.4)
+    }
+    pdf_path <- paste0(params$out_prefix, ".species_tree.pdf")
+    ggplot2::ggsave(pdf_path, p, device = grDevices::cairo_pdf,
+                    width = plot_w, height = plot_h, dpi = 300)
+    print(p)
+  }
+}
+```
 
 `r if (has_any_chrom && has_per_asm) "# 4. Similarity {.tabset}" else ""`
 

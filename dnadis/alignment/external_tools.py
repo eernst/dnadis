@@ -387,6 +387,8 @@ def run_mafft(
     output_fasta: Path,
     threads: int = 1,
     err_path: Optional[Path] = None,
+    algorithm: str = "auto",
+    quiet: bool = False,
 ) -> bool:
     """Run MAFFT multiple sequence alignment.
 
@@ -395,6 +397,10 @@ def run_mafft(
         output_fasta: Output aligned FASTA
         threads: Number of threads
         err_path: Path for stderr output
+        algorithm: "auto" (default, --auto) or "linsi" (--localpair --maxiterate 1000)
+        quiet: If True, demote the per-invocation start/reuse logs to DEBUG.
+            Useful when running thousands of per-gene alignments where the
+            per-call line would drown out other output.
 
     Returns:
         True if successful, False if MAFFT not available
@@ -403,17 +409,24 @@ def run_mafft(
         return False
 
     if file_exists_and_valid(output_fasta):
-        logger.info(f"MAFFT output exists, reusing: {output_fasta}")
+        (logger.debug if quiet else logger.info)(f"MAFFT output exists, reusing: {output_fasta}")
         return True
+
+    if algorithm == "linsi":
+        algo_args = ["--localpair", "--maxiterate", "1000"]
+    elif algorithm == "auto":
+        algo_args = ["--auto"]
+    else:
+        raise ValueError(f"Unknown MAFFT algorithm: {algorithm!r}")
 
     cmd = [
         "mafft",
-        "--auto",
+        *algo_args,
         "--thread", str(threads),
         str(input_fasta),
     ]
 
-    logger.info(f"Running MAFFT -> {output_fasta}")
+    (logger.debug if quiet else logger.info)(f"Running MAFFT -> {output_fasta}")
 
     if err_path:
         err_path.parent.mkdir(parents=True, exist_ok=True)
@@ -433,3 +446,145 @@ def run_mafft(
         return False
 
     return True
+
+
+def run_trimal(
+    input_msa: Path,
+    output_msa: Path,
+    mode: str = "gappyout",
+    err_path: Optional[Path] = None,
+    quiet: bool = False,
+) -> bool:
+    """Run trimAl to trim columns from a multiple sequence alignment.
+
+    Args:
+        input_msa: Input aligned FASTA
+        output_msa: Output trimmed aligned FASTA
+        mode: trimAl heuristic mode ("gappyout", "strict", "strictplus", "automated1")
+        err_path: Path for stderr output
+        quiet: If True, demote start/reuse logs to DEBUG.
+
+    Returns:
+        True if successful, False if trimAl is not available or the run failed.
+    """
+    if not have_exe("trimal"):
+        return False
+
+    if file_exists_and_valid(output_msa):
+        (logger.debug if quiet else logger.info)(f"trimAl output exists, reusing: {output_msa}")
+        return True
+
+    if mode not in {"gappyout", "strict", "strictplus", "automated1", "nogaps", "noallgaps"}:
+        raise ValueError(f"Unknown trimAl mode: {mode!r}")
+
+    cmd = [
+        "trimal",
+        "-in", str(input_msa),
+        "-out", str(output_msa),
+        f"-{mode}",
+    ]
+
+    (logger.debug if quiet else logger.info)(f"Running trimAl ({mode}) -> {output_msa}")
+
+    try:
+        if err_path:
+            err_path.parent.mkdir(parents=True, exist_ok=True)
+            with err_path.open("wb") as err_fh:
+                ret = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=err_fh, check=False)
+        else:
+            ret = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        if ret.returncode != 0:
+            logger.warning(f"trimAl failed with return code {ret.returncode}")
+            return False
+    except Exception as e:
+        logger.warning(f"trimAl failed: {e}")
+        return False
+
+    return True
+
+
+def get_iqtree_exe() -> Optional[str]:
+    """Return the IQ-TREE executable name found on PATH, preferring iqtree3."""
+    for name in ("iqtree3", "iqtree2", "iqtree"):
+        if have_exe(name):
+            return name
+    return None
+
+
+def run_iqtree(
+    supermatrix: Path,
+    prefix: Path,
+    threads: int = 1,
+    max_mem_gb: int = 64,
+    bootstrap: int = 1000,
+    alrt: int = 1000,
+    models: str = "LG,WAG,JTT",
+    outgroup: Optional[str] = None,
+    err_path: Optional[Path] = None,
+) -> bool:
+    """Run IQ-TREE on a concatenated protein supermatrix.
+
+    The output Newick is at ``{prefix}.treefile``; branch support values are
+    ``SH-aLRT/UFBoot`` (in that order in the newick).
+
+    Args:
+        supermatrix: Concatenated alignment FASTA.
+        prefix: Output prefix; IQ-TREE appends ``.treefile``, ``.iqtree``, etc.
+        threads: CPU threads (``-T``).
+        max_mem_gb: Peak memory cap in GB passed to ``--mem``.
+        bootstrap: Ultrafast bootstrap replicates (``-B``); 0 disables.
+        alrt: SH-aLRT replicates (``--alrt``); 0 disables.
+        models: Comma-separated model set passed to ``--mset``.
+        outgroup: Taxon name(s) for ``-o`` (comma-separated for multiple); None = unrooted.
+        err_path: Path for stderr.
+
+    Returns:
+        True on success, False otherwise.
+    """
+    exe = get_iqtree_exe()
+    if exe is None:
+        logger.warning("IQ-TREE not found in PATH (looked for iqtree3, iqtree2, iqtree)")
+        return False
+
+    treefile = Path(f"{prefix}.treefile")
+    if file_exists_and_valid(treefile):
+        logger.info(f"IQ-TREE output exists, reusing: {treefile}")
+        return True
+
+    validate_extra_args(models, arg_name="iqtree models")
+    if outgroup is not None:
+        validate_extra_args(outgroup, arg_name="iqtree outgroup")
+
+    cmd = [
+        exe,
+        "-s", str(supermatrix),
+        "--prefix", str(prefix),
+        "-T", str(threads),
+        "--redo",
+        "--mset", models,
+        "--mem", f"{max_mem_gb}G",
+    ]
+    if bootstrap and bootstrap > 0:
+        cmd.extend(["-B", str(bootstrap)])
+    if alrt and alrt > 0:
+        cmd.extend(["--alrt", str(alrt)])
+    if outgroup:
+        cmd.extend(["-o", outgroup])
+
+    logger.info(f"Running {exe} -> {treefile}")
+
+    try:
+        if err_path:
+            err_path.parent.mkdir(parents=True, exist_ok=True)
+            with err_path.open("wb") as err_fh:
+                ret = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=err_fh, check=False)
+        else:
+            ret = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        if ret.returncode != 0:
+            logger.warning(f"IQ-TREE failed with return code {ret.returncode}")
+            return False
+    except Exception as e:
+        logger.warning(f"IQ-TREE failed: {e}")
+        return False
+
+    return file_exists_and_valid(treefile)

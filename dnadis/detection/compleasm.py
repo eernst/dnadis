@@ -48,6 +48,17 @@ def parse_compleasm_summary(summary_path: Path) -> Optional[CompleasmResult]:
     lineage_match = re.search(r"## lineage:\s*(\S+)", text)
     lineage = lineage_match.group(1) if lineage_match else "unknown"
 
+    lineage_subdir = summary_path.parent / lineage if lineage != "unknown" else None
+    full_table_path: Optional[Path] = None
+    translated_protein_path: Optional[Path] = None
+    if lineage_subdir is not None:
+        candidate_full = lineage_subdir / "full_table_busco_format.tsv"
+        if candidate_full.exists():
+            full_table_path = candidate_full
+        candidate_prot = lineage_subdir / "translated_protein.fasta"
+        if candidate_prot.exists():
+            translated_protein_path = candidate_prot
+
     # Parse category lines: X:pct%, count
     categories = {}
     for code in ("S", "D", "F", "I", "M"):
@@ -75,6 +86,8 @@ def parse_compleasm_summary(summary_path: Path) -> Optional[CompleasmResult]:
         pct_interspersed=categories["I"][0],
         pct_missing=categories["M"][0],
         summary_path=summary_path,
+        full_table_path=full_table_path,
+        translated_protein_path=translated_protein_path,
     )
 
 

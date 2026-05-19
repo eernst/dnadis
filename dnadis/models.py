@@ -448,6 +448,8 @@ class CompleasmResult:
     pct_interspersed: float
     pct_missing: float
     summary_path: Path
+    full_table_path: Optional[Path] = None
+    translated_protein_path: Optional[Path] = None
 
     def summary_line(self) -> str:
         """One-line summary string for logging (e.g. 'S:85.3% D:7.0% F:3.9% M:3.1%')."""
@@ -468,6 +470,19 @@ class CompleasmResult:
             _fmt(self.pct_interspersed),
             _fmt(self.pct_missing),
         ]
+
+
+@dataclass
+class PhylogenyResult:
+    """Outputs from the cross-assembly species-tree pipeline."""
+    supermatrix_fasta: Path
+    treefile: Path
+    leaf_order: List[str]
+    n_genes_used: int
+    n_columns: int
+    outgroup: Optional[str] = None  # The taxon label used to root, or None for unrooted
+    iqtree_prefix: Optional[Path] = None
+    dropped_leaves: List[Tuple[str, float]] = field(default_factory=list)
 
 
 @dataclass

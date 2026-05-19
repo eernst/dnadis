@@ -151,6 +151,18 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
         "compleasm_path": "compleasm_path",
         "skip_compleasm": "skip_compleasm",
     },
+    "phylogeny": {
+        "skip_phylogeny": "skip_phylogeny",
+        "phylo_min_busco_completeness": "phylo_min_busco_completeness",
+        "phylo_outgroup": "phylo_outgroup",
+        "phylo_skip_reference": "phylo_skip_reference",
+        "phylo_max_mem_gb": "phylo_max_mem_gb",
+        "phylo_bootstrap_reps": "phylo_bootstrap_reps",
+        "phylo_alrt_reps": "phylo_alrt_reps",
+        "phylo_models": "phylo_models",
+        "phylo_msa_chunk_size": "phylo_msa_chunk_size",
+        "phylo_msa_inner_threads": "phylo_msa_inner_threads",
+    },
     "multi_assembly": {
         "fofn": "fofn",
         "assembly_dir": "assembly_dir",
