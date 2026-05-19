@@ -178,17 +178,49 @@ def run_phylogeny(
 
     iqtree_prefix = phylo_dir / "species_tree"
     iqtree_err = phylo_dir / "iqtree.err"
-    treefile = build_tree(
-        supermatrix_fasta=supermatrix_fasta,
-        out_prefix=iqtree_prefix,
-        threads=args.threads,
-        max_mem_gb=args.phylo_max_mem_gb,
-        bootstrap=args.phylo_bootstrap_reps,
-        alrt=args.phylo_alrt_reps,
-        models=args.phylo_models,
-        outgroup_label=outgroup_label,
-        err_path=iqtree_err,
-    )
+
+    iqtree_threads = args.phylo_iqtree_threads
+    if use_cluster and cluster_config is not None:
+        from dnadis.utils.distributed import ResourceSpec, clamp_resources
+        iqtree_spec = clamp_resources(
+            ResourceSpec(
+                cores=iqtree_threads,
+                memory_gb=float(args.phylo_max_mem_gb),
+                time_minutes=args.phylo_iqtree_time_minutes,
+                job_name="dnadis_iqtree",
+            ),
+            cluster_config,
+        )
+        iqtree_threads = iqtree_spec.cores  # may have been clamped down
+        logger.info(
+            f"Submitting IQ-TREE to SLURM: cores={iqtree_spec.cores}, "
+            f"mem={iqtree_spec.memory_gb:g}G, time={iqtree_spec.time_minutes}min"
+        )
+        treefile = executor.submit(
+            build_tree,
+            supermatrix_fasta=supermatrix_fasta,
+            out_prefix=iqtree_prefix,
+            threads=iqtree_threads,
+            max_mem_gb=args.phylo_max_mem_gb,
+            bootstrap=args.phylo_bootstrap_reps,
+            alrt=args.phylo_alrt_reps,
+            models=args.phylo_models,
+            outgroup_label=outgroup_label,
+            err_path=iqtree_err,
+            resource_spec=iqtree_spec,
+        ).result()
+    else:
+        treefile = build_tree(
+            supermatrix_fasta=supermatrix_fasta,
+            out_prefix=iqtree_prefix,
+            threads=iqtree_threads,
+            max_mem_gb=args.phylo_max_mem_gb,
+            bootstrap=args.phylo_bootstrap_reps,
+            alrt=args.phylo_alrt_reps,
+            models=args.phylo_models,
+            outgroup_label=outgroup_label,
+            err_path=iqtree_err,
+        )
     if treefile is None:
         logger.warning("Phylogeny: IQ-TREE failed; no tree produced")
         return None

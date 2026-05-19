@@ -162,6 +162,8 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
         "phylo_models": "phylo_models",
         "phylo_msa_chunk_size": "phylo_msa_chunk_size",
         "phylo_msa_inner_threads": "phylo_msa_inner_threads",
+        "phylo_iqtree_threads": "phylo_iqtree_threads",
+        "phylo_iqtree_time_minutes": "phylo_iqtree_time_minutes",
     },
     "multi_assembly": {
         "fofn": "fofn",

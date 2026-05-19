@@ -1567,9 +1567,10 @@ def main():
             keep_executor_cache=False,
             skip_phylogeny=False, phylo_min_busco_completeness=50.0,
             phylo_outgroup="none", phylo_skip_reference=False,
-            phylo_max_mem_gb=64, phylo_bootstrap_reps=1000,
+            phylo_max_mem_gb=8, phylo_bootstrap_reps=1000,
             phylo_alrt_reps=1000, phylo_models="LG,WAG,JTT",
             phylo_msa_chunk_size=256, phylo_msa_inner_threads=4,
+            phylo_iqtree_threads=16, phylo_iqtree_time_minutes=720,
         )
         print(dump_config_template(defaults))
         sys.exit(0)
@@ -2051,8 +2052,8 @@ def main():
         help="Exclude the reference genome as a leaf in the species tree (by default it is included).",
     )
     phylo_grp.add_argument(
-        "--phylo-max-mem-gb", type=int, default=64, metavar="GB",
-        help="Memory cap (GB) for IQ-TREE (passed to --mem) and SLURM request when --cluster. [64]",
+        "--phylo-max-mem-gb", type=int, default=8, metavar="GB",
+        help="Memory cap (GB) for IQ-TREE (passed to --mem) and SLURM request when --cluster. The supermatrix step is small in RAM (sub-GB in typical runs); bump for >1000 taxa or >1M columns. [8]",
     )
     phylo_grp.add_argument(
         "--phylo-bootstrap-reps", type=int, default=1000, metavar="N",
@@ -2073,6 +2074,14 @@ def main():
     phylo_grp.add_argument(
         "--phylo-msa-inner-threads", type=int, default=4, metavar="N",
         help="In --cluster mode, cores allocated to each per-gene MSA chunk job; this many genes run concurrently inside one chunk. [4]",
+    )
+    phylo_grp.add_argument(
+        "--phylo-iqtree-threads", type=int, default=16, metavar="N",
+        help="Threads for IQ-TREE (-T). In --cluster mode this is also the SLURM --cpus-per-task request. [16]",
+    )
+    phylo_grp.add_argument(
+        "--phylo-iqtree-time-minutes", type=int, default=720, metavar="MIN",
+        help="In --cluster mode, SLURM --time request for the IQ-TREE job. IQ-TREE with -B 1000 on a large supermatrix can run for hours. [720]",
     )
 
     args = p.parse_args()
