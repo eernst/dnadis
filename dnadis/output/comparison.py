@@ -65,6 +65,7 @@ def build_assembly_result(
     rdna_arrays_tsv: Optional[Path] = None,
     agp_tsv: Optional[Path] = None,
     per_subgenome_chrs: Optional[Dict[str, Path]] = None,
+    compleasm_full: Optional[CompleasmResult] = None,
     compleasm_chrs: Optional[CompleasmResult] = None,
     compleasm_non_chrs: Optional[CompleasmResult] = None,
 ) -> AssemblyResult:
@@ -280,6 +281,7 @@ def build_assembly_result(
         rdna_arrays_tsv=rdna_arrays_tsv,
         agp_tsv=agp_tsv,
         per_subgenome_chrs=per_subgenome_chrs or {},
+        compleasm_full=compleasm_full,
         compleasm_chrs=compleasm_chrs,
         compleasm_non_chrs=compleasm_non_chrs,
     )

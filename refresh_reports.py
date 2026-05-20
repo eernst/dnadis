@@ -246,7 +246,33 @@ def build_placeholder_values(
         "__TOP_N__": "10",
         "__SELF_CONTAINED__": "true",
         "__DNADIS_VERSION__": _dnadis_version(),
+        # Optional pipeline outputs: when the comparison report is refreshed
+        # for a run that pre-dates the phylogeny feature, these placeholders
+        # are simply empty (no tree, no outgroup).  The Rmd already treats
+        # an empty value as "no tree section."
+        "__PHYLOGENY_TREEFILE__": "",
+        "__PHYLOGENY_OUTGROUP__": "",
     }
+
+    # If the pipeline wrote a sidecar with the outgroup label, prefer that
+    # over the empty default.  Path is fixed by convention in
+    # phylogeny/pipeline.py:run_phylogeny.
+    if "__PHYLOGENY_OUTGROUP__" in template_text:
+        og_sidecar = prefix.parent / "phylogeny" / "species_tree.outgroup.txt"
+        if og_sidecar.exists():
+            text = og_sidecar.read_text(encoding="utf-8").strip()
+            # Only use a non-empty sidecar value; keep the empty default
+            # otherwise.  This also covers older runs whose pipeline never
+            # wrote the sidecar.
+            if text:
+                defaults["__PHYLOGENY_OUTGROUP__"] = text
+
+    # Same idea for the treefile path so a refresh after a pipeline upgrade
+    # picks up the canonical location without depending on the old Rmd.
+    if "__PHYLOGENY_TREEFILE__" in template_text:
+        tf = prefix.parent / "phylogeny" / "species_tree.treefile"
+        if tf.exists():
+            defaults["__PHYLOGENY_TREEFILE__"] = esc(tf)
     for placeholder, default in defaults.items():
         if placeholder in template_text:
             current = values.get(placeholder, "")
@@ -401,6 +427,17 @@ def main():
         action="store_true", default=None,
         help="Force non-self-contained HTML (faster, HTML + _files/ directory)",
     )
+    parser.add_argument(
+        "--phylo-outgroup",
+        metavar="LABEL",
+        default=None,
+        help="Override the phylogeny outgroup label used to root the ggtree plot. "
+             "Accepts a single leaf label (e.g. 'la6002') or a comma-separated "
+             "clade (e.g. 'reference_A,reference_P,reference_T').  Useful when "
+             "re-rendering a comparison report whose Rmd was generated before "
+             "the outgroup placeholder existed, or to try alternative rootings "
+             "without re-running the pipeline.",
+    )
     args = parser.parse_args()
 
     run_dir = args.run_dir.resolve()
@@ -417,6 +454,8 @@ def main():
         overrides["__SELF_CONTAINED__"] = "true"
     elif args.no_self_contained:
         overrides["__SELF_CONTAINED__"] = "false"
+    if args.phylo_outgroup is not None:
+        overrides["__PHYLOGENY_OUTGROUP__"] = args.phylo_outgroup
 
     # Collect (dir, scripts, prefix) groups to process
     groups: list[tuple[Path, list[tuple[str, Path]], Path]] = []

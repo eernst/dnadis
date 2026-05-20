@@ -10,14 +10,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from dnadis.detection.compleasm import derive_chrs_non_chrs_compleasm
 from dnadis.models import CompleasmResult, ContigClassification
 from dnadis.phylogeny.busco_extraction import (
     LeafBuscos,
     LeafId,
     build_assembly_leaves,
-    build_reference_leaf,
+    build_outgroup_leaves,
+    build_reference_leaves,
     filter_leaves_by_completeness,
+    infer_assembly_ploidy,
     parse_full_table,
+    ref_assignment_quality_by_subgenome,
     shared_single_copy_genes,
 )
 from dnadis.phylogeny.tree import (
@@ -277,3 +281,261 @@ def test_auto_outgroup_two_taxa_returns_none(tmp_path):
     fa = tmp_path / "sm.faa"
     fa.write_text(">a\nAAAA\n>b\nAAAA\n")
     assert auto_outgroup(fa) is None
+
+
+# --------------------------------------------------------------------------
+# Derived chrs / non_chrs split from a full-assembly compleasm run
+# --------------------------------------------------------------------------
+def test_derive_split_counts_correctly(tmp_path):
+    """Full-table joined with classifications produces consistent chrs/non_chrs counts."""
+    ft = _write_full_table(
+        tmp_path / "full_table.tsv",
+        [
+            # gA: single hit on a chrom_assigned contig → chrs:Complete
+            ("gA", "Complete",   "ctg1A", 1, 100, "+", 90.0, 99),
+            # gB: hits on both chrs and non_chrs contigs
+            ("gB", "Duplicated", "ctg1A", 1, 100, "+", 90.0, 99),
+            ("gB", "Duplicated", "ctgX",  1, 100, "+", 90.0, 99),
+            # gC: two hits on debris → non_chrs:Duplicated
+            ("gC", "Duplicated", "ctgX",  200, 300, "+", 90.0, 99),
+            ("gC", "Duplicated", "ctgY",  200, 300, "+", 90.0, 99),
+            # gD: fragmented on debris → non_chrs:Fragmented
+            ("gD", "Fragmented", "ctgX",  500, 600, "+", 30.0, 99),
+        ],
+    )
+    classifications = [
+        _mk_classification("ctg1A", "chr1A"),
+        _mk_classification("ctgX",  "debris"),
+        _mk_classification("ctgY",  "debris"),
+    ]
+    classifications[1].classification = "debris"
+    classifications[2].classification = "debris"
+
+    full = _mk_compleasm(ft, n_total=10)
+    chrs_dir = tmp_path / "chrs"
+    non_dir = tmp_path / "non"
+    chrs_res, non_res = derive_chrs_non_chrs_compleasm(
+        full, classifications, chrs_dir, non_dir,
+    )
+
+    # chrs side: gA (1 hit) → S; gB (1 hit) → S; others not present
+    assert chrs_res is not None
+    assert chrs_res.n_single == 2
+    assert chrs_res.n_duplicated == 0
+    assert chrs_res.n_fragmented == 0
+    assert chrs_res.n_missing == 10 - 2
+
+    # non_chrs side: gB (1 hit) → S; gC (2 hits) → D; gD (1 frag-only) → F
+    assert non_res is not None
+    assert non_res.n_single == 1
+    assert non_res.n_duplicated == 1
+    assert non_res.n_fragmented == 1
+    assert non_res.n_missing == 10 - 3
+
+    # Sanity: derived summary parses back through parse_compleasm_summary
+    assert (chrs_dir / "summary.txt").exists()
+    assert (non_dir / "summary.txt").exists()
+    # And the derived full_tables are persisted under the lineage subdir
+    assert (chrs_dir / full.lineage / "full_table_busco_format.tsv").exists()
+    assert (non_dir / full.lineage / "full_table_busco_format.tsv").exists()
+
+
+# --------------------------------------------------------------------------
+# Outgroup helpers: ploidy inference and ref-assignment quality
+# --------------------------------------------------------------------------
+def test_infer_assembly_ploidy_haploid(tmp_path):
+    rows = parse_full_table(_write_full_table(tmp_path / "ft.tsv", [
+        ("g1", "Complete", "c", 1, 100, "+", 90.0, 99),
+        ("g2", "Complete", "c", 200, 300, "+", 90.0, 99),
+        ("g3", "Complete", "c", 400, 500, "+", 90.0, 99),
+    ]))
+    assert infer_assembly_ploidy(rows) == 1
+
+
+def test_infer_assembly_ploidy_polyploid(tmp_path):
+    # Each gene appears twice (typical allotetraploid) → median = 2
+    rows = parse_full_table(_write_full_table(tmp_path / "ft.tsv", [
+        ("g1", "Duplicated", "cA", 1, 100, "+", 90.0, 99),
+        ("g1", "Duplicated", "cP", 1, 100, "+", 90.0, 99),
+        ("g2", "Duplicated", "cA", 200, 300, "+", 90.0, 99),
+        ("g2", "Duplicated", "cP", 200, 300, "+", 90.0, 99),
+    ]))
+    assert infer_assembly_ploidy(rows) == 2
+
+
+def test_ref_assignment_quality_distant_outgroup():
+    """7 assignments scattered across a 30-chrom reference → low quality everywhere."""
+    classifications = [
+        _mk_classification("c1", "chr1A"),
+        _mk_classification("c2", "chr2A"),
+        _mk_classification("c3", "chr3A"),
+        _mk_classification("c4", "chr1P"),
+        _mk_classification("c5", "chr2P"),
+        _mk_classification("c6", "chr1T"),
+        _mk_classification("c7", "chr2T"),
+    ]
+    # Pretend the reference has 10 chroms per subgenome
+    ref_lengths = {}
+    for sg in ("A", "P", "T"):
+        for i in range(1, 11):
+            ref_lengths[f"chr{i}{sg}"] = 1_000_000
+    quality = ref_assignment_quality_by_subgenome(classifications, ref_lengths)
+    # A subgenome: 3 chroms assigned out of 10 → 0.3
+    assert abs(quality["A"] - 0.3) < 1e-9
+    assert abs(quality["P"] - 0.2) < 1e-9
+    assert abs(quality["T"] - 0.2) < 1e-9
+
+
+def test_ref_assignment_quality_well_mapped_one_subgenome():
+    """One subgenome densely mapped, others not → keep the dense one."""
+    classifications = [_mk_classification(f"c{i}", f"chr{i}A") for i in range(1, 11)]
+    ref_lengths = {}
+    for sg in ("A", "P"):
+        for i in range(1, 11):
+            ref_lengths[f"chr{i}{sg}"] = 1_000_000
+    quality = ref_assignment_quality_by_subgenome(classifications, ref_lengths)
+    assert abs(quality["A"] - 1.0) < 1e-9
+    assert quality.get("P", 0.0) == 0.0  # no contigs assigned to P
+
+
+# --------------------------------------------------------------------------
+# build_outgroup_leaves: status decisions
+# --------------------------------------------------------------------------
+def test_build_outgroup_leaves_haploid_pools_all(tmp_path):
+    """Haploid outgroup retains BUSCOs regardless of chromosome assignment."""
+    ft = _write_full_table(tmp_path / "ft.tsv", [
+        ("g1", "Complete", "ctg_chrom_assigned", 1, 100, "+", 90.0, 99),
+        ("g2", "Complete", "ctg_unassigned",     1, 100, "+", 90.0, 99),
+        ("g3", "Complete", "ctg_debris",         1, 100, "+", 90.0, 99),
+    ])
+    classifications = [
+        _mk_classification("ctg_chrom_assigned", "chr1A"),
+        _mk_classification("ctg_unassigned",     "chr1A"),  # ref_id set ...
+        _mk_classification("ctg_debris",         "debris"),
+    ]
+    classifications[1].classification = "chrom_unassigned"
+    classifications[1].assigned_ref_id = None
+    classifications[2].classification = "debris"
+
+    full = _mk_compleasm(ft, n_total=10)
+    leaves, status = build_outgroup_leaves(
+        "outg", classifications, full, ref_lengths_norm={"chr1A": 100_000}, min_ref_assignment=0.5,
+    )
+    assert status == "haploid_pooled"
+    assert len(leaves) == 1
+    assert leaves[0].leaf.label == "outg"  # no ref_sg / query_sg suffix
+    assert leaves[0].single_copy_genes() == {"g1", "g2", "g3"}
+
+
+def test_build_outgroup_leaves_polyploid_unusable(tmp_path):
+    """Polyploid outgroup with sparse ref-chromosome assignments → unusable."""
+    ft = _write_full_table(tmp_path / "ft.tsv", [
+        # 4 BUSCOs, each duplicated → ploidy median == 2
+        ("g1", "Duplicated", "cA", 1, 100, "+", 90.0, 99),
+        ("g1", "Duplicated", "cP", 1, 100, "+", 90.0, 99),
+        ("g2", "Duplicated", "cA", 200, 300, "+", 90.0, 99),
+        ("g2", "Duplicated", "cP", 200, 300, "+", 90.0, 99),
+        ("g3", "Duplicated", "cA", 400, 500, "+", 90.0, 99),
+        ("g3", "Duplicated", "cP", 400, 500, "+", 90.0, 99),
+        ("g4", "Duplicated", "cA", 600, 700, "+", 90.0, 99),
+        ("g4", "Duplicated", "cP", 600, 700, "+", 90.0, 99),
+    ])
+    # Only 1/10 chroms assigned per subgenome → 0.1 quality, below 0.5 threshold
+    classifications = [
+        _mk_classification("cA", "chr1A"),
+        _mk_classification("cP", "chr1P"),
+    ]
+    ref_lengths = {}
+    for sg in ("A", "P"):
+        for i in range(1, 11):
+            ref_lengths[f"chr{i}{sg}"] = 1_000_000
+    leaves, status = build_outgroup_leaves(
+        "outg", classifications, _mk_compleasm(ft, n_total=10),
+        ref_lengths_norm=ref_lengths, min_ref_assignment=0.5,
+    )
+    assert status == "polyploid_unusable"
+    assert leaves == []
+
+
+def test_build_reference_leaves_monoploid(tmp_path):
+    """Monoploid reference contigs (no subgenome suffix) → one leaf."""
+    ft = _write_full_table(tmp_path / "ft.tsv", [
+        ("g1", "Complete", "chr1", 1, 100, "+", 90.0, 99),
+        ("g2", "Complete", "chr2", 1, 100, "+", 90.0, 99),
+    ])
+    leaves = build_reference_leaves("ref", _mk_compleasm(ft, n_total=10))
+    assert len(leaves) == 1
+    assert leaves[0].leaf.label == "ref"
+    assert leaves[0].single_copy_genes() == {"g1", "g2"}
+
+
+def test_build_reference_leaves_polyploid_splits_by_subgenome(tmp_path):
+    """Composed polyploid reference → one leaf per chr subgenome suffix.
+
+    Without this split a polyploid reference produces one pooled leaf
+    where every BUSCO hit count equals the reference's ploidy, so
+    ``single_copy_genes()`` drops every BUSCO and the reference falls
+    below the completeness threshold.
+    """
+    ft = _write_full_table(tmp_path / "ft.tsv", [
+        # BUSCO present once per subgenome (allopolyploid composed reference)
+        ("g1", "Duplicated", "chr1A", 1, 100, "+", 90.0, 99),
+        ("g1", "Duplicated", "chr1P", 1, 100, "+", 90.0, 99),
+        ("g1", "Duplicated", "chr1T", 1, 100, "+", 90.0, 99),
+        ("g2", "Duplicated", "chr2A", 1, 100, "+", 90.0, 99),
+        ("g2", "Duplicated", "chr2P", 1, 100, "+", 90.0, 99),
+        ("g2", "Duplicated", "chr2T", 1, 100, "+", 90.0, 99),
+    ])
+    leaves = build_reference_leaves("ref", _mk_compleasm(ft, n_total=10))
+    by_label = {lb.leaf.label: lb for lb in leaves}
+    assert set(by_label) == {"ref_A", "ref_P", "ref_T"}
+    for label in ("ref_A", "ref_P", "ref_T"):
+        # Each subgenome leaf sees each BUSCO exactly once → single-copy
+        assert by_label[label].single_copy_genes() == {"g1", "g2"}
+
+
+def test_resolve_outgroup_polyploid_reference_returns_clade(tmp_path):
+    """--phylo-outgroup=reference on a polyploid ref → comma-joined clade."""
+    fa = tmp_path / "sm.faa"
+    fa.write_text(">ref_A\nA\n>ref_P\nA\n>ref_T\nA\n>q1\nA\n>q2\nA\n")
+    result = resolve_outgroup(
+        "reference",
+        ["ref_A", "ref_P", "ref_T", "q1", "q2"],
+        ["ref_A", "ref_P", "ref_T"],
+        fa,
+    )
+    assert result is not None
+    parts = set(result.split(","))
+    assert parts == {"ref_A", "ref_P", "ref_T"}
+
+
+def test_resolve_outgroup_accepts_legacy_string_reference(tmp_path):
+    """Legacy single-string reference_labels arg still works."""
+    fa = tmp_path / "sm.faa"
+    fa.write_text(">ref\nA\n>q1\nA\n")
+    assert resolve_outgroup("reference", ["ref", "q1"], "ref", fa) == "ref"
+
+
+def test_build_outgroup_leaves_polyploid_filtered(tmp_path):
+    """Polyploid outgroup with one well-mapped subgenome → keep just that one."""
+    ft = _write_full_table(tmp_path / "ft.tsv", [
+        ("g1", "Duplicated", "cA1", 1, 100, "+", 90.0, 99),
+        ("g1", "Duplicated", "cP",  1, 100, "+", 90.0, 99),
+        ("g2", "Duplicated", "cA2", 200, 300, "+", 90.0, 99),
+        ("g2", "Duplicated", "cP",  200, 300, "+", 90.0, 99),
+    ])
+    # 2/2 A-chroms assigned (quality 1.0); 1/2 P-chroms assigned (quality 0.5)
+    classifications = [
+        _mk_classification("cA1", "chr1A"),
+        _mk_classification("cA2", "chr2A"),
+        _mk_classification("cP",  "chr1P"),
+    ]
+    ref_lengths = {"chr1A": 1_000_000, "chr2A": 1_000_000,
+                   "chr1P": 1_000_000, "chr2P": 1_000_000}
+    leaves, status = build_outgroup_leaves(
+        "outg", classifications, _mk_compleasm(ft, n_total=10),
+        ref_lengths_norm=ref_lengths, min_ref_assignment=0.75,
+    )
+    assert status == "polyploid_filtered"
+    labels = {lb.leaf.label for lb in leaves}
+    assert labels == {"outg_A"}  # P dropped (0.5 < 0.75 threshold)

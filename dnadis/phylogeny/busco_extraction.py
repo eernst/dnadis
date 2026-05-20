@@ -11,6 +11,7 @@ the reference are placed on the same footing.
 """
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -18,7 +19,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 from dnadis.models import CompleasmResult, ContigClassification
 from dnadis.utils.io_utils import file_exists_and_valid
 from dnadis.utils.logging_config import get_logger
-from dnadis.utils.reference_utils import split_chrom_subgenome
+from dnadis.utils.reference_utils import is_nuclear_chromosome, split_chrom_subgenome
 
 logger = get_logger("phylogeny")
 
@@ -58,9 +59,12 @@ class LeafId:
     @property
     def label(self) -> str:
         parts = [self.assembly]
-        if self.ref_subgenome:
+        # ``split_chrom_subgenome`` returns the literal string ``"NA"`` for
+        # monoploid references; treat it the same as None so the leaf label
+        # for a monoploid reference stays bare ``reference_name``.
+        if self.ref_subgenome and self.ref_subgenome != "NA":
             parts.append(self.ref_subgenome)
-        if self.query_subgenome:
+        if self.query_subgenome and self.query_subgenome != "NA":
             parts.append(self.query_subgenome)
         return "_".join(parts)
 
@@ -176,6 +180,8 @@ def build_assembly_leaves(
         ref_sg: Optional[str] = None
         if clf.assigned_ref_id:
             _, ref_sg = split_chrom_subgenome(clf.assigned_ref_id)
+            if ref_sg == "NA":
+                ref_sg = None
         leaf = LeafId(
             assembly=assembly_name,
             ref_subgenome=ref_sg,
@@ -208,25 +214,52 @@ def build_assembly_leaves(
     return list(leaves_by_id.values())
 
 
-def build_reference_leaf(
+def build_reference_leaves(
     reference_name: str,
     compleasm_result: CompleasmResult,
-) -> Optional[LeafBuscos]:
-    """Build a single leaf representing the reference genome."""
+) -> List[LeafBuscos]:
+    """Build one leaf per reference subgenome.
+
+    Reference contig names directly encode subgenome identity (chr3A → "A",
+    chr3P → "P"); we split the reference's full_table by
+    :func:`split_chrom_subgenome` of each row's contig.
+
+    * Monoploid reference: every row has ``ref_sg = None`` → one leaf
+      labeled with just ``reference_name``.
+    * Polyploid composed reference (e.g. three haploidized assemblies
+      stitched together with chr*A / chr*P / chr*T suffixes): one leaf per
+      subgenome (``reference_name_A``, ``reference_name_P``, etc.).  This
+      mirrors how query assemblies are split — without it a polyploid
+      reference looks like every BUSCO is c-fold duplicated and the
+      ``--phylo-min-busco-completeness`` gate drops the whole reference.
+    """
     if compleasm_result.full_table_path is None:
         logger.warning("Reference compleasm has no full_table; cannot include reference in tree")
-        return None
-    leaf = LeafId(assembly=reference_name)
-    lb = LeafBuscos(
-        leaf=leaf,
-        translated_protein_path=compleasm_result.translated_protein_path,
-        n_lineage_total=compleasm_result.n_total,
-    )
+        return []
+
+    leaves_by_id: Dict[LeafId, LeafBuscos] = {}
     for h in parse_full_table(compleasm_result.full_table_path):
         if h.status not in _INCLUDE_STATUSES:
             continue
+        if h.contig is None:
+            continue
+        _, ref_sg = split_chrom_subgenome(h.contig)
+        # split_chrom_subgenome returns "NA" (string) for monoploid refs;
+        # normalise that to None so the leaf label stays bare "reference_name"
+        # rather than "reference_name_NA".
+        if ref_sg == "NA":
+            ref_sg = None
+        leaf_id = LeafId(assembly=reference_name, ref_subgenome=ref_sg)
+        lb = leaves_by_id.setdefault(
+            leaf_id,
+            LeafBuscos(
+                leaf=leaf_id,
+                translated_protein_path=compleasm_result.translated_protein_path,
+                n_lineage_total=compleasm_result.n_total,
+            ),
+        )
         lb.hits_by_busco.setdefault(h.busco_id, []).append(h)
-    return lb
+    return list(leaves_by_id.values())
 
 
 def filter_leaves_by_completeness(
@@ -258,3 +291,162 @@ def shared_single_copy_genes(leaves: List[LeafBuscos]) -> List[str]:
         if not common:
             return []
     return sorted(common)
+
+
+# ---------------------------------------------------------------------------
+# Outgroup helpers
+#
+# When the user designates a specific query assembly as the outgroup, we
+# relax the chrom_assigned filter so distant outgroups whose contigs largely
+# don't align to the reference can still anchor the tree.  This carries two
+# risks the helpers below try to detect:
+#
+#   * polyploid outgroup without subgenome separation: c >= 2 hits per
+#     BUSCO, but very few outgroup contigs map to reference chromosomes —
+#     subgenome identity is unrecoverable, so the outgroup can't contribute
+#     meaningful per-subgenome leaves.
+#   * partially-mappable polyploid outgroup: c >= 2 and one subgenome has
+#     dense reference coverage while another doesn't.  We keep the well-
+#     mapped subgenome(s) and drop the rest (per user judgement that the
+#     non-mapping subgenome is too hard to distinguish from debris).
+# ---------------------------------------------------------------------------
+
+
+def infer_assembly_ploidy(hits: List[BuscoHit]) -> int:
+    """Estimate ploidy ``c`` from per-BUSCO hit-count distribution.
+
+    Returns the median number of present-status hits per BUSCO across all
+    BUSCOs that compleasm detected.  ``c == 1`` indicates a haploid /
+    collapsed assembly; ``c >= 2`` indicates polyploidy.  Returns ``1`` when
+    there are no present-status hits (the caller has bigger problems than
+    ploidy estimation).
+    """
+    per_busco: Dict[str, int] = defaultdict(int)
+    for h in hits:
+        if h.status in _INCLUDE_STATUSES:
+            per_busco[h.busco_id] += 1
+    if not per_busco:
+        return 1
+    counts = sorted(per_busco.values())
+    return counts[len(counts) // 2]
+
+
+def ref_assignment_quality_by_subgenome(
+    classifications: Iterable[ContigClassification],
+    ref_lengths_norm: Dict[str, int],
+) -> Dict[Optional[str], float]:
+    """Per-reference-subgenome assignment coverage for one query assembly.
+
+    For each ref subgenome (chr1A → ``A``, chr1P → ``P``, etc.) returns the
+    fraction of that subgenome's reference chromosomes that have at least
+    one query contig assigned to them.  A distant outgroup that picks up
+    7 / 63 chromosome assignments across three subgenomes scores low on
+    every subgenome (~0.03–0.10); a close outgroup that maps cleanly to
+    one subgenome scores ~1.0 on that subgenome and ~0 on the others.
+
+    Organelles and non-nuclear references are excluded from both numerator
+    and denominator.
+    """
+    sg_to_assigned: Dict[Optional[str], set] = defaultdict(set)
+    for clf in classifications:
+        if clf.classification != "chrom_assigned" or not clf.assigned_ref_id:
+            continue
+        _, sg = split_chrom_subgenome(clf.assigned_ref_id)
+        sg_to_assigned[sg].add(clf.assigned_ref_id)
+
+    sg_to_total: Dict[Optional[str], int] = defaultdict(int)
+    for ref_id in ref_lengths_norm:
+        if not is_nuclear_chromosome(ref_id):
+            continue
+        _, sg = split_chrom_subgenome(ref_id)
+        sg_to_total[sg] += 1
+
+    out: Dict[Optional[str], float] = {}
+    for sg, assigned in sg_to_assigned.items():
+        total = sg_to_total.get(sg, 0)
+        out[sg] = (len(assigned) / total) if total > 0 else 0.0
+    return out
+
+
+def build_outgroup_leaves(
+    assembly_name: str,
+    classifications: Iterable[ContigClassification],
+    compleasm_result: CompleasmResult,
+    ref_lengths_norm: Dict[str, int],
+    min_ref_assignment: float = 0.5,
+) -> Tuple[List[LeafBuscos], str]:
+    """Build leaves for a designated outgroup with relaxed chrom-assigned rules.
+
+    Returns ``(leaves, status)`` where ``status`` is one of:
+
+    * ``"haploid_pooled"`` — c = 1; all single-copy BUSCOs in the outgroup
+      contribute to a single leaf regardless of whether their contig was
+      chromosome-assigned.
+    * ``"polyploid_filtered"`` — c >= 2 and at least one reference subgenome
+      has assignment quality >= ``min_ref_assignment``; only those well-
+      assigned subgenomes contribute leaves.
+    * ``"polyploid_unusable"`` — c >= 2 but no subgenome is well-assigned;
+      caller should warn and skip the outgroup.
+    """
+    if compleasm_result.full_table_path is None:
+        return [], "polyploid_unusable"
+
+    hits = parse_full_table(compleasm_result.full_table_path)
+    ploidy = infer_assembly_ploidy(hits)
+
+    if ploidy <= 1:
+        leaf = LeafId(assembly=assembly_name)
+        lb = LeafBuscos(
+            leaf=leaf,
+            translated_protein_path=compleasm_result.translated_protein_path,
+            n_lineage_total=compleasm_result.n_total,
+        )
+        for h in hits:
+            if h.status not in _INCLUDE_STATUSES:
+                continue
+            lb.hits_by_busco.setdefault(h.busco_id, []).append(h)
+        return [lb], "haploid_pooled"
+
+    quality = ref_assignment_quality_by_subgenome(classifications, ref_lengths_norm)
+    usable_sgs = {
+        sg for sg, q in quality.items()
+        if sg is not None and q >= min_ref_assignment
+    }
+    if not usable_sgs:
+        return [], "polyploid_unusable"
+
+    contig_to_leaf: Dict[str, LeafId] = {}
+    for clf in classifications:
+        if clf.classification != "chrom_assigned" or not clf.assigned_ref_id:
+            continue
+        _, ref_sg = split_chrom_subgenome(clf.assigned_ref_id)
+        if ref_sg == "NA":
+            ref_sg = None
+        if ref_sg not in usable_sgs:
+            continue
+        leaf = LeafId(
+            assembly=assembly_name,
+            ref_subgenome=ref_sg,
+            query_subgenome=clf.query_subgenome,
+        )
+        contig_to_leaf[clf.new_name] = leaf
+        contig_to_leaf[clf.original_name] = leaf
+
+    leaves_by_id: Dict[LeafId, LeafBuscos] = {}
+    for h in hits:
+        if h.status not in _INCLUDE_STATUSES:
+            continue
+        leaf = _leaf_for_contig(contig_to_leaf, h.contig)
+        if leaf is None:
+            continue
+        lb = leaves_by_id.setdefault(
+            leaf,
+            LeafBuscos(
+                leaf=leaf,
+                translated_protein_path=compleasm_result.translated_protein_path,
+                n_lineage_total=compleasm_result.n_total,
+            ),
+        )
+        lb.hits_by_busco.setdefault(h.busco_id, []).append(h)
+
+    return list(leaves_by_id.values()), "polyploid_filtered"

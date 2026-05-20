@@ -19,7 +19,8 @@ from dnadis.models import (
 from dnadis.phylogeny.busco_extraction import (
     LeafBuscos,
     build_assembly_leaves,
-    build_reference_leaf,
+    build_outgroup_leaves,
+    build_reference_leaves,
     filter_leaves_by_completeness,
     shared_single_copy_genes,
 )
@@ -39,6 +40,48 @@ _MIN_LEAVES = 3
 _MIN_GENES = 4
 
 
+def submit_reference_compleasm(
+    args,
+    ref_ctx: ReferenceContext,
+    output_dir: Path,
+    executor,
+    cluster_config,
+):
+    """Submit the reference compleasm job at the start of the executor scope.
+
+    Called from ``main()`` right after the executor opens, in parallel with
+    the per-assembly pipelines, so the reference run doesn't become a
+    straggler that only starts once every assembly has finished.  Returns
+    a future whose ``.result()`` yields a :class:`CompleasmResult` (or
+    ``None``), or ``None`` if the reference run is not needed.
+    """
+    if args.skip_phylogeny:
+        return None
+    if not args.compleasm_lineage or args.skip_compleasm:
+        return None
+    if args.phylo_skip_reference:
+        return None
+
+    ref_compleasm_dir = output_dir / "reference" / "compleasm"
+    use_cluster = cluster_config.enabled if cluster_config else False
+    ref_compleasm_spec = None
+    ref_threads = args.threads
+    if use_cluster:
+        from dnadis.utils.resource_estimation import estimate_compleasm_resources
+        ref_compleasm_spec = estimate_compleasm_resources(ref_ctx.ref, cluster_config)
+        ref_threads = ref_compleasm_spec.cores
+    return executor.submit(
+        run_compleasm,
+        fasta=ref_ctx.ref,
+        output_dir=ref_compleasm_dir,
+        lineage=args.compleasm_lineage,
+        threads=ref_threads,
+        library_path=args.compleasm_library,
+        compleasm_exe=args.compleasm_path,
+        resource_spec=ref_compleasm_spec if use_cluster else None,
+    )
+
+
 def run_phylogeny(
     args,
     ref_ctx: ReferenceContext,
@@ -47,8 +90,13 @@ def run_phylogeny(
     executor,
     cluster_config,
     reference_name: str,
+    ref_compleasm_future=None,
 ) -> Optional[PhylogenyResult]:
     """Build a species tree from per-leaf single-copy BUSCOs.
+
+    ``ref_compleasm_future`` is the future returned by
+    :func:`submit_reference_compleasm` at the top of the executor scope;
+    pass ``None`` here only when running without a reference leaf.
 
     Returns ``None`` when the tree cannot be built (insufficient compleasm
     data, missing tools, too few taxa or shared genes).
@@ -58,45 +106,67 @@ def run_phylogeny(
     phylo_dir = output_dir / "phylogeny"
     phylo_dir.mkdir(parents=True, exist_ok=True)
 
-    # Submit reference compleasm early so it overlaps with per-gene MSA work.
-    ref_compleasm_future = None
-    if not args.phylo_skip_reference and args.compleasm_lineage:
-        ref_compleasm_dir = output_dir / "reference" / "compleasm"
-        use_cluster = cluster_config.enabled if cluster_config else False
-        ref_compleasm_spec = None
-        ref_threads = args.threads
-        if use_cluster:
-            from dnadis.utils.resource_estimation import estimate_compleasm_resources
-            ref_compleasm_spec = estimate_compleasm_resources(
-                ref_ctx.ref, cluster_config,
-            )
-            ref_threads = ref_compleasm_spec.cores
-        ref_compleasm_future = executor.submit(
-            run_compleasm,
-            fasta=ref_ctx.ref,
-            output_dir=ref_compleasm_dir,
-            lineage=args.compleasm_lineage,
-            threads=ref_threads,
-            library_path=args.compleasm_library,
-            compleasm_exe=args.compleasm_path,
-            resource_spec=ref_compleasm_spec if use_cluster else None,
-        )
-    elif not args.compleasm_lineage:
+    if not args.compleasm_lineage:
         logger.info("Phylogeny skipped: no --compleasm-lineage configured")
         return None
 
+    outgroup_arg = (args.phylo_outgroup or "none").strip()
+    # Special outgroup handling only applies when the user names a specific
+    # query assembly.  "none"/"reference"/"auto" follow the standard path.
+    outgroup_asm_name: Optional[str] = None
+    if outgroup_arg.lower() not in {"none", "reference", "auto", ""}:
+        for r in results:
+            if r.assembly_name == outgroup_arg:
+                outgroup_asm_name = r.assembly_name
+                break
+        if outgroup_asm_name is None:
+            logger.warning(
+                f"--phylo-outgroup={outgroup_arg!r} does not name any query assembly; "
+                f"outgroup will be resolved against built leaves after the tree is built."
+            )
+
     leaves: List[LeafBuscos] = []
     for r in results:
-        if r.compleasm_chrs is None or r.compleasm_chrs.full_table_path is None:
+        compleasm_for_phylo = r.compleasm_full or r.compleasm_chrs
+        if compleasm_for_phylo is None or compleasm_for_phylo.full_table_path is None:
             logger.info(
                 f"Assembly {r.assembly_name!r} has no compleasm full_table — "
                 f"excluding from phylogeny"
             )
             continue
-        leaves.extend(build_assembly_leaves(r.assembly_name, r.classifications, r.compleasm_chrs))
+        if r.assembly_name == outgroup_asm_name:
+            og_leaves, og_status = build_outgroup_leaves(
+                assembly_name=r.assembly_name,
+                classifications=r.classifications,
+                compleasm_result=compleasm_for_phylo,
+                ref_lengths_norm=ref_ctx.ref_lengths_norm,
+                min_ref_assignment=args.phylo_outgroup_min_ref_assignment,
+            )
+            if og_status == "haploid_pooled":
+                logger.info(
+                    f"Outgroup {r.assembly_name!r}: detected c=1; pooled all "
+                    f"single-copy BUSCOs into one leaf regardless of chromosome assignment"
+                )
+            elif og_status == "polyploid_filtered":
+                kept_sgs = sorted({lb.leaf.ref_subgenome for lb in og_leaves if lb.leaf.ref_subgenome})
+                logger.info(
+                    f"Outgroup {r.assembly_name!r}: c>=2; retained subgenome(s) "
+                    f"{kept_sgs} with ref-chromosome-assignment quality >= "
+                    f"{args.phylo_outgroup_min_ref_assignment:.0%}; other subgenomes dropped"
+                )
+            elif og_status == "polyploid_unusable":
+                logger.warning(
+                    f"Outgroup {r.assembly_name!r}: c>=2 but no reference subgenome reached "
+                    f"the assignment-quality threshold ({args.phylo_outgroup_min_ref_assignment:.0%}). "
+                    f"This usually means the outgroup is too divergent for subgenome "
+                    f"separation against this reference.  Excluding it from the tree; "
+                    f"phylogeny will proceed unrooted unless --phylo-outgroup matches another taxon."
+                )
+            leaves.extend(og_leaves)
+        else:
+            leaves.extend(build_assembly_leaves(r.assembly_name, r.classifications, compleasm_for_phylo))
 
-    ref_leaf: Optional[LeafBuscos] = None
-    ref_label: Optional[str] = None
+    ref_labels: List[str] = []
     if ref_compleasm_future is not None:
         try:
             ref_compleasm: Optional[CompleasmResult] = ref_compleasm_future.result()
@@ -104,10 +174,14 @@ def run_phylogeny(
             logger.warning(f"Reference compleasm failed: {e}")
             ref_compleasm = None
         if ref_compleasm is not None:
-            ref_leaf = build_reference_leaf(reference_name, ref_compleasm)
-            if ref_leaf is not None:
-                leaves.append(ref_leaf)
-                ref_label = ref_leaf.leaf.label
+            ref_leaves = build_reference_leaves(reference_name, ref_compleasm)
+            if len(ref_leaves) > 1:
+                logger.info(
+                    f"Reference is polyploid: split into {len(ref_leaves)} per-subgenome "
+                    f"leaves ({[lb.leaf.label for lb in ref_leaves]})"
+                )
+            leaves.extend(ref_leaves)
+            ref_labels = [lb.leaf.label for lb in ref_leaves]
 
     if not leaves:
         logger.warning("Phylogeny: no usable leaves; skipping")
@@ -172,7 +246,7 @@ def run_phylogeny(
     outgroup_label = resolve_outgroup(
         args.phylo_outgroup,
         sm.leaf_order,
-        ref_label,
+        ref_labels,
         supermatrix_fasta,
     )
 
@@ -224,6 +298,11 @@ def run_phylogeny(
     if treefile is None:
         logger.warning("Phylogeny: IQ-TREE failed; no tree produced")
         return None
+
+    # Sidecar so refresh_reports.py (and any downstream consumer) can recover
+    # the outgroup label without re-deriving it from the run.
+    outgroup_sidecar = phylo_dir / "species_tree.outgroup.txt"
+    outgroup_sidecar.write_text(f"{outgroup_label or ''}\n")
 
     logger.done(f"Species tree: {treefile}")
     return PhylogenyResult(

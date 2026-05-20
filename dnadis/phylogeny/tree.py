@@ -78,30 +78,50 @@ def auto_outgroup(supermatrix_fasta: Path) -> Optional[str]:
 def resolve_outgroup(
     requested: str,
     leaf_labels: List[str],
-    reference_label: Optional[str],
+    reference_labels,
     supermatrix_fasta: Path,
 ) -> Optional[str]:
     """Map a user-facing ``--phylo-outgroup`` value to a leaf label.
 
+    ``reference_labels`` may be a single string (legacy), a list of
+    strings (polyploid reference, one leaf per subgenome), or ``None``.
+    When ``--phylo-outgroup=reference`` matches more than one reference
+    leaf, all present reference leaves are joined with commas — IQ-TREE
+    accepts that form for an outgroup clade.
+
     Returns ``None`` when the tree should be unrooted (requested == 'none'),
     or when the requested taxon is not present.
     """
+    if reference_labels is None:
+        ref_list: List[str] = []
+    elif isinstance(reference_labels, str):
+        ref_list = [reference_labels]
+    else:
+        ref_list = list(reference_labels)
+
     req = (requested or "none").strip().lower()
     if req == "none":
         return None
     if req == "reference":
-        if reference_label is None:
+        if not ref_list:
             logger.warning(
                 "--phylo-outgroup=reference requested but reference is not in the tree; "
                 "leaving tree unrooted"
             )
             return None
-        if reference_label not in leaf_labels:
+        present = [lbl for lbl in ref_list if lbl in leaf_labels]
+        if not present:
             logger.warning(
-                f"Reference leaf {reference_label!r} not in tree; leaving unrooted"
+                f"Reference leaves {ref_list} not in tree; leaving unrooted"
             )
             return None
-        return reference_label
+        if len(present) == 1:
+            return present[0]
+        logger.info(
+            f"--phylo-outgroup=reference: polyploid reference; using all "
+            f"{len(present)} reference subgenomes as the outgroup clade: {present}"
+        )
+        return ",".join(present)
     if req == "auto":
         logger.warning(
             "--phylo-outgroup=auto picks the most-divergent taxon by alignment identity; "

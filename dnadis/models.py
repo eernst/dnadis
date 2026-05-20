@@ -598,7 +598,12 @@ class AssemblyResult:
     # Per-subgenome chrs.fasta paths (polyploid references)
     per_subgenome_chrs: Dict[str, Path] = field(default_factory=dict)
 
-    # Compleasm (BUSCO) completeness results
+    # Compleasm (BUSCO) completeness results.  ``compleasm_full`` is the
+    # primary source (compleasm runs once on the full assembly); chrs and
+    # non_chrs are derived by joining the full-table with ContigClassification
+    # so the per-subset views in the assembly report and comparison TSV stay
+    # consistent with the underlying compleasm output.
+    compleasm_full: Optional['CompleasmResult'] = None
     compleasm_chrs: Optional['CompleasmResult'] = None
     compleasm_non_chrs: Optional['CompleasmResult'] = None
 

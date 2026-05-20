@@ -156,6 +156,7 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
         "phylo_min_busco_completeness": "phylo_min_busco_completeness",
         "phylo_outgroup": "phylo_outgroup",
         "phylo_skip_reference": "phylo_skip_reference",
+        "phylo_outgroup_min_ref_assignment": "phylo_outgroup_min_ref_assignment",
         "phylo_max_mem_gb": "phylo_max_mem_gb",
         "phylo_bootstrap_reps": "phylo_bootstrap_reps",
         "phylo_alrt_reps": "phylo_alrt_reps",

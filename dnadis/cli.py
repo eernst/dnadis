@@ -1390,67 +1390,53 @@ def run_assembly(
         logger.info(f"       {cat}: {count}")
 
     # --- Phase 18: Compleasm (BUSCO) evaluation ---
+    compleasm_full_result = None
     compleasm_chrs_result = None
     compleasm_non_chrs_result = None
 
     can_compleasm = args.compleasm_lineage and not args.skip_compleasm
     if can_compleasm:
-        import shutil
         logger.phase("Phase 18: Compleasm (BUSCO completeness) evaluation")
 
-        chrs_fasta = Path(str(outprefix) + ".chrs.fasta")
-
-        # Build non_chrs.fasta by concatenating all non-chromosome FASTAs
-        non_chrs_fasta = Path(str(outprefix) + ".non_chrs.fasta")
-        non_chr_suffixes = [".debris.fasta", ".unclassified.fasta", ".contaminants.fasta"]
-        if not file_exists_and_valid(non_chrs_fasta):
-            with non_chrs_fasta.open("wb") as out_fh:
-                for suffix in non_chr_suffixes:
-                    src = Path(str(outprefix) + suffix)
-                    if file_exists_and_valid(src):
-                        with src.open("rb") as in_fh:
-                            shutil.copyfileobj(in_fh, out_fh)
-            if not file_exists_and_valid(non_chrs_fasta):
-                logger.info("No non-chromosome contigs for compleasm")
-
+        # Run compleasm once on the full assembly; chrs/non_chrs views are
+        # derived post-hoc by joining the full_table with ContigClassification.
+        # This is cheaper than two parallel runs and keeps a single source of
+        # truth — the per-leaf phylogeny pipeline uses the same full_table and
+        # is no longer blind to BUSCOs that happened to land on
+        # chrom_unassigned/debris/unclassified contigs.
         compleasm_threads = args.threads
-
         if use_cluster:
             from dnadis.utils.resource_estimation import estimate_compleasm_resources
-            compleasm_spec = estimate_compleasm_resources(chrs_fasta, cluster_config)
+            compleasm_spec = estimate_compleasm_resources(qry, cluster_config)
             compleasm_threads = _job_threads(compleasm_spec)
         else:
             compleasm_spec = ResourceSpec()
 
-        # Submit both compleasm runs in parallel
-        compleasm_chrs_future = executor.submit(
+        compleasm_full_future = executor.submit(
             run_compleasm,
-            fasta=chrs_fasta,
-            output_dir=work_dir / "compleasm_chrs",
+            fasta=qry,
+            output_dir=work_dir / "compleasm_full",
             lineage=args.compleasm_lineage,
             threads=compleasm_threads,
             library_path=args.compleasm_library,
             compleasm_exe=args.compleasm_path,
             resource_spec=compleasm_spec if use_cluster else None,
         )
-        compleasm_non_chrs_future = executor.submit(
-            run_compleasm,
-            fasta=non_chrs_fasta,
-            output_dir=work_dir / "compleasm_non_chrs",
-            lineage=args.compleasm_lineage,
-            threads=compleasm_threads,
-            library_path=args.compleasm_library,
-            compleasm_exe=args.compleasm_path,
-            resource_spec=compleasm_spec if use_cluster else None,
-        )
+        compleasm_full_result = compleasm_full_future.result()
 
-        compleasm_chrs_result = compleasm_chrs_future.result()
-        compleasm_non_chrs_result = compleasm_non_chrs_future.result()
-
-        if compleasm_chrs_result:
-            logger.done(f"Compleasm chrs:     {compleasm_chrs_result.summary_line()}")
-        if compleasm_non_chrs_result:
-            logger.done(f"Compleasm non-chrs: {compleasm_non_chrs_result.summary_line()}")
+        if compleasm_full_result is not None:
+            logger.done(f"Compleasm full:     {compleasm_full_result.summary_line()}")
+            from dnadis.detection.compleasm import derive_chrs_non_chrs_compleasm
+            compleasm_chrs_result, compleasm_non_chrs_result = derive_chrs_non_chrs_compleasm(
+                full_result=compleasm_full_result,
+                classifications=classifications,
+                chrs_out_dir=work_dir / "compleasm_chrs",
+                non_chrs_out_dir=work_dir / "compleasm_non_chrs",
+            )
+            if compleasm_chrs_result:
+                logger.done(f"Compleasm chrs:     {compleasm_chrs_result.summary_line()}")
+            if compleasm_non_chrs_result:
+                logger.done(f"Compleasm non-chrs: {compleasm_non_chrs_result.summary_line()}")
     else:
         if args.compleasm_lineage:
             logger.info("Phase 18: Skipping compleasm (--skip-compleasm)")
@@ -1483,6 +1469,7 @@ def run_assembly(
         rdna_arrays_tsv=rdna_arrays_tsv_path,
         agp_tsv=Path(str(outprefix) + ".scaffolded.agp") if args.scaffold and scaffolded_seqs else None,
         per_subgenome_chrs=per_sg_chrs,
+        compleasm_full=compleasm_full_result,
         compleasm_chrs=compleasm_chrs_result,
         compleasm_non_chrs=compleasm_non_chrs_result,
     )
@@ -1567,6 +1554,7 @@ def main():
             keep_executor_cache=False,
             skip_phylogeny=False, phylo_min_busco_completeness=50.0,
             phylo_outgroup="none", phylo_skip_reference=False,
+            phylo_outgroup_min_ref_assignment=0.5,
             phylo_max_mem_gb=8, phylo_bootstrap_reps=1000,
             phylo_alrt_reps=1000, phylo_models="LG,WAG,JTT",
             phylo_msa_chunk_size=256, phylo_msa_inner_threads=4,
@@ -2052,6 +2040,10 @@ def main():
         help="Exclude the reference genome as a leaf in the species tree (by default it is included).",
     )
     phylo_grp.add_argument(
+        "--phylo-outgroup-min-ref-assignment", type=float, default=0.5, metavar="FRAC",
+        help="When --phylo-outgroup names a polyploid query assembly (c>=2 inferred from BUSCO hit-count distribution), keep only its reference subgenomes for which at least this fraction of ref chromosomes received >=1 outgroup contig assignment. Default 0.5. If no subgenome meets the threshold the outgroup is dropped. Ignored for haploid outgroups (c=1), which pool BUSCOs regardless of assignment.",
+    )
+    phylo_grp.add_argument(
         "--phylo-max-mem-gb", type=int, default=8, metavar="GB",
         help="Memory cap (GB) for IQ-TREE (passed to --mem) and SLURM request when --cluster. The supermatrix step is small in RAM (sub-GB in typical runs); bump for >1000 taxa or >1M columns. [8]",
     )
@@ -2198,6 +2190,15 @@ def main():
     pairwise_pairs: list[tuple[str, Path]] = []
 
     with create_executor(cluster_config, output_dir=output_dir) as executor:
+        # Submit reference compleasm immediately so it runs in parallel with
+        # the per-assembly pipelines.  If it waited until run_phylogeny() at
+        # the end, it would be a straggler that only starts after every
+        # assembly's own compleasm has finished.
+        from dnadis.phylogeny.pipeline import submit_reference_compleasm
+        ref_compleasm_future = submit_reference_compleasm(
+            args, ref_ctx, output_dir, executor, cluster_config,
+        )
+
         if cluster_config.enabled and n_total > 1:
             # Run assemblies concurrently — each run_assembly() is mostly
             # I/O-bound (waiting on SLURM futures), so threads work well.
@@ -2518,6 +2519,7 @@ def main():
                     executor=executor,
                     cluster_config=cluster_config,
                     reference_name=args.reference_name or Path(args.ref).stem,
+                    ref_compleasm_future=ref_compleasm_future,
                 )
             except Exception as e:
                 logger.error(f"Phylogeny pipeline failed: {e}")
@@ -2571,6 +2573,7 @@ def main():
                 self_contained=not args.no_self_contained_html,
                 assembly_sort_order=args.assembly_sort_order,
                 phylogeny_treefile=(phylogeny_result.treefile if phylogeny_result else None),
+                phylogeny_outgroup=(phylogeny_result.outgroup if phylogeny_result else None),
             ):
                 logger.error("Comparison report generation failed.")
 
