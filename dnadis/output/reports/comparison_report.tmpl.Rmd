@@ -1528,6 +1528,15 @@ phylo_outgroup_vec <- if (nzchar(phylo_outgroup_raw)) {
 } else {
   character(0)
 }
+# Pre-compute the tree's tip count so the Tree-chunk's fig.height option can
+# scale with it without re-reading the Newick (chunk options are evaluated
+# even when eval=FALSE, so guarding here avoids errors on runs with no tree).
+phylo_n_tips <- if (has_phylo_tree && requireNamespace("ape", quietly = TRUE)) {
+  tryCatch(length(ape::read.tree(phylo_treefile)$tip.label),
+           error = function(e) 0)
+} else {
+  0
+}
 ```
 
 `r if (has_synteny_data || has_phylo_tree) "# 3. Phylogenetics {.tabset}" else ""`
@@ -2608,7 +2617,7 @@ cat("Synteny data available but no ribbon connections could be built. ",
 
 `r if (has_phylo_tree) "## Tree" else ""`
 
-```{r phylo_tree_panel, eval=has_phylo_tree, results='asis'}
+```{r phylo_tree_panel, eval=has_phylo_tree, results='asis', fig.width=7, fig.height=max(4, 0.6 * phylo_n_tips + 1)}
 cat('<p class="section-intro">\n')
 cat("Maximum-likelihood species tree built from single-copy BUSCOs that are ",
     "present in every retained query subgenome (and the reference, unless ",
@@ -2656,17 +2665,51 @@ if (!has_ape || !has_ggtree) {
         }
       }
     }
+    # ape::root(..., resolve.root=TRUE) writes a "Root" string into the new
+    # root's node.label, which geom_nodelab would then draw on top of the
+    # SH-aLRT/UFBoot support values.  Clear it.  In ape's phylo object the
+    # root is internal node index (n_tips + 1), and node.label is indexed
+    # from 1 over internal nodes only — so node.label[1] is the root.
+    if (!is.null(tree$node.label) && length(tree$node.label) >= 1) {
+      tree$node.label[1] <- ""
+
+      # Hide labels on strongly-supported branches.  Standard threshold from
+      # the Hoang et al. UFBoot paper: SH-aLRT >= 80 AND UFBoot >= 95 is
+      # "strong" support; showing those values just adds visual noise.  Only
+      # branches with weaker support keep their labels.  Labels that don't
+      # parse as "<sh-aLRT>/<ufboot>" are left alone.
+      tree$node.label <- vapply(tree$node.label, function(lbl) {
+        if (is.na(lbl) || lbl == "") return(lbl)
+        parts <- strsplit(lbl, "/", fixed = TRUE)[[1]]
+        if (length(parts) != 2) return(lbl)
+        sh <- suppressWarnings(as.numeric(parts[1]))
+        uf <- suppressWarnings(as.numeric(parts[2]))
+        if (is.na(sh) || is.na(uf)) return(lbl)
+        if (sh >= 80 && uf >= 95) return("")
+        lbl
+      }, character(1))
+    }
     n_tips <- length(tree$tip.label)
+    # Height scales with the tip count to keep labels from colliding; width
+    # is fixed at 7 in (page width).  These match the chunk's fig.width /
+    # fig.height so the HTML rendering and the saved PDF use the same
+    # dimensions.
     plot_w <- 7
-    plot_h <- max(3, 0.45 * n_tips + 1)
+    plot_h <- max(4, 0.6 * n_tips + 1)
     p <- ggtree::ggtree(tree) +
-      ggtree::geom_tiplab(size = 3.2, hjust = -0.05) +
+      ggtree::geom_tiplab(size = 6, hjust = -0.05) +
       ggplot2::theme_void() +
       ggplot2::theme(plot.margin = ggplot2::margin(8, 80, 8, 8)) +
       ggplot2::xlim(0, max(ggtree::fortify(tree)$x) * 1.4)
     has_support <- !is.null(tree$node.label) && any(nzchar(tree$node.label))
     if (has_support) {
-      p <- p + ggtree::geom_nodelab(size = 2.6, hjust = 1.1, vjust = -0.4)
+      # Position at the branch midpoint (aes(x = branch)) rather than the
+      # node (default), so labels sit centered over their branches and
+      # read more naturally.  vjust=-0.4 lifts them just above the branch.
+      p <- p + ggtree::geom_nodelab(
+        ggplot2::aes(x = branch),
+        size = 4.5, hjust = 0.5, vjust = -0.4
+      )
     }
     if (length(og_in_tree) >= 1) {
       cat(sprintf(
