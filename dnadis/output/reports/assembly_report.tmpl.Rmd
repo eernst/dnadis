@@ -1720,6 +1720,7 @@ arrays_tbl <- arrays_show %>%
   )
 
 arrays_tbl %>%
+  arrange(desc(span_kb)) %>%
   select(array_id, contig, original_name, coords, span_bar, span_text,
          copies_text, id_dist, id_text) %>%
   gt() %>%
@@ -1773,6 +1774,7 @@ rdna_show <- rdna_df %>%
          conf_html = sapply(classification_confidence, conf_badge))
 
 rdna_show %>%
+  arrange(desc(length_kb)) %>%
   select(contig, original_name, length_kb, rdna_pct, conf_html) %>%
   gt() %>%
   cols_label(contig = "Contig", original_name = "Original Name",
