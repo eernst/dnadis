@@ -37,7 +37,7 @@ PLACEHOLDER_TSV = {
     "__MACRO__": ".macro_blocks.tsv",
     "__RDNA_ANNOTATIONS__": ".rdna_annotations.tsv",
     "__AGP__": ".scaffolded.agp",
-    "__CONTAMINANTS_TSV__": ".contaminants.tsv",
+    "__COBIONTS_TSV__": ".cobionts.tsv",
 }
 
 # Output file suffixes per script type

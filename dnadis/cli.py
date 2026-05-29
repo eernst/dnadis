@@ -151,7 +151,7 @@ from dnadis.detection.rdna import (
     detect_rdna_contigs,
 )
 from dnadis.detection.debris import detect_chromosome_debris
-from dnadis.detection.contaminant import detect_contaminants
+from dnadis.detection.cobiont import detect_cobionts
 from dnadis.detection.compleasm import run_compleasm
 from dnadis.classification.classifier import (
     classify_all_contigs,
@@ -166,7 +166,7 @@ from dnadis.output.tsv_output import (
     write_chain_segments_tsv,
     write_chain_summary_tsv,
     write_contig_summary_tsv,
-    write_contaminant_summary_tsv,
+    write_cobiont_summary_tsv,
     write_macro_blocks_tsv,
     write_rdna_annotations_gff3,
     write_rdna_annotations_tsv,
@@ -468,7 +468,7 @@ def run_assembly(
     """Run the full analysis pipeline for a single query assembly.
 
     Performs synteny analysis, detection (organelle, rDNA, debris,
-    contaminant), classification, optional read depth and rDNA consensus,
+    cobiont), classification, optional read depth and rDNA consensus,
     scaffolding, and output generation.
 
     Args:
@@ -810,7 +810,7 @@ def run_assembly(
     logger.done(f"Macro blocks TSV:  {macro_blocks_tsv}")
 
     # --- Identify chromosome contigs early (before BLAST phases) ---
-    # This allows creating a filtered FASTA for faster organelle/rDNA/contaminant detection
+    # This allows creating a filtered FASTA for faster organelle/rDNA/cobiont detection
     chromosome_contigs: Set[str] = set()
     for contig, ref_id in best_ref.items():
         if ref_id and qry_lengths.get(contig, 0) >= chr_like_minlen:
@@ -832,7 +832,7 @@ def run_assembly(
     work_dir.mkdir(parents=True, exist_ok=True)
 
     # Create filtered FASTA with only non-chromosome contigs for BLAST-based detection
-    # This significantly speeds up organelle/rDNA/contaminant BLAST searches
+    # This significantly speeds up organelle/rDNA/cobiont BLAST searches
     non_chrom_contigs = set(qry_lengths.keys()) - chromosome_contigs
     non_chrom_fasta = work_dir / "non_chromosome_contigs.fa"
     if non_chrom_contigs:
@@ -966,42 +966,42 @@ def run_assembly(
         chromosome_debris, chrom_debris_hits = debris_future.result()
         already_classified = already_classified | chromosome_debris
 
-    # --- Phase 6: Contaminant detection ---
-    contaminants: Dict[str, Tuple[int, str]] = {}
+    # --- Phase 6: Cobiont detection ---
+    cobionts: Dict[str, Tuple[int, str]] = {}
 
-    if not args.skip_contaminants and args.centrifuger_idx:
-        logger.phase("Phase 6: Contaminant detection")
+    if not args.skip_cobionts and args.centrifuger_idx:
+        logger.phase("Phase 6: Cobiont detection")
         residual_contigs = set(qry_lengths.keys()) - already_classified - chromosome_contigs
         if residual_contigs:
-            residual_fasta = work_dir / "residual_for_contaminant_screen.fa"
+            residual_fasta = work_dir / "residual_for_cobiont_screen.fa"
             write_filtered_fasta(qry, residual_fasta, residual_contigs)
             residual_lengths = {k: v for k, v in qry_lengths.items() if k in residual_contigs}
 
             if use_cluster:
-                from dnadis.utils.resource_estimation import estimate_contaminant_resources
-                contam_spec = estimate_contaminant_resources(args.centrifuger_idx, cluster_config)
+                from dnadis.utils.resource_estimation import estimate_cobiont_resources
+                cobiont_spec = estimate_cobiont_resources(args.centrifuger_idx, cluster_config)
             else:
-                contam_spec = ResourceSpec()
+                cobiont_spec = ResourceSpec()
 
-            contam_future = executor.submit(
-                detect_contaminants,
+            cobiont_future = executor.submit(
+                detect_cobionts,
                 query_fasta=residual_fasta,
                 query_lengths=residual_lengths,
                 centrifuger_idx=args.centrifuger_idx,
-                work_dir=work_dir / "contaminants",
-                threads=_job_threads(contam_spec),
-                min_score=args.contaminant_min_score,
+                work_dir=work_dir / "cobionts",
+                threads=_job_threads(cobiont_spec),
+                min_score=args.cobiont_min_score,
                 exclude_contigs=set(),
-                resource_spec=contam_spec if use_cluster else None,
+                resource_spec=cobiont_spec if use_cluster else None,
             )
-            contaminants = contam_future.result()
+            cobionts = cobiont_future.result()
     else:
-        logger.info("Phase 6: Skipping contaminant detection")
+        logger.info("Phase 6: Skipping cobiont detection")
 
     # --- Phase 7: Debris/unclassified classification ---
     logger.phase("Phase 7: Debris/unclassified classification")
 
-    already_classified = already_classified | set(contaminants.keys()) | chromosome_contigs
+    already_classified = already_classified | set(cobionts.keys()) | chromosome_contigs
     remaining_contigs = set(qry_lengths.keys()) - already_classified
 
     additional_debris, _unclassified, other_debris_hits = classify_debris_and_unclassified(
@@ -1059,16 +1059,16 @@ def run_assembly(
     # --- Phase 11: Classification ---
     logger.phase("Phase 11: Classifying all contigs")
 
-    # Filter contaminants by coverage threshold (low coverage hits may be false positives)
-    contaminants_filtered = {
-        contig: hit for contig, hit in contaminants.items()
-        if hit.coverage >= args.contaminant_min_coverage
+    # Filter cobionts by coverage threshold (low coverage hits may be false positives)
+    cobionts_filtered = {
+        contig: hit for contig, hit in cobionts.items()
+        if hit.coverage >= args.cobiont_min_coverage
     }
-    if len(contaminants_filtered) < len(contaminants):
-        n_filtered = len(contaminants) - len(contaminants_filtered)
+    if len(cobionts_filtered) < len(cobionts):
+        n_filtered = len(cobionts) - len(cobionts_filtered)
         logger.info(
-            f"Filtered {n_filtered} low-coverage contaminant hits "
-            f"(coverage < {args.contaminant_min_coverage:.0%})"
+            f"Filtered {n_filtered} low-coverage cobiont hits "
+            f"(coverage < {args.cobiont_min_coverage:.0%})"
         )
 
     classifications = classify_all_contigs(
@@ -1082,7 +1082,7 @@ def run_assembly(
         chrM_contig=chrM_contig,
         organelle_debris=organelle_debris,
         rdna_contigs=rdna_contigs,
-        contaminants=contaminants_filtered,
+        cobionts=cobionts_filtered,
         chromosome_debris=chromosome_debris,
         other_debris=other_debris,
         add_subgenome_suffix=args.add_subgenome_suffix,
@@ -1370,17 +1370,17 @@ def run_assembly(
     logger.done(f"Summary:           {summary_tsv}")
     logger.done(f"Ref lengths:       {ref_lengths_tsv}")
 
-    # Write contaminant summary TSV with taxonomic lineage (for alluvial plot)
-    # Use filtered contaminants (coverage >= threshold) for consistency with classification
-    contaminants_tsv = Path(str(outprefix) + ".contaminants.tsv")
-    if contaminants_filtered:
-        write_contaminant_summary_tsv(
-            output_path=contaminants_tsv,
-            contaminants=contaminants_filtered,
+    # Write cobiont summary TSV with taxonomic lineage (for alluvial plot)
+    # Use filtered cobionts (coverage >= threshold) for consistency with classification
+    cobionts_tsv = Path(str(outprefix) + ".cobionts.tsv")
+    if cobionts_filtered:
+        write_cobiont_summary_tsv(
+            output_path=cobionts_tsv,
+            cobionts=cobionts_filtered,
             query_lengths=qry_lengths,
             depth_stats=depth_stats if depth_stats else None,
         )
-        logger.done(f"Contaminants:      {contaminants_tsv}")
+        logger.done(f"Cobionts:      {cobionts_tsv}")
 
     clf_counts: Dict[str, int] = defaultdict(int)
     for clf in classifications:
@@ -1453,7 +1453,7 @@ def run_assembly(
         qry_lengths=qry_lengths,
         ref_lengths_norm=ref_ctx.ref_lengths_norm,
         ev=ev,
-        contaminants_filtered=contaminants_filtered,
+        cobionts_filtered=cobionts_filtered,
         chrC_contig=chrC_contig,
         chrM_contig=chrM_contig,
         rdna_arrays=rdna_arrays,
@@ -1464,7 +1464,7 @@ def run_assembly(
         segments_tsv=segments_tsv,
         evidence_tsv=chain_summary_tsv,
         macro_blocks_tsv=macro_blocks_tsv,
-        contaminants_tsv_path=contaminants_tsv if contaminants_filtered else None,
+        cobionts_tsv_path=cobionts_tsv if cobionts_filtered else None,
         rdna_annotations_tsv=rdna_annotations_tsv,
         rdna_arrays_tsv=rdna_arrays_tsv_path,
         agp_tsv=Path(str(outprefix) + ".scaffolded.agp") if args.scaffold and scaffolded_seqs else None,
@@ -1478,7 +1478,7 @@ def run_assembly(
 
     if not args.skip_plot:
         agp_tsv = result.agp_tsv
-        contam_tsv_arg = contaminants_tsv if contaminants_filtered else None
+        cobiont_tsv_arg = cobionts_tsv if cobionts_filtered else None
 
         # Resolve compleasm summary paths for the report
         compleasm_chrs_sum = compleasm_chrs_result.summary_path if compleasm_chrs_result else None
@@ -1498,7 +1498,7 @@ def run_assembly(
             reference_name=args.reference_name,
             rdna_annotations_tsv=rdna_annotations_tsv,
             rdna_arrays_tsv=rdna_arrays_tsv_path,
-            contaminants_tsv=contam_tsv_arg,
+            cobionts_tsv=cobiont_tsv_arg,
             agp_tsv=agp_tsv,
             compleasm_chrs_summary=compleasm_chrs_sum,
             compleasm_non_chrs_summary=compleasm_non_sum,
@@ -1530,7 +1530,7 @@ def main():
             add_subgenome_suffix=None, ref_id_pattern=None, reads=None,
             reads_type="lrhq", skip_depth=False, depth_window_size=1000,
             depth_target_coverage=0, keep_depth_bam=False, synteny_mode="nucleotide",
-            skip_organelles=False, skip_rdna=False, skip_contaminants=False,
+            skip_organelles=False, skip_rdna=False, skip_cobionts=False,
             miniprot="miniprot", miniprot_args="",
             chrC_ref=None, chrM_ref=None, rdna_ref=None, centrifuger_idx=None,
             assign_min_frac=0.10, assign_min_ratio=1.25, chimera_primary_frac=0.8,
@@ -1544,7 +1544,7 @@ def main():
             chrM_len_tolerance=0.20, rdna_min_cov=0.50,
             skip_rdna_consensus=False, rdna_ref_features=None,
             chr_debris_min_cov=0.80,
-            chr_debris_min_identity=0.90, contaminant_min_score=1000, contaminant_min_coverage=0.50,
+            chr_debris_min_identity=0.90, cobiont_min_score=1000, cobiont_min_coverage=0.50,
             debris_min_cov=0.50, debris_min_protein_hits=2, preset="asm20", kmer=None, window=None, aln_minlen=10000,
             scaffold=False, scaffold_gap_size=100,
             compleasm_lineage=None, compleasm_library=None, compleasm_path=None, skip_compleasm=False,
@@ -1692,7 +1692,7 @@ def main():
     toggles = p.add_argument_group("Pipeline phase toggles")
     toggles.add_argument("--skip-organelles", action="store_true", help="Skip organelle detection.")
     toggles.add_argument("--skip-rdna", action="store_true", help="Skip rDNA detection.")
-    toggles.add_argument("--skip-contaminants", action="store_true", help="Skip contaminant detection.")
+    toggles.add_argument("--skip-cobionts", action="store_true", help="Skip cobiont detection.")
 
     # =========================================================================
     # External tool paths
@@ -1719,7 +1719,7 @@ def main():
     )
     refs.add_argument(
         "--centrifuger-idx", type=str, default=None,
-        help="Path prefix to centrifuger index for contaminant screening.",
+        help="Path prefix to centrifuger index for cobiont screening.",
     )
 
     # =========================================================================
@@ -1877,16 +1877,16 @@ def main():
     )
 
     # =========================================================================
-    # Thresholds: Contaminant detection
+    # Thresholds: Cobiont detection
     # =========================================================================
-    contam_thresh = p.add_argument_group("Thresholds: Contaminant detection")
-    contam_thresh.add_argument(
-        "--contaminant-min-score", type=int, default=1000,
-        help="Min centrifuger score for contaminant classification (~1kb matching sequence with k=31) [1000]",
+    cobiont_thresh = p.add_argument_group("Thresholds: Cobiont detection")
+    cobiont_thresh.add_argument(
+        "--cobiont-min-score", type=int, default=1000,
+        help="Min centrifuger score for cobiont classification (~1kb matching sequence with k=31) [1000]",
     )
-    contam_thresh.add_argument(
-        "--contaminant-min-coverage", type=float, default=0.50,
-        help="Min query coverage for contaminant classification (low coverage may indicate conserved genes, not contamination) [0.50]",
+    cobiont_thresh.add_argument(
+        "--cobiont-min-coverage", type=float, default=0.50,
+        help="Min query coverage for cobiont classification (low coverage may indicate conserved genes rather than a true cobiont) [0.50]",
     )
 
     # =========================================================================
@@ -2102,8 +2102,8 @@ def main():
     if args.synteny_mode == "protein" and not args.ref_gff3:
         sys.exit("[error] --ref-gff3 is required when using --synteny-mode protein")
 
-    if not 0.0 <= args.contaminant_min_coverage <= 1.0:
-        sys.exit(f"[error] --contaminant-min-coverage must be between 0.0 and 1.0, got {args.contaminant_min_coverage}")
+    if not 0.0 <= args.cobiont_min_coverage <= 1.0:
+        sys.exit(f"[error] --cobiont-min-coverage must be between 0.0 and 1.0, got {args.cobiont_min_coverage}")
 
     if args.phylo_skip_reference and args.phylo_outgroup == "reference":
         sys.exit(

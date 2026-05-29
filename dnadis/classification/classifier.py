@@ -22,7 +22,7 @@ from dnadis.alignment.external_tools import get_minimap2_exe, run_minimap2
 from dnadis.utils.logging_config import get_logger
 from dnadis.models import (
     ChainEvidenceResult,
-    ContaminantHit,
+    CobiontHit,
     ContigClassification,
     DebrisHit,
     OrganelleHit,
@@ -87,7 +87,7 @@ def determine_contig_orientations(
     """Determine which chromosome contigs need to be reverse-complemented.
 
     Only chromosome-assigned contigs are subject to reorientation based on synteny
-    block strand votes. Non-chromosome contigs (debris, contaminants, unclassified)
+    block strand votes. Non-chromosome contigs (debris, cobionts, unclassified)
     are left in their original orientation since they lack reliable synteny evidence.
 
     Returns:
@@ -223,7 +223,7 @@ def classify_debris_and_unclassified(
 
     Classification criteria:
     - Debris: contigs with 50%+ nucleotide alignment coverage to reference OR 2+ miniprot hits
-    - Unclassified: everything else (potential novel sequences, contaminants missed by
+    - Unclassified: everything else (potential novel sequences, cobionts missed by
       earlier screening, or highly divergent sequences)
 
     Args:
@@ -1150,7 +1150,7 @@ def classify_all_contigs(
     chrM_contig: Optional[str],
     organelle_debris: Set[str],
     rdna_contigs: Set[str],
-    contaminants: Dict[str, ContaminantHit],
+    cobionts: Dict[str, CobiontHit],
     chromosome_debris: Set[str],
     other_debris: Set[str],
     add_subgenome_suffix: Optional[str],
@@ -1184,7 +1184,7 @@ def classify_all_contigs(
     - organelle_complete: Complete organelle genomes (chrC, chrM)
     - organelle_debris: Partial organelle sequences
     - rDNA: Ribosomal DNA repeat units
-    - contaminant: Sequences from contaminating organisms
+    - cobiont: Sequences from co-occurring organisms (symbionts, commensals, etc.)
     - chrom_debris: High-coverage duplicates of assembled chromosomes
     - debris: Assembly fragments with reference homology
     - unclassified: Sequences with no classification evidence
@@ -1219,7 +1219,7 @@ def classify_all_contigs(
         chrM_contig: Mitochondrial contig name
         organelle_debris: Set of organelle debris contigs
         rdna_contigs: Set of rDNA contigs
-        contaminants: Dict of contig -> ContaminantHit with taxid, name, coverage, score
+        cobionts: Dict of contig -> CobiontHit with taxid, name, coverage, score
         chromosome_debris: Set of chromosome debris contigs (from chr-vs-chr alignment)
         other_debris: Set of other debris contigs (from ref/protein alignment)
         add_subgenome_suffix: Optional subgenome suffix to add
@@ -1400,8 +1400,8 @@ def classify_all_contigs(
             new_name="",  # Will be filled later
             classification="chrom_assigned",
             reversed=False,  # Will be filled later
-            contaminant_taxid=None,
-            contaminant_sci=None,
+            cobiont_taxid=None,
+            cobiont_sci=None,
             assigned_ref_id=ref_id,
             ref_gene_proportion=gene_proportion,
             contig_len=contig_len,
@@ -1423,21 +1423,21 @@ def classify_all_contigs(
         classified_contigs.add(contig)
 
     # 1b. Chromosome-length contigs WITHOUT reference assignment
-    # (but not contaminants - those are handled separately)
+    # (but not cobionts - those are handled separately)
     for contig, contig_len in query_lengths.items():
         if contig in classified_contigs:
             continue
         if contig_len < chr_like_minlen:
             continue
-        # Skip known contaminants - they should be classified as contaminants, not chrom_unassigned
-        if contig in contaminants:
+        # Skip known cobionts - they should be classified as cobionts, not chrom_unassigned
+        if contig in cobionts:
             continue
 
         gc_dev = _gc_deviation_vs_asm(contig)  # Use assembly chromosome GC baseline
 
         # Confidence is inherently low/medium for unassigned contigs
         # Medium: GC similar to assembly chromosomes (might be a real chromosome from a divergent region)
-        # Low: GC different from assembly (might be contaminant or unusual sequence)
+        # Low: GC different from assembly (might be cobiont or unusual sequence)
         confidence = "medium"
         if gc_dev is not None and gc_dev > 2.0:
             confidence = "low"
@@ -1448,8 +1448,8 @@ def classify_all_contigs(
             new_name="",  # Will be filled later
             classification="chrom_unassigned",
             reversed=False,
-            contaminant_taxid=None,
-            contaminant_sci=None,
+            cobiont_taxid=None,
+            cobiont_sci=None,
             assigned_ref_id=None,
             ref_gene_proportion=None,
             contig_len=contig_len,
@@ -1474,8 +1474,8 @@ def classify_all_contigs(
             new_name="chrC",
             classification="organelle_complete",
             reversed=False,
-            contaminant_taxid=None,
-            contaminant_sci=None,
+            cobiont_taxid=None,
+            cobiont_sci=None,
             assigned_ref_id="chrC",
             ref_gene_proportion=None,
             contig_len=query_lengths.get(chrC_contig, 0),
@@ -1496,8 +1496,8 @@ def classify_all_contigs(
             new_name="chrM",
             classification="organelle_complete",
             reversed=False,
-            contaminant_taxid=None,
-            contaminant_sci=None,
+            cobiont_taxid=None,
+            cobiont_sci=None,
             assigned_ref_id="chrM",
             ref_gene_proportion=None,
             contig_len=query_lengths.get(chrM_contig, 0),
@@ -1521,8 +1521,8 @@ def classify_all_contigs(
                 new_name="",
                 classification="organelle_debris",
                 reversed=False,
-                contaminant_taxid=None,
-                contaminant_sci=None,
+                cobiont_taxid=None,
+                cobiont_sci=None,
                 assigned_ref_id=hit.organelle_type if hit else None,
                 ref_gene_proportion=None,
                 contig_len=query_lengths.get(contig, 0),
@@ -1552,8 +1552,8 @@ def classify_all_contigs(
                 new_name="",
                 classification="rDNA",
                 reversed=False,
-                contaminant_taxid=None,
-                contaminant_sci=None,
+                cobiont_taxid=None,
+                cobiont_sci=None,
                 assigned_ref_id=None,
                 ref_gene_proportion=None,
                 contig_len=query_lengths.get(contig, 0),
@@ -1563,8 +1563,8 @@ def classify_all_contigs(
             ))
             classified_contigs.add(contig)
 
-    # 4. Contaminants
-    for contig, hit in contaminants.items():
+    # 4. Cobionts
+    for contig, hit in cobionts.items():
         if contig not in classified_contigs:
             contig_len = query_lengths.get(contig, 0)
             gc_dev = _gc_deviation_vs_asm(contig)  # Use assembly chromosome GC baseline
@@ -1578,24 +1578,24 @@ def classify_all_contigs(
                 confidence = "low"
             elif hit.coverage < 0.8:
                 confidence = "medium"
-            # GC deviation supports contaminant classification
+            # GC deviation supports cobiont classification
             if gc_dev is not None and gc_dev > 2.0:
                 confidence = "high"
 
             classifications.append(ContigClassification(
                 original_name=contig,
                 new_name="",
-                classification="contaminant",
+                classification="cobiont",
                 reversed=False,
-                contaminant_taxid=hit.taxid,
-                contaminant_sci=hit.sci_name,
+                cobiont_taxid=hit.taxid,
+                cobiont_sci=hit.sci_name,
                 assigned_ref_id=None,
                 ref_gene_proportion=None,
                 contig_len=contig_len,
                 gc_content=_get_gc(contig),
                 gc_deviation=gc_dev,
-                contam_score=min(1.0, hit.score / 1e9) if hit.score else None,  # Normalize to 0-1 range
-                contam_coverage=hit.coverage,
+                cobiont_score=min(1.0, hit.score / 1e9) if hit.score else None,  # Normalize to 0-1 range
+                cobiont_coverage=hit.coverage,
                 classification_confidence=confidence,
             ))
             classified_contigs.add(contig)
@@ -1623,8 +1623,8 @@ def classify_all_contigs(
                 new_name="",
                 classification="chrom_debris",
                 reversed=False,
-                contaminant_taxid=None,
-                contaminant_sci=None,
+                cobiont_taxid=None,
+                cobiont_sci=None,
                 assigned_ref_id=ref_id if ref_id else None,
                 ref_gene_proportion=None,
                 contig_len=query_lengths.get(contig, 0),
@@ -1672,8 +1672,8 @@ def classify_all_contigs(
                 new_name="",
                 classification=classification,
                 reversed=False,
-                contaminant_taxid=None,
-                contaminant_sci=None,
+                cobiont_taxid=None,
+                cobiont_sci=None,
                 assigned_ref_id=ref_id if ref_id else None,
                 ref_gene_proportion=None,
                 contig_len=query_lengths.get(contig, 0),
@@ -1693,8 +1693,8 @@ def classify_all_contigs(
                 new_name="",
                 classification="unclassified",
                 reversed=False,
-                contaminant_taxid=None,
-                contaminant_sci=None,
+                cobiont_taxid=None,
+                cobiont_sci=None,
                 assigned_ref_id=None,
                 ref_gene_proportion=None,
                 contig_len=query_lengths.get(contig, 0),

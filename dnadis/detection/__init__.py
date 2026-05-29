@@ -1,12 +1,12 @@
 # dnadis/detection/__init__.py
-"""Detection modules for organelles, rDNA, debris, and contaminants."""
+"""Detection modules for organelles, rDNA, debris, and cobionts."""
 
 from dnadis.detection.blast import (
     parse_blast_coverage,
     run_blastn_megablast,
     run_makeblastdb,
 )
-from dnadis.detection.contaminant import detect_contaminants
+from dnadis.detection.cobiont import detect_cobionts
 from dnadis.detection.debris import detect_chromosome_debris
 from dnadis.detection.organelle import (
     detect_organelles,
@@ -33,8 +33,8 @@ __all__ = [
     "build_rdna_consensus",
     # debris.py
     "detect_chromosome_debris",
-    # contaminant.py
-    "detect_contaminants",
+    # cobiont.py
+    "detect_cobionts",
     # rearrangements.py
     "detect_rearrangements",
 ]

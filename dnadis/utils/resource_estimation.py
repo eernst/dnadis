@@ -136,11 +136,11 @@ def estimate_debris_resources(
     return clamp_resources(spec, config)
 
 
-def estimate_contaminant_resources(
+def estimate_cobiont_resources(
     centrifuger_idx: str,
     config: ClusterConfig,
 ) -> ResourceSpec:
-    """Estimate resources for contaminant detection (phase 6)."""
+    """Estimate resources for cobiont detection (phase 6)."""
     # Index size drives memory; try .1.cfr first, fall back to prefix.cfr
     idx_path = Path(centrifuger_idx + ".1.cfr")
     if not idx_path.exists():
@@ -152,7 +152,7 @@ def estimate_contaminant_resources(
         cores=min(16, config.max_threads),
         memory_gb=mem_gb,
         time_minutes=30 * _TIME_SAFETY_FACTOR,
-        job_name="contaminant",
+        job_name="cobiont",
     )
     return clamp_resources(spec, config)
 

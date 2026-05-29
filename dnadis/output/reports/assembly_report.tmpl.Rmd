@@ -8,7 +8,7 @@ params:
   macro_blocks_tsv: "__MACRO__"
   rdna_annotations_tsv: "__RDNA_ANNOTATIONS__"
   rdna_arrays_tsv: "__RDNA_ARRAYS__"
-  contaminants_tsv: "__CONTAMINANTS_TSV__"
+  cobionts_tsv: "__COBIONTS_TSV__"
   agp_tsv: "__AGP__"
   compleasm_chrs_summary: "__COMPLEASM_CHRS__"
   compleasm_non_chrs_summary: "__COMPLEASM_NONCHRS__"
@@ -19,7 +19,7 @@ params:
   chr_like_minlen: "__CHRLIKE__"
   plot_suffix: "__SUFFIX__"
   out_prefix: "__OUTPREFIX__"
-  top_n_contaminants: "__TOP_N__"
+  top_n_cobionts: "__TOP_N__"
   dnadis_version: "__DNADIS_VERSION__"
 output:
   html_document:
@@ -94,12 +94,12 @@ has_rdna_arrays <- nchar(params$rdna_arrays_tsv) > 0 && file.exists(params$rdna_
 rdna_arrays_df  <- if (has_rdna_arrays) read_tsv(params$rdna_arrays_tsv, show_col_types = FALSE) else NULL
 has_rdna_arrays <- !is.null(rdna_arrays_df) && nrow(rdna_arrays_df) > 0
 
-has_contaminants <- nchar(params$contaminants_tsv) > 0 && file.exists(params$contaminants_tsv)
-contam_df <- if (has_contaminants) {
-  tmp <- read_tsv(params$contaminants_tsv, show_col_types = FALSE)
+has_cobionts <- nchar(params$cobionts_tsv) > 0 && file.exists(params$cobionts_tsv)
+cobiont_df <- if (has_cobionts) {
+  tmp <- read_tsv(params$cobionts_tsv, show_col_types = FALSE)
   if (nrow(tmp) > 0) tmp else NULL
 } else NULL
-has_contaminants <- !is.null(contam_df)
+has_cobionts <- !is.null(cobiont_df)
 
 has_rearrangements <- nchar(params$rearrangements_tsv) > 0 && file.exists(params$rearrangements_tsv)
 rearr_df <- if (has_rearrangements) {
@@ -113,7 +113,7 @@ has_collinearity <- "collinearity_score" %in% names(summary_df)
 has_chrom_assigned <- sum(summary_df$classification == "chrom_assigned", na.rm = TRUE) > 0
 
 chr_like_minlen <- as.numeric(params$chr_like_minlen)
-top_n_contam    <- as.integer(params$top_n_contaminants)
+top_n_cobiont    <- as.integer(params$top_n_cobionts)
 
 # PDF output paths (derived from out_prefix)
 pdf_chrom_overview <- paste0(params$out_prefix, ".chromosome_overview.pdf")
@@ -452,7 +452,7 @@ mean_ref_cov <- if ("ref_coverage" %in% names(chr_df_stats) && any(!is.na(chr_df
 mean_ident <- if ("seq_identity_vs_ref" %in% names(chr_df_stats) && any(!is.na(chr_df_stats$seq_identity_vs_ref)))
   mean(as.numeric(chr_df_stats$seq_identity_vs_ref), na.rm = TRUE) else NA
 
-n_contaminants <- sum(summary_df$classification == "contaminant")
+n_cobionts <- sum(summary_df$classification == "cobiont")
 n_rdna <- sum(summary_df$classification == "rDNA")
 has_chrC <- any(grepl("chrC|Pt|chloro|plast", summary_df$assigned_ref_id[summary_df$classification == "organelle_complete"], ignore.case = TRUE))
 has_chrM <- any(grepl("chrM|Mt|mito", summary_df$assigned_ref_id[summary_df$classification == "organelle_complete"], ignore.case = TRUE))
@@ -468,7 +468,7 @@ tibble(
   `Both telo` = as.integer(n_both_telo),
   `Mean ref cov` = if (is.na(mean_ref_cov)) "\u2014" else sprintf("%.1f%%", mean_ref_cov * 100),
   `Mean identity` = if (is.na(mean_ident)) "\u2014" else sprintf("%.2f%%", mean_ident * 100),
-  Contaminants = as.integer(n_contaminants),
+  Cobionts = as.integer(n_cobionts),
   rDNA = as.integer(n_rdna),
   chrC = if (has_chrC) "\u2713" else "\u2014",
   chrM = if (has_chrM) "\u2713" else "\u2014"
@@ -479,7 +479,7 @@ tibble(
   cols_align(align = "right", columns = where(is.numeric)) %>%
   tab_spanner(label = "Contiguity", columns = c(Contigs, `Size (Mb)`, N50, L50, `Largest (Mb)`)) %>%
   tab_spanner(label = "Chromosomes", columns = c(`Asgn / Unasgn / Chim`, `Full-length`, `Both telo`, `Mean ref cov`, `Mean identity`)) %>%
-  tab_spanner(label = "Other", columns = c(Contaminants, rDNA, chrC, chrM))
+  tab_spanner(label = "Other", columns = c(Cobionts, rDNA, chrC, chrM))
 ```
 
 `r if (has_compleasm) "## BUSCO Completeness" else ""`
@@ -1456,7 +1456,7 @@ depth_classification_order <- c(
   "chrom_assigned", "chrom_debris", "chrom_unassigned",
   "chrC", "chrC_debris", "chrM", "chrM_debris",
   "organelle_complete", "organelle_debris",
-  "rDNA", "contaminant", "debris", "unclassified"
+  "rDNA", "cobiont", "debris", "unclassified"
 )
 depth_classification_colors <- c(
   "chrom_assigned"     = oi[5],
@@ -1469,7 +1469,7 @@ depth_classification_colors <- c(
   "organelle_complete" = oi[3],
   "organelle_debris"   = oi[4],
   "rDNA"               = oi[1],
-  "contaminant"        = oi[7],
+  "cobiont"        = oi[7],
   "debris"             = oi[9],
   "unclassified"       = oi[8]
 )
@@ -1879,14 +1879,14 @@ if (has_depth) {
 gt_tbl
 ```
 
-# 8. Contaminants
+# 8. Cobionts
 
-```{r contaminant_table_build, eval=has_contaminants}
+```{r cobiont_table_build, eval=has_cobionts}
 # ---------------------------------------------------------------------------
-# Contaminant table
+# Cobiont table
 # ---------------------------------------------------------------------------
-ct_has_depth <- "depth_mean" %in% names(contam_df) && !all(is.na(contam_df$depth_mean))
-ct_df <- contam_df
+ct_has_depth <- "depth_mean" %in% names(cobiont_df) && !all(is.na(cobiont_df$depth_mean))
+ct_df <- cobiont_df
 if (ct_has_depth) ct_df <- ct_df %>% filter(!is.na(depth_mean))
 
 if (nrow(ct_df) > 0) {
@@ -1914,7 +1914,7 @@ if (nrow(ct_df) > 0) {
       length_min = min(length), length_max = max(length),
       n_circular = sum(is_circular), mean_coverage = mean(coverage),
       .groups = "drop") %>%
-    arrange(desc(abundance)) %>% head(top_n_contam) %>%
+    arrange(desc(abundance)) %>% head(top_n_cobiont) %>%
     mutate(rank = row_number())
 
   if (nrow(ct_agg) > 0) {
@@ -2002,7 +2002,7 @@ if (nrow(ct_df) > 0) {
         }) %>%
         cols_align(align = "left", columns = depth_text) %>%
         tab_options(table.width = pct(100)) %>%
-        tab_header(title = md(paste0("**Top ", nrow(tbl_data), " Contaminants**")),
+        tab_header(title = md(paste0("**Top ", nrow(tbl_data), " Cobionts**")),
                    subtitle = md(paste0("Ranked by abundance (depth \u00D7 length) \u2014 ", params$plot_suffix)))
     } else {
       gt_tbl <- gt_tbl %>%
@@ -2011,7 +2011,7 @@ if (nrow(ct_df) > 0) {
                    mean_coverage = "Cov%", circ_indicator = "Circ") %>%
         cols_hide(c(domain_color, family_color, total_pct)) %>%
         tab_options(table.width = pct(100)) %>%
-        tab_header(title = md(paste0("**Top ", nrow(tbl_data), " Contaminants**")),
+        tab_header(title = md(paste0("**Top ", nrow(tbl_data), " Cobionts**")),
                    subtitle = md(paste0("Ranked by total length \u2014 ", params$plot_suffix)))
     }
     gt_tbl
@@ -2019,8 +2019,8 @@ if (nrow(ct_df) > 0) {
 }
 ```
 
-```{r no_contam_placeholder, eval=!has_contaminants, results='asis'}
-cat('<div class="note-box">No contaminant sequences were detected. If contamination screening was not performed, provide a Centrifuger index with <code>--centrifuger-idx</code>.</div>')
+```{r no_cobiont_placeholder, eval=!has_cobionts, results='asis'}
+cat('<div class="note-box">No cobiont sequences were detected. If cobiont screening was not performed, provide a Centrifuger index with <code>--centrifuger-idx</code>.</div>')
 ```
 
 # 9. Unclassified & Debris

@@ -29,7 +29,7 @@ from dnadis.utils.resource_estimation import (
     _file_size_bytes,
     _scale_time,
     estimate_blast_resources,
-    estimate_contaminant_resources,
+    estimate_cobiont_resources,
     estimate_debris_resources,
     estimate_depth_resources,
     estimate_pairwise_resources,
@@ -395,20 +395,20 @@ class TestEstimateDebrisResources:
         assert spec.memory_gb >= 1.0
 
 
-class TestEstimateContaminantResources:
+class TestEstimateCobiontResources:
     def test_with_index(self, tmp_path):
         idx_prefix = str(tmp_path / "cfr_idx")
         idx_file = tmp_path / "cfr_idx.1.cfr"
         idx_file.write_bytes(b"x" * 4_000_000_000)  # 4GB index
         cfg = ClusterConfig()
-        spec = estimate_contaminant_resources(idx_prefix, cfg)
+        spec = estimate_cobiont_resources(idx_prefix, cfg)
         assert spec.memory_gb > 4.0  # Should be index_size * 1.2 + 2
-        assert spec.job_name == "contaminant"
+        assert spec.job_name == "cobiont"
 
     def test_without_index(self, tmp_path):
         idx_prefix = str(tmp_path / "missing_idx")
         cfg = ClusterConfig()
-        spec = estimate_contaminant_resources(idx_prefix, cfg)
+        spec = estimate_cobiont_resources(idx_prefix, cfg)
         assert spec.memory_gb >= 4.0  # Minimum
 
 

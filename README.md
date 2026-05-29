@@ -2,7 +2,7 @@
 
 **Genome assembly post-processing tool for contig classification, homology assignment, and quality control** - the *de novo* assembly disambiguator
 
-`dnadis` classifies contigs from a *de novo* genome assembly into biological categories (chromosomes, organelles, rDNA, contaminants, debris) using nucleotide or protein-anchored synteny with a reference, organelle/rDNA alignments, and taxonomic classification. Beyond classification, it evaluates assembly quality through BUSCO completeness scoring (via compleasm), syntenic block coverage, and alignment identity metrics, and produces rich interactive HTML reports for both individual assemblies and multi-assembly comparisons. Multi-assembly mode aggregates individual assessments for easy comparisons between various assemblies of the same individual, between different individuals of the same species, or even between multiple species.
+`dnadis` classifies contigs from a *de novo* genome assembly into biological categories (chromosomes, organelles, rDNA, cobionts, debris) using nucleotide or protein-anchored synteny with a reference, organelle/rDNA alignments, and taxonomic classification. Beyond classification, it evaluates assembly quality through BUSCO completeness scoring (via compleasm), syntenic block coverage, and alignment identity metrics, and produces rich interactive HTML reports for both individual assemblies and multi-assembly comparisons. Multi-assembly mode aggregates individual assessments for easy comparisons between various assemblies of the same individual, between different individuals of the same species, or even between multiple species.
 
 ## Features
 
@@ -14,7 +14,7 @@
 - **Organelle detection** (chloroplast/chrC, mitochondrion/chrM) via BLAST
 - **rDNA contig identification** via BLAST against reference rDNA
 - **rDNA consensus building and annotation** (optional) with structure-based sub-feature detection (18S, 5.8S, 25S, ITS1, ITS2) using Infernal/Rfam
-- **Contaminant screening** via centrifuger taxonomic classification
+- **Cobiont screening** via centrifuger taxonomic classification
 - **Debris detection** for assembly fragments (chromosome debris, organelle debris)
 - **Chimera flagging** for contigs with evidence from multiple chromosomes
 - **Orientation determination** for chromosome-assigned contigs
@@ -24,7 +24,7 @@
 - **Read depth analysis** (optional) with automated downsampling and caching
 - **Multi-assembly mode**: analyze multiple assemblies concurrently against a shared reference via `--fofn` (file-of-filenames TSV) or `--assembly-dir` (directory scan)
 - **Cross-assembly comparison reports**: interactive HTML tables (via gt) aggregating classification and BUSCO completeness results across all assemblies
-- **Interactive HTML reports** per assembly with chromosome overview, classification summary, read depth, and contaminant table (enabled by default; requires rmarkdown + pandoc). Reports are self-contained by default (single portable file); use `--no-self-contained-html` for HTML + companion `_files/` directory (faster rendering)
+- **Interactive HTML reports** per assembly with chromosome overview, classification summary, read depth, and cobiont table (enabled by default; requires rmarkdown + pandoc). Reports are self-contained by default (single portable file); use `--no-self-contained-html` for HTML + companion `_files/` directory (faster rendering)
 - **Distributed SLURM execution** (optional) via executorlib: compute-intensive phases submitted as individual SLURM jobs with automatic resource estimation
 
 ## Contig Naming Scheme
@@ -97,8 +97,8 @@ No user configuration is required. The feature runs automatically whenever multi
 - [samtools](https://github.com/samtools/samtools) - BAM/CRAM handling for depth analysis
 - [mosdepth](https://github.com/brentp/mosdepth) - efficient depth calculation
 - [rasusa](https://github.com/mbhall88/rasusa) - FASTQ downsampling for depth analysis
-- [centrifuger](https://github.com/mourisl/centrifuger) - contaminant detection
-- [taxonkit](https://github.com/shenwei356/taxonkit) + NCBI taxonomy database - taxonomic lineage for contaminant table (see below)
+- [centrifuger](https://github.com/mourisl/centrifuger) - cobiont detection
+- [taxonkit](https://github.com/shenwei356/taxonkit) + NCBI taxonomy database - taxonomic lineage for cobiont table (see below)
 - [RagTag](https://github.com/malonge/RagTag) - improved reference-guided scaffolding (for `--scaffold`; built-in scaffolder used as fallback)
 - [executorlib](https://github.com/pyiron/executorlib) + [pysqa](https://github.com/pyiron/pysqa) + [h5py](https://github.com/h5py/h5py) - distributed SLURM job submission (required for `--cluster`; pysqa and h5py are optional executorlib dependencies not pulled in by default)
 - [infernal](http://eddylab.org/infernal/) - structure-based rRNA annotation with Rfam covariance models (for rDNA consensus building; enabled by default, skip with `--skip-rdna-consensus`; bundled Rfam database)
@@ -134,7 +134,7 @@ conda create -n dnadis -c conda-forge -c bioconda \
 conda activate dnadis
 ```
 
-**Full** — all features including reports, contaminant screening, read depth, rDNA annotation, reference-guided scaffolding, SLURM distribution, and taxonomic lineage:
+**Full** — all features including reports, cobiont screening, read depth, rDNA annotation, reference-guided scaffolding, SLURM distribution, and taxonomic lineage:
 
 ```bash
 conda create -n dnadis -c conda-forge -c bioconda \
@@ -161,13 +161,13 @@ conda create -n compleasm -c bioconda -c conda-forge compleasm
 
 The pipeline auto-detects the `compleasm` conda environment, or you can pass `--compleasm-path /path/to/compleasm` explicitly. Use `--compleasm-lineage <lineage>` (e.g., `embryophyta`, `liliopsida`, `eukaryota`) to enable BUSCO evaluation.
 
-**Taxonkit** — for full taxonomic lineage (Domain → Family → Genus → Species) in the contaminant table, download the NCBI taxonomy database after installing taxonkit:
+**Taxonkit** — for full taxonomic lineage (Domain → Family → Genus → Species) in the cobiont table, download the NCBI taxonomy database after installing taxonkit:
 
 ```bash
 taxonkit download --data-dir ~/.taxonkit
 ```
 
-Without taxonkit or the database, contaminant tables show species names only.
+Without taxonkit or the database, cobiont tables show species names only.
 
 ### Development
 
@@ -244,7 +244,7 @@ Latest tested conda package versions (CI):
 | `--chrM-ref` | Mitochondrion reference FASTA (default: extract from --ref) |
 | `--rdna-ref` | rDNA reference FASTA, or 'default' for bundled Arabidopsis 45S |
 | `--skip-rdna-consensus` | Skip building consensus 45S rDNA and annotating rDNA loci (enabled by default) |
-| `--centrifuger-idx` | Centrifuger index prefix for contaminant screening |
+| `--centrifuger-idx` | Centrifuger index prefix for cobiont screening |
 
 ### Read depth analysis
 
@@ -287,7 +287,7 @@ Read type to minimap2 preset mapping:
 |----------|-------------|
 | `--skip-organelles` | Skip organelle detection |
 | `--skip-rdna` | Skip rDNA detection |
-| `--skip-contaminants` | Skip contaminant detection |
+| `--skip-cobionts` | Skip cobiont detection |
 
 ### BUSCO completeness options
 
@@ -298,7 +298,7 @@ Read type to minimap2 preset mapping:
 | `--compleasm-path` | Path to compleasm executable. If unset, auto-detects from a `compleasm` conda environment or `PATH`. | auto-detect |
 | `--skip-compleasm` | Skip compleasm even if `--compleasm-lineage` is specified | off |
 
-When `--compleasm-lineage` is set, phase 18 runs compleasm on two FASTA subsets: chromosome-assigned contigs (`*.chrs.fasta`) and non-chromosome contigs (`*.non_chrs.fasta`, combining debris + unclassified + contaminants). Both runs are submitted in parallel. Results are included in the per-assembly unified HTML report and in the multi-assembly `comparison_summary.tsv`.
+When `--compleasm-lineage` is set, phase 18 runs compleasm on two FASTA subsets: chromosome-assigned contigs (`*.chrs.fasta`) and non-chromosome contigs (`*.non_chrs.fasta`, combining debris + unclassified + cobionts). Both runs are submitted in parallel. Results are included in the per-assembly unified HTML report and in the multi-assembly `comparison_summary.tsv`.
 
 ### Scaffolding options
 
@@ -324,7 +324,7 @@ When `--scaffold` is enabled, chromosome-assigned contigs are grouped by referen
 conda install -n dnadis -c conda-forge executorlib pysqa h5py
 ```
 
-When `--cluster` is enabled, compute-intensive phases (synteny alignment, BLAST detection, debris detection, contaminant screening, read depth, compleasm) are submitted as individual SLURM jobs with per-job resource control. In multi-assembly mode, assemblies run concurrently with each submitting its own SLURM jobs. Without `--cluster`, all phases run locally.
+When `--cluster` is enabled, compute-intensive phases (synteny alignment, BLAST detection, debris detection, cobiont screening, read depth, compleasm) are submitted as individual SLURM jobs with per-job resource control. In multi-assembly mode, assemblies run concurrently with each submitting its own SLURM jobs. Without `--cluster`, all phases run locally.
 
 ## Output Files
 
@@ -335,10 +335,10 @@ When `--cluster` is enabled, compute-intensive phases (synteny alignment, BLAST 
 | `*.chrs.fasta` | Chromosome-assigned contigs (renamed and reoriented; scaffolded pseudomolecules if `--scaffold`) |
 | `*.organelles.fasta` | Organelle contigs (chrC, chrM) |
 | `*.rdna.fasta` | rDNA-containing contigs |
-| `*.contaminants.fasta` | Contaminant contigs |
+| `*.cobionts.fasta` | Cobiont contigs |
 | `*.debris.fasta` | Assembly debris (fragments, duplicates) |
 | `*.unclassified.fasta` | Contigs that couldn't be classified |
-| `*.non_chrs.fasta` | Combined non-chromosome contigs (debris + unclassified + contaminants; produced when `--compleasm-lineage` is set) |
+| `*.non_chrs.fasta` | Combined non-chromosome contigs (debris + unclassified + cobionts; produced when `--compleasm-lineage` is set) |
 | `*.scaffolded.fasta` | Scaffolded chromosome pseudomolecules (if `--scaffold`) |
 | `*.scaffolded.agp` | AGP 2.0 file describing scaffold structure (if `--scaffold`) |
 
@@ -351,7 +351,7 @@ When `--cluster` is enabled, compute-intensive phases (synteny alignment, BLAST 
 | `*.segments.tsv` | Individual synteny segments |
 | `*.macro_blocks.tsv` | Aggregated synteny macro-blocks |
 | `*.ref_lengths.tsv` | Reference chromosome lengths |
-| `*.contaminants.tsv` | Detailed contaminant summary with taxonomic lineage (if contaminants detected) |
+| `*.cobionts.tsv` | Detailed cobiont summary with taxonomic lineage (if cobionts detected) |
 | `*.rdna_annotations.tsv` | rRNA sub-feature annotations in TSV format (produced by default; skip with `--skip-rdna-consensus`) |
 | `*.rdna_arrays.tsv` | rDNA array locations per contig (produced when arrays are detected; skip with `--skip-rdna-consensus`) |
 
@@ -377,11 +377,11 @@ Produced in the top-level output directory when ≥2 assemblies complete. File n
 |--------|-------------|
 | `contig` | New contig name (with chromosome assignment) |
 | `original_name` | Original contig name from input FASTA |
-| `classification` | Category: chrom_assigned, chrom_unassigned, organelle_complete, organelle_debris, rDNA, contaminant, chrom_debris, debris, unclassified |
+| `classification` | Category: chrom_assigned, chrom_unassigned, organelle_complete, organelle_debris, rDNA, cobiont, chrom_debris, debris, unclassified |
 | `classification_confidence` | Confidence level: high, medium, or low |
 | `reversed` | Whether contig was reverse-complemented |
-| `contaminant_taxid` | NCBI taxonomy ID (for contaminants) |
-| `contaminant_sci` | Scientific name (for contaminants) |
+| `cobiont_taxid` | NCBI taxonomy ID (for cobionts) |
+| `cobiont_sci` | Scientific name (for cobionts) |
 | `assigned_ref_id` | Best-matching reference chromosome |
 | `ref_gene_proportion` | Fraction of reference chromosome genes aligned to this contig (0.0-1.0) |
 | `genes_per_Mbp` | Gene density (aligned reference genes per Mbp of query sequence) |
@@ -399,7 +399,7 @@ Enabled by default; skip with `--skip-plot` (requires R with ggplot2 and related
 
 | File | Description |
 |------|-------------|
-| `*.assembly_report.html` | HTML report per assembly with all plots (chromosome overview, classification bar, read depth overview, contaminant table). Self-contained by default (all resources embedded). Use `--no-self-contained-html` to produce HTML + companion `*_files/` directory for faster rendering. |
+| `*.assembly_report.html` | HTML report per assembly with all plots (chromosome overview, classification bar, read depth overview, cobiont table). Self-contained by default (all resources embedded). Use `--no-self-contained-html` to produce HTML + companion `*_files/` directory for faster rendering. |
 | `*.chromosome_overview.pdf` | Multi-panel plot showing contig composition, subgenome support, and alignment identity (exported from the assembly report) |
 | `*.depth_overview.pdf` | Read depth visualization by classification and chromosome (if `--reads` provided; exported from the assembly report) |
 
@@ -414,7 +414,7 @@ Reference preparation runs first: read reference genome, compute GC statistics, 
 | 3 | **Organelle detection** — BLAST against chrC/chrM references (skip with `--skip-organelles`) |
 | 4 | **rDNA detection** — BLAST against rDNA reference (skip with `--skip-rdna`) |
 | 5 | **Chromosome debris detection** — high-coverage, high-identity matches to assembled chromosomes (minimap2) |
-| 6 | **Contaminant detection** — centrifuger taxonomic classification with two-gate filtering (score ≥1000, coverage ≥0.50; requires `--centrifuger-idx`) |
+| 6 | **Cobiont detection** — centrifuger taxonomic classification with two-gate filtering (score ≥1000, coverage ≥0.50; requires `--centrifuger-idx`) |
 | 7 | **Debris classification** — reference-based debris detection for remaining contigs |
 | 8 | **Gene count statistics** — compute gene proportion metrics (if GFF3 provided) |
 | 9 | **Orientation determination** — determine strand for chromosome contigs based on synteny votes |
@@ -465,7 +465,7 @@ Uses Infernal covariance models from Rfam 15.0 for structure-based rRNA boundary
 | `organelle_complete` | Complete organelle genome (chrC or chrM) |
 | `organelle_debris` | Partial organelle sequence |
 | `rDNA` | Ribosomal DNA repeat unit |
-| `contaminant` | Sequence from contaminating organism |
+| `cobiont` | Sequence from a co-occurring organism (symbiont, commensal, etc.) |
 | `chrom_debris` | High-coverage (≥80%), high-identity (≥90%) duplicate of an assembled chromosome contig |
 | `debris` | Assembly debris with reference nucleotide coverage (≥50%) or protein homology (≥2 miniprot hits) |
 | `unclassified` | Could not be classified |
@@ -486,7 +486,7 @@ Each contig is assigned a confidence level (`high`, `medium`, or `low`) indicati
 | **organelle_complete** | Coverage ≥90% | Coverage 80-90% | — |
 | **organelle_debris** | — | Coverage ≥60% | Coverage <60% |
 | **rDNA** | Coverage ≥80% AND identity ≥95% | Coverage 50-80% OR identity <95% | Coverage <60% |
-| **contaminant** | Coverage ≥80% OR GC deviation >2σ | Coverage 50-80% | Coverage <50% |
+| **cobiont** | Coverage ≥80% OR GC deviation >2σ | Coverage 50-80% | Coverage <50% |
 | **chrom_debris** | Coverage ≥90%, identity ≥95%, GC deviation <3σ | Coverage 80-90% OR identity 90-95% OR GC deviation ≥3σ | — |
 | **debris** (protein mode) | Coverage ≥80% OR ≥5 protein hits | Coverage 50-80% OR 2-5 protein hits | GC deviation >3σ AND no synteny |
 | **debris** (nucleotide mode) | Coverage ≥80% | Coverage 50-80% | Coverage <55% OR GC deviation >3σ |
@@ -502,7 +502,7 @@ Each contig is assigned a confidence level (`high`, `medium`, or `low`) indicati
 - Protein mode: `min(1.0, gene_proportion × 2)` — normalized gene proportion
 - Nucleotide mode: `min(1.0, ref_coverage)` — directly uses reference coverage
 
-**GC deviation**: How many standard deviations (σ) the contig's GC content differs from a GC baseline. Large deviations may indicate contamination or unusual sequences.
+**GC deviation**: How many standard deviations (σ) the contig's GC content differs from a GC baseline. Large deviations may indicate cobionts or unusual sequences.
 - For `chrom_assigned`: compared to reference nuclear genome GC (validates synteny-based assignment)
 - For all other categories: compared to assembly chromosome GC (more appropriate for divergent genomes where the assembly may differ significantly from the reference)
 
@@ -550,12 +550,12 @@ All gate criteria must be satisfied for chromosome assignment (AND logic). The s
 | `--chrC-len-tolerance` | 0.05 | Length tolerance for chrC |
 | `--chrM-len-tolerance` | 0.20 | Length tolerance for chrM |
 
-### Contaminant detection
+### Cobiont detection
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `--contaminant-min-score` | 1000 | Min centrifuger score (~1kb matching sequence with k=31) |
-| `--contaminant-min-coverage` | 0.50 | Min query coverage (low coverage may indicate conserved genes, not contamination) |
+| `--cobiont-min-score` | 1000 | Min centrifuger score (~1kb matching sequence with k=31) |
+| `--cobiont-min-coverage` | 0.50 | Min query coverage (low coverage may indicate conserved genes rather than a true cobiont) |
 
 ### Debris detection
 
@@ -654,7 +654,7 @@ Use nucleotide mode when you want to detect chromosome-scale structural features
 
 Note: Nucleotide mode does not require `--ref-gff3`, but if provided, gene count statistics will be included in the output.
 
-### Polyploid genome with contaminant screening
+### Polyploid genome with cobiont screening
 
 ```bash
 ./dnadis.py \
@@ -877,11 +877,11 @@ Two complementary approaches:
 
 2. **Reference-based debris** - Contigs with moderate reference coverage (>50%) but insufficient synteny support for chromosome assignment
 
-### Contaminant visualization
+### Cobiont visualization
 
-When contaminants are detected (with `--centrifuger-idx`) and plotting is enabled (the default; disable with `--skip-plot`), dnadis includes a **contaminant table** in the assembly report (`*.assembly_report.html`): an interactive HTML table showing top contaminants ranked by abundance (depth × length if depth data available, otherwise total length). Features include species-level aggregation with binomial names, inline gradient bars for Total Mb and Depth columns, colored domain badges, family grouping, and min-max spread values for multi-contig entries. HTML-only output (CSS gradients don't render to PDF).
+When cobionts are detected (with `--centrifuger-idx`) and plotting is enabled (the default; disable with `--skip-plot`), dnadis includes a **cobiont table** in the assembly report (`*.assembly_report.html`): an interactive HTML table showing top cobionts ranked by abundance (depth × length if depth data available, otherwise total length). Features include species-level aggregation with binomial names, inline gradient bars for Total Mb and Depth columns, colored domain badges, family grouping, and min-max spread values for multi-contig entries. HTML-only output (CSS gradients don't render to PDF).
 
-The table filters to high-confidence contaminants (coverage ≥ `--contaminant-min-coverage`, default 0.50) to reduce noise from conserved gene matches. See [docs/output_formats.md](docs/output_formats.md#contaminant-table-visualization-html) for detailed documentation on the table format and interpretation.
+The table filters to high-confidence cobionts (coverage ≥ `--cobiont-min-coverage`, default 0.50) to reduce noise from conserved gene matches. See [docs/output_formats.md](docs/output_formats.md#cobiont-table-visualization-html) for detailed documentation on the table format and interpretation.
 
 ## Glossary
 
@@ -909,7 +909,7 @@ Please also cite the underlying tools that dnadis invokes:
 - [minimap2](https://github.com/lh3/minimap2)
 - [gffread](https://github.com/gpertea/gffread)
 - [centrifuger](https://github.com/mourisl/centrifuger) (if used)
-- [taxonkit](https://github.com/shenwei356/taxonkit) (if used for contaminant visualization)
+- [taxonkit](https://github.com/shenwei356/taxonkit) (if used for cobiont visualization)
 - [Infernal](http://eddylab.org/infernal/) and [Rfam](https://rfam.org/) (if rDNA consensus building was used for rRNA annotation):
   - Nawrocki EP, Eddy SR (2013). Infernal 1.1: 100-fold faster RNA homology searches. Bioinformatics, 29(22):2933-2935. <https://doi.org/10.1093/bioinformatics/btt509>
   - Kalvari I, et al. (2021). Rfam 14: expanded coverage of metagenomic, viral and microRNA families. Nucleic Acids Research, 49(D1):D192-D200. <https://doi.org/10.1093/nar/gkaa1047>

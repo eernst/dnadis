@@ -34,7 +34,7 @@ MODULE_ORDER = [
     ("dnadis/detection/organelle.py", "dnadis.detection.organelle"),
     ("dnadis/detection/rdna.py", "dnadis.detection.rdna"),
     ("dnadis/detection/debris.py", "dnadis.detection.debris"),
-    ("dnadis/detection/contaminant.py", "dnadis.detection.contaminant"),
+    ("dnadis/detection/cobiont.py", "dnadis.detection.cobiont"),
     # Classification (depends on utils, models, detection)
     ("dnadis/classification/classifier.py", "dnadis.classification.classifier"),
     # Output (depends on utils, models)

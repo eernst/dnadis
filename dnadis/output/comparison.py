@@ -49,7 +49,7 @@ def build_assembly_result(
     qry_lengths: Dict[str, int],
     ref_lengths_norm: Dict[str, int],
     ev: ChainEvidenceResult,
-    contaminants_filtered: Dict,
+    cobionts_filtered: Dict,
     chrC_contig: Optional[str],
     chrM_contig: Optional[str],
     rdna_arrays: List[RdnaArray],
@@ -60,7 +60,7 @@ def build_assembly_result(
     segments_tsv: Path,
     evidence_tsv: Path,
     macro_blocks_tsv: Path,
-    contaminants_tsv_path: Optional[Path] = None,
+    cobionts_tsv_path: Optional[Path] = None,
     rdna_annotations_tsv: Optional[Path] = None,
     rdna_arrays_tsv: Optional[Path] = None,
     agp_tsv: Optional[Path] = None,
@@ -79,7 +79,7 @@ def build_assembly_result(
         qry_lengths: Dict mapping contig name -> length.
         ref_lengths_norm: Normalized reference chromosome lengths.
         ev: ChainEvidenceResult from synteny analysis.
-        contaminants_filtered: Dict of filtered contaminant hits.
+        cobionts_filtered: Dict of filtered cobiont hits.
         chrC_contig: Name of chrC contig, or None.
         chrM_contig: Name of chrM contig, or None.
         rdna_arrays: List of detected rDNA arrays.
@@ -90,7 +90,7 @@ def build_assembly_result(
         segments_tsv: Path to segments.tsv.
         evidence_tsv: Path to evidence_summary.tsv.
         macro_blocks_tsv: Path to macro_blocks.tsv.
-        contaminants_tsv_path: Path to contaminants.tsv, or None.
+        cobionts_tsv_path: Path to cobionts.tsv, or None.
         rdna_annotations_tsv: Path to rdna_annotations.tsv, or None.
         rdna_arrays_tsv: Path to rdna_arrays.tsv, or None.
 
@@ -168,15 +168,15 @@ def build_assembly_result(
     gc_devs = [abs(c.gc_deviation) for c in chrom_assigned if c.gc_deviation is not None]
     mean_gc_deviation = sum(gc_devs) / len(gc_devs) if gc_devs else None
 
-    # --- Contamination ---
-    contaminant_contigs = [c for c in classifications if c.classification == "contaminant"]
-    n_contaminants = len(contaminant_contigs)
-    total_contaminant_bp = sum(c.contig_len for c in contaminant_contigs)
-    contaminant_species = set()
-    for c in contaminant_contigs:
-        if c.contaminant_sci:
-            contaminant_species.add(c.contaminant_sci)
-    n_unique_contaminant_species = len(contaminant_species)
+    # --- Cobionts ---
+    cobiont_contigs = [c for c in classifications if c.classification == "cobiont"]
+    n_cobionts = len(cobiont_contigs)
+    total_cobiont_bp = sum(c.contig_len for c in cobiont_contigs)
+    cobiont_species = set()
+    for c in cobiont_contigs:
+        if c.cobiont_sci:
+            cobiont_species.add(c.cobiont_sci)
+    n_unique_cobiont_species = len(cobiont_species)
 
     # --- rDNA ---
     rdna_contigs = [c for c in classifications if c.classification == "rDNA"]
@@ -261,9 +261,9 @@ def build_assembly_result(
         weighted_identity=weighted_identity,
         mean_collinearity=mean_collinearity,
         mean_gc_deviation=mean_gc_deviation,
-        n_contaminants=n_contaminants,
-        total_contaminant_bp=total_contaminant_bp,
-        n_unique_contaminant_species=n_unique_contaminant_species,
+        n_cobionts=n_cobionts,
+        total_cobiont_bp=total_cobiont_bp,
+        n_unique_cobiont_species=n_unique_cobiont_species,
         n_rdna_contigs=n_rdna_contigs,
         total_rdna_bp=total_rdna_bp,
         n_rdna_arrays=n_rdna_arrays_count,
@@ -276,7 +276,7 @@ def build_assembly_result(
         segments_tsv=segments_tsv,
         evidence_tsv=evidence_tsv,
         macro_blocks_tsv=macro_blocks_tsv,
-        contaminants_tsv=contaminants_tsv_path,
+        cobionts_tsv=cobionts_tsv_path,
         rdna_annotations_tsv=rdna_annotations_tsv,
         rdna_arrays_tsv=rdna_arrays_tsv,
         agp_tsv=agp_tsv,
@@ -318,9 +318,9 @@ def write_comparison_summary_tsv(
         "weighted_identity",
         "mean_collinearity",
         "mean_gc_deviation",
-        "n_contaminants",
-        "contaminant_bp",
-        "n_contaminant_species",
+        "n_cobionts",
+        "cobiont_bp",
+        "n_cobiont_species",
         "n_rdna",
         "rdna_bp",
         "n_rdna_arrays",
@@ -377,9 +377,9 @@ def write_comparison_summary_tsv(
                 _fmt(r.weighted_identity),
                 _fmt(r.mean_collinearity),
                 _fmt(r.mean_gc_deviation),
-                str(r.n_contaminants),
-                str(r.total_contaminant_bp),
-                str(r.n_unique_contaminant_species),
+                str(r.n_cobionts),
+                str(r.total_cobiont_bp),
+                str(r.n_unique_cobiont_species),
                 str(r.n_rdna_contigs),
                 str(r.total_rdna_bp),
                 str(r.n_rdna_arrays),

@@ -36,7 +36,7 @@ def detect_chromosome_debris(
     of the same genomic region - haplotigs, bubble branches, or other duplicates. These
     contigs are nearly identical to portions of the primary chromosome contigs and should
     be classified as debris rather than left as "unclassified" or mistakenly flagged as
-    contaminants. This detection method aligns candidate contigs against the *assembled*
+    cobionts. This detection method aligns candidate contigs against the *assembled*
     chromosome contigs (not the reference) to catch these assembly-specific artifacts.
 
     This complements reference-based debris detection (classify_debris_and_unclassified),

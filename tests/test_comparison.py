@@ -39,16 +39,16 @@ def _make_classification(
     seq_identity: float = 0.98,
     collinearity: float = 0.95,
     gc_deviation: float = 0.5,
-    contaminant_sci: str = None,
-    contaminant_taxid: int = None,
+    cobiont_sci: str = None,
+    cobiont_taxid: int = None,
 ) -> ContigClassification:
     return ContigClassification(
         original_name=name,
         new_name=name,
         classification=classification,
         reversed=False,
-        contaminant_taxid=contaminant_taxid,
-        contaminant_sci=contaminant_sci,
+        cobiont_taxid=cobiont_taxid,
+        cobiont_sci=cobiont_sci,
         assigned_ref_id=assigned_ref_id if classification == "chrom_assigned" else None,
         ref_gene_proportion=0.8 if classification == "chrom_assigned" else None,
         contig_len=contig_len,
@@ -127,7 +127,7 @@ def _make_assembly_result(
         qry_lengths=qry_lengths,
         ref_lengths_norm=ref_lengths_norm,
         ev=ev,
-        contaminants_filtered={},
+        cobionts_filtered={},
         chrC_contig=None,
         chrM_contig=None,
         rdna_arrays=[],
@@ -239,7 +239,7 @@ class TestBuildAssemblyResult:
             outprefix=tmp_path / "sparse" / "sparse",
             classifications=clfs, qry_lengths={"ctg1": 100_000_000},
             ref_lengths_norm={"chr1": 100_000_000},
-            ev=ev, contaminants_filtered={},
+            ev=ev, cobionts_filtered={},
             chrC_contig=None, chrM_contig=None, rdna_arrays=[], depth_stats={},
             chimera_primary_frac=0.8, chimera_secondary_frac=0.2,
             summary_tsv=tmp_path / "s.tsv", segments_tsv=tmp_path / "seg.tsv",
@@ -299,7 +299,7 @@ class TestBuildAssemblyResult:
             qry_lengths={"ctg1": 10_000},
             ref_lengths_norm={},
             ev=ev,
-            contaminants_filtered={},
+            cobionts_filtered={},
             chrC_contig="chrC_ctg",
             chrM_contig=None,
             rdna_arrays=[],
@@ -314,27 +314,27 @@ class TestBuildAssemblyResult:
         assert r.chrC_found is True
         assert r.chrM_found is False
 
-    def test_contaminant_metrics(self, tmp_path):
+    def test_cobiont_metrics(self, tmp_path):
         clfs = [
             _make_classification(
-                "ctg1", "contaminant", 50_000,
-                contaminant_sci="E. coli", contaminant_taxid=562,
+                "ctg1", "cobiont", 50_000,
+                cobiont_sci="E. coli", cobiont_taxid=562,
             ),
             _make_classification(
-                "ctg2", "contaminant", 30_000,
-                contaminant_sci="E. coli", contaminant_taxid=562,
+                "ctg2", "cobiont", 30_000,
+                cobiont_sci="E. coli", cobiont_taxid=562,
             ),
             _make_classification(
-                "ctg3", "contaminant", 20_000,
-                contaminant_sci="S. aureus", contaminant_taxid=1280,
+                "ctg3", "cobiont", 20_000,
+                cobiont_sci="S. aureus", cobiont_taxid=1280,
             ),
         ]
         r = _make_assembly_result(
             classifications=clfs, ref_lengths_norm={}, tmp_path=tmp_path,
         )
-        assert r.n_contaminants == 3
-        assert r.total_contaminant_bp == 100_000
-        assert r.n_unique_contaminant_species == 2
+        assert r.n_cobionts == 3
+        assert r.total_cobiont_bp == 100_000
+        assert r.n_unique_cobiont_species == 2
 
     def test_telomere_counts(self, tmp_path):
         clfs = [

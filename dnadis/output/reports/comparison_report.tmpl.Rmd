@@ -9,7 +9,7 @@ params:
   per_assembly_macro_blocks_tsvs: "__PER_ASM_MACRO_TSVS__"
   per_assembly_rdna_arrays_tsvs: "__PER_ASM_RDNA_TSVS__"
   per_assembly_rearrangements_tsvs: "__PER_ASM_REARR_TSVS__"
-  per_assembly_contaminants_tsvs: "__PER_ASM_CONTAM_TSVS__"
+  per_assembly_cobionts_tsvs: "__PER_ASM_COBIONT_TSVS__"
   per_assembly_agp_tsvs: "__PER_ASM_AGP_TSVS__"
   pairwise_macro_blocks_tsvs: "__PAIRWISE_MACRO_TSVS__"
   pairwise_names: "__PAIRWISE_NAMES__"
@@ -104,8 +104,8 @@ rdna_arrays_paths <- if (nzchar(params$per_assembly_rdna_arrays_tsvs))
   strsplit(params$per_assembly_rdna_arrays_tsvs, ";")[[1]] else character(0)
 rearr_paths <- if (nzchar(params$per_assembly_rearrangements_tsvs))
   strsplit(params$per_assembly_rearrangements_tsvs, ";")[[1]] else character(0)
-contam_tsv_paths <- if (nzchar(params$per_assembly_contaminants_tsvs))
-  strsplit(params$per_assembly_contaminants_tsvs, ";")[[1]] else character(0)
+cobiont_tsv_paths <- if (nzchar(params$per_assembly_cobionts_tsvs))
+  strsplit(params$per_assembly_cobionts_tsvs, ";")[[1]] else character(0)
 agp_paths <- if (nzchar(params$per_assembly_agp_tsvs))
   strsplit(params$per_assembly_agp_tsvs, ";")[[1]] else character(0)
 
@@ -159,7 +159,7 @@ if (params$assembly_sort_order == "identity" && has_per_asm) {
   per_asm_macro_paths <- permute_if_paired(per_asm_macro_paths)
   rdna_arrays_paths  <- permute_if_paired(rdna_arrays_paths)
   rearr_paths        <- permute_if_paired(rearr_paths)
-  contam_tsv_paths   <- permute_if_paired(contam_tsv_paths)
+  cobiont_tsv_paths   <- permute_if_paired(cobiont_tsv_paths)
   agp_paths          <- permute_if_paired(agp_paths)
 
   # Reorder comp_df rows to match.
@@ -167,7 +167,7 @@ if (params$assembly_sort_order == "identity" && has_per_asm) {
 }
 
 has_any_chrom <- any(comp_df$n_chrom_assigned > 0, na.rm = TRUE)
-has_any_contam <- any(comp_df$n_contaminants > 0, na.rm = TRUE)
+has_any_cobiont <- any(comp_df$n_cobionts > 0, na.rm = TRUE)
 has_any_depth <- any(!is.na(comp_df$mean_chrom_depth) & comp_df$mean_chrom_depth > 0)
 
 chr_like_minlen <- as.numeric(params$chr_like_minlen)
@@ -266,21 +266,21 @@ all_rearr_df <- if (length(rearr_list) > 0) bind_rows(rearr_list) else NULL
 has_rearrangements <- !is.null(all_rearr_df) && nrow(all_rearr_df) > 0
 
 # ---------------------------------------------------------------------------
-# Load per-assembly contaminants TSVs (contam_tsv_paths declared above)
+# Load per-assembly cobionts TSVs (cobiont_tsv_paths declared above)
 # ---------------------------------------------------------------------------
-contam_detail_list <- list()
-for (i in seq_along(contam_tsv_paths)) {
-  p <- contam_tsv_paths[i]
+cobiont_detail_list <- list()
+for (i in seq_along(cobiont_tsv_paths)) {
+  p <- cobiont_tsv_paths[i]
   if (nzchar(p) && file.exists(p)) {
     df <- read_tsv(p, show_col_types = FALSE)
     if (nrow(df) > 0) {
       df$assembly <- asm_name_list[i]
-      contam_detail_list[[i]] <- df
+      cobiont_detail_list[[i]] <- df
     }
   }
 }
-all_contam_detail_df <- if (length(contam_detail_list) > 0) bind_rows(contam_detail_list) else NULL
-has_contam_detail <- !is.null(all_contam_detail_df) && nrow(all_contam_detail_df) > 0
+all_cobiont_detail_df <- if (length(cobiont_detail_list) > 0) bind_rows(cobiont_detail_list) else NULL
+has_cobiont_detail <- !is.null(all_cobiont_detail_df) && nrow(all_cobiont_detail_df) > 0
 
 # ---------------------------------------------------------------------------
 # Load per-assembly AGP files (agp_paths declared above)
@@ -469,7 +469,7 @@ clf_short <- c(
   "organelle_complete" = "Org",
   "organelle_debris"   = "OrgD",
   "rDNA"               = "rDNA",
-  "contaminant"        = "Cont",
+  "cobiont"            = "Cob",
   "chrom_debris"       = "ChrD",
   "debris"             = "Debris",
   "unclassified"       = "Unclf"
@@ -644,7 +644,7 @@ tbl <- comp_df %>%
                             sprintf("%.1f%%", mean_ref_coverage * 100)),
     `Mean identity` = ifelse(is.na(mean_identity), "\u2014",
                              sprintf("%.2f%%", mean_identity * 100)),
-    Contaminants = n_contaminants,
+    Cobionts = n_cobionts,
     rDNA = n_rdna,
     chrC = ifelse(chrC_found == "yes", "\u2713", "\u2014"),
     chrM = ifelse(chrM_found == "yes", "\u2713", "\u2014")
@@ -662,11 +662,11 @@ gt_obj <- tbl %>%
 # Conditionally include chrC in "Other" spanner
 if (show_chrC) {
   gt_obj <- gt_obj %>%
-    tab_spanner(label = "Other", columns = c(Contaminants, rDNA, chrC, chrM))
+    tab_spanner(label = "Other", columns = c(Cobionts, rDNA, chrC, chrM))
 } else {
   gt_obj <- gt_obj %>%
     cols_hide(columns = chrC) %>%
-    tab_spanner(label = "Other", columns = c(Contaminants, rDNA, chrM))
+    tab_spanner(label = "Other", columns = c(Cobionts, rDNA, chrM))
 }
 gt_obj
 ```
@@ -3240,28 +3240,28 @@ if (show_chrC_org) {
 ```
 
 
-`r if (has_any_contam) "# 8. Contaminants {.tabset}" else ""`
+`r if (has_any_cobiont) "# 8. Cobionts {.tabset}" else ""`
 
-`r if (has_any_contam) "## Summary" else ""`
+`r if (has_any_cobiont) "## Summary" else ""`
 
-```{r contamination, eval=has_any_contam}
-contam_tbl <- comp_df %>%
-  filter(n_contaminants > 0) %>%
+```{r cobionts, eval=has_any_cobiont}
+cobiont_tbl <- comp_df %>%
+  filter(n_cobionts > 0) %>%
   transmute(
     Assembly = assembly,
-    contam_mb = round(contaminant_bp / 1e6, 2),
-    Contigs = n_contaminants,
-    Species = n_contaminant_species
+    cobiont_mb = round(cobiont_bp / 1e6, 2),
+    Contigs = n_cobionts,
+    Species = n_cobiont_species
   )
 
-max_contam_mb <- max(contam_tbl$contam_mb, na.rm = TRUE)
+max_cobiont_mb <- max(cobiont_tbl$cobiont_mb, na.rm = TRUE)
 
-contam_tbl %>%
+cobiont_tbl %>%
   rowwise() %>%
   mutate(
     `Total (Mb)` = {
-      pct <- if (max_contam_mb > 0) min(100, contam_mb / max_contam_mb * 100) else 0
-      bar_cell(pct, oi[7], sprintf("%.2f", contam_mb))
+      pct <- if (max_cobiont_mb > 0) min(100, cobiont_mb / max_cobiont_mb * 100) else 0
+      bar_cell(pct, oi[7], sprintf("%.2f", cobiont_mb))
     }
   ) %>%
   ungroup() %>%
@@ -3275,15 +3275,15 @@ contam_tbl %>%
     style = css(vertical_align = "middle"),
     locations = cells_body()
   ) %>%
-  tab_header(title = md("**Contamination Summary**")) %>%
+  tab_header(title = md("**Cobiont Summary**")) %>%
   gt_theme()
 ```
 
-`r if (has_any_contam && has_contam_detail) "## Top Taxa" else ""`
+`r if (has_any_cobiont && has_cobiont_detail) "## Top Taxa" else ""`
 
-```{r top_taxa, eval=(has_any_contam && has_contam_detail), results='asis'}
+```{r top_taxa, eval=(has_any_cobiont && has_cobiont_detail), results='asis'}
 # --- Top genera by prevalence across assemblies ---
-genus_prevalence <- all_contam_detail_df %>%
+genus_prevalence <- all_cobiont_detail_df %>%
   filter(nzchar(genus) & !is.na(genus)) %>%
   distinct(assembly, genus) %>%
   group_by(genus) %>%
@@ -3325,7 +3325,7 @@ genus_gt <- genus_prevalence %>%
   gt_theme()
 
 # --- Top species by prevalence across assemblies ---
-species_prevalence <- all_contam_detail_df %>%
+species_prevalence <- all_cobiont_detail_df %>%
   filter(nzchar(species) & !is.na(species)) %>%
   mutate(binomial = paste(genus, species)) %>%
   distinct(assembly, binomial) %>%

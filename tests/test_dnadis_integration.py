@@ -264,7 +264,7 @@ def test_contig_orientation_detection(tmp_path):
         "--ref-gff3", str(subset_gff3),
         "--output-dir", str(output_dir),
         "-t", "4",
-        "--skip-contaminants",  # Skip contaminant detection to speed up test
+        "--skip-cobionts",  # Skip cobiont detection to speed up test
         "--skip-rdna",  # Skip rDNA detection to speed up test
     ]
 

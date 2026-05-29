@@ -139,7 +139,7 @@ class ContigClassification:
     - organelle_complete: Complete organelle genome (chrC or chrM)
     - organelle_debris: Partial organelle sequence
     - rDNA: Ribosomal DNA repeat unit
-    - contaminant: Sequence from contaminating organism
+    - cobiont: Sequence from a co-occurring organism (symbiont, commensal, or other cobiont)
     - chrom_debris: High-coverage duplicate of assembled chromosome
     - debris: Assembly fragment with reference homology
     - unclassified: No classification evidence
@@ -153,10 +153,10 @@ class ContigClassification:
     """
     original_name: str
     new_name: str
-    classification: str  # chrom_assigned, chrom_unassigned, chrom_debris, organelle_complete, organelle_debris, rDNA, contaminant, debris, unclassified
+    classification: str  # chrom_assigned, chrom_unassigned, chrom_debris, organelle_complete, organelle_debris, rDNA, cobiont, debris, unclassified
     reversed: bool
-    contaminant_taxid: Optional[int]  # NCBI taxonomy ID for contaminants
-    contaminant_sci: Optional[str]  # Scientific name for contaminants
+    cobiont_taxid: Optional[int]  # NCBI taxonomy ID for cobionts
+    cobiont_sci: Optional[str]  # Scientific name for cobionts
     assigned_ref_id: Optional[str]
     ref_gene_proportion: Optional[float]
     contig_len: int
@@ -164,8 +164,8 @@ class ContigClassification:
     gc_content: Optional[float] = None  # GC content (0.0-1.0)
     gc_deviation: Optional[float] = None  # Deviation from reference mean in std devs
     synteny_score: Optional[float] = None  # Synteny evidence strength (0.0-1.0)
-    contam_score: Optional[float] = None  # Contaminant evidence strength (0.0-1.0)
-    contam_coverage: Optional[float] = None  # Contaminant alignment coverage (0.0-1.0)
+    cobiont_score: Optional[float] = None  # Cobiont evidence strength (0.0-1.0)
+    cobiont_coverage: Optional[float] = None  # Cobiont alignment coverage (0.0-1.0)
     classification_confidence: Optional[str] = None  # high/medium/low
     # Read depth fields (optional, from --reads analysis)
     depth_mean: Optional[float] = None
@@ -232,8 +232,8 @@ class RearrangementCall:
 
 
 @dataclass
-class ContaminantHit:
-    """Contaminant detection result for a contig."""
+class CobiontHit:
+    """Cobiont detection result for a contig."""
     taxid: int
     sci_name: str
     coverage: float  # Fraction of contig covered (0.0-1.0)
@@ -241,10 +241,10 @@ class ContaminantHit:
 
 
 @dataclass
-class ContaminantHitExtended:
-    """Contaminant hit with full taxonomic lineage.
+class CobiontHitExtended:
+    """Cobiont hit with full taxonomic lineage.
 
-    Extends ContaminantHit with NCBI taxonomy hierarchy from TaxonKit.
+    Extends CobiontHit with NCBI taxonomy hierarchy from TaxonKit.
     Used for phylogenetic breakdown visualizations (alluvial plots).
     """
     taxid: int
@@ -562,10 +562,10 @@ class AssemblyResult:
     mean_collinearity: Optional[float]
     mean_gc_deviation: Optional[float]
 
-    # Contamination
-    n_contaminants: int
-    total_contaminant_bp: int
-    n_unique_contaminant_species: int
+    # Cobionts
+    n_cobionts: int
+    total_cobiont_bp: int
+    n_unique_cobiont_species: int
 
     # rDNA
     n_rdna_contigs: int
@@ -590,7 +590,7 @@ class AssemblyResult:
     segments_tsv: Path
     evidence_tsv: Path
     macro_blocks_tsv: Path
-    contaminants_tsv: Optional[Path] = None
+    cobionts_tsv: Optional[Path] = None
     rdna_annotations_tsv: Optional[Path] = None
     rdna_arrays_tsv: Optional[Path] = None
     agp_tsv: Optional[Path] = None

@@ -84,7 +84,7 @@ from dnadis.detection.rdna import (
     detect_rdna_contigs,
 )
 from dnadis.detection.debris import detect_chromosome_debris
-from dnadis.detection.contaminant import detect_contaminants
+from dnadis.detection.cobiont import detect_cobionts
 
 # Import chain parsing from package module
 from dnadis.alignment.chain_parsing import (
@@ -174,7 +174,7 @@ __all__ = [
     "prepare_rdna_reference",
     "detect_rdna_contigs",
     "detect_chromosome_debris",
-    "detect_contaminants",
+    "detect_cobionts",
     # Classification
     "compute_orientation_votes",
     "determine_contig_orientations",

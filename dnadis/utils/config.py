@@ -64,7 +64,7 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
     "pipeline_toggles": {
         "skip_organelles": "skip_organelles",
         "skip_rdna": "skip_rdna",
-        "skip_contaminants": "skip_contaminants",
+        "skip_cobionts": "skip_cobionts",
     },
     "external_tools": {
         "miniprot": "miniprot",
@@ -119,9 +119,9 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
         "chr_debris_min_cov": "chr_debris_min_cov",
         "chr_debris_min_identity": "chr_debris_min_identity",
     },
-    "thresholds_contaminant": {
-        "contaminant_min_score": "contaminant_min_score",
-        "contaminant_min_coverage": "contaminant_min_coverage",
+    "thresholds_cobiont": {
+        "cobiont_min_score": "cobiont_min_score",
+        "cobiont_min_coverage": "cobiont_min_coverage",
     },
     "thresholds_debris": {
         "debris_min_cov": "debris_min_cov",

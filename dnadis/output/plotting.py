@@ -153,18 +153,18 @@ def run_assembly_report(
     reference_name: str = "",
     rdna_annotations_tsv: Optional[Path] = None,
     rdna_arrays_tsv: Optional[Path] = None,
-    contaminants_tsv: Optional[Path] = None,
+    cobionts_tsv: Optional[Path] = None,
     agp_tsv: Optional[Path] = None,
     compleasm_chrs_summary: Optional[Path] = None,
     compleasm_non_chrs_summary: Optional[Path] = None,
-    top_n_contaminants: int = 10,
+    top_n_cobionts: int = 10,
     rearrangements_tsv: Optional[Path] = None,
     self_contained: bool = False,
 ) -> bool:
     """Generate unified HTML report with all plots and summary tables.
 
     All plots (chromosome overview, classification bar, depth overview,
-    contaminant table) are built natively within the Rmd template — no
+    cobiont table) are built natively within the Rmd template — no
     external .rds files needed.  Individual PDFs are also exported from
     within the Rmd via ggsave().
 
@@ -186,7 +186,7 @@ def run_assembly_report(
     # Optional TSV paths (absolute, empty string if missing)
     rdna_str = _abs_esc(rdna_annotations_tsv) if rdna_annotations_tsv and rdna_annotations_tsv.exists() else ""
     rdna_arrays_str = _abs_esc(rdna_arrays_tsv) if rdna_arrays_tsv and rdna_arrays_tsv.exists() else ""
-    contam_str = _abs_esc(contaminants_tsv) if contaminants_tsv and contaminants_tsv.exists() else ""
+    cobiont_str = _abs_esc(cobionts_tsv) if cobionts_tsv and cobionts_tsv.exists() else ""
     agp_str = _abs_esc(agp_tsv) if agp_tsv and agp_tsv.exists() else ""
     compleasm_chrs_str = _abs_esc(compleasm_chrs_summary) if compleasm_chrs_summary and compleasm_chrs_summary.exists() else ""
     compleasm_non_str = _abs_esc(compleasm_non_chrs_summary) if compleasm_non_chrs_summary and compleasm_non_chrs_summary.exists() else ""
@@ -200,7 +200,7 @@ def run_assembly_report(
         .replace("__MACRO__", _abs_esc(macro_blocks_tsv))
         .replace("__RDNA_ANNOTATIONS__", rdna_str)
         .replace("__RDNA_ARRAYS__", rdna_arrays_str)
-        .replace("__CONTAMINANTS_TSV__", contam_str)
+        .replace("__COBIONTS_TSV__", cobiont_str)
         .replace("__AGP__", agp_str)
         .replace("__COMPLEASM_CHRS__", compleasm_chrs_str)
         .replace("__COMPLEASM_NONCHRS__", compleasm_non_str)
@@ -211,7 +211,7 @@ def run_assembly_report(
         .replace("__CHRLIKE__", str(int(chr_like_minlen)))
         .replace("__SUFFIX__", str(plot_title_suffix).replace('"', '\\"'))
         .replace("__OUTPREFIX__", _abs_esc(outprefix))
-        .replace("__TOP_N__", str(int(top_n_contaminants)))
+        .replace("__TOP_N__", str(int(top_n_cobionts)))
         .replace("__COMMON_R__", _esc(_COMMON_R))
         .replace("__COMMON_CSS__", _esc(_COMMON_CSS))
         .replace("__SELF_CONTAINED__", "true" if self_contained else "false")
@@ -299,9 +299,9 @@ def run_comparison_report(
         for r in assembly_results
     )
 
-    # Per-assembly contaminants TSVs (for contamination Top Taxa section)
-    per_asm_contam_tsvs = ";".join(
-        _abs_esc(r.contaminants_tsv) if r.contaminants_tsv and r.contaminants_tsv.exists() else ""
+    # Per-assembly cobionts TSVs (for cobiont Top Taxa section)
+    per_asm_cobiont_tsvs = ";".join(
+        _abs_esc(r.cobionts_tsv) if r.cobionts_tsv and r.cobionts_tsv.exists() else ""
         for r in assembly_results
     )
 
@@ -334,7 +334,7 @@ def run_comparison_report(
         .replace("__ASM_NAMES__", asm_names)
         .replace("__PER_ASM_MACRO_TSVS__", per_asm_macro_tsvs)
         .replace("__PER_ASM_RDNA_TSVS__", per_asm_rdna_tsvs)
-        .replace("__PER_ASM_CONTAM_TSVS__", per_asm_contam_tsvs)
+        .replace("__PER_ASM_COBIONT_TSVS__", per_asm_cobiont_tsvs)
         .replace("__PER_ASM_REARR_TSVS__", per_asm_rearr_tsvs)
         .replace("__PER_ASM_AGP_TSVS__", per_asm_agp_tsvs)
         .replace("__PAIRWISE_MACRO_TSVS__", pw_macro_str)

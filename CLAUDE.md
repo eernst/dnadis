@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-`dnadis` is a bioinformatics genome assembly comprehension and curation tool that classifies contigs from *de novo* genome assemblies into biological categories (chromosomes, organelles, rDNA, contaminants, debris) using synteny evidence (protein-anchored or nucleotide whole-genome alignment), organelle/rDNA alignments, and taxonomic classification.
+`dnadis` is a bioinformatics genome assembly comprehension and curation tool that classifies contigs from *de novo* genome assemblies into biological categories (chromosomes, organelles, rDNA, cobionts, debris) using synteny evidence (protein-anchored or nucleotide whole-genome alignment), organelle/rDNA alignments, and taxonomic classification.
 
 **Key concepts**:
 - **Nucleotide mode** (default): Uses whole-genome nucleotide alignment (via minimap2) for structural composition analysis. Detects actual sequence-level identity, making it ideal for identifying structural features like chromosomal fusions, homeologous recombination, or introgression events.
@@ -111,7 +111,7 @@ dnadis/
 │   ├── rdna_consensus.py  # Consensus 45S rDNA building and sub-feature annotation
 │   ├── telomere.py        # Telomere repeat detection at contig ends
 │   ├── debris.py          # Chromosome debris detection via minimap2
-│   ├── contaminant.py     # Centrifuger taxonomic classification
+│   ├── cobiont.py     # Centrifuger taxonomic classification
 │   └── compleasm.py       # Compleasm (BUSCO completeness) evaluation
 ├── analysis/              # Read depth analysis
 │   └── read_depth.py      # Depth calculation via mosdepth with caching
@@ -160,9 +160,9 @@ dnadis/
    - Organelle detection via BLAST (chrC, chrM)
    - rDNA detection via BLAST against reference rDNA
    - Chromosome debris via minimap2 (high coverage/identity duplicates)
-   - Contaminant screening via centrifuger with two-gate filtering:
+   - Cobiont screening via centrifuger with two-gate filtering:
      - Score threshold (default 1000, ~1kb matching sequence with k=31)
-     - Coverage threshold (default 0.50, filters low-coverage hits that may represent conserved genes rather than contamination)
+     - Coverage threshold (default 0.50, filters low-coverage hits that may represent conserved genes rather than a true cobiont)
 
 4. **Classification** (`classification/classifier.py`)
    - **Gate-based assignment**: contigs must pass multiple criteria (min genes, segments, span) to be assigned
@@ -179,9 +179,9 @@ dnadis/
 
 6. **Output Generation** (`output/`)
    - Classified FASTA files (chromosomes, organelles, rDNA, etc.)
-   - TSV summary tables (contig_summary, evidence_summary, segments, macro_blocks, contaminants with taxonomic lineage)
+   - TSV summary tables (contig_summary, evidence_summary, segments, macro_blocks, cobionts with taxonomic lineage)
    - Unified HTML report with embedded plots (enabled by default; skip with `--skip-plot`; requires rmarkdown + pandoc):
-     - Chromosome overview, classification bar, read depth overview, contaminant table
+     - Chromosome overview, classification bar, read depth overview, cobiont table
 
 ### Pipeline Phases
 
@@ -194,7 +194,7 @@ dnadis/
 | 3 | Organelle detection (BLAST) | `--skip-organelles` |
 | 4 | rDNA detection (BLAST) | `--skip-rdna` |
 | 5 | Chromosome debris detection (minimap2) | |
-| 6 | Contaminant detection (centrifuger) | requires `--centrifuger-idx` |
+| 6 | Cobiont detection (centrifuger) | requires `--centrifuger-idx` |
 | 7 | Debris/unclassified classification | |
 | 8 | Gene count statistics | requires `--ref-gff3` |
 | 9 | Orientation determination | |
@@ -230,7 +230,7 @@ The rDNA consensus module (`rdna_consensus.py`) uses internal "Step 1-4" numberi
 
 **TOML configuration**: `config.py` provides schema-based config file support. CLI arguments override config file values.
 
-**Distributed computing** (`--cluster`): Optional SLURM job submission via [executorlib](https://github.com/pyiron/executorlib). When `--cluster` is set, compute-intensive phases (synteny alignment, BLAST detection, debris detection, contaminant screening, read depth, compleasm) are submitted as individual SLURM jobs with per-job resource control. The coordinator process orchestrates submission and waits on futures. Two levels of parallelism: intra-assembly (independent phases like organelle + rDNA BLAST run as parallel SLURM jobs) and inter-assembly (multiple `run_assembly()` calls run concurrently via ThreadPoolExecutor, each submitting its own SLURM jobs). When `--cluster` is not set, `LocalExecutor` provides synchronous execution with zero overhead — behavior is identical to the non-distributed code path. If `--cluster` is set but executorlib (or its optional dependencies pysqa/h5py) is not installed, the tool exits with a clear error message and install instructions. Resource estimation (`resource_estimation.py`) sizes each job based on input file sizes and caps against `--max-threads-dist`, `--max-mem-dist`, `--max-time-dist`.
+**Distributed computing** (`--cluster`): Optional SLURM job submission via [executorlib](https://github.com/pyiron/executorlib). When `--cluster` is set, compute-intensive phases (synteny alignment, BLAST detection, debris detection, cobiont screening, read depth, compleasm) are submitted as individual SLURM jobs with per-job resource control. The coordinator process orchestrates submission and waits on futures. Two levels of parallelism: intra-assembly (independent phases like organelle + rDNA BLAST run as parallel SLURM jobs) and inter-assembly (multiple `run_assembly()` calls run concurrently via ThreadPoolExecutor, each submitting its own SLURM jobs). When `--cluster` is not set, `LocalExecutor` provides synchronous execution with zero overhead — behavior is identical to the non-distributed code path. If `--cluster` is set but executorlib (or its optional dependencies pysqa/h5py) is not installed, the tool exits with a clear error message and install instructions. Resource estimation (`resource_estimation.py`) sizes each job based on input file sizes and caps against `--max-threads-dist`, `--max-mem-dist`, `--max-time-dist`.
 
 ### Critical Security Notes
 
@@ -270,7 +270,7 @@ The permissive parameters are balanced by downstream filtering (identity thresho
 
 **Rfam database auto-pressing**: The bundled Rfam covariance models are stored in text format and automatically pressed to binary indices (`.i1f`, `.i1i`, `.i1m`, `.i1p`) by Infernal on first use. The tool checks for existing indices and only presses if they're missing or outdated. This eliminates the need for manual database preparation.
 
-**Compleasm (BUSCO) evaluation**: Phase 17 runs compleasm on two FASTA subsets: `chrs.fasta` (chromosome-assigned contigs) and `non_chrs.fasta` (debris + unclassified + contaminants). Requires `--compleasm-lineage` (e.g., `eukaryota`, `viridiplantae`, `embryophyta`). Optionally specify `--compleasm-library` for pre-downloaded lineage files to avoid runtime downloads. Both compleasm runs are submitted in parallel via the executor. Results are stored as `CompleasmResult` dataclass fields on `AssemblyResult` (`compleasm_chrs`, `compleasm_non_chrs`) and included in `comparison_summary.tsv` columns (`compleasm_lineage`, `compleasm_chrs_S/D/F/I/M`, `compleasm_non_chrs_S/D/F/I/M`). The detection module is in `detection/compleasm.py`, which parses compleasm's `summary.txt` output format. Cached results are reused if the output directory already contains a `summary.txt`.
+**Compleasm (BUSCO) evaluation**: Phase 17 runs compleasm on two FASTA subsets: `chrs.fasta` (chromosome-assigned contigs) and `non_chrs.fasta` (debris + unclassified + cobionts). Requires `--compleasm-lineage` (e.g., `eukaryota`, `viridiplantae`, `embryophyta`). Optionally specify `--compleasm-library` for pre-downloaded lineage files to avoid runtime downloads. Both compleasm runs are submitted in parallel via the executor. Results are stored as `CompleasmResult` dataclass fields on `AssemblyResult` (`compleasm_chrs`, `compleasm_non_chrs`) and included in `comparison_summary.tsv` columns (`compleasm_lineage`, `compleasm_chrs_S/D/F/I/M`, `compleasm_non_chrs_S/D/F/I/M`). The detection module is in `detection/compleasm.py`, which parses compleasm's `summary.txt` output format. Cached results are reused if the output directory already contains a `summary.txt`.
 
 ## Testing Philosophy
 
@@ -294,7 +294,7 @@ Tests are in `tests/` directory (7 test files, ~165 tests):
 - samtools - BAM/CRAM handling
 - mosdepth - depth calculation
 - rasusa - FASTQ downsampling
-- centrifuger - contaminant detection
+- centrifuger - cobiont detection
 - infernal (cmscan) - structure-based rRNA annotation with Rfam models (rDNA consensus building; enabled by default, skip with --skip-rdna-consensus)
 - cd-hit (cd-hit-est) - sequence clustering for rDNA consensus building (enabled by default, skip with --skip-rdna-consensus; falls back to a BLAST-based representative when absent)
 - compleasm - BUSCO completeness evaluation (requires `--compleasm-lineage`; skip with `--skip-compleasm`; **install in a separate conda environment** due to dependency conflicts — see README.md)
@@ -309,7 +309,7 @@ All external tools are called via subprocess with proper error handling. Use `ut
 
 ## Output Files Reference
 
-**FASTA outputs**: `*.chrs.fasta`, `*.organelles.fasta`, `*.rdna.fasta`, `*.contaminants.fasta`, `*.debris.fasta`, `*.unclassified.fasta`, `*.non_chrs.fasta` (combined non-chromosome contigs, produced when compleasm is enabled)
+**FASTA outputs**: `*.chrs.fasta`, `*.organelles.fasta`, `*.rdna.fasta`, `*.cobionts.fasta`, `*.debris.fasta`, `*.unclassified.fasta`, `*.non_chrs.fasta` (combined non-chromosome contigs, produced when compleasm is enabled)
 
 **TSV outputs**:
 - `*.contig_summary.tsv` - Per-contig classification with all evidence fields
@@ -317,7 +317,7 @@ All external tools are called via subprocess with proper error handling. Use `ut
 - `*.segments.tsv` - Individual synteny segments from chain parsing
 - `*.macro_blocks.tsv` - Aggregated synteny macro-blocks
 - `*.ref_lengths.tsv` - Reference chromosome lengths
-- `*.contaminants.tsv` - Detailed contaminant summary with taxonomic lineage (if contaminants detected)
+- `*.cobionts.tsv` - Detailed cobiont summary with taxonomic lineage (if cobionts detected)
 - `*.rdna_annotations.tsv` - rRNA sub-feature annotations in TSV format (produced by default; skip with `--skip-rdna-consensus`)
 - `*.rdna_arrays.tsv` - rDNA array locations per contig (produced by default when arrays are detected; skip with `--skip-rdna-consensus`)
 
@@ -325,7 +325,7 @@ All external tools are called via subprocess with proper error handling. Use `ut
 - `*.rdna_annotations.gff3` - Hierarchical rRNA gene annotations with 18S, 5.8S, 25S, ITS1, ITS2 sub-features (produced by default; skip with `--skip-rdna-consensus`)
 
 **Visualization** (enabled by default; skip with `--skip-plot`; requires rmarkdown + pandoc):
-- `*.unified_report.html` - Self-contained HTML report with all plots (chromosome overview, classification bar, depth overview, contaminant table)
+- `*.unified_report.html` - Self-contained HTML report with all plots (chromosome overview, classification bar, depth overview, cobiont table)
 - Individual PDFs (`*.chromosome_overview.pdf`, etc.) are also exported from within the report
 
 **Output directory structure** (uniform for single- and multi-assembly):
@@ -373,7 +373,7 @@ Each contig is scored independently. Multiple contigs can still be assigned to t
 2. rDNA (if BLAST coverage ≥50%)
 3. Chromosome assigned (if passes ALL synteny gates)
 4. Chromosome unassigned (if length ≥ `--chr-like-minlen` but failed synteny gates)
-5. Contaminant (if centrifuger score ≥1000 AND coverage ≥0.50; two-gate filtering prevents false positives from conserved genes)
+5. Cobiont (if centrifuger score ≥1000 AND coverage ≥0.50; two-gate filtering prevents false positives from conserved genes)
 6. Chromosome debris (if high coverage/identity vs assembled chromosomes)
 7. Organelle debris (if partial organelle match)
 8. Debris (if reference coverage >50% or protein hits ≥2)

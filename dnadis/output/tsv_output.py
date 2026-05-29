@@ -7,7 +7,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
-from dnadis.models import ContigClassification, ContaminantHitExtended, DepthStats, RearrangementCall, RdnaArray, RdnaLocus
+from dnadis.models import ContigClassification, CobiontHitExtended, DepthStats, RearrangementCall, RdnaArray, RdnaLocus
 from dnadis.utils.reference_utils import split_chrom_subgenome
 
 # Use a large but finite value instead of infinity to avoid parsing issues
@@ -81,11 +81,11 @@ def write_contig_summary_tsv(
 
     Includes classification columns:
     - original_name
-    - classification (chrom_assigned, chrom_unassigned, contaminant, etc.)
+    - classification (chrom_assigned, chrom_unassigned, cobiont, etc.)
     - classification_confidence (high/medium/low)
     - reversed
-    - contaminant_taxid (NCBI taxonomy ID for contaminants)
-    - contaminant_sci (scientific name for contaminants)
+    - cobiont_taxid (NCBI taxonomy ID for cobionts)
+    - cobiont_sci (scientific name for cobionts)
     - length (after status)
     - ref_gene_proportion
     - genes_per_Mbp (for chromosome-assigned contigs)
@@ -94,8 +94,8 @@ def write_contig_summary_tsv(
     - gc_content: GC content of contig (0.0-1.0)
     - gc_deviation: Deviation from reference mean in std devs
     - synteny_score: Synteny evidence strength (0.0-1.0)
-    - contam_score: Contaminant evidence strength (0.0-1.0)
-    - contam_coverage: Contaminant alignment coverage (0.0-1.0)
+    - cobiont_score: Cobiont evidence strength (0.0-1.0)
+    - cobiont_coverage: Cobiont alignment coverage (0.0-1.0)
     """
     # Build lookup by original name
     clf_lookup = {clf.original_name: clf for clf in classifications}
@@ -106,8 +106,8 @@ def write_contig_summary_tsv(
         "classification",
         "classification_confidence",
         "reversed",
-        "contaminant_taxid",
-        "contaminant_sci",
+        "cobiont_taxid",
+        "cobiont_sci",
         "assigned_subgenome",
         "assigned_ref_id",
         "assigned_chrom_id",
@@ -127,8 +127,8 @@ def write_contig_summary_tsv(
         "gc_deviation",
         "synteny_score",
         "collinearity_score",
-        "contam_score",
-        "contam_coverage",
+        "cobiont_score",
+        "cobiont_coverage",
         "depth_mean",
         "depth_median",
         "depth_std",
@@ -196,11 +196,11 @@ def write_contig_summary_tsv(
             bs = float(best_score.get(q, 0.0) or 0.0)
             sr = float(second_score.get(q, 0.0) or 0.0)
 
-            # For non-chromosome classifications (organelles, rDNA, contaminants, debris),
+            # For non-chromosome classifications (organelles, rDNA, cobionts, debris),
             # use the classification's assigned_ref_id instead of chain evidence
             clf_class = clf.classification if clf else "unclassified"
             if clf and clf_class in ("organelle_complete", "organelle_debris", "rDNA",
-                                     "contaminant", "debris", "chrom_debris", "unclassified"):
+                                     "cobiont", "debris", "chrom_debris", "unclassified"):
                 assigned_ref_id = clf.assigned_ref_id if clf.assigned_ref_id else ""
             else:
                 assigned_ref_id = chain_assigned_ref_id
@@ -215,7 +215,7 @@ def write_contig_summary_tsv(
             # For non-chromosome classifications (organelles, debris, etc.), don't require
             # chain evidence (bs > 0) - they have assigned_ref_id from their detection method
             needs_chain_evidence = clf_class not in ("organelle_complete", "organelle_debris",
-                                                      "rDNA", "contaminant", "debris",
+                                                      "rDNA", "cobiont", "debris",
                                                       "chrom_debris", "unclassified")
             if not assigned_ref_id or (needs_chain_evidence and bs <= 0.0):
                 assigned_chrom_id, assigned_subgenome = ("", "NA")
@@ -250,8 +250,8 @@ def write_contig_summary_tsv(
             classification = clf.classification if clf else "unclassified"
             classification_confidence = clf.classification_confidence if clf and clf.classification_confidence else ""
             reversed_val = "yes" if contig_orientations.get(q, False) else "no"
-            contaminant_taxid = str(clf.contaminant_taxid) if clf and clf.contaminant_taxid is not None else ""
-            contaminant_sci = clf.contaminant_sci if clf and clf.contaminant_sci else ""
+            cobiont_taxid = str(clf.cobiont_taxid) if clf and clf.cobiont_taxid is not None else ""
+            cobiont_sci = clf.cobiont_sci if clf and clf.cobiont_sci else ""
             ref_gene_proportion = clf.ref_gene_proportion if clf and clf.ref_gene_proportion is not None else ""
 
             # Full-length vs fragment columns
@@ -269,8 +269,8 @@ def write_contig_summary_tsv(
             gc_deviation = f"{clf.gc_deviation:.2f}" if clf and clf.gc_deviation is not None else ""
             synteny_score = f"{clf.synteny_score:.3f}" if clf and clf.synteny_score is not None else ""
             collinearity_score = f"{clf.collinearity_score:.3f}" if clf and clf.collinearity_score is not None else ""
-            contam_score = f"{clf.contam_score:.3f}" if clf and clf.contam_score is not None else ""
-            contam_coverage = f"{clf.contam_coverage:.3f}" if clf and clf.contam_coverage is not None else ""
+            cobiont_score = f"{clf.cobiont_score:.3f}" if clf and clf.cobiont_score is not None else ""
+            cobiont_coverage = f"{clf.cobiont_coverage:.3f}" if clf and clf.cobiont_coverage is not None else ""
 
             # Read depth columns
             depth_mean = f"{clf.depth_mean:.2f}" if clf and clf.depth_mean is not None else ""
@@ -294,8 +294,8 @@ def write_contig_summary_tsv(
                         classification,
                         classification_confidence,
                         reversed_val,
-                        contaminant_taxid,
-                        contaminant_sci,
+                        cobiont_taxid,
+                        cobiont_sci,
                         str(assigned_subgenome),
                         str(assigned_ref_id_out),
                         str(assigned_chrom_id),
@@ -315,8 +315,8 @@ def write_contig_summary_tsv(
                         gc_deviation,
                         synteny_score,
                         collinearity_score,
-                        contam_score,
-                        contam_coverage,
+                        cobiont_score,
+                        cobiont_coverage,
                         depth_mean,
                         depth_median,
                         depth_std,
@@ -730,20 +730,20 @@ def build_segment_support_from_rows(segment_rows):
     return seg_count, span_bp
 
 
-def write_contaminant_summary_tsv(
+def write_cobiont_summary_tsv(
     output_path: Path,
-    contaminants: Dict[str, ContaminantHitExtended],
+    cobionts: Dict[str, CobiontHitExtended],
     query_lengths: Dict[str, int],
     depth_stats: Optional[Dict[str, DepthStats]] = None,
 ) -> None:
-    """Write detailed contaminant summary TSV with taxonomic lineage.
+    """Write detailed cobiont summary TSV with taxonomic lineage.
 
-    This TSV is used for the contamination alluvial plot visualization,
-    showing the phylogenetic breakdown of detected contaminants.
+    This TSV is used for the cobiont summary table visualization,
+    showing the phylogenetic breakdown of detected cobionts.
 
     Args:
         output_path: Path to output TSV file
-        contaminants: Dict mapping contig name -> ContaminantHitExtended
+        cobionts: Dict mapping contig name -> CobiontHitExtended
         query_lengths: Dict mapping contig name -> length
         depth_stats: Optional dict mapping contig name -> DepthStats
     """
@@ -767,8 +767,8 @@ def write_contaminant_summary_tsv(
     with output_path.open("w") as fh:
         fh.write("\t".join(columns) + "\n")
 
-        for contig_name in sorted(contaminants.keys()):
-            hit = contaminants[contig_name]
+        for contig_name in sorted(cobionts.keys()):
+            hit = cobionts[contig_name]
             length = query_lengths.get(contig_name, 0)
             ds = depth_stats.get(contig_name) if depth_stats else None
 

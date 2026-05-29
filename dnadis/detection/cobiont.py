@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Contaminant detection for dnadis.
+Cobiont detection for dnadis.
 
-Contains functions for identifying contaminated contigs using centrifuger
-taxonomic classification.
+Contains functions for identifying cobiont contigs (sequence from organisms
+co-occurring with the target, such as symbionts or commensals) using
+centrifuger taxonomic classification.
 """
 from __future__ import annotations
 
@@ -11,11 +12,11 @@ import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
-from dnadis.models import ContaminantHit, ContaminantHitExtended
+from dnadis.models import CobiontHit, CobiontHitExtended
 from dnadis.utils.io_utils import have_exe, open_maybe_gzip
 from dnadis.utils.logging_config import get_logger
 
-logger = get_logger("contaminant")
+logger = get_logger("cobiont")
 
 
 # NCBI taxonomy rank names used by taxonkit
@@ -462,7 +463,7 @@ def _get_genus_lineages(
     return cached
 
 
-def detect_contaminants(
+def detect_cobionts(
     query_fasta: Path,
     query_lengths: Dict[str, int],
     centrifuger_idx: str,
@@ -471,12 +472,12 @@ def detect_contaminants(
     min_score: int,
     exclude_contigs: Set[str],
     fetch_lineage: bool = True,
-) -> Dict[str, ContaminantHitExtended]:
-    """Identify contaminant contigs using centrifuger taxonomic classification.
+) -> Dict[str, CobiontHitExtended]:
+    """Identify cobiont contigs using centrifuger taxonomic classification.
 
     Centrifuger is much faster than BLAST for taxonomic classification.
     Any contig that gets a significant classification hit is considered
-    a potential contaminant.
+    a potential cobiont.
 
     Args:
         query_fasta: Query FASTA file
@@ -489,13 +490,13 @@ def detect_contaminants(
         fetch_lineage: Whether to fetch taxonomic lineage via taxonkit
 
     Returns:
-        Dict mapping contig_name -> ContaminantHitExtended with taxid, name, coverage, score, and lineage
+        Dict mapping contig_name -> CobiontHitExtended with taxid, name, coverage, score, and lineage
     """
     work_dir.mkdir(parents=True, exist_ok=True)
 
     # Check for centrifuger executable
     if not have_exe("centrifuger"):
-        logger.warning("centrifuger not found in PATH, skipping contaminant detection")
+        logger.warning("centrifuger not found in PATH, skipping cobiont detection")
         return {}
 
     # Validate index
@@ -534,10 +535,10 @@ def detect_contaminants(
             return {}
 
     # Parse results
-    contaminants: Dict[str, ContaminantHitExtended] = {}
+    cobionts: Dict[str, CobiontHitExtended] = {}
 
     if not output_path.exists() or output_path.stat().st_size == 0:
-        return contaminants
+        return cobionts
 
     # Get taxid -> scientific name mapping
     name_table = _get_centrifuger_name_table(centrifuger_idx, work_dir)
@@ -580,7 +581,7 @@ def detect_contaminants(
 
             hits_basic.append((contig_name, taxid, sci_name, coverage, score))
             contig_len = query_lengths.get(contig_name, read_len)
-            logger.info(f"Contaminant: {contig_name} ({contig_len:,} bp, taxid={taxid}, {sci_name}, score={score}, cov={coverage:.2f})")
+            logger.info(f"Cobiont: {contig_name} ({contig_len:,} bp, taxid={taxid}, {sci_name}, score={score}, cov={coverage:.2f})")
 
     # Fetch taxonomic lineage for all taxids
     lineages: Dict[int, Dict[str, Optional[str]]] = {}
@@ -611,7 +612,7 @@ def detect_contaminants(
     if "__genus_fallback__" in lineages:
         genus_fallback = lineages.pop("__genus_fallback__")  # type: ignore
 
-    # Build extended contaminant hits
+    # Build extended cobiont hits
     for contig_name, taxid, sci_name, coverage, score in hits_basic:
         lineage = lineages.get(taxid, {})
 
@@ -645,7 +646,7 @@ def detect_contaminants(
             order = order or genus_lineage.get("order")
             family = family or genus_lineage.get("family")
 
-        contaminants[contig_name] = ContaminantHitExtended(
+        cobionts[contig_name] = CobiontHitExtended(
             taxid=taxid,
             sci_name=sci_name,
             coverage=coverage,
@@ -659,5 +660,5 @@ def detect_contaminants(
             species=species,
         )
 
-    logger.info(f"Contaminant contigs: {len(contaminants)}")
-    return contaminants
+    logger.info(f"Cobiont contigs: {len(cobionts)}")
+    return cobionts

@@ -47,7 +47,7 @@ def write_classified_fastas(
     - {prefix}.chrs.fasta
     - {prefix}.organelles.fasta
     - {prefix}.rdna.fasta
-    - {prefix}.contaminants.fasta
+    - {prefix}.cobionts.fasta
     - {prefix}.debris.fasta
     - {prefix}.unclassified.fasta
     """
@@ -67,8 +67,8 @@ def write_classified_fastas(
             category = "organelles"
         elif clf.classification == "rDNA":
             category = "rdna"
-        elif clf.classification == "contaminant":
-            category = "contaminants"
+        elif clf.classification == "cobiont":
+            category = "cobionts"
         elif clf.classification in ("chrom_debris", "debris", "organelle_debris"):
             category = "debris"
         else:
@@ -78,7 +78,7 @@ def write_classified_fastas(
 
     # Write each category
     output_paths: Dict[str, Path] = {}
-    categories = ["chrs", "organelles", "rdna", "contaminants", "debris", "unclassified"]
+    categories = ["chrs", "organelles", "rdna", "cobionts", "debris", "unclassified"]
 
     for category in categories:
         output_path = Path(f"{output_prefix}.{category}.fasta")

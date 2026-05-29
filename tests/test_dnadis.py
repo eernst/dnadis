@@ -561,8 +561,8 @@ def test_generate_contig_names_full_length_single():
         new_name="",
         classification="chrom_assigned",
         reversed=False,
-        contaminant_taxid=None,
-        contaminant_sci=None,
+        cobiont_taxid=None,
+        cobiont_sci=None,
         assigned_ref_id="chr1A",
         ref_gene_proportion=0.5,
         contig_len=1000000,
@@ -590,8 +590,8 @@ def test_generate_contig_names_fragment():
             new_name="",
             classification="chrom_assigned",
             reversed=False,
-            contaminant_taxid=None,
-            contaminant_sci=None,
+            cobiont_taxid=None,
+            cobiont_sci=None,
             assigned_ref_id="chr1A",
             ref_gene_proportion=0.3,
             contig_len=500000,
@@ -603,8 +603,8 @@ def test_generate_contig_names_fragment():
             new_name="",
             classification="chrom_assigned",
             reversed=False,
-            contaminant_taxid=None,
-            contaminant_sci=None,
+            cobiont_taxid=None,
+            cobiont_sci=None,
             assigned_ref_id="chr1A",
             ref_gene_proportion=0.2,
             contig_len=300000,
@@ -635,8 +635,8 @@ def test_generate_contig_names_query_subgenome():
             new_name="",
             classification="chrom_assigned",
             reversed=False,
-            contaminant_taxid=None,
-            contaminant_sci=None,
+            cobiont_taxid=None,
+            cobiont_sci=None,
             assigned_ref_id="chr1A",
             ref_gene_proportion=0.5,
             contig_len=1000000,
@@ -648,8 +648,8 @@ def test_generate_contig_names_query_subgenome():
             new_name="",
             classification="chrom_assigned",
             reversed=False,
-            contaminant_taxid=None,
-            contaminant_sci=None,
+            cobiont_taxid=None,
+            cobiont_sci=None,
             assigned_ref_id="chr1A",
             ref_gene_proportion=0.4,
             contig_len=900000,
@@ -679,8 +679,8 @@ def test_generate_contig_names_multiple_full_length_copies():
             new_name="",
             classification="chrom_assigned",
             reversed=False,
-            contaminant_taxid=None,
-            contaminant_sci=None,
+            cobiont_taxid=None,
+            cobiont_sci=None,
             assigned_ref_id="chr1A",
             ref_gene_proportion=0.5,
             contig_len=1000000,
@@ -692,8 +692,8 @@ def test_generate_contig_names_multiple_full_length_copies():
             new_name="",
             classification="chrom_assigned",
             reversed=False,
-            contaminant_taxid=None,
-            contaminant_sci=None,
+            cobiont_taxid=None,
+            cobiont_sci=None,
             assigned_ref_id="chr1A",
             ref_gene_proportion=0.5,
             contig_len=900000,
@@ -1058,8 +1058,8 @@ def test_scaffold_skip_full_length():
         new_name="chr1A",
         classification="chrom_assigned",
         reversed=False,
-        contaminant_taxid=None,
-        contaminant_sci=None,
+        cobiont_taxid=None,
+        cobiont_sci=None,
         assigned_ref_id="chr1A",
         ref_gene_proportion=0.9,
         contig_len=30000000,
@@ -1134,38 +1134,38 @@ def test_scaffold_contig_grouping():
     clfs = [
         ContigClassification(
             original_name="ctg1", new_name="chr1A", classification="chrom_assigned",
-            reversed=False, contaminant_taxid=None, contaminant_sci=None,
+            reversed=False, cobiont_taxid=None, cobiont_sci=None,
             assigned_ref_id="chr1A", ref_gene_proportion=0.5, contig_len=1000000,
             query_subgenome_grp=1, seq_identity_vs_ref=0.95,
         ),
         ContigClassification(
             original_name="ctg2", new_name="chr1A_f2", classification="chrom_assigned",
-            reversed=False, contaminant_taxid=None, contaminant_sci=None,
+            reversed=False, cobiont_taxid=None, cobiont_sci=None,
             assigned_ref_id="chr1A", ref_gene_proportion=0.3, contig_len=500000,
             query_subgenome_grp=1, seq_identity_vs_ref=0.94,
         ),
         ContigClassification(
             original_name="ctg3", new_name="chr2A", classification="chrom_assigned",
-            reversed=False, contaminant_taxid=None, contaminant_sci=None,
+            reversed=False, cobiont_taxid=None, cobiont_sci=None,
             assigned_ref_id="chr2A", ref_gene_proportion=0.8, contig_len=2000000,
             query_subgenome_grp=1, seq_identity_vs_ref=0.92,
         ),
         # chrom_debris contig with evidence pointing to chr1A (scaffolding candidate)
         ContigClassification(
             original_name="ctg4", new_name="debris_1", classification="chrom_debris",
-            reversed=False, contaminant_taxid=None, contaminant_sci=None,
+            reversed=False, cobiont_taxid=None, cobiont_sci=None,
             assigned_ref_id="chr1A", ref_gene_proportion=None, contig_len=50000,
         ),
         # Plain debris contig (should NOT be grouped - only chrom_debris allowed)
         ContigClassification(
             original_name="ctg4b", new_name="debris_2", classification="debris",
-            reversed=False, contaminant_taxid=None, contaminant_sci=None,
+            reversed=False, cobiont_taxid=None, cobiont_sci=None,
             assigned_ref_id="chr1A", ref_gene_proportion=None, contig_len=30000,
         ),
         # Unclassified contig with no evidence (should not be grouped)
         ContigClassification(
             original_name="ctg5", new_name="unclass_1", classification="unclassified",
-            reversed=False, contaminant_taxid=None, contaminant_sci=None,
+            reversed=False, cobiont_taxid=None, cobiont_sci=None,
             assigned_ref_id=None, ref_gene_proportion=None, contig_len=10000,
         ),
     ]
@@ -1509,12 +1509,12 @@ def test_infer_query_subgenomes_single_contig_per_ref():
     clfs = [
         ContigClassification(
             original_name="ctg1", new_name="", classification="chrom_assigned",
-            reversed=False, contaminant_taxid=None, contaminant_sci=None,
+            reversed=False, cobiont_taxid=None, cobiont_sci=None,
             assigned_ref_id="chr1A", ref_gene_proportion=0.5, contig_len=10_000_000,
         ),
         ContigClassification(
             original_name="ctg2", new_name="", classification="chrom_assigned",
-            reversed=False, contaminant_taxid=None, contaminant_sci=None,
+            reversed=False, cobiont_taxid=None, cobiont_sci=None,
             assigned_ref_id="chr2A", ref_gene_proportion=0.5, contig_len=10_000_000,
         ),
     ]
@@ -1543,7 +1543,7 @@ def test_infer_query_subgenomes_two_subgenomes():
         prim = ContigClassification(
             original_name=f"ctg_{i}_high", new_name="",
             classification="chrom_assigned", reversed=False,
-            contaminant_taxid=None, contaminant_sci=None,
+            cobiont_taxid=None, cobiont_sci=None,
             assigned_ref_id=ref_id, ref_gene_proportion=0.5,
             contig_len=10_000_000,
         )
@@ -1551,7 +1551,7 @@ def test_infer_query_subgenomes_two_subgenomes():
         sec = ContigClassification(
             original_name=f"ctg_{i}_low", new_name="",
             classification="chrom_assigned", reversed=False,
-            contaminant_taxid=None, contaminant_sci=None,
+            cobiont_taxid=None, cobiont_sci=None,
             assigned_ref_id=ref_id, ref_gene_proportion=0.4,
             contig_len=9_000_000,
         )
@@ -1586,14 +1586,14 @@ def test_infer_query_subgenomes_no_split_similar_identities():
         c1 = ContigClassification(
             original_name=f"ctg_{i}_a", new_name="",
             classification="chrom_assigned", reversed=False,
-            contaminant_taxid=None, contaminant_sci=None,
+            cobiont_taxid=None, cobiont_sci=None,
             assigned_ref_id=ref_id, ref_gene_proportion=0.5,
             contig_len=10_000_000,
         )
         c2 = ContigClassification(
             original_name=f"ctg_{i}_b", new_name="",
             classification="chrom_assigned", reversed=False,
-            contaminant_taxid=None, contaminant_sci=None,
+            cobiont_taxid=None, cobiont_sci=None,
             assigned_ref_id=ref_id, ref_gene_proportion=0.5,
             contig_len=10_000_000,
         )
@@ -1619,7 +1619,7 @@ def test_infer_query_subgenomes_sets_identity():
 
     clf = ContigClassification(
         original_name="ctg1", new_name="", classification="chrom_assigned",
-        reversed=False, contaminant_taxid=None, contaminant_sci=None,
+        reversed=False, cobiont_taxid=None, cobiont_sci=None,
         assigned_ref_id="chr1A", ref_gene_proportion=0.5, contig_len=10_000_000,
     )
     idents = {("ctg1", "chr1A"): 0.72}
@@ -1643,7 +1643,7 @@ def test_infer_query_subgenomes_mixed_single_and_multi():
             clf = ContigClassification(
                 original_name=f"ctg_{i}_{label}", new_name="",
                 classification="chrom_assigned", reversed=False,
-                contaminant_taxid=None, contaminant_sci=None,
+                cobiont_taxid=None, cobiont_sci=None,
                 assigned_ref_id=ref_id, ref_gene_proportion=0.5,
                 contig_len=10_000_000,
             )
@@ -1656,7 +1656,7 @@ def test_infer_query_subgenomes_mixed_single_and_multi():
         clf = ContigClassification(
             original_name=f"ctg_{i}_only", new_name="",
             classification="chrom_assigned", reversed=False,
-            contaminant_taxid=None, contaminant_sci=None,
+            cobiont_taxid=None, cobiont_sci=None,
             assigned_ref_id=ref_id, ref_gene_proportion=0.5,
             contig_len=10_000_000,
         )
@@ -1699,7 +1699,7 @@ def test_infer_query_subgenomes_allotriploid():
             clf = ContigClassification(
                 original_name=f"ctg_A{i}_{label}", new_name="",
                 classification="chrom_assigned", reversed=False,
-                contaminant_taxid=None, contaminant_sci=None,
+                cobiont_taxid=None, cobiont_sci=None,
                 assigned_ref_id=ref_id, ref_gene_proportion=0.5,
                 contig_len=10_000_000,
             )
@@ -1712,7 +1712,7 @@ def test_infer_query_subgenomes_allotriploid():
         clf = ContigClassification(
             original_name=f"ctg_P{i}", new_name="",
             classification="chrom_assigned", reversed=False,
-            contaminant_taxid=None, contaminant_sci=None,
+            cobiont_taxid=None, cobiont_sci=None,
             assigned_ref_id=ref_id, ref_gene_proportion=0.5,
             contig_len=10_000_000,
         )
@@ -1919,12 +1919,12 @@ def _make_homeolog_pair(ref_id, ident_high, ident_low, cov_high, cov_low,
     nm_low = f"{ref_id}_low"
     high = ContigClassification(
         original_name=nm_high, new_name="", classification="chrom_assigned",
-        reversed=False, contaminant_taxid=None, contaminant_sci=None,
+        reversed=False, cobiont_taxid=None, cobiont_sci=None,
         assigned_ref_id=ref_id, ref_gene_proportion=0.5, contig_len=contig_len,
     )
     low = ContigClassification(
         original_name=nm_low, new_name="", classification="chrom_assigned",
-        reversed=False, contaminant_taxid=None, contaminant_sci=None,
+        reversed=False, cobiont_taxid=None, cobiont_sci=None,
         assigned_ref_id=ref_id, ref_gene_proportion=0.5, contig_len=contig_len,
     )
     return high, low, nm_high, nm_low
@@ -1984,7 +1984,7 @@ def test_infer_query_subgenomes_seq_identity_uses_raw_ident_dict():
 
     clf = ContigClassification(
         original_name="ctg1", new_name="", classification="chrom_assigned",
-        reversed=False, contaminant_taxid=None, contaminant_sci=None,
+        reversed=False, cobiont_taxid=None, cobiont_sci=None,
         assigned_ref_id="chr1A", ref_gene_proportion=0.5, contig_len=10_000_000,
     )
     qr_ident = {("ctg1", "chr1A"): 0.81}

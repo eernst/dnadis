@@ -110,7 +110,7 @@ classification_colors <- c(
   "organelle_complete" = oi[3],
   "organelle_debris"   = oi[4],
   "rDNA"               = oi[1],
-  "contaminant"        = oi[7],
+  "cobiont"        = oi[7],
   "chrom_debris"       = lighten(oi[5], amount = 0.5),
   "debris"             = oi[9],
   "unclassified"       = oi[8]
@@ -122,7 +122,7 @@ classification_labels <- c(
   "organelle_complete" = "Organelle (complete)",
   "organelle_debris"   = "Organelle (debris)",
   "rDNA"               = "rDNA",
-  "contaminant"        = "Contaminant",
+  "cobiont"        = "Cobiont",
   "chrom_debris"       = "Chromosome debris",
   "debris"             = "Debris",
   "unclassified"       = "Unclassified"
@@ -134,7 +134,7 @@ clf_labels_short <- c(
   "organelle_complete" = "Organelle",
   "organelle_debris"   = "Organelle debris",
   "rDNA"               = "rDNA",
-  "contaminant"        = "Contaminant",
+  "cobiont"        = "Cobiont",
   "chrom_debris"       = "Chr debris",
   "debris"             = "Debris",
   "unclassified"       = "Unclassified"
@@ -142,7 +142,7 @@ clf_labels_short <- c(
 
 classification_levels <- c(
   "chrom_assigned", "chrom_unassigned", "organelle_complete", "organelle_debris",
-  "rDNA", "contaminant", "chrom_debris", "debris", "unclassified"
+  "rDNA", "cobiont", "chrom_debris", "debris", "unclassified"
 )
 
 # ---------------------------------------------------------------------------
