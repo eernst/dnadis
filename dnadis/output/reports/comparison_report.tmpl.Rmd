@@ -2617,7 +2617,7 @@ cat("Synteny data available but no ribbon connections could be built. ",
 
 `r if (has_phylo_tree) "## Tree" else ""`
 
-```{r phylo_tree_panel, eval=has_phylo_tree, results='asis', fig.width=7, fig.height=max(4, 0.6 * phylo_n_tips + 1)}
+```{r phylo_tree_panel, eval=has_phylo_tree, results='asis', fig.width=9, fig.height=max(4, 0.3 * phylo_n_tips + 1)}
 cat('<p class="section-intro">\n')
 cat("Maximum-likelihood species tree built from single-copy BUSCOs that are ",
     "present in every retained query subgenome (and the reference, unless ",
@@ -2689,37 +2689,73 @@ if (!has_ape || !has_ggtree) {
         lbl
       }, character(1))
     }
-    n_tips <- length(tree$tip.label)
-    # Height scales with the tip count to keep labels from colliding; width
-    # is fixed at 7 in (page width).  These match the chunk's fig.width /
-    # fig.height so the HTML rendering and the saved PDF use the same
-    # dimensions.
-    plot_w <- 7
-    plot_h <- max(4, 0.6 * n_tips + 1)
-    p <- ggtree::ggtree(tree) +
-      ggtree::geom_tiplab(size = 6, hjust = -0.05) +
-      ggplot2::theme_void() +
-      ggplot2::theme(plot.margin = ggplot2::margin(8, 80, 8, 8)) +
-      ggplot2::xlim(0, max(ggtree::fortify(tree)$x) * 1.4)
-    has_support <- !is.null(tree$node.label) && any(nzchar(tree$node.label))
-    if (has_support) {
-      # Position at the branch midpoint (aes(x = branch)) rather than the
-      # node (default), so labels sit centered over their branches and
-      # read more naturally.  vjust=-0.4 lifts them just above the branch.
-      p <- p + ggtree::geom_nodelab(
-        ggplot2::aes(x = branch),
-        size = 4.5, hjust = 0.5, vjust = -0.4
-      )
+    # Draw a visible stem before the root bifurcation.  ape stores this on
+    # `tree$root.edge` and ggtree picks it up via geom_rootedge().  Length
+    # is set to a small fraction of the longest branch so the stem reads as
+    # "the tree has a root" without dominating the plot.
+    if (!is.null(tree$edge.length) && length(tree$edge.length) > 0) {
+      max_branch <- max(tree$edge.length, na.rm = TRUE)
+      if (is.finite(max_branch) && max_branch > 0) {
+        tree$root.edge <- max_branch * 0.08
+      }
     }
+
+    has_support <- !is.null(tree$node.label) && any(nzchar(tree$node.label))
+    n_tips <- length(tree$tip.label)
+    max_x <- max(ggtree::fortify(tree)$x)
+    # xlim lower bound has to include the root stem (negative x) so it
+    # actually renders.  Upper bound is kept *tight* against the data
+    # (just past max_x); tip labels overflow into the right plot margin,
+    # which we widen below.  clip="off" lets them render outside the
+    # panel rather than getting cut.  This makes the tree branches fill
+    # the panel width instead of being squished into the leftmost ~60%.
+    min_x <- if (!is.null(tree$root.edge)) -tree$root.edge * 1.5 else 0
+
+    # Shared plot builder.  PDF and inline HTML reuse the same topology
+    # but use different font sizes: HTML compresses the plot to fit the
+    # browser width which shrinks labels proportionally, so HTML calls
+    # this with larger sizes than the page-sized PDF.
+    build_tree_plot <- function(tip_size, node_size, right_margin_pt) {
+      p <- ggtree::ggtree(tree) +
+        ggtree::geom_rootedge() +
+        ggtree::geom_tiplab(size = tip_size, hjust = -0.05) +
+        ggtree::geom_treescale(linesize = 0.5, fontsize = node_size * 0.9) +
+        ggplot2::theme_void() +
+        ggplot2::theme(plot.margin = ggplot2::margin(8, right_margin_pt, 8, 8)) +
+        ggplot2::coord_cartesian(xlim = c(min_x, max_x * 1.02), clip = "off")
+      if (has_support) {
+        # aes(x = branch) places labels at the branch midpoint so they read
+        # with the branch they describe, instead of right-justified at the
+        # node terminus.
+        p <- p + ggtree::geom_nodelab(
+          ggplot2::aes(x = branch),
+          size = node_size, hjust = 0.5, vjust = -0.4
+        )
+      }
+      p
+    }
+
     if (length(og_in_tree) >= 1) {
       cat(sprintf(
         "<p style='font-size:9pt;color:#666'>Rooted on outgroup: <code>%s</code></p>\n",
         paste(og_in_tree, collapse = ", ")))
     }
+
+    # PDF: page-sized, taller (one inch of height per ~1.7 tips); smaller
+    # labels and a moderately wide right margin so the longest tip label
+    # has room.
+    plot_w <- 9
+    plot_h <- max(4, 0.6 * n_tips + 1)
+    p_pdf <- build_tree_plot(tip_size = 5, node_size = 3.5, right_margin_pt = 110)
     pdf_path <- paste0(params$out_prefix, ".species_tree.pdf")
-    ggplot2::ggsave(pdf_path, p, device = grDevices::cairo_pdf,
+    ggplot2::ggsave(pdf_path, p_pdf, device = grDevices::cairo_pdf,
                     width = plot_w, height = plot_h, dpi = 300)
-    print(p)
+
+    # HTML: bigger labels to compensate for the vertically-compressed
+    # inline rendering (chunk fig.height is roughly half the PDF height);
+    # wider right margin to keep larger labels visible.
+    p_html <- build_tree_plot(tip_size = 6.5, node_size = 7.5, right_margin_pt = 160)
+    print(p_html)
   }
 }
 ```
