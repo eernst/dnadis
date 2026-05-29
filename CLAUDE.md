@@ -296,8 +296,10 @@ Tests are in `tests/` directory (7 test files, ~165 tests):
 - rasusa - FASTQ downsampling
 - centrifuger - contaminant detection
 - infernal (cmscan) - structure-based rRNA annotation with Rfam models (rDNA consensus building; enabled by default, skip with --skip-rdna-consensus)
+- cd-hit (cd-hit-est) - sequence clustering for rDNA consensus building (enabled by default, skip with --skip-rdna-consensus; falls back to a BLAST-based representative when absent)
 - compleasm - BUSCO completeness evaluation (requires `--compleasm-lineage`; skip with `--skip-compleasm`; **install in a separate conda environment** due to dependency conflicts — see README.md)
-- Rscript (with ggplot2, dplyr, etc.) - visualization
+- mafft, trimal, iqtree - per-gene MSA, trimming, and ML tree inference for the cross-assembly species tree (multi-assembly + `--compleasm-lineage`; skip with `--skip-phylogeny`)
+- Rscript (with ggplot2, dplyr, etc.; ggtree + ape for the species-tree plot) - visualization
 
 **Python packages**:
 - intervaltree - efficient overlap detection

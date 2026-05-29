@@ -41,6 +41,7 @@ dependencies:
   - centrifuger
   - taxonkit
   - infernal
+  - cd-hit       # provides cd-hit-est for rDNA consensus clustering
 
   # --- Distributed computing (optional) ---
   - executorlib

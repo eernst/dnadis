@@ -102,7 +102,10 @@ No user configuration is required. The feature runs automatically whenever multi
 - [RagTag](https://github.com/malonge/RagTag) - improved reference-guided scaffolding (for `--scaffold`; built-in scaffolder used as fallback)
 - [executorlib](https://github.com/pyiron/executorlib) + [pysqa](https://github.com/pyiron/pysqa) + [h5py](https://github.com/h5py/h5py) - distributed SLURM job submission (required for `--cluster`; pysqa and h5py are optional executorlib dependencies not pulled in by default)
 - [infernal](http://eddylab.org/infernal/) - structure-based rRNA annotation with Rfam covariance models (for rDNA consensus building; enabled by default, skip with `--skip-rdna-consensus`; bundled Rfam database)
+- [cd-hit](https://github.com/weizhongli/cdhit) - sequence clustering for rDNA consensus building (provides `cd-hit-est`; for rDNA consensus; enabled by default, skip with `--skip-rdna-consensus`; falls back to a BLAST-based representative when absent)
 - [compleasm](https://github.com/huangnengCSU/compleasm) - BUSCO completeness evaluation (requires `--compleasm-lineage`; install in a **separate conda environment** due to dependency conflicts — see below)
+- [MAFFT](https://mafft.cbrc.jp/alignment/software/), [trimAl](https://github.com/inab/trimal), [IQ-TREE](http://www.iqtree.org/) - per-gene protein alignment, trimming, and maximum-likelihood tree inference for the cross-assembly species tree (multi-assembly mode with `--compleasm-lineage`; skip with `--skip-phylogeny`)
+- R [ggtree](https://bioconductor.org/packages/ggtree/) (+ [ape](https://cran.r-project.org/package=ape)) - species-tree visualization in the comparison report (falls back to a Newick-path note if absent)
 - R with ggplot2, dplyr, readr, stringr, tibble, tidyr, patchwork, ggnewscale, pacman - visualization (enabled by default; skip with `--skip-plot`)
 - rmarkdown + pandoc - unified HTML report generation (enabled by default; skip with `--skip-plot`)
 
@@ -138,14 +141,15 @@ conda create -n dnadis -c conda-forge -c bioconda \
     python=3.14 intervaltree \
     miniprot gffread blast mm2plus \
     ragtag \
+    mafft trimal iqtree \
     samtools mosdepth rasusa \
-    centrifuger taxonkit infernal \
+    centrifuger taxonkit infernal cd-hit \
     executorlib pysqa h5py \
     r-base r-ggplot2 r-dplyr r-readr r-stringr r-tibble r-tidyr \
     r-patchwork r-ggnewscale r-pacman r-ggiraph r-htmlwidgets r-scales \
     r-gt r-gtextras r-svglite r-xml2 r-rmarkdown r-ggridges \
     r-colorspace r-ggokabeito r-ggrepel r-showtext r-sysfonts \
-    r-systemfonts freetype libxml2 xz pandoc
+    r-systemfonts bioconductor-ggtree freetype libxml2 xz pandoc
 conda activate dnadis
 ```
 
