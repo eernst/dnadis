@@ -130,15 +130,22 @@ if (params$assembly_sort_order == "identity" && has_per_asm) {
   # Mirrors comparison.py:build_assembly_result() so the R ordering matches
   # the Python ordering used for FOFN-adjacent pairwise jobs:
   #   sum(seq_identity_vs_ref * best_ref_union_bp) / sum(length)
+  # In protein mode best_ref_union_bp is coding-exon bp, so that ratio
+  # collapses to gene density; fall back to mean seq identity to match the
+  # Python None-handling in cli.py.
   ident_sort <- all_summary_df %>%
     filter(classification == "chrom_assigned", !is.na(seq_identity_vs_ref)) %>%
     group_by(assembly) %>%
     summarise(
-      weighted_ident = sum(seq_identity_vs_ref *
-                             ifelse(is.na(best_ref_union_bp), 0,
-                                    as.numeric(best_ref_union_bp)),
-                           na.rm = TRUE) /
-                       sum(as.numeric(length), na.rm = TRUE),
+      weighted_ident = if (params$synteny_mode == "protein") {
+        mean(seq_identity_vs_ref, na.rm = TRUE)
+      } else {
+        sum(seq_identity_vs_ref *
+              ifelse(is.na(best_ref_union_bp), 0,
+                     as.numeric(best_ref_union_bp)),
+            na.rm = TRUE) /
+          sum(as.numeric(length), na.rm = TRUE)
+      },
       .groups = "drop"
     ) %>%
     arrange(desc(weighted_ident))
@@ -2777,7 +2784,12 @@ if (has_subgenomes && "assigned_subgenome" %in% names(chrom_df)) {
 
 has_identity <- "seq_identity_vs_ref" %in% names(chrom_df) &&
                 !all(is.na(chrom_df$seq_identity_vs_ref))
+# Suppressed in protein mode: best_ref_union_bp is coding-exon bp there, so
+# the per-contig weighted identity collapses to (protein identity × gene
+# density) rather than alignment quality.  Matches comparison.py leaving the
+# assembly-level weighted_identity as None in protein mode.
 has_weighted_ident <- has_identity &&
+                params$synteny_mode != "protein" &&
                 "best_ref_union_bp" %in% names(chrom_df) &&
                 "length" %in% names(chrom_df)
 has_collin   <- "collinearity_score" %in% names(chrom_df) &&

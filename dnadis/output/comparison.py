@@ -68,6 +68,7 @@ def build_assembly_result(
     compleasm_full: Optional[CompleasmResult] = None,
     compleasm_chrs: Optional[CompleasmResult] = None,
     compleasm_non_chrs: Optional[CompleasmResult] = None,
+    synteny_mode: str = "nucleotide",
 ) -> AssemblyResult:
     """Build an AssemblyResult summarizing one assembly's analysis.
 
@@ -150,17 +151,25 @@ def build_assembly_result(
     #   sum(seq_identity_vs_ref * best_ref_union_bp) / sum(contig_len)
     # Unmapped query bp contribute 0, so the metric reflects both alignment
     # breadth and identity rather than identity within aligned regions only.
-    weighted_ident_num = 0.0
-    weighted_ident_den = 0
-    for c in chrom_assigned:
-        if c.seq_identity_vs_ref is None:
-            continue
-        union_bp = int(ev.best_bp.get(c.original_name, 0) or 0)
-        weighted_ident_num += c.seq_identity_vs_ref * union_bp
-        weighted_ident_den += c.contig_len
-    weighted_identity = (
-        weighted_ident_num / weighted_ident_den if weighted_ident_den > 0 else None
-    )
+    #
+    # Only defined in nucleotide mode.  In protein mode, best_ref_union_bp is
+    # the bp under protein hits (coding exons), so best_bp/contig_len collapses
+    # to gene density and the metric tracks inverse genome size rather than
+    # alignment quality.  Left as None there; mean_identity carries the
+    # protein-mode quality signal and the comparison sort falls back to it.
+    weighted_identity: Optional[float] = None
+    if synteny_mode != "protein":
+        weighted_ident_num = 0.0
+        weighted_ident_den = 0
+        for c in chrom_assigned:
+            if c.seq_identity_vs_ref is None:
+                continue
+            union_bp = int(ev.best_bp.get(c.original_name, 0) or 0)
+            weighted_ident_num += c.seq_identity_vs_ref * union_bp
+            weighted_ident_den += c.contig_len
+        weighted_identity = (
+            weighted_ident_num / weighted_ident_den if weighted_ident_den > 0 else None
+        )
 
     collinearities = [c.collinearity_score for c in chrom_assigned if c.collinearity_score is not None]
     mean_collinearity = sum(collinearities) / len(collinearities) if collinearities else None

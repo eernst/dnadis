@@ -557,7 +557,9 @@ class AssemblyResult:
     mean_identity: Optional[float]
     # Aligned-bp-weighted identity used for sort ordering:
     #   sum(seq_identity_vs_ref * best_ref_union_bp) / sum(contig_len)
-    # Unmapped query bp contribute 0 to the numerator.
+    # Unmapped query bp contribute 0 to the numerator.  None in protein mode,
+    # where best_ref_union_bp is coding-exon bp and the ratio collapses to gene
+    # density rather than alignment quality; the sort falls back to mean_identity.
     weighted_identity: Optional[float]
     mean_collinearity: Optional[float]
     mean_gc_deviation: Optional[float]

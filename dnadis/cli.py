@@ -1472,6 +1472,7 @@ def run_assembly(
         compleasm_full=compleasm_full_result,
         compleasm_chrs=compleasm_chrs_result,
         compleasm_non_chrs=compleasm_non_chrs_result,
+        synteny_mode=args.synteny_mode,
     )
     result.rearrangements = rearrangement_calls
     result.rearrangements_tsv = rearrangements_tsv
@@ -1613,7 +1614,7 @@ def main():
         "--assembly-sort-order",
         choices=["input", "identity"],
         default="identity",
-        help="Assembly ordering in comparison report: 'identity' (default) sorts by descending aligned-bp-weighted identity vs reference (sum(seq_identity_vs_ref * best_ref_union_bp) / sum(contig_len) over chrom_assigned contigs); 'input' preserves FOFN/directory order",
+        help="Assembly ordering in comparison report: 'identity' (default) sorts by descending aligned-bp-weighted identity vs reference (sum(seq_identity_vs_ref * best_ref_union_bp) / sum(contig_len) over chrom_assigned contigs; in protein mode this metric is undefined and the sort falls back to mean identity); 'input' preserves FOFN/directory order",
     )
     common.add_argument("-v", "--verbose", action="store_true", help="Enable verbose (DEBUG level) logging")
     common.add_argument("--quiet", action="store_true", help="Suppress INFO messages (only show warnings and errors)")
@@ -2255,9 +2256,15 @@ def main():
         # the user asked for identity ordering, matching the report's sort key
         # so FOFN-adjacent pairs computed below match the identity-adjacent
         # rows the riparian plot draws ribbons between.  Assemblies with no
-        # chrom_assigned identities are pushed to the end.
+        # chrom_assigned identities are pushed to the end.  weighted_identity is
+        # None in protein mode (it conflates gene density with quality there),
+        # so fall back to mean_identity to keep a usable identity ordering.
         if args.assembly_sort_order == "identity" and len(results) >= 2:
-            sort_keys = {id(r): r.weighted_identity for r in results}
+            sort_keys = {
+                id(r): (r.weighted_identity if r.weighted_identity is not None
+                        else r.mean_identity)
+                for r in results
+            }
             results.sort(
                 key=lambda r: (
                     sort_keys[id(r)] is None,

@@ -250,6 +250,32 @@ class TestBuildAssemblyResult:
         assert r.weighted_identity == pytest.approx(0.0495)
         assert r.weighted_identity < r.mean_identity
 
+    def test_weighted_identity_none_in_protein_mode(self, tmp_path):
+        """In protein mode best_bp is coding-exon bp, so weighted_identity would
+        conflate gene density with quality; it is left as None and mean_identity
+        still carries the protein-mode identity signal."""
+        clfs = [_make_classification("ctg1", "chrom_assigned", 100_000_000, "chr1",
+                                     seq_identity=0.99)]
+        ev = _make_empty_ev()
+        ev.contig_total["ctg1"] = 5_000_000
+        ev.contig_refs["ctg1"] = {"chr1"}
+        ev.best_bp["ctg1"] = 5_000_000
+
+        r = build_assembly_result(
+            assembly_name="prot", assembly_path=tmp_path / "prot.fa",
+            outprefix=tmp_path / "prot" / "prot",
+            classifications=clfs, qry_lengths={"ctg1": 100_000_000},
+            ref_lengths_norm={"chr1": 100_000_000},
+            ev=ev, cobionts_filtered={},
+            chrC_contig=None, chrM_contig=None, rdna_arrays=[], depth_stats={},
+            chimera_primary_frac=0.8, chimera_secondary_frac=0.2,
+            summary_tsv=tmp_path / "s.tsv", segments_tsv=tmp_path / "seg.tsv",
+            evidence_tsv=tmp_path / "ev.tsv", macro_blocks_tsv=tmp_path / "mb.tsv",
+            synteny_mode="protein",
+        )
+        assert r.weighted_identity is None
+        assert r.mean_identity == pytest.approx(0.99)
+
     def test_no_chrom_assigned(self, tmp_path):
         """Assembly with no chrom_assigned contigs."""
         clfs = [
