@@ -300,6 +300,20 @@ Read type to minimap2 preset mapping:
 
 When `--compleasm-lineage` is set, phase 18 runs compleasm on two FASTA subsets: chromosome-assigned contigs (`*.chrs.fasta`) and non-chromosome contigs (`*.non_chrs.fasta`, combining debris + unclassified + cobionts). Both runs are submitted in parallel. Results are included in the per-assembly unified HTML report and in the multi-assembly `comparison_summary.tsv`.
 
+### Phylogeny (species tree) options
+
+In multi-assembly mode with `--compleasm-lineage`, dnadis builds a cross-assembly species tree from per-leaf single-copy BUSCOs (MAFFT → trimAl → IQ-TREE). See [docs/phylogeny.md](docs/phylogeny.md) for the per-leaf accounting and rooting details.
+
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--skip-phylogeny` | Skip species-tree construction | off |
+| `--phylo-min-busco-completeness` | Drop a leaf below this single-copy BUSCO percentage | 50.0 |
+| `--phylo-outgroup` | Tree rooting: `none`, `reference`, `auto`, or a query assembly name | none |
+| `--phylo-outgroup-only` | Designate a query assembly as a **phylogeny-only outgroup** (repeatable; comma-separated lists allowed) | none |
+| `--phylo-skip-reference` | Exclude the reference genome as a tree leaf | off |
+
+A **phylogeny-only outgroup** is a distant taxon useful only for rooting (it diverges too far to align meaningfully to the reference). It runs a minimal pipeline — compleasm only — and is excluded from `comparison_summary.tsv`, `chromosome_completeness.tsv`, pairwise synteny, and the HTML report, while still contributing leaves to and auto-rooting the species tree. Its subgenomes are split from its own contig-name suffixes (chr1A / chr1B → leaves `_A` / `_B`); a contig with no suffix pools into one leaf. Requires multi-assembly mode and `--compleasm-lineage`, and supersedes `--phylo-outgroup`. See [docs/phylogeny.md](docs/phylogeny.md#phylogeny-only-outgroups).
+
 ### Scaffolding options
 
 | Argument | Description | Default |
