@@ -1514,6 +1514,67 @@ def run_assembly(
     return result
 
 
+def run_outgroup_assembly(
+    args,
+    ref_ctx: "ReferenceContext",
+    qry: Path,
+    assembly_name: str,
+    outprefix: Path,
+    executor=None,
+    cluster_config=None,
+) -> "OutgroupAssembly":
+    """Run the minimal pipeline for a phylogeny-only outgroup assembly.
+
+    Only compleasm is run (on the full assembly) — no synteny, detection,
+    classification, depth, scaffolding, or output files.  The result feeds the
+    species tree via :func:`phylogeny.busco_extraction.build_outgroup_only_leaves`
+    and is never added to the ``results`` list, so the outgroup stays out of
+    comparison TSVs, pairwise synteny, and the HTML report.
+    """
+    from dnadis.models import OutgroupAssembly
+    from dnadis.utils.distributed import LocalExecutor, ResourceSpec
+    from dnadis.utils.logging_config import get_logger, set_assembly_context
+    logger = get_logger("cli")
+    set_assembly_context(assembly_name)
+    logger.phase(f"Outgroup (phylogeny-only): compleasm for {assembly_name}")
+
+    out_dir = outprefix.parent
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    if executor is None:
+        executor = LocalExecutor()
+    use_cluster = cluster_config is not None and cluster_config.enabled
+
+    compleasm_threads = args.threads
+    compleasm_spec = ResourceSpec()
+    if use_cluster:
+        from dnadis.utils.resource_estimation import estimate_compleasm_resources
+        compleasm_spec = estimate_compleasm_resources(qry, cluster_config)
+        compleasm_threads = compleasm_spec.cores
+
+    compleasm_result = executor.submit(
+        run_compleasm,
+        fasta=qry,
+        output_dir=out_dir / "compleasm",
+        lineage=args.compleasm_lineage,
+        threads=compleasm_threads,
+        library_path=args.compleasm_library,
+        compleasm_exe=args.compleasm_path,
+        resource_spec=compleasm_spec if use_cluster else None,
+    ).result()
+
+    if compleasm_result is not None:
+        logger.done(f"Compleasm (outgroup): {compleasm_result.summary_line()}")
+    else:
+        logger.warning(f"Outgroup {assembly_name!r}: compleasm produced no result")
+
+    return OutgroupAssembly(
+        assembly_name=assembly_name,
+        assembly_path=qry,
+        compleasm=compleasm_result,
+    )
+
+
 # ---------------------------------------------------------------------------
 # main: argument parsing, validation, dispatch
 # ---------------------------------------------------------------------------
@@ -1554,7 +1615,8 @@ def main():
             max_time_dist=720, partition="cpuq", qos="",
             keep_executor_cache=False,
             skip_phylogeny=False, phylo_min_busco_completeness=50.0,
-            phylo_outgroup="none", phylo_skip_reference=False,
+            phylo_outgroup="none", phylo_outgroup_only=[],
+            phylo_skip_reference=False,
             phylo_outgroup_min_ref_assignment=0.5,
             phylo_max_mem_gb=8, phylo_bootstrap_reps=1000,
             phylo_alrt_reps=1000, phylo_models="LG,WAG,JTT",
@@ -2037,6 +2099,15 @@ def main():
         help="Outgroup for tree rooting: 'none' (unrooted, default), 'reference', a query assembly name, or 'auto' (most-divergent taxon; not biologically conclusive).",
     )
     phylo_grp.add_argument(
+        "--phylo-outgroup-only", action="append", default=[], metavar="NAME",
+        help="Designate a query assembly as a phylogeny-only outgroup: it runs only "
+             "compleasm (no synteny/detection/classification), is excluded from comparison "
+             "TSVs, pairwise synteny, and reporting, and contributes to & auto-roots the "
+             "species tree. Repeatable, and each value may be a comma-separated list. "
+             "Subgenomes are split from the outgroup's own contig-name suffixes. "
+             "Requires multi-assembly mode and --compleasm-lineage. Supersedes --phylo-outgroup.",
+    )
+    phylo_grp.add_argument(
         "--phylo-skip-reference", action="store_true",
         help="Exclude the reference genome as a leaf in the species tree (by default it is included).",
     )
@@ -2117,6 +2188,30 @@ def main():
             f"got {args.phylo_min_busco_completeness}"
         )
 
+    # Parse --phylo-outgroup-only (repeatable + comma-separated) into an
+    # ordered unique list; name-matching against the assembly list happens
+    # once the assemblies are resolved.
+    phylo_outgroup_only: list[str] = []
+    for entry in (args.phylo_outgroup_only or []):
+        for name in str(entry).split(","):
+            name = name.strip()
+            if name and name not in phylo_outgroup_only:
+                phylo_outgroup_only.append(name)
+    args.phylo_outgroup_only = phylo_outgroup_only
+    if phylo_outgroup_only:
+        if not is_multi:
+            sys.exit(
+                "[error] --phylo-outgroup-only requires multi-assembly mode "
+                "(--fofn or --assembly-dir)"
+            )
+        if args.skip_phylogeny:
+            sys.exit("[error] --phylo-outgroup-only is incompatible with --skip-phylogeny")
+        if not args.compleasm_lineage or args.skip_compleasm:
+            sys.exit(
+                "[error] --phylo-outgroup-only requires --compleasm-lineage "
+                "(and not --skip-compleasm); the outgroup is used only for the species tree"
+            )
+
     # --- Logging setup ---
     output_dir = Path(args.output_dir).resolve()
     log_file = args.log_file
@@ -2167,6 +2262,36 @@ def main():
         name = args.assembly_name if args.assembly_name else _strip_fasta_extension(args.query.name)
         assemblies = [(args.query, name, args.reads)]
 
+    # --- Partition off phylogeny-only outgroups ---
+    # Outgroup-only assemblies run a minimal compleasm-only path and are kept
+    # out of `results`, so they never reach comparison/pairwise/reporting.
+    outgroup_assemblies: list = []
+    if args.phylo_outgroup_only:
+        asm_names = {a[1] for a in assemblies}
+        unknown = [n for n in args.phylo_outgroup_only if n not in asm_names]
+        if unknown:
+            sys.exit(
+                f"[error] --phylo-outgroup-only names not found among assemblies "
+                f"{sorted(asm_names)}: {unknown}"
+            )
+        outgroup_set = set(args.phylo_outgroup_only)
+        outgroup_assemblies = [a for a in assemblies if a[1] in outgroup_set]
+        assemblies = [a for a in assemblies if a[1] not in outgroup_set]
+        if not assemblies:
+            sys.exit(
+                "[error] all assemblies were designated --phylo-outgroup-only; "
+                "at least one non-outgroup assembly is required"
+            )
+        if (args.phylo_outgroup or "none").strip().lower() != "none":
+            logger.warning(
+                f"--phylo-outgroup={args.phylo_outgroup!r} is superseded by "
+                f"--phylo-outgroup-only {args.phylo_outgroup_only}; rooting on the outgroup-only clade"
+            )
+        logger.info(
+            f"Phylogeny-only outgroup(s): {args.phylo_outgroup_only} "
+            f"(excluded from comparison/pairwise/reporting; compleasm only)"
+        )
+
     # --- Default reference name from FASTA filename if not provided ---
     if not args.reference_name:
         from dnadis.utils.multi_assembly import _strip_fasta_extension
@@ -2181,6 +2306,9 @@ def main():
     n_ok = 0
     failures = []
     results = []
+    # Phylogeny-only outgroups (--phylo-outgroup-only): minimal compleasm-only
+    # runs, kept out of `results` so they never reach comparison/pairwise/report.
+    outgroup_results: list = []
 
     # --- Per-assembly pipeline (executor scope) ---
     # The executor context is kept as narrow as possible: it covers only
@@ -2251,6 +2379,22 @@ def main():
                 except Exception as e:
                     logger.error(f"Assembly '{asm_name}' failed: {e}")
                     failures.append((asm_name, str(e)))
+
+        # --- Phylogeny-only outgroups (minimal compleasm-only path) ---
+        # Kept separate from `results` so they never reach the comparison,
+        # pairwise-synteny, or report code below.
+        for asm_path, asm_name, _asm_reads in outgroup_assemblies:
+            og_outprefix = output_dir / asm_name / asm_name
+            try:
+                outgroup_results.append(
+                    run_outgroup_assembly(
+                        args, ref_ctx, asm_path, asm_name,
+                        og_outprefix, executor=executor, cluster_config=cluster_config,
+                    )
+                )
+            except Exception as e:
+                logger.error(f"Outgroup '{asm_name}' failed: {e}")
+                failures.append((asm_name, str(e)))
 
         # Sort `results` by AssemblyResult.weighted_identity (descending) when
         # the user asked for identity ordering, matching the report's sort key
@@ -2509,8 +2653,11 @@ def main():
         # Submits the reference compleasm and IQ-TREE jobs through the
         # executor so SLURM submission works in --cluster mode.
         phylogeny_result = None
+        # Outgroup-only assemblies are excluded from `results` but still count
+        # toward the leaf total, so gate on regular + outgroup runs combined.
+        n_phylo_taxa = len(results) + len(outgroup_results)
         if (
-            n_total >= 2
+            n_phylo_taxa >= 2
             and not args.skip_phylogeny
             and args.compleasm_lineage
             and not args.skip_compleasm
@@ -2527,10 +2674,11 @@ def main():
                     cluster_config=cluster_config,
                     reference_name=args.reference_name or Path(args.ref).stem,
                     ref_compleasm_future=ref_compleasm_future,
+                    outgroup_results=outgroup_results,
                 )
             except Exception as e:
                 logger.error(f"Phylogeny pipeline failed: {e}")
-        elif n_total >= 2 and not args.skip_phylogeny and not args.compleasm_lineage:
+        elif n_phylo_taxa >= 2 and not args.skip_phylogeny and not args.compleasm_lineage:
             logger.info("Phylogeny skipped (no --compleasm-lineage)")
 
     # --- executor is now closed ---
@@ -2585,9 +2733,16 @@ def main():
                 logger.error("Comparison report generation failed.")
 
     # --- Summary ---
-    if n_total > 1:
+    # Count phylogeny-only outgroups (run via the minimal path) alongside the
+    # regular assemblies so the tally reflects everything that ran.
+    n_outgroup = len(outgroup_assemblies)
+    if (n_total + n_outgroup) > 1:
         logger.phase("=== Multi-assembly summary ===")
-        logger.done(f"{n_ok}/{n_total} assemblies completed successfully")
+        logger.done(
+            f"{n_ok + len(outgroup_results)}/{n_total + n_outgroup} assemblies "
+            f"completed successfully"
+            + (f" ({n_outgroup} phylogeny-only outgroup(s))" if n_outgroup else "")
+        )
         if failures:
             for name, err in failures:
                 logger.error(f"  FAILED: {name} — {err}")

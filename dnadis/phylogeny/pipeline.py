@@ -13,6 +13,7 @@ from dnadis.detection.compleasm import run_compleasm
 from dnadis.models import (
     AssemblyResult,
     CompleasmResult,
+    OutgroupAssembly,
     PhylogenyResult,
     ReferenceContext,
 )
@@ -20,6 +21,7 @@ from dnadis.phylogeny.busco_extraction import (
     LeafBuscos,
     build_assembly_leaves,
     build_outgroup_leaves,
+    build_outgroup_only_leaves,
     build_reference_leaves,
     filter_leaves_by_completeness,
     shared_single_copy_genes,
@@ -91,6 +93,7 @@ def run_phylogeny(
     cluster_config,
     reference_name: str,
     ref_compleasm_future=None,
+    outgroup_results: Optional[List[OutgroupAssembly]] = None,
 ) -> Optional[PhylogenyResult]:
     """Build a species tree from per-leaf single-copy BUSCOs.
 
@@ -165,6 +168,30 @@ def run_phylogeny(
             leaves.extend(og_leaves)
         else:
             leaves.extend(build_assembly_leaves(r.assembly_name, r.classifications, compleasm_for_phylo))
+
+    # Phylogeny-only outgroups (--phylo-outgroup-only): these ran a minimal
+    # compleasm-only pipeline and are absent from `results`, so they never
+    # reach the comparison/pairwise/report code paths.  They contribute leaves
+    # here (with subgenomes split from their own contig names) and root the
+    # tree below.
+    outgroup_only_names: set = set()
+    for og in (outgroup_results or []):
+        if og.compleasm is None or og.compleasm.full_table_path is None:
+            logger.warning(
+                f"Outgroup {og.assembly_name!r} has no compleasm full_table — "
+                f"excluding from phylogeny"
+            )
+            continue
+        og_leaves = build_outgroup_only_leaves(og.assembly_name, og.compleasm)
+        if not og_leaves:
+            continue
+        outgroup_only_names.add(og.assembly_name)
+        labels = [lb.leaf.label for lb in og_leaves]
+        logger.info(
+            f"Phylogeny-only outgroup {og.assembly_name!r}: "
+            f"{len(og_leaves)} leaf(s) {labels} (subgenomes from contig names)"
+        )
+        leaves.extend(og_leaves)
 
     ref_labels: List[str] = []
     if ref_compleasm_future is not None:
@@ -243,12 +270,33 @@ def run_phylogeny(
         f"{len(sm.leaf_order)} taxa"
     )
 
-    outgroup_label = resolve_outgroup(
-        args.phylo_outgroup,
-        sm.leaf_order,
-        ref_labels,
-        supermatrix_fasta,
-    )
+    if outgroup_only_names:
+        # Root on the designated phylogeny-only outgroup(s).  An outgroup-only
+        # assembly may contribute several subgenome leaves; pass them all as a
+        # comma-joined clade (IQ-TREE's -o accepts this), restricted to leaves
+        # that survived into the supermatrix.  This supersedes --phylo-outgroup.
+        og_labels = [
+            lbl for lbl in sm.leaf_order
+            if any(lbl == name or lbl.startswith(f"{name}_") for name in outgroup_only_names)
+        ]
+        if og_labels:
+            outgroup_label = ",".join(og_labels)
+            logger.info(
+                f"Rooting on phylogeny-only outgroup clade: {og_labels}"
+            )
+        else:
+            logger.warning(
+                "Phylogeny-only outgroup(s) did not survive into the supermatrix "
+                "(dropped by the completeness/shared-gene filters); leaving tree unrooted"
+            )
+            outgroup_label = None
+    else:
+        outgroup_label = resolve_outgroup(
+            args.phylo_outgroup,
+            sm.leaf_order,
+            ref_labels,
+            supermatrix_fasta,
+        )
 
     iqtree_prefix = phylo_dir / "species_tree"
     iqtree_err = phylo_dir / "iqtree.err"

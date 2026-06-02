@@ -346,7 +346,9 @@ All external tools are called via subprocess with proper error handling. Use `ut
 ```
 
 See `docs/output_formats.md` for complete column documentation.
-See `docs/phylogeny.md` for how per-leaf BUSCO single-copy accounting handles the different ploidy combinations (collapsed haploid, polyploid reference, polyploid query, polyploid both).
+See `docs/phylogeny.md` for how per-leaf BUSCO single-copy accounting handles the different ploidy combinations (collapsed haploid, polyploid reference, polyploid query, polyploid both), tree rooting, and phylogeny-only outgroups.
+
+**Phylogeny-only outgroups (`--phylo-outgroup-only NAME`)**: Marks a query assembly as a distant taxon used solely to root the species tree. Such an assembly runs a minimal pipeline — compleasm only, via `cli.py:run_outgroup_assembly()` — and is partitioned out of the `results` list in `main()` *before* the per-assembly loop, so it never reaches comparison TSVs, pairwise synteny, or reporting (exclusion is structural, not a per-site filter). It is collected into a separate `outgroup_results: list[OutgroupAssembly]` passed to `run_phylogeny()`, which builds its leaves with `phylogeny/busco_extraction.py:build_outgroup_only_leaves()` — subgenomes are inferred from the outgroup's *own* contig-name suffixes via `split_chrom_subgenome` (no classifications exist in the minimal path), and contigs without a suffix pool into one leaf. The outgroup auto-roots the tree (its leaf labels become the IQ-TREE outgroup clade), superseding `--phylo-outgroup`. The flag is repeatable, accepts comma-separated lists, requires multi-assembly mode + `--compleasm-lineage`, and requires ≥1 remaining non-outgroup assembly. Contrast with `--phylo-outgroup NAME` on a regular assembly, which runs the full pipeline and uses `build_outgroup_leaves()` (ploidy + reference-assignment-quality based).
 
 ## Plot Design Guidelines
 

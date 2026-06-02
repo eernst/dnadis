@@ -368,6 +368,56 @@ def ref_assignment_quality_by_subgenome(
     return out
 
 
+def build_outgroup_only_leaves(
+    assembly_name: str,
+    compleasm_result: CompleasmResult,
+) -> List[LeafBuscos]:
+    """Build leaves for a phylogeny-only outgroup (``--phylo-outgroup-only``).
+
+    Such an assembly runs a minimal pipeline (compleasm only) and has no
+    classifications, so subgenome identity cannot come from reference
+    assignment.  Instead we read it straight from the outgroup's *own* contig
+    names via :func:`split_chrom_subgenome`: contigs sharing an alpha suffix
+    (chr1A / chr2A → ``A``, chr1B → ``B``) group into one leaf per suffix,
+    placed in :attr:`LeafId.query_subgenome`.  Contigs without a recognizable
+    subgenome suffix pool into a single leaf labeled bare ``assembly_name`` —
+    the common case for a distant outgroup that doesn't align to the reference.
+
+    Unlike :func:`build_outgroup_leaves`, this never inspects reference
+    assignment or infers ploidy, so it works for an outgroup whose contigs
+    largely don't map to the reference at all.
+    """
+    if compleasm_result.full_table_path is None:
+        logger.warning(
+            f"Outgroup {assembly_name!r} has no compleasm full_table; "
+            f"excluding from phylogeny"
+        )
+        return []
+
+    leaves_by_id: Dict[LeafId, LeafBuscos] = {}
+    for h in parse_full_table(compleasm_result.full_table_path):
+        if h.status not in _INCLUDE_STATUSES:
+            continue
+        if h.contig is None:
+            continue
+        _, query_sg = split_chrom_subgenome(h.contig)
+        # "NA" (string) means no subgenome suffix; normalise to None so the
+        # leaf label stays bare "assembly_name" rather than "assembly_name_NA".
+        if query_sg == "NA":
+            query_sg = None
+        leaf_id = LeafId(assembly=assembly_name, query_subgenome=query_sg)
+        lb = leaves_by_id.setdefault(
+            leaf_id,
+            LeafBuscos(
+                leaf=leaf_id,
+                translated_protein_path=compleasm_result.translated_protein_path,
+                n_lineage_total=compleasm_result.n_total,
+            ),
+        )
+        lb.hits_by_busco.setdefault(h.busco_id, []).append(h)
+    return list(leaves_by_id.values())
+
+
 def build_outgroup_leaves(
     assembly_name: str,
     classifications: Iterable[ContigClassification],

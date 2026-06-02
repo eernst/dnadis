@@ -155,6 +155,7 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
         "skip_phylogeny": "skip_phylogeny",
         "phylo_min_busco_completeness": "phylo_min_busco_completeness",
         "phylo_outgroup": "phylo_outgroup",
+        "phylo_outgroup_only": "phylo_outgroup_only",
         "phylo_skip_reference": "phylo_skip_reference",
         "phylo_outgroup_min_ref_assignment": "phylo_outgroup_min_ref_assignment",
         "phylo_max_mem_gb": "phylo_max_mem_gb",
@@ -240,16 +241,22 @@ def merge_config_with_args(config: Dict[str, Any], args: argparse.Namespace) -> 
         current_value = getattr(args, key)
 
         # Skip if CLI explicitly set a value (non-None for optional args)
-        # This is a heuristic - works for most cases
-        if current_value is not None and key not in (
+        # This is a heuristic - works for most cases.  An empty list is the
+        # default for append-action args (e.g. phylo_outgroup_only) and is
+        # treated as "unset" so a config-file value still applies.
+        if current_value not in (None, []) and key not in (
             "threads", "skip_plot",
             "max_threads_dist", "max_mem_dist", "max_time_dist",
             "partition", "qos",
         ):
             continue
 
+        # For list-valued config (e.g. append-action args), accept a scalar or
+        # a list from the TOML file.
+        if isinstance(value, list) or (isinstance(current_value, list) and value is not None):
+            setattr(args, key, list(value) if isinstance(value, list) else [value])
         # For boolean flags that default to False, only override if not set via CLI
-        if isinstance(value, bool) and current_value is False:
+        elif isinstance(value, bool) and current_value is False:
             setattr(args, key, value)
         # For numeric defaults, be more careful
         elif key == "threads" and current_value == 8:  # Default threads

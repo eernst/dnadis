@@ -486,6 +486,20 @@ class PhylogenyResult:
 
 
 @dataclass
+class OutgroupAssembly:
+    """A query assembly designated phylogeny-only via ``--phylo-outgroup-only``.
+
+    Such an assembly runs a minimal pipeline — compleasm only — and never
+    enters the ``results`` list that drives comparison TSVs, pairwise synteny,
+    and the HTML report.  It contributes leaves to the species tree (and roots
+    it) but produces no per-assembly outputs besides its compleasm directory.
+    """
+    assembly_name: str
+    assembly_path: Path
+    compleasm: Optional[CompleasmResult] = None
+
+
+@dataclass
 class DepthStats:
     """Read depth statistics for a contig.
 

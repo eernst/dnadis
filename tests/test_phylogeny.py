@@ -8,6 +8,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from dnadis.detection.compleasm import derive_chrs_non_chrs_compleasm
@@ -17,6 +19,7 @@ from dnadis.phylogeny.busco_extraction import (
     LeafId,
     build_assembly_leaves,
     build_outgroup_leaves,
+    build_outgroup_only_leaves,
     build_reference_leaves,
     filter_leaves_by_completeness,
     infer_assembly_ploidy,
@@ -539,3 +542,128 @@ def test_build_outgroup_leaves_polyploid_filtered(tmp_path):
     assert status == "polyploid_filtered"
     labels = {lb.leaf.label for lb in leaves}
     assert labels == {"outg_A"}  # P dropped (0.5 < 0.75 threshold)
+
+
+# --------------------------------------------------------------------------
+# build_outgroup_only_leaves: phylogeny-only outgroups (name-based subgenomes)
+# --------------------------------------------------------------------------
+def test_build_outgroup_only_leaves_pools_when_no_subgenome_suffix(tmp_path):
+    """A distant outgroup with no subgenome suffixes pools into one leaf."""
+    ft = _write_full_table(tmp_path / "ft.tsv", [
+        ("g1", "Complete", "ctg000001", 1, 100, "+", 90.0, 99),
+        ("g2", "Complete", "ctg000002", 1, 100, "+", 90.0, 99),
+        ("g3", "Duplicated", "ctg000003", 1, 100, "+", 90.0, 99),
+    ])
+    leaves = build_outgroup_only_leaves("la6002", _mk_compleasm(ft, n_total=10))
+    assert len(leaves) == 1
+    assert leaves[0].leaf.label == "la6002"  # bare name, no suffix
+    assert leaves[0].leaf.ref_subgenome is None
+    assert leaves[0].leaf.query_subgenome is None
+    assert leaves[0].single_copy_genes() == {"g1", "g2", "g3"}
+
+
+def test_build_outgroup_only_leaves_splits_by_contig_name_suffix(tmp_path):
+    """Subgenomes are split from the outgroup's own chr-name suffixes."""
+    ft = _write_full_table(tmp_path / "ft.tsv", [
+        ("g1", "Duplicated", "chr1A", 1, 100, "+", 90.0, 99),
+        ("g1", "Duplicated", "chr1B", 1, 100, "+", 90.0, 99),
+        ("g2", "Duplicated", "chr2A", 1, 100, "+", 90.0, 99),
+        ("g2", "Duplicated", "chr2B", 1, 100, "+", 90.0, 99),
+    ])
+    leaves = build_outgroup_only_leaves("outg", _mk_compleasm(ft, n_total=10))
+    labels = {lb.leaf.label for lb in leaves}
+    assert labels == {"outg_A", "outg_B"}
+    by_label = {lb.leaf.label: lb for lb in leaves}
+    # Each subgenome leaf is single-copy for both genes
+    assert by_label["outg_A"].single_copy_genes() == {"g1", "g2"}
+    assert by_label["outg_B"].single_copy_genes() == {"g1", "g2"}
+    # Subgenome lands in the query_subgenome slot, ref_subgenome stays None
+    assert all(lb.leaf.ref_subgenome is None for lb in leaves)
+
+
+def test_build_outgroup_only_leaves_no_full_table_returns_empty(tmp_path):
+    cr = CompleasmResult(
+        lineage="eukaryota_odb12", n_total=10, n_single=10, n_duplicated=0,
+        n_fragmented=0, n_interspersed=0, n_missing=0,
+        pct_single=100.0, pct_duplicated=0.0, pct_fragmented=0.0,
+        pct_interspersed=0.0, pct_missing=0.0,
+        summary_path=tmp_path / "summary.txt", full_table_path=None,
+    )
+    assert build_outgroup_only_leaves("outg", cr) == []
+
+
+def test_build_outgroup_only_leaves_skips_missing_and_fragmented(tmp_path):
+    ft = _write_full_table(tmp_path / "ft.tsv", [
+        ("g1", "Complete", "ctg1", 1, 100, "+", 90.0, 99),
+        ("g2", "Missing"),
+        ("g3", "Fragmented", "ctg1", 1, 100, "+", 90.0, 99),
+    ])
+    leaves = build_outgroup_only_leaves("outg", _mk_compleasm(ft, n_total=10))
+    assert len(leaves) == 1
+    assert leaves[0].single_copy_genes() == {"g1"}
+
+
+# --------------------------------------------------------------------------
+# CLI validation for --phylo-outgroup-only
+# --------------------------------------------------------------------------
+def _touch_fasta(path: Path) -> Path:
+    path.write_text(">c1\nACGT\n")
+    return path
+
+
+def _run_cli(argv):
+    import dnadis.cli as cli
+    old = sys.argv
+    sys.argv = ["dnadis.py"] + argv
+    try:
+        cli.main()
+    finally:
+        sys.argv = old
+
+
+def test_phylo_outgroup_only_rejected_in_single_assembly_mode(tmp_path):
+    ref = _touch_fasta(tmp_path / "ref.fa")
+    qry = _touch_fasta(tmp_path / "q.fa")
+    with pytest.raises(SystemExit) as ei:
+        _run_cli([
+            "-r", str(ref), "-q", str(qry), "-o", str(tmp_path / "out"),
+            "--compleasm-lineage", "eukaryota", "--phylo-outgroup-only", "foo",
+        ])
+    assert "multi-assembly" in str(ei.value)
+
+
+def test_phylo_outgroup_only_requires_compleasm_lineage(tmp_path):
+    ref = _touch_fasta(tmp_path / "ref.fa")
+    fofn = tmp_path / "asm.tsv"
+    fofn.write_text(f"{_touch_fasta(tmp_path / 'a.fa')}\ta\n{_touch_fasta(tmp_path / 'b.fa')}\tb\n")
+    with pytest.raises(SystemExit) as ei:
+        _run_cli([
+            "-r", str(ref), "--fofn", str(fofn), "-o", str(tmp_path / "out"),
+            "--phylo-outgroup-only", "a",
+        ])
+    assert "compleasm-lineage" in str(ei.value)
+
+
+def test_phylo_outgroup_only_unknown_name_rejected(tmp_path):
+    ref = _touch_fasta(tmp_path / "ref.fa")
+    fofn = tmp_path / "asm.tsv"
+    fofn.write_text(f"{_touch_fasta(tmp_path / 'a.fa')}\ta\n{_touch_fasta(tmp_path / 'b.fa')}\tb\n")
+    with pytest.raises(SystemExit) as ei:
+        _run_cli([
+            "-r", str(ref), "--fofn", str(fofn), "-o", str(tmp_path / "out"),
+            "--compleasm-lineage", "eukaryota", "--phylo-outgroup-only", "nope",
+        ])
+    assert "not found among assemblies" in str(ei.value)
+
+
+def test_phylo_outgroup_only_all_assemblies_rejected(tmp_path):
+    ref = _touch_fasta(tmp_path / "ref.fa")
+    fofn = tmp_path / "asm.tsv"
+    fofn.write_text(f"{_touch_fasta(tmp_path / 'a.fa')}\ta\n{_touch_fasta(tmp_path / 'b.fa')}\tb\n")
+    with pytest.raises(SystemExit) as ei:
+        _run_cli([
+            "-r", str(ref), "--fofn", str(fofn), "-o", str(tmp_path / "out"),
+            "--compleasm-lineage", "eukaryota",
+            "--phylo-outgroup-only", "a", "--phylo-outgroup-only", "b",
+        ])
+    assert "at least one non-outgroup assembly" in str(ei.value)

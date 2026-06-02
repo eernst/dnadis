@@ -82,3 +82,44 @@ trimmed alignments are concatenated horizontally into `supermatrix.faa`
 with a consistent leaf order across genes.  IQ-TREE then runs on the
 supermatrix; SH-aLRT/UFBoot branch supports appear in that order in the
 output Newick (`species_tree.treefile`).
+
+## Rooting
+
+The tree is rooted by `--phylo-outgroup`: `none` (unrooted, default),
+`reference`, `auto` (most-divergent taxon — not biologically conclusive),
+or a query assembly name.  When a polyploid leaf set shares one outgroup
+name, all of its subgenome leaves are passed to IQ-TREE as a comma-joined
+outgroup clade.
+
+## Phylogeny-only outgroups
+
+A distant taxon is often useful *only* to root the tree: it diverged too
+far to align to the reference, so its composition, pairwise synteny, and
+per-chromosome assignments are noise rather than signal.  Designate such
+an assembly with `--phylo-outgroup-only NAME` (repeatable; each value may
+be a comma-separated list).  A phylogeny-only outgroup:
+
+- Runs a **minimal pipeline** — compleasm only.  No synteny, detection,
+  classification, read depth, scaffolding, or per-assembly outputs are
+  produced beyond its `compleasm/` directory.
+- Is **excluded** from `comparison_summary.tsv`,
+  `chromosome_completeness.tsv`, pairwise synteny, and the HTML report.
+  Exclusion is structural — the assembly never enters the `results` list
+  those outputs iterate.
+- **Contributes leaves** to the species tree and **auto-roots** it (so a
+  separate `--phylo-outgroup` is unnecessary; if both are given,
+  `--phylo-outgroup-only` supersedes it).
+
+Because the minimal path has no classifications, subgenome identity for a
+phylogeny-only outgroup is read from its **own contig names** rather than
+from reference assignment: contigs sharing an alpha suffix (chr1A / chr2A
+→ `A`, chr1B → `B`) form one leaf per suffix
+(`build_outgroup_only_leaves`).  A contig with no recognizable suffix —
+the common case for a divergent outgroup — pools into a single leaf
+labeled with the bare assembly name.  This differs from
+`--phylo-outgroup NAME` on a *regular* assembly
+(`build_outgroup_leaves`), which still runs the full pipeline and infers
+subgenomes from ploidy and reference-assignment quality.
+
+Requires multi-assembly mode and `--compleasm-lineage`; at least one
+non-outgroup assembly must remain.
