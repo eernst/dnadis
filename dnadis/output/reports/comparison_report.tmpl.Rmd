@@ -1,5 +1,6 @@
 ---
 title: "Multi-Assembly Comparison Report"
+pagetitle: "dnadis: __CMP_NAME__"
 params:
   comparison_tsv: "__COMPARISON_TSV__"
   completeness_tsv: "__COMPLETENESS_TSV__"
