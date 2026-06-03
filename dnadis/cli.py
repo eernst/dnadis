@@ -30,8 +30,10 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 import traceback
 from collections import defaultdict
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Optional, Set, Tuple
 
@@ -482,9 +484,13 @@ def run_assembly(
     Returns:
         :class:`AssemblyResult` summarizing the assembly's classification.
     """
-    from dnadis.utils.logging_config import get_logger, set_assembly_context
+    from dnadis.utils.logging_config import (
+        get_logger, set_assembly_context, begin_phase_timing, end_phase_timing,
+    )
     logger = get_logger("cli")
     set_assembly_context(assembly_name)
+    pipeline_start = time.monotonic()
+    begin_phase_timing()
 
     # --- Unpack reference context into local variables ---
     # This keeps the rest of the function identical to the original main().
@@ -1511,6 +1517,11 @@ def run_assembly(
                 "Ensure Rscript, rmarkdown, and pandoc are installed."
             )
 
+    end_phase_timing()
+    logger.done(
+        f"Pipeline wall-clock time: "
+        f"{timedelta(seconds=round(time.monotonic() - pipeline_start))}"
+    )
     return result
 
 
@@ -1536,6 +1547,7 @@ def run_outgroup_assembly(
     from dnadis.utils.logging_config import get_logger, set_assembly_context
     logger = get_logger("cli")
     set_assembly_context(assembly_name)
+    pipeline_start = time.monotonic()
     logger.phase(f"Outgroup (phylogeny-only): compleasm for {assembly_name}")
 
     out_dir = outprefix.parent
@@ -1568,6 +1580,10 @@ def run_outgroup_assembly(
     else:
         logger.warning(f"Outgroup {assembly_name!r}: compleasm produced no result")
 
+    logger.done(
+        f"Pipeline wall-clock time: "
+        f"{timedelta(seconds=round(time.monotonic() - pipeline_start))}"
+    )
     return OutgroupAssembly(
         assembly_name=assembly_name,
         assembly_path=qry,
@@ -2227,6 +2243,11 @@ def main():
     import shlex
     logger.info(f"Command: {shlex.join(sys.argv)}")
 
+    # Wall-clock tracking: monotonic for the elapsed measurement (immune to
+    # system clock adjustments), datetime for the human-readable start stamp.
+    run_start = time.monotonic()
+    logger.info(f"Run started: {datetime.now().isoformat(timespec='seconds')}")
+
     # Tee stderr to a file so that unlogged output (thread tracebacks, external
     # tool messages, etc.) is preserved alongside the structured log.
     stderr_log = output_dir / "dnadis.stderr.log"
@@ -2746,6 +2767,15 @@ def main():
         if failures:
             for name, err in failures:
                 logger.error(f"  FAILED: {name} — {err}")
+
+    # Report total wall-clock time for the whole pipeline.  Placed outside the
+    # multi-assembly block so it fires for single-assembly runs too, and before
+    # the failure exit so it is reported even when some assemblies failed.
+    elapsed = timedelta(seconds=round(time.monotonic() - run_start))
+    logger.done(
+        f"Total wall-clock time: {elapsed} "
+        f"(finished {datetime.now().isoformat(timespec='seconds')})"
+    )
 
     if failures:
         sys.exit(1)

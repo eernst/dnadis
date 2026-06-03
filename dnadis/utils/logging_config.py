@@ -30,11 +30,37 @@ from __future__ import annotations
 import logging
 import sys
 import threading
+import time
+from datetime import timedelta
 from pathlib import Path
 from typing import Optional
 
 # Thread-local assembly context for per-assembly log prefixes.
 _assembly_context = threading.local()
+
+# Thread-local per-phase wall-clock timing.  Enabled within a pipeline scope
+# via begin_phase_timing()/end_phase_timing(); while enabled, each phase()
+# call reports the elapsed time of the preceding phase on the same thread.
+# Thread-local so concurrent assemblies (cluster mode) time independently.
+_phase_timing = threading.local()
+
+
+def begin_phase_timing() -> None:
+    """Start per-phase wall-clock tracking on the current thread."""
+    _phase_timing.active = True
+    _phase_timing.name = None
+    _phase_timing.start = 0.0
+
+
+def end_phase_timing() -> None:
+    """Stop per-phase tracking, flushing the final phase's elapsed time."""
+    if getattr(_phase_timing, "active", False):
+        prev = getattr(_phase_timing, "name", None)
+        if prev:
+            elapsed = timedelta(seconds=round(time.monotonic() - _phase_timing.start))
+            logging.getLogger("dnadis.cli").done(f"  ↳ {prev} — {elapsed}")
+    _phase_timing.active = False
+    _phase_timing.name = None
 
 
 def set_assembly_context(name: str) -> None:
@@ -125,6 +151,16 @@ def _add_custom_levels():
 
 def _phase(self, message, *args, **kwargs):
     """Log a phase announcement (bold formatting in terminal)."""
+    # When per-phase timing is active on this thread, report the preceding
+    # phase's elapsed time before announcing the new phase, then start the
+    # clock for this one.
+    if getattr(_phase_timing, "active", False):
+        prev = getattr(_phase_timing, "name", None)
+        if prev:
+            elapsed = timedelta(seconds=round(time.monotonic() - _phase_timing.start))
+            self.done(f"  ↳ {prev} — {elapsed}")
+        _phase_timing.name = message
+        _phase_timing.start = time.monotonic()
     if self.isEnabledFor(PHASE_LEVEL):
         # Add custom attribute for formatting
         kwargs.setdefault('extra', {})['is_phase'] = True
