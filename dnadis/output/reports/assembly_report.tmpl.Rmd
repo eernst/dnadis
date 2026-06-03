@@ -1,5 +1,6 @@
 ---
-title: "dnadis Assembly Report"
+title: "Assembly Report"
+pagetitle: "dnadis: __ASMNAME__"
 params:
   summary_tsv: "__SUMMARY__"
   ref_lengths_tsv: "__REF__"
