@@ -2099,3 +2099,79 @@ def test_infer_query_subgenomes_cluster_score_defaults_to_raw_ident():
         assert low.query_subgenome is not None, (
             f"{ref_id}: expected low-identity copy to be secondary"
         )
+
+
+# ===================================================================
+# Compleasm setup validation tests
+# ===================================================================
+
+def _make_compleasm_exe(tmp_path):
+    """Create a fake compleasm executable so the PATH check passes."""
+    exe = tmp_path / "compleasm"
+    exe.write_text("#!/bin/sh\n")
+    exe.chmod(0o755)
+    return str(exe)
+
+
+def _make_complete_library(tmp_path, lineage="liliopsida"):
+    """Create a library dir with the lineage and placement marker present."""
+    lib = tmp_path / "mb_downloads"
+    (lib / f"{lineage}_odb12").mkdir(parents=True)
+    (lib / "placement_files.done").touch()
+    return lib
+
+
+def test_validate_compleasm_setup_complete_library(tmp_path):
+    """A complete library yields no fatal error and no warnings."""
+    from dnadis.detection.compleasm import validate_compleasm_setup
+
+    exe = _make_compleasm_exe(tmp_path)
+    lib = _make_complete_library(tmp_path)
+    fatal, warnings = validate_compleasm_setup("liliopsida", str(lib), exe)
+    assert fatal is None
+    assert warnings == []
+
+
+def test_validate_compleasm_setup_missing_library_dir(tmp_path):
+    """A nonexistent --compleasm-library directory is a fatal error."""
+    from dnadis.detection.compleasm import validate_compleasm_setup
+
+    exe = _make_compleasm_exe(tmp_path)
+    fatal, _ = validate_compleasm_setup(
+        "liliopsida", str(tmp_path / "does_not_exist"), exe
+    )
+    assert fatal is not None
+    assert "does not exist" in fatal
+
+
+def test_validate_compleasm_setup_missing_placement_marker(tmp_path):
+    """Library without placement_files.done warns about the download crash."""
+    from dnadis.detection.compleasm import validate_compleasm_setup
+
+    exe = _make_compleasm_exe(tmp_path)
+    lib = tmp_path / "mb_downloads"
+    (lib / "liliopsida_odb12").mkdir(parents=True)  # lineage present, no marker
+    fatal, warnings = validate_compleasm_setup("liliopsida", str(lib), exe)
+    assert fatal is None
+    assert any("placement_files.done" in w for w in warnings)
+
+
+def test_validate_compleasm_setup_no_library(tmp_path):
+    """No library set warns and recommends --compleasm-library."""
+    from dnadis.detection.compleasm import validate_compleasm_setup
+
+    exe = _make_compleasm_exe(tmp_path)
+    fatal, warnings = validate_compleasm_setup("liliopsida", None, exe)
+    assert fatal is None
+    assert any("--compleasm-library" in w for w in warnings)
+
+
+def test_validate_compleasm_setup_missing_exe(tmp_path):
+    """A --compleasm-path pointing at a missing file is fatal."""
+    from dnadis.detection.compleasm import validate_compleasm_setup
+
+    fatal, _ = validate_compleasm_setup(
+        "liliopsida", None, str(tmp_path / "nope" / "compleasm")
+    )
+    assert fatal is not None
+    assert "missing file" in fatal

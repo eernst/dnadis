@@ -2261,6 +2261,21 @@ def main():
     if args.ref_id_pattern:
         set_ref_id_patterns(compile_ref_id_patterns(args.ref_id_pattern))
 
+    # --- Validate compleasm setup up front ---
+    # Catches a missing library / placement marker before the pipeline starts,
+    # rather than letting compleasm crash inside its downloader at phase 18.
+    if args.compleasm_lineage and not args.skip_compleasm:
+        from dnadis.detection.compleasm import validate_compleasm_setup
+        fatal, comp_warnings = validate_compleasm_setup(
+            lineage=args.compleasm_lineage,
+            library_path=args.compleasm_library,
+            compleasm_exe=args.compleasm_path,
+        )
+        for w in comp_warnings:
+            logger.warning(w)
+        if fatal:
+            sys.exit(f"[error] {fatal}")
+
     # --- Build cluster config ---
     from dnadis.utils.distributed import ClusterConfig, create_executor
 

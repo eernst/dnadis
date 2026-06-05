@@ -94,6 +94,90 @@ def parse_compleasm_summary(summary_path: Path) -> Optional[CompleasmResult]:
     )
 
 
+def validate_compleasm_setup(
+    lineage: str,
+    library_path: Optional[str],
+    compleasm_exe: Optional[str],
+) -> Tuple[Optional[str], List[str]]:
+    """Check compleasm prerequisites up front.
+
+    Returns ``(fatal, warnings)`` where ``fatal`` is a single error message (or
+    None) and ``warnings`` is a list of advisory lines.  The caller is expected
+    to exit on ``fatal`` and log each warning.
+
+    The important case: when no complete library is supplied, compleasm's
+    ``Downloader`` runs a live BUSCO fetch on first use.  Its eager
+    placement-file download (``download_placement``) crashes on current odb12
+    data (``strain.split(".")`` sees >3 dot-fields), which aborts BUSCO deep in
+    a per-assembly phase.  A library directory that already contains the
+    lineage and a ``placement_files.done`` marker skips the download entirely.
+    Surfacing this before the pipeline starts turns a late, cryptic crash into
+    an actionable up-front message.
+    """
+    warnings: List[str] = []
+
+    # Executable resolvable?
+    if compleasm_exe:
+        if not Path(compleasm_exe).is_file():
+            return (
+                f"--compleasm-path points to a missing file: {compleasm_exe}",
+                warnings,
+            )
+    elif not have_exe("compleasm"):
+        warnings.append(
+            "compleasm not found in PATH and --compleasm-path not set; "
+            "BUSCO evaluation will be skipped. Install compleasm or pass "
+            "--compleasm-path."
+        )
+        return (None, warnings)
+
+    remedy = (
+        "Set --compleasm-library to a pre-downloaded library containing "
+        f"'{lineage}_odb*' and a 'placement_files.done' marker to skip the "
+        "download."
+    )
+
+    if not library_path:
+        warnings.append(
+            "No --compleasm-library set: compleasm will download BUSCO lineage "
+            "and placement files to ./mb_downloads on first use. Current BUSCO "
+            "odb12 data triggers a known crash in compleasm's placement-file "
+            "downloader, which aborts BUSCO evaluation. " + remedy
+        )
+        return (None, warnings)
+
+    lib = Path(library_path)
+    if not lib.is_dir():
+        return (
+            f"--compleasm-library directory does not exist: {library_path}",
+            warnings,
+        )
+
+    # Lineage present?  compleasm appends the odb version (e.g. liliopsida_odb12);
+    # accept a name the user already qualified with _odb.
+    if "_odb" in lineage:
+        lineage_present = (lib / lineage).is_dir()
+    else:
+        lineage_present = any(lib.glob(f"{lineage}_odb*"))
+    if not lineage_present:
+        warnings.append(
+            f"--compleasm-library {library_path} has no '{lineage}_odb*' "
+            "lineage; compleasm will try to download it at runtime (may crash "
+            "on current BUSCO data). " + remedy
+        )
+
+    # Placement marker present?  Its absence is what forces the crashing fetch.
+    if not (lib / "placement_files.done").exists():
+        warnings.append(
+            f"--compleasm-library {library_path} is missing the "
+            "'placement_files.done' marker; compleasm will attempt the "
+            "placement-file download that crashes on current BUSCO odb12 data. "
+            + remedy
+        )
+
+    return (None, warnings)
+
+
 def run_compleasm(
     fasta: Path,
     output_dir: Path,
