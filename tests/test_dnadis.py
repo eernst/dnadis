@@ -1740,6 +1740,81 @@ def test_infer_query_subgenomes_allotriploid():
         assert p_clf.query_subgenome_grp == 1
 
 
+def test_infer_query_subgenomes_fragment_does_not_block_split():
+    """A fragment must not be counted as a homeolog copy.
+
+    Reproduces a locus where both full-length homeologs score nearer the
+    secondary (low) cluster than the primary (high) cluster, plus a fragment
+    of one homeolog.  With three contigs but k=2, the copy-count rescue must
+    still fire on the *two full-length copies* so the higher-scoring one is
+    promoted to the primary (unsuffixed) subgenome.  Counting the fragment
+    would inflate the copy count (3 != 2) and leave all three labelled "B".
+    """
+    from dnadis.classification.classifier import infer_query_subgenomes
+    from dnadis.models import ContigClassification
+
+    clfs = []
+    idents = {}
+
+    # Background: 9 chromosomes with a clean bimodal split establishes the
+    # global k=2 GMM (primary ~0.69, secondary ~0.60).
+    for i in range(1, 10):
+        ref_id = f"chr{i}A"
+        for label, ident, full in [("high", 0.69, True), ("low", 0.60, True)]:
+            c = ContigClassification(
+                original_name=f"ctg_{i}_{label}", new_name="",
+                classification="chrom_assigned", reversed=False,
+                cobiont_taxid=None, cobiont_sci=None,
+                assigned_ref_id=ref_id, ref_gene_proportion=0.5,
+                contig_len=10_000_000,
+            )
+            c.is_full_length = full
+            clfs.append(c)
+            idents[(f"ctg_{i}_{label}", ref_id)] = ident
+
+    # Locus of interest: two full-length copies that BOTH score on the low
+    # side of the split, plus a fragment of the second copy.
+    ref_id = "chr10A"
+    c1 = ContigClassification(
+        original_name="c1", new_name="", classification="chrom_assigned",
+        reversed=False, cobiont_taxid=None, cobiont_sci=None,
+        assigned_ref_id=ref_id, ref_gene_proportion=0.5, contig_len=10_000_000,
+    )
+    c1.is_full_length = True
+    c2 = ContigClassification(
+        original_name="c2", new_name="", classification="chrom_assigned",
+        reversed=False, cobiont_taxid=None, cobiont_sci=None,
+        assigned_ref_id=ref_id, ref_gene_proportion=0.5, contig_len=10_000_000,
+    )
+    c2.is_full_length = True
+    f1 = ContigClassification(
+        original_name="f1", new_name="", classification="chrom_assigned",
+        reversed=False, cobiont_taxid=None, cobiont_sci=None,
+        assigned_ref_id=ref_id, ref_gene_proportion=0.5, contig_len=2_000_000,
+    )
+    f1.is_full_length = False
+    clfs.extend([c1, c2, f1])
+    # All three sit near (or below) the secondary cluster mean.
+    idents[("c1", ref_id)] = 0.605
+    idents[("c2", ref_id)] = 0.595
+    idents[("f1", ref_id)] = 0.600
+
+    infer_query_subgenomes(clfs, idents)
+
+    # The two full-length copies must end up in different subgenome groups,
+    # with the higher-scoring one (c1) promoted to the primary (no suffix).
+    assert c1.query_subgenome_grp != c2.query_subgenome_grp, (
+        "two full-length homeologs should split into different subgenomes"
+    )
+    assert c1.query_subgenome is None, "highest-scoring copy should be primary"
+    assert c2.query_subgenome is not None, "second copy should get a suffix"
+    # The fragment must stay with its homeolog (c2's secondary group), not
+    # form a spurious third subgenome.
+    assert f1.query_subgenome_grp == c2.query_subgenome_grp, (
+        "fragment should follow its homeolog, not create a new subgenome"
+    )
+
+
 # ===================================================================
 # Reciprocal translocation assignment tests
 # ===================================================================

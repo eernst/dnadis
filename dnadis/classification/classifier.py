@@ -1000,33 +1000,49 @@ def infer_query_subgenomes(
                 clf.query_subgenome_grp = 1
             continue
 
-        # Sort contigs by cluster score descending
-        ref_clfs.sort(
+        def nearest_cluster(clf: ContigClassification) -> int:
+            score = qr_cluster_score.get((clf.original_name, ref_id), 0.0)
+            return min(
+                range(gmm_k),
+                key=lambda j: abs(score - sorted_means[j]),
+            )
+
+        # The number of distinct homeologs at a locus is set by its
+        # full-length copies; fragments are partial pieces of one of those
+        # copies, not independent homeologs.  Counting them would inflate the
+        # copy count and defeat the rescue below.  is_full_length is None only
+        # when full-length status was never computed (e.g. unit tests) — treat
+        # that as a copy so behaviour matches the original len(ref_clfs) rule.
+        copies = [c for c in ref_clfs if c.is_full_length is not False]
+        fragments = [c for c in ref_clfs if c.is_full_length is False]
+
+        # Sort copies by cluster score descending so the highest-identity copy
+        # maps to the primary (unsuffixed) subgenome.
+        copies.sort(
             key=lambda c: qr_cluster_score.get((c.original_name, ref_id), 0.0),
             reverse=True,
         )
 
-        # Assign each contig to the nearest GMM cluster (by mean)
-        assignments: List[int] = []  # 0-based cluster per contig
-        for clf in ref_clfs:
-            score = qr_cluster_score.get((clf.original_name, ref_id), 0.0)
-            best_cluster = min(
-                range(gmm_k),
-                key=lambda j: abs(score - sorted_means[j]),
-            )
-            assignments.append(best_cluster)
+        # Assign each copy to the nearest GMM cluster (by mean)
+        copy_assign = [nearest_cluster(c) for c in copies]
 
-        # Rescue: if this chromosome has exactly k copies but they all
-        # landed in the same cluster, rank-assign instead (highest
-        # identity → primary, next → B, etc.).  This is safe because
-        # the global split is already validated across chromosomes;
-        # these are borderline cases where the per-chromosome gap is
-        # smaller than the distance between cluster means.
-        if len(ref_clfs) == gmm_k and len(set(assignments)) == 1:
-            # ref_clfs is sorted by identity descending above
-            assignments = list(range(gmm_k))
+        # Rescue: if this chromosome has exactly k full-length copies but they
+        # all landed in the same cluster, rank-assign instead (highest
+        # identity → primary, next → B, etc.).  This is safe because the global
+        # split is already validated across chromosomes; these are borderline
+        # cases where the per-chromosome gap is smaller than the distance
+        # between cluster means.
+        if len(copies) == gmm_k and len(set(copy_assign)) == 1:
+            # copies is sorted by score descending above
+            copy_assign = list(range(gmm_k))
 
-        for clf, cluster in zip(ref_clfs, assignments):
+        # Fragments follow their nearest cluster mean — a fragment is not an
+        # independent copy, so it never participates in the rescue.
+        frag_assign = [nearest_cluster(c) for c in fragments]
+
+        for clf, cluster in (
+            list(zip(copies, copy_assign)) + list(zip(fragments, frag_assign))
+        ):
             clf.query_subgenome_grp = cluster + 1  # 1-based
             if cluster == 0:
                 clf.query_subgenome = None  # Primary — no suffix
