@@ -1,6 +1,6 @@
 # dnadis
 
-**Genome assembly post-processing tool for contig classification, homology assignment, and quality control** - the *de novo* assembly disambiguator
+**Genome assembly post-processing tool for contig classification, homology assignment, and quality control** - a *de novo* assembly disambiguator
 
 `dnadis` classifies contigs from a *de novo* genome assembly into biological categories (chromosomes, organelles, rDNA, cobionts, debris) using nucleotide or protein-anchored synteny with a reference, organelle/rDNA alignments, and taxonomic classification. Beyond classification, it evaluates assembly quality through BUSCO completeness scoring (via compleasm), syntenic block coverage, and alignment identity metrics, and produces rich interactive HTML reports for both individual assemblies and multi-assembly comparisons. Multi-assembly mode aggregates individual assessments for easy comparisons between various assemblies of the same individual, between different individuals of the same species, or even between multiple species.
 
