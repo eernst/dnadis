@@ -1004,10 +1004,26 @@ def run_assembly(
     else:
         logger.info("Phase 6: Skipping cobiont detection")
 
+    # Filter cobionts by coverage threshold (low coverage hits may be false
+    # positives: a tiny vector/adapter or conserved-gene match can earn a high
+    # centrifuger score on an otherwise chromosomal contig). Filter BEFORE the
+    # debris phase so low-coverage hits remain in remaining_contigs and get
+    # reference-debris screened rather than dropping straight to unclassified.
+    cobionts_filtered = {
+        contig: hit for contig, hit in cobionts.items()
+        if hit.coverage >= args.cobiont_min_coverage
+    }
+    if len(cobionts_filtered) < len(cobionts):
+        n_filtered = len(cobionts) - len(cobionts_filtered)
+        logger.info(
+            f"Filtered {n_filtered} low-coverage cobiont hits "
+            f"(coverage < {args.cobiont_min_coverage:.0%})"
+        )
+
     # --- Phase 7: Debris/unclassified classification ---
     logger.phase("Phase 7: Debris/unclassified classification")
 
-    already_classified = already_classified | set(cobionts.keys()) | chromosome_contigs
+    already_classified = already_classified | set(cobionts_filtered.keys()) | chromosome_contigs
     remaining_contigs = set(qry_lengths.keys()) - already_classified
 
     additional_debris, _unclassified, other_debris_hits = classify_debris_and_unclassified(
@@ -1065,18 +1081,8 @@ def run_assembly(
     # --- Phase 11: Classification ---
     logger.phase("Phase 11: Classifying all contigs")
 
-    # Filter cobionts by coverage threshold (low coverage hits may be false positives)
-    cobionts_filtered = {
-        contig: hit for contig, hit in cobionts.items()
-        if hit.coverage >= args.cobiont_min_coverage
-    }
-    if len(cobionts_filtered) < len(cobionts):
-        n_filtered = len(cobionts) - len(cobionts_filtered)
-        logger.info(
-            f"Filtered {n_filtered} low-coverage cobiont hits "
-            f"(coverage < {args.cobiont_min_coverage:.0%})"
-        )
-
+    # cobionts_filtered (coverage >= threshold) was computed before the debris
+    # phase so low-coverage hits could be debris-screened; reuse it here.
     classifications = classify_all_contigs(
         query_fasta=qry,
         query_lengths=qry_lengths,
