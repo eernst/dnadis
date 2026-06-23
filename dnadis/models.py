@@ -528,7 +528,13 @@ class DepthStats:
 # ----------------------------
 @dataclass
 class ChromRefSummary:
-    """Per-reference-chromosome summary for one assembly."""
+    """Per-reference-chromosome summary for one assembly.
+
+    ``n_contigs`` and the quality fields count chrom_assigned contigs only
+    (the Overview pill heatmap uses these as a copy-number / identity signal).
+    ``n_anchor`` / ``n_fragment`` and ``state`` additionally account for
+    chrom_fragment contigs for the contiguity / under-assembly view.
+    """
     ref_id: str
     ref_length: int
     n_contigs: int
@@ -537,6 +543,10 @@ class ChromRefSummary:
     is_full_length: bool
     has_both_telomeres: bool
     mean_identity: Optional[float]
+    # Contiguity accounting (chrom_assigned + chrom_fragment)
+    n_anchor: int = 0      # chrom_assigned contigs
+    n_fragment: int = 0    # chrom_fragment contigs
+    state: str = "absent"  # T2T/single/multiple/fragmented/fragments_only/absent
 
 
 @dataclass

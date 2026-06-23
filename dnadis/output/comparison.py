@@ -21,6 +21,32 @@ from dnadis.models import (
 )
 
 
+# Per-reference-chromosome assembly states (best → missing).  Mirrors the R
+# helper compute_chrom_contiguity() in reports/common.R; keep the two in sync.
+CHROM_STATE_LEVELS = [
+    "T2T", "single", "multiple", "fragmented", "fragments_only", "absent",
+]
+
+
+def _chrom_contiguity_state(
+    n_anchor: int, n_fragment: int, both_telo: bool, any_full_length: bool
+) -> str:
+    """Classify one reference chromosome's assembly state for an assembly.
+
+    n_anchor counts chrom_assigned contigs (substantial, gate-passing pieces);
+    n_fragment counts chrom_fragment contigs (sub-chr_like_minlen arms).
+    """
+    if n_anchor + n_fragment == 0:
+        return "absent"
+    if n_anchor == 0:
+        return "fragments_only"
+    if n_anchor == 1 and n_fragment == 0:
+        return "T2T" if (both_telo and any_full_length) else "single"
+    if n_anchor >= 2 and n_fragment == 0:
+        return "multiple"
+    return "fragmented"
+
+
 def _compute_n50_l50(lengths: List[int]) -> tuple[int, int]:
     """Compute N50 and L50 from a list of contig lengths.
 
@@ -210,11 +236,18 @@ def build_assembly_result(
 
     # --- Per-reference-chromosome detail ---
     chrom_ref_coverage: Dict[str, ChromRefSummary] = {}
-    # Group chrom_assigned by assigned_ref_id
+    # Group chrom_assigned by assigned_ref_id (drives the Overview pill heatmap:
+    # n_contigs is the copy-number indicator, quality fields the identity signal).
     ref_groups: Dict[str, List[ContigClassification]] = defaultdict(list)
     for c in chrom_assigned:
         if c.assigned_ref_id:
             ref_groups[c.assigned_ref_id].append(c)
+
+    # Group chrom_fragment by assigned_ref_id (for the contiguity / state view).
+    frag_groups: Dict[str, List[ContigClassification]] = defaultdict(list)
+    for c in classifications:
+        if c.classification == "chrom_fragment" and c.assigned_ref_id:
+            frag_groups[c.assigned_ref_id].append(c)
 
     for ref_id, ref_len in ref_lengths_norm.items():
         contigs_for_ref = ref_groups.get(ref_id, [])
@@ -237,6 +270,11 @@ def build_assembly_result(
             if c.seq_identity_vs_ref is not None:
                 ident_vals.append(c.seq_identity_vs_ref)
 
+        # Contiguity state from anchors (chrom_assigned) vs fragments.
+        n_anchor = n_contigs_ref
+        n_fragment = len(frag_groups.get(ref_id, []))
+        state = _chrom_contiguity_state(n_anchor, n_fragment, any_both_telo, any_full_length)
+
         chrom_ref_coverage[ref_id] = ChromRefSummary(
             ref_id=ref_id,
             ref_length=ref_len,
@@ -246,6 +284,9 @@ def build_assembly_result(
             is_full_length=any_full_length,
             has_both_telomeres=any_both_telo,
             mean_identity=sum(ident_vals) / len(ident_vals) if ident_vals else None,
+            n_anchor=n_anchor,
+            n_fragment=n_fragment,
+            state=state,
         )
 
     return AssemblyResult(
@@ -320,6 +361,12 @@ def write_comparison_summary_tsv(
         "chrom_assigned_bp",
         "n_chrom_fragment",
         "chrom_fragment_bp",
+        "n_chr_t2t",
+        "n_chr_single",
+        "n_chr_multiple",
+        "n_chr_fragmented",
+        "n_chr_fragments_only",
+        "n_chr_absent",
         "n_full_length",
         "n_both_telomeres",
         "n_any_telomere",
@@ -369,6 +416,12 @@ def write_comparison_summary_tsv(
             debris_bp = r.classification_bp.get("debris", 0) + r.classification_bp.get("chrom_debris", 0)
             unclassified_bp = r.classification_bp.get("unclassified", 0)
 
+            # Per-chromosome state tally (excludes absent refs below chr scale is
+            # already handled upstream; here we count every reference chromosome).
+            state_counts = defaultdict(int)
+            for crs in r.chrom_ref_coverage.values():
+                state_counts[crs.state] += 1
+
             row = [
                 r.assembly_name,
                 str(r.total_contigs),
@@ -381,6 +434,12 @@ def write_comparison_summary_tsv(
                 str(r.classification_bp.get("chrom_assigned", 0)),
                 str(r.classification_counts.get("chrom_fragment", 0)),
                 str(r.classification_bp.get("chrom_fragment", 0)),
+                str(state_counts.get("T2T", 0)),
+                str(state_counts.get("single", 0)),
+                str(state_counts.get("multiple", 0)),
+                str(state_counts.get("fragmented", 0)),
+                str(state_counts.get("fragments_only", 0)),
+                str(state_counts.get("absent", 0)),
                 str(r.n_full_length),
                 str(r.n_with_both_telomeres),
                 str(r.n_with_any_telomere),
@@ -435,6 +494,9 @@ def write_chromosome_completeness_tsv(
         "is_full_length",
         "has_both_telomeres",
         "mean_identity",
+        "n_anchor",
+        "n_fragment",
+        "state",
     ]
 
     def _fmt(val, fmt_str=".4f"):
@@ -460,6 +522,9 @@ def write_chromosome_completeness_tsv(
                         "yes" if crs.is_full_length else "no",
                         "yes" if crs.has_both_telomeres else "no",
                         _fmt(crs.mean_identity),
+                        str(crs.n_anchor),
+                        str(crs.n_fragment),
+                        crs.state,
                     ]
                 else:
                     row = [
@@ -472,5 +537,8 @@ def write_chromosome_completeness_tsv(
                         "no",
                         "no",
                         "",
+                        "0",
+                        "0",
+                        "absent",
                     ]
                 fh.write("\t".join(row) + "\n")

@@ -1161,6 +1161,72 @@ has_scatter_cov   <- "ref_coverage" %in% names(scatter_df) &&
                      !all(is.na(scatter_df$ref_coverage))
 ```
 
+`r if (has_any_chrom && all(c("state","n_anchor","n_fragment") %in% names(compl_df))) "## Contiguity" else ""`
+
+```{r contiguity_cmp_build, include=FALSE}
+ct_has <- has_any_chrom && all(c("state", "n_anchor", "n_fragment") %in% names(compl_df))
+```
+
+```{r contiguity_cmp_intro, eval=ct_has, results='asis'}
+cat('<p class="section-intro">Per-reference-chromosome <b>assembly state</b> across assemblies — a companion to <b>Overview</b> (which encodes copy number and identity). Each cell shows how a chromosome is assembled: a single contig, multiple full-length copies, fragmented (a full-length anchor plus fragments), fragments-only (chromosomal fragments with no full-length anchor), or absent.</p>')
+```
+
+```{r contiguity_cmp_heatmap, eval=ct_has, fig.width=10, fig.height=max(3, n_asm * 0.34 + 2.4)}
+organelle_ids <- ref_lengths %>%
+  filter(grepl("^chr[CM]$|^chrPt$|^chrMt$", ref_id)) %>% pull(ref_id)
+
+ctdf <- compl_df %>%
+  filter(!ref_id %in% organelle_ids) %>%
+  left_join(ref_lengths %>% select(ref_id, subgenome), by = "ref_id") %>%
+  mutate(
+    sg = if (has_subgenomes) subgenome else "G",
+    chrom_num = as.integer(str_extract(ref_id, "\\d+")),
+    chrom_num = factor(chrom_num, levels = sort(unique(chrom_num))),
+    assembly = factor(assembly, levels = rev(asm_names)),
+    state = factor(state, levels = chrom_state_levels),
+    tooltip = paste0(ref_id, " — ", assembly,
+                     "\nState: ", chrom_state_labels[as.character(state)],
+                     "\nAssigned contigs: ", n_anchor,
+                     "\nFragment contigs: ", n_fragment)
+  )
+
+p_ct_hm <- ggplot(ctdf, aes(x = chrom_num, y = assembly, fill = state)) +
+  ggiraph::geom_tile_interactive(
+    aes(tooltip = tooltip, data_id = paste(assembly, ref_id)),
+    color = "white", linewidth = 0.3, width = 0.95, height = 0.95) +
+  scale_fill_manual(values = chrom_state_colors, labels = chrom_state_labels,
+                    drop = FALSE, name = "State") +
+  { if (has_subgenomes) facet_grid(cols = vars(sg), scales = "free_x", space = "free_x") } +
+  theme_minimal(base_size = base_font_pt, base_family = base_family) +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(size = base_font_pt - 2),
+        legend.position = "bottom") +
+  labs(title = "Per-chromosome assembly state across assemblies",
+       x = "Chromosome", y = NULL)
+
+pdf_ct_hm <- paste0(params$out_prefix, ".chromosome_contiguity.pdf")
+save_pdf(pdf_ct_hm, p_ct_hm, width = 7.2, height = max(2.4, n_asm * 0.22 + 1.8))
+girafe_styled(ggobj = p_ct_hm, width_svg = 10, height_svg = max(3, n_asm * 0.34 + 2.4))
+```
+
+```{r contiguity_cmp_bar, eval=ct_has, fig.width=10, fig.height=max(2.6, n_asm * 0.3 + 1.6)}
+bar_df <- ctdf %>% count(assembly, state, name = "n")
+
+p_ct_bar <- ggplot(bar_df, aes(y = assembly, x = n, fill = state)) +
+  ggiraph::geom_col_interactive(
+    aes(tooltip = paste0(assembly, "\n", chrom_state_labels[as.character(state)], ": ", n)),
+    width = 0.72) +
+  scale_fill_manual(values = chrom_state_colors, labels = chrom_state_labels,
+                    drop = FALSE, name = "State") +
+  theme_minimal(base_size = base_font_pt, base_family = base_family) +
+  axis_theme +
+  theme(panel.grid.major.y = element_blank(), legend.position = "bottom") +
+  labs(title = "Chromosome assembly-state composition by assembly",
+       x = "Reference chromosomes", y = NULL)
+
+girafe_styled(ggobj = p_ct_bar, width_svg = 10, height_svg = max(3, n_asm * 0.3 + 1.6))
+```
+
 `r if (has_any_chrom) "## Chromosome Summary"`
 
 ```{r chrom_summary_setup, eval=has_any_chrom, include=FALSE}
