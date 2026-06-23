@@ -1454,13 +1454,14 @@ cat('<div class="note-box">Read depth data is not available. Provide sequencing 
 
 # Extended classification colors for depth (includes chrC/chrM splits)
 depth_classification_order <- c(
-  "chrom_assigned", "chrom_debris", "chrom_unassigned",
+  "chrom_assigned", "chrom_fragment", "chrom_debris", "chrom_unassigned",
   "chrC", "chrC_debris", "chrM", "chrM_debris",
   "organelle_complete", "organelle_debris",
   "rDNA", "cobiont", "debris", "unclassified"
 )
 depth_classification_colors <- c(
   "chrom_assigned"     = oi[5],
+  "chrom_fragment"     = lighten(oi[5], amount = 0.25),
   "chrom_debris"       = lighten(oi[5], amount = 0.5),
   "chrom_unassigned"   = oi[2],
   "chrC"               = oi[3],

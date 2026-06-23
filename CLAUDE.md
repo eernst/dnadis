@@ -270,7 +270,7 @@ The permissive parameters are balanced by downstream filtering (identity thresho
 
 **Rfam database auto-pressing**: The bundled Rfam covariance models are stored in text format and automatically pressed to binary indices (`.i1f`, `.i1i`, `.i1m`, `.i1p`) by Infernal on first use. The tool checks for existing indices and only presses if they're missing or outdated. This eliminates the need for manual database preparation.
 
-**Compleasm (BUSCO) evaluation**: Phase 17 runs compleasm on two FASTA subsets: `chrs.fasta` (chromosome-assigned contigs) and `non_chrs.fasta` (debris + unclassified + cobionts). Requires `--compleasm-lineage` (e.g., `eukaryota`, `viridiplantae`, `embryophyta`). Optionally specify `--compleasm-library` for pre-downloaded lineage files to avoid runtime downloads. Both compleasm runs are submitted in parallel via the executor. Results are stored as `CompleasmResult` dataclass fields on `AssemblyResult` (`compleasm_chrs`, `compleasm_non_chrs`) and included in `comparison_summary.tsv` columns (`compleasm_lineage`, `compleasm_chrs_S/D/F/I/M`, `compleasm_non_chrs_S/D/F/I/M`). The detection module is in `detection/compleasm.py`, which parses compleasm's `summary.txt` output format. Cached results are reused if the output directory already contains a `summary.txt`.
+**Compleasm (BUSCO) evaluation**: Phase 17 runs compleasm on two FASTA subsets: `chrs.fasta` (chromosomal contigs — `chrom_assigned` and `chrom_fragment`) and `non_chrs.fasta` (debris + unclassified + cobionts). Requires `--compleasm-lineage` (e.g., `eukaryota`, `viridiplantae`, `embryophyta`). Optionally specify `--compleasm-library` for pre-downloaded lineage files to avoid runtime downloads. Both compleasm runs are submitted in parallel via the executor. Results are stored as `CompleasmResult` dataclass fields on `AssemblyResult` (`compleasm_chrs`, `compleasm_non_chrs`) and included in `comparison_summary.tsv` columns (`compleasm_lineage`, `compleasm_chrs_S/D/F/I/M`, `compleasm_non_chrs_S/D/F/I/M`). The detection module is in `detection/compleasm.py`, which parses compleasm's `summary.txt` output format. Cached results are reused if the output directory already contains a `summary.txt`.
 
 ## Testing Philosophy
 
@@ -373,13 +373,14 @@ Each contig is scored independently. Multiple contigs can still be assigned to t
 
 1. Organelle complete (if BLAST coverage ≥80%)
 2. rDNA (if BLAST coverage ≥50%)
-3. Chromosome assigned (if passes ALL synteny gates)
+3. Chromosome assigned (if length ≥ `--chr-like-minlen` and passes ALL synteny gates)
 4. Chromosome unassigned (if length ≥ `--chr-like-minlen` but failed synteny gates)
 5. Cobiont (if centrifuger score ≥1000 AND coverage ≥0.50; two-gate filtering prevents false positives from conserved genes)
 6. Chromosome debris (if high coverage/identity vs assembled chromosomes)
-7. Organelle debris (if partial organelle match)
-8. Debris (if reference coverage >50% or protein hits ≥2)
-9. Unclassified (no evidence)
+7. Chromosome fragment (if length < `--chr-like-minlen` but passed the synteny gate, i.e. has a `best_ref`, AND its reference footprint is not redundant with a longer placed contig). Redundant ones (footprint ≥80% contained in a longer contig at identity ≥ `--chr-debris-min-identity`) become chromosome debris instead. Containment is computed from each contig's merged reference intervals (`macro_block_rows`), using the reference as a shared coordinate system. Chromosome fragments are grouped with chromosomes for `chrs.fasta`, the per-subgenome FASTAs, the compleasm `chrs` subset, phylogeny BUSCO extraction, and reference-guided scaffolding (they are scaffold *members*, not anchors), but are excluded from full-chromosome-only quality metrics (full-length %, weighted identity) and rearrangement analysis.
+8. Organelle debris (if partial organelle match)
+9. Debris (if reference coverage >50% or protein hits ≥2)
+10. Unclassified (no evidence)
 
 **Confidence levels** are assigned by `classifier.py:assign_classification_confidence()` based on category-specific criteria (gene proportion, GC deviation, coverage, identity, protein hits).
 

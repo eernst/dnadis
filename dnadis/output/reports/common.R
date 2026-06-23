@@ -106,6 +106,7 @@ bar_cell <- function(pct, col, label, alpha = 0.25) {
 
 classification_colors <- c(
   "chrom_assigned"     = oi[5],
+  "chrom_fragment"     = lighten(oi[5], amount = 0.25),
   "chrom_unassigned"   = oi[2],
   "organelle_complete" = oi[3],
   "organelle_debris"   = oi[4],
@@ -118,6 +119,7 @@ classification_colors <- c(
 
 classification_labels <- c(
   "chrom_assigned"     = "Chromosome (assigned)",
+  "chrom_fragment"     = "Chromosome (fragment)",
   "chrom_unassigned"   = "Chromosome (unassigned)",
   "organelle_complete" = "Organelle (complete)",
   "organelle_debris"   = "Organelle (debris)",
@@ -130,6 +132,7 @@ classification_labels <- c(
 
 clf_labels_short <- c(
   "chrom_assigned"     = "Chr assigned",
+  "chrom_fragment"     = "Chr fragment",
   "chrom_unassigned"   = "Chr unassigned",
   "organelle_complete" = "Organelle",
   "organelle_debris"   = "Organelle debris",
@@ -141,8 +144,8 @@ clf_labels_short <- c(
 )
 
 classification_levels <- c(
-  "chrom_assigned", "chrom_unassigned", "organelle_complete", "organelle_debris",
-  "rDNA", "cobiont", "chrom_debris", "debris", "unclassified"
+  "chrom_assigned", "chrom_fragment", "chrom_unassigned", "organelle_complete",
+  "organelle_debris", "rDNA", "cobiont", "chrom_debris", "debris", "unclassified"
 )
 
 # ---------------------------------------------------------------------------

@@ -59,7 +59,7 @@ def write_classified_fastas(
 
     for clf in classifications:
         # Map classification to output category
-        if clf.classification == "chrom_assigned":
+        if clf.classification in ("chrom_assigned", "chrom_fragment"):
             category = "chrs"
         elif clf.classification == "chrom_unassigned":
             category = "unclassified"

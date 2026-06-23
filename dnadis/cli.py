@@ -1116,6 +1116,11 @@ def run_assembly(
         rearrangement_threshold=args.rearrangement_threshold,
         rearrangement_density_frac=args.rearrangement_density_frac,
         synteny_mode=args.synteny_mode,
+        # A sub-threshold contig is reclassified from chrom_fragment to
+        # chrom_debris only when its reference footprint is largely contained
+        # within a longer placed contig AND it aligns at the same high identity
+        # used for chromosome-debris detection.
+        fragment_debris_min_identity=args.chr_debris_min_identity,
     )
 
     for clf in classifications:

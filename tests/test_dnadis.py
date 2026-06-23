@@ -3,6 +3,8 @@ import textwrap
 from pathlib import Path
 import sys
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import dnadis
@@ -1150,15 +1152,16 @@ def test_scaffold_contig_grouping():
             assigned_ref_id="chr2A", ref_gene_proportion=0.8, contig_len=2000000,
             query_subgenome_grp=1, seq_identity_vs_ref=0.92,
         ),
-        # chrom_debris contig with evidence pointing to chr1A (scaffolding candidate)
+        # chrom_fragment contig with evidence pointing to chr1A (scaffolding candidate)
         ContigClassification(
-            original_name="ctg4", new_name="debris_1", classification="chrom_debris",
+            original_name="ctg4", new_name="chr1A_f1", classification="chrom_fragment",
             reversed=False, cobiont_taxid=None, cobiont_sci=None,
             assigned_ref_id="chr1A", ref_gene_proportion=None, contig_len=50000,
+            seq_identity_vs_ref=0.93,
         ),
-        # Plain debris contig (should NOT be grouped - only chrom_debris allowed)
+        # chrom_debris contig (redundant duplicate; must NOT be scaffolded)
         ContigClassification(
-            original_name="ctg4b", new_name="debris_2", classification="debris",
+            original_name="ctg4b", new_name="debris_1", classification="chrom_debris",
             reversed=False, cobiont_taxid=None, cobiont_sci=None,
             assigned_ref_id="chr1A", ref_gene_proportion=None, contig_len=30000,
         ),
@@ -1180,16 +1183,140 @@ def test_scaffold_contig_grouping():
         },
     )
 
-    # (chr1A, 1) should have ctg1, ctg2, and chrom_debris ctg4
+    # (chr1A, 1) should have ctg1, ctg2, and chrom_fragment ctg4
     assert set(groups[("chr1A", 1)]) == {"ctg1", "ctg2", "ctg4"}
     # (chr2A, 1) should have ctg3
     assert groups[("chr2A", 1)] == ["ctg3"]
-    # ctg4b (plain debris) and ctg5 should not appear anywhere
+    # ctg4b (chrom_debris, redundant) and ctg5 should not appear anywhere
     all_grouped = set()
     for contigs in groups.values():
         all_grouped.update(contigs)
     assert "ctg4b" not in all_grouped
     assert "ctg5" not in all_grouped
+
+
+# ----------------------------
+# Chromosome-fragment containment tests
+# ----------------------------
+def test_containment_fraction_basic():
+    """Overlap fraction of a footprint against merged anchor intervals."""
+    from dnadis.classification.classifier import _containment_fraction
+
+    # Fully contained
+    assert _containment_fraction([(1_000_000, 2_000_000)], [(0, 10_000_000)]) == 1.0
+    # Disjoint
+    assert _containment_fraction([(12_000_000, 13_000_000)], [(0, 10_000_000)]) == 0.0
+    # Half overlap
+    assert _containment_fraction([(0, 100), (200, 300)], [(0, 100)]) == pytest.approx(0.5)
+    # Empty footprint → 0.0 (no span)
+    assert _containment_fraction([], [(0, 100)]) == 0.0
+
+
+def test_build_ref_footprints_merges_intervals():
+    """Per-(contig, ref) reference intervals are merged from macro rows."""
+    from dnadis.classification.classifier import _build_ref_footprints
+
+    rows = [
+        _make_macro_row("ctg1", "chr1A", "+", 0, 100000, 50000, 0, 100000),
+        # Overlapping ref interval on same contig/ref → merged
+        _make_macro_row("ctg1", "chr1A", "+", 100000, 200000, 50000, 90000, 250000),
+        # Separate contig
+        _make_macro_row("ctg2", "chr1A", "+", 0, 100000, 50000, 500000, 600000),
+    ]
+    fp = _build_ref_footprints(rows)
+    assert fp[("ctg1", "chr1A")] == [(0, 250000)]
+    assert fp[("ctg2", "chr1A")] == [(500000, 600000)]
+
+
+def _minimal_chain_evidence(macro_rows, best_chain_ident, ref_span_bp):
+    """Build a ChainEvidenceResult with only the fields classify_all_contigs reads."""
+    from dnadis.models import ChainEvidenceResult
+
+    return ChainEvidenceResult(
+        qlens_from_paf={},
+        qr_union_bp={},
+        qr_matches={},
+        qr_alnlen={},
+        qr_gene_count={},
+        contig_total={},
+        contig_refs={},
+        qr_score_topk={},
+        qr_weight_all={},
+        qr_nchains_kept={},
+        best_ref={},
+        best_score={},
+        best_bp={},
+        second_ref={},
+        second_score={},
+        second_bp={},
+        chain_segments_rows=[],
+        macro_block_rows=macro_rows,
+        chain_summary_rows=[],
+        qr_ref_span_bp=ref_span_bp,
+        qr_best_chain_ident=best_chain_ident,
+    )
+
+
+def test_classify_chrom_fragment_vs_debris():
+    """Sub-threshold contigs split into chrom_fragment (unique) vs chrom_debris
+    (contained in a longer contig at high identity)."""
+    from dnadis.classification.classifier import classify_all_contigs
+
+    chr_like_minlen = 5_000_000
+    query_lengths = {
+        "anchor": 10_000_000,    # full chromosome (>= minlen)
+        "frag_unique": 1_000_000,  # disjoint arm → chrom_fragment
+        "frag_dup": 1_000_000,     # contained, high identity → chrom_debris
+    }
+    best_ref = {"anchor": "chr1A", "frag_unique": "chr1A", "frag_dup": "chr1A"}
+
+    macro_rows = [
+        # Anchor spans chr1A 0–10 Mb
+        _make_macro_row("anchor", "chr1A", "+", 0, 10_000_000, 9_000_000, 0, 10_000_000),
+        # Unique fragment maps to an unoccupied region (12–13 Mb)
+        _make_macro_row("frag_unique", "chr1A", "+", 0, 1_000_000, 900_000, 12_000_000, 13_000_000),
+        # Duplicate fragment maps inside the anchor's footprint (1–2 Mb)
+        _make_macro_row("frag_dup", "chr1A", "+", 0, 1_000_000, 900_000, 1_000_000, 2_000_000),
+    ]
+    best_chain_ident = {
+        ("anchor", "chr1A"): 0.96,
+        ("frag_unique", "chr1A"): 0.75,
+        ("frag_dup", "chr1A"): 0.98,
+    }
+    ref_span_bp = {
+        ("anchor", "chr1A"): 10_000_000,
+        ("frag_unique", "chr1A"): 1_000_000,
+        ("frag_dup", "chr1A"): 1_000_000,
+    }
+    ev = _minimal_chain_evidence(macro_rows, best_chain_ident, ref_span_bp)
+
+    classifications = classify_all_contigs(
+        query_fasta=Path("/nonexistent.fa"),
+        query_lengths=query_lengths,
+        best_ref=best_ref,
+        chr_like_minlen=chr_like_minlen,
+        ev=ev,
+        ref_gene_counts={},
+        chrC_contig=None,
+        chrM_contig=None,
+        organelle_debris=set(),
+        rdna_contigs=set(),
+        cobionts={},
+        chromosome_debris=set(),
+        other_debris=set(),
+        add_subgenome_suffix=None,
+        ref_lengths={"chr1A": 15_000_000},
+        synteny_mode="nucleotide",
+    )
+
+    by_name = {c.original_name: c for c in classifications}
+    assert by_name["anchor"].classification == "chrom_assigned"
+    assert by_name["frag_unique"].classification == "chrom_fragment"
+    assert by_name["frag_dup"].classification == "chrom_debris"
+    # The unique fragment keeps its reference assignment and is named as a fragment
+    assert by_name["frag_unique"].assigned_ref_id == "chr1A"
+    assert by_name["frag_unique"].new_name.startswith("chr1A")
+    assert "_f" in by_name["frag_unique"].new_name
 
 
 # ----------------------------

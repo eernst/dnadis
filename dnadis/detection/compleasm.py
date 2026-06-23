@@ -306,8 +306,8 @@ def derive_chrs_non_chrs_compleasm(
     """Derive (compleasm_chrs, compleasm_non_chrs) from a full-assembly run.
 
     Splits ``full_result.full_table_path`` by joining each row's contig
-    against ``classifications`` (chrom_assigned → chrs; everything else
-    → non_chrs).  For each split, writes a compleasm-format
+    against ``classifications`` (chrom_assigned and chrom_fragment → chrs;
+    everything else → non_chrs).  For each split, writes a compleasm-format
     ``summary.txt`` and a filtered ``full_table_busco_format.tsv`` under
     ``{out_dir}/{lineage}/`` so the user can browse the split directly.
 
@@ -329,7 +329,7 @@ def derive_chrs_non_chrs_compleasm(
 
     contig_to_split: dict = {}
     for clf in classifications:
-        cat = "chrs" if clf.classification == "chrom_assigned" else "non_chrs"
+        cat = "chrs" if clf.classification in ("chrom_assigned", "chrom_fragment") else "non_chrs"
         contig_to_split[clf.original_name] = cat
         contig_to_split[clf.new_name] = cat
 

@@ -124,7 +124,10 @@ def _group_contigs_by_ref_chrom(
     """Group contigs by target reference chromosome for scaffolding.
 
     Chromosome-assigned contigs go to their assigned ref.
-    Candidate pool (chrom_debris only) goes to their assigned_ref_id.
+    Candidate pool (chrom_fragment only) goes to their assigned_ref_id —
+    these are unique chromosomal arms too short to be full chromosomes.
+    chrom_debris is excluded: it is redundant with already-placed sequence,
+    so scaffolding it would duplicate sequence in the pseudomolecule.
 
     Returns:
         Dict mapping ref_id -> list of contig original names.
@@ -138,11 +141,11 @@ def _group_contigs_by_ref_chrom(
             groups[clf.assigned_ref_id].append(clf.original_name)
             assigned_contigs.add(clf.original_name)
 
-    # Second pass: only chrom_debris contigs are scaffolding candidates
+    # Second pass: only chrom_fragment contigs are scaffolding candidates
     for clf in classifications:
         if clf.original_name in assigned_contigs:
             continue
-        if clf.classification != "chrom_debris":
+        if clf.classification != "chrom_fragment":
             continue
 
         ref_id = clf.assigned_ref_id or best_ref.get(clf.original_name, "")
@@ -190,7 +193,9 @@ def _group_contigs_by_haplotype(
     """Group contigs by (ref_id, query_subgenome_grp) for haplotype-aware scaffolding.
 
     Pass 1: Chromosome-assigned contigs grouped by (assigned_ref_id, grp).
-    Pass 2: chrom_debris contigs assigned to the nearest haplotype group by identity.
+    Pass 2: chrom_fragment contigs assigned to the nearest haplotype group by
+    identity (unique arms too short to be full chromosomes; chrom_debris is
+    excluded as redundant with already-placed sequence).
 
     Args:
         classifications: List of ContigClassification objects.
@@ -220,11 +225,11 @@ def _group_contigs_by_haplotype(
     # Compute mean identity per group (for debris assignment)
     group_mean_idents = _compute_group_mean_idents(groups, clf_lookup)
 
-    # Pass 2: chrom_debris candidates only
+    # Pass 2: chrom_fragment candidates only
     for clf in classifications:
         if clf.original_name in assigned_contigs:
             continue
-        if clf.classification != "chrom_debris":
+        if clf.classification != "chrom_fragment":
             continue
 
         ref_id = clf.assigned_ref_id or best_ref.get(clf.original_name, "")
@@ -785,8 +790,8 @@ def scaffold_chromosomes(
             scaffold_name = f"{base_name}_{chr(ord('A') + grp - 1)}"
 
         # T2T handling: emit each T2T contig as its own trivial scaffold.
-        # When T2T contigs exist, remaining contigs (fragments, haplotigs,
-        # debris) are excluded from scaffolded output — the T2T contig(s)
+        # When T2T contigs exist, remaining non-anchor members (chromosome
+        # fragments) are excluded from scaffolded output — the T2T contig(s)
         # already represent the complete chromosome.
         chrom_assigned_in_group = [
             c for c in contig_names
@@ -815,10 +820,10 @@ def scaffold_chromosomes(
             non_t2t_chrom = [
                 c for c in chrom_assigned_in_group if c not in t2t_set
             ]
-            n_debris = len(contig_names) - len(chrom_assigned_in_group)
-            if n_debris > 0:
+            n_dropped = len(contig_names) - len(chrom_assigned_in_group)
+            if n_dropped > 0:
                 logger.info(
-                    f"{scaffold_name}: dropping {n_debris} debris contig(s) "
+                    f"{scaffold_name}: dropping {n_dropped} fragment contig(s) "
                     f"(T2T copy exists)"
                 )
             for contig in non_t2t_chrom:

@@ -170,12 +170,13 @@ These depth metrics are useful for:
 | Category | Description |
 |----------|-------------|
 | `chrom_assigned` | Chromosome-length contig assigned to a reference chromosome |
+| `chrom_fragment` | Sub-chromosome-length contig with a passing reference assignment, representing unique chromosomal sequence too short to be called a full chromosome. Included with chromosomes in `chrs.fasta`, the per-subgenome FASTAs, and the compleasm `chrs` subset. Distinguished from `chrom_debris` by reference-footprint containment: a fragment is reclassified as `chrom_debris` only if its reference footprint is largely contained (≥80%) within a longer placed contig's footprint AND it aligns at high identity (≥`--chr-debris-min-identity`). |
 | `chrom_unassigned` | Chromosome-length contig without reference assignment (novel or failed synteny gates) |
 | `organelle_complete` | Complete organelle genome (chrC or chrM) |
 | `organelle_debris` | Partial organelle sequence |
 | `rDNA` | Ribosomal DNA repeat unit |
 | `cobiont` | Sequence from a co-occurring organism (symbiont, commensal, etc.) |
-| `chrom_debris` | High-coverage (≥80%), high-identity (≥90%) duplicate of an assembled chromosome |
+| `chrom_debris` | High-coverage (≥80%), high-identity (≥90%) duplicate of an assembled chromosome, or a sub-chromosome-length contig whose reference footprint is redundant with a longer placed contig |
 | `debris` | Assembly debris with reference homology (≥50% coverage) or protein hits (≥2) |
 | `unclassified` | Could not be classified (below chromosome-length threshold) |
 
@@ -204,6 +205,7 @@ The `classification_confidence` column indicates how certain the classification 
 | Classification | High | Medium | Low |
 |---------------|------|--------|-----|
 | `chrom_assigned` | Gene proportion ≥20% AND GC deviation <2σ | Gene proportion 10-20% OR GC deviation 2-3σ | Gene proportion <10% OR GC deviation >3σ |
+| `chrom_fragment` | Identity ≥80% AND GC deviation <2σ | Identity 50-80% OR GC deviation 2-3σ | Identity <50% OR GC deviation >3σ |
 | `chrom_unassigned` | — | GC deviation <2σ | GC deviation ≥2σ |
 | `organelle_complete` | Coverage ≥90% | Coverage 80-90% | — |
 | `organelle_debris` | — | Coverage ≥60% | Coverage <60% |

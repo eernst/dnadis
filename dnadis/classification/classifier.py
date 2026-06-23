@@ -1095,7 +1095,7 @@ def generate_contig_names(
     non_chrom_contigs: List[str] = []
 
     for clf in classifications:
-        if clf.classification == "chrom_assigned" and clf.assigned_ref_id:
+        if clf.classification in ("chrom_assigned", "chrom_fragment") and clf.assigned_ref_id:
             key = (clf.assigned_ref_id, clf.query_subgenome)
             groups[key].append(clf)
         else:
@@ -1153,6 +1153,61 @@ def generate_contig_names(
 
 
 # ----------------------------
+# Chromosome-fragment containment
+# ----------------------------
+def _build_ref_footprints(
+    macro_block_rows: List[Tuple],
+) -> Dict[Tuple[str, str], List[Tuple[int, int]]]:
+    """Merge per-(contig, ref) reference intervals from macro-block rows.
+
+    Returns ``(contig, ref_id) -> [(ref_start, ref_end), ...]`` with each
+    contig's reference footprint merged into non-overlapping intervals.
+    Column layout matches ``chain_parsing`` macro-block rows / macro_blocks.tsv:
+    contig=0, ref_id=2, ref_start=17, ref_end=18.
+    """
+    raw: Dict[Tuple[str, str], List[Tuple[int, int]]] = defaultdict(list)
+    for row in macro_block_rows:
+        try:
+            contig = row[0]
+            ref_id = row[2]
+            rs = int(row[17])
+            re = int(row[18])
+        except (IndexError, ValueError, TypeError):
+            continue
+        if rs == re:
+            continue
+        raw[(contig, ref_id)].append((min(rs, re), max(rs, re)))
+    footprints: Dict[Tuple[str, str], List[Tuple[int, int]]] = {}
+    for key, intervals in raw.items():
+        merged, _ = merge_intervals(intervals)
+        footprints[key] = merged
+    return footprints
+
+
+def _containment_fraction(
+    footprint: List[Tuple[int, int]],
+    anchors: List[Tuple[int, int]],
+) -> float:
+    """Fraction of ``footprint``'s span overlapping the merged ``anchors``.
+
+    Both are lists of non-overlapping reference intervals. Used to decide
+    whether a short contig's reference footprint is largely redundant with a
+    longer contig already placed on the same reference chromosome.
+    """
+    span = sum(e - s for s, e in footprint)
+    if span <= 0:
+        return 0.0
+    overlap = 0
+    for s, e in footprint:
+        for a, b in anchors:
+            lo = max(s, a)
+            hi = min(e, b)
+            if hi > lo:
+                overlap += hi - lo
+    return min(1.0, overlap / span)
+
+
+# ----------------------------
 # Classification pipeline
 # ----------------------------
 def classify_all_contigs(
@@ -1188,6 +1243,8 @@ def classify_all_contigs(
     rearrangement_threshold: float = 0.10,
     rearrangement_density_frac: float = 0.10,
     synteny_mode: str = "protein",
+    fragment_containment_frac: float = 0.80,
+    fragment_debris_min_identity: float = 0.90,
 ) -> List[ContigClassification]:
     """Classify all contigs and assign confidence levels.
 
@@ -1196,6 +1253,8 @@ def classify_all_contigs(
 
     Classification categories:
     - chrom_assigned: Chromosome-length contigs with synteny support
+    - chrom_fragment: Sub-chromosome-length contigs with a passing reference
+      assignment that are not redundant with a longer placed contig
     - chrom_unassigned: Chromosome-length contigs without synteny
     - organelle_complete: Complete organelle genomes (chrC, chrM)
     - organelle_debris: Partial organelle sequences
@@ -1649,6 +1708,130 @@ def classify_all_contigs(
                 classification_confidence=confidence,
             ))
             classified_contigs.add(contig)
+
+    # 5b. Chromosome fragments: sub-chr_like_minlen contigs that passed the
+    # reference-assignment synteny gate (best_ref present).  Split from
+    # chrom_debris by reference-footprint containment: a fragment whose
+    # footprint is largely contained within a longer contig's footprint on the
+    # same reference AND aligns at high identity is a redundant duplicate
+    # (chrom_debris); otherwise it is unique chromosomal sequence too short to
+    # be called a full chromosome (chrom_fragment).  Containment uses the
+    # reference as a shared coordinate system, avoiding an all-vs-all query
+    # alignment.  Runs after organelle/rDNA/cobiont/phase-5 debris (which take
+    # precedence) and before the generic debris/unclassified fallbacks.
+    ref_footprints = _build_ref_footprints(ev.macro_block_rows)
+
+    # Seed anchor footprints with chrom_assigned contigs (per reference), then
+    # grow greedily as longer fragments are kept, so a smaller fragment
+    # contained within a kept larger fragment is also caught.
+    anchor_intervals: Dict[str, List[Tuple[int, int]]] = defaultdict(list)
+    for clf in classifications:
+        if clf.classification == "chrom_assigned" and clf.assigned_ref_id:
+            fp = ref_footprints.get((clf.original_name, clf.assigned_ref_id))
+            if fp:
+                anchor_intervals[clf.assigned_ref_id].extend(fp)
+    for rid in list(anchor_intervals):
+        merged, _ = merge_intervals(anchor_intervals[rid])
+        anchor_intervals[rid] = merged
+
+    # Candidates: best_ref present (passed the gate), sub-threshold length, not
+    # already classified.  Longest-first so greedy anchor growth is stable.
+    frag_candidates = [
+        c for c, rid in best_ref.items()
+        if rid
+        and c not in classified_contigs
+        and query_lengths.get(c, 0) < chr_like_minlen
+    ]
+    frag_candidates.sort(key=lambda c: query_lengths.get(c, 0), reverse=True)
+
+    n_fragment = 0
+    n_fragment_debris = 0
+    for contig in frag_candidates:
+        ref_id = best_ref[contig]
+        fp = ref_footprints.get((contig, ref_id), [])
+        ident = 0.0
+        if ev.qr_best_chain_ident:
+            ident = float(ev.qr_best_chain_ident.get((contig, ref_id), 0.0) or 0.0)
+        containment = _containment_fraction(fp, anchor_intervals.get(ref_id, []))
+        contig_len = query_lengths.get(contig, 0)
+
+        is_redundant = (
+            containment >= fragment_containment_frac
+            and ident >= fragment_debris_min_identity
+        )
+
+        if is_redundant:
+            # Redundant duplicate of already-placed chromosomal sequence.
+            # Use the assembly GC baseline, as for other non-keeper categories.
+            gc_dev = _gc_deviation_vs_asm(contig)
+            confidence = "high" if (ident >= 0.95 and containment >= 0.90) else "medium"
+            classifications.append(ContigClassification(
+                original_name=contig,
+                new_name="",
+                classification="chrom_debris",
+                reversed=False,
+                cobiont_taxid=None,
+                cobiont_sci=None,
+                assigned_ref_id=ref_id,
+                ref_gene_proportion=None,
+                contig_len=contig_len,
+                gc_content=_get_gc(contig),
+                gc_deviation=gc_dev,
+                seq_identity_vs_ref=ident if ident > 0 else None,
+                classification_confidence=confidence,
+            ))
+            n_fragment_debris += 1
+        else:
+            # Unique chromosomal sequence, too short to call a full chromosome.
+            # Validate GC against the reference baseline, as for chrom_assigned.
+            gc_dev = _gc_deviation_vs_ref(contig)
+            ref_cov = None
+            if ref_lengths and ev.qr_ref_span_bp:
+                ref_span = ev.qr_ref_span_bp.get((contig, ref_id), 0)
+                ref_len = ref_lengths.get(ref_id, 0)
+                if ref_len > 0:
+                    ref_cov = ref_span / ref_len
+            confidence = "high"
+            if ident and ident < 0.5:
+                confidence = "low"
+            elif ident and ident < 0.8:
+                confidence = "medium"
+            if gc_dev is not None and gc_dev > 3.0:
+                confidence = "low"
+            elif gc_dev is not None and gc_dev > 2.0 and confidence == "high":
+                confidence = "medium"
+            classifications.append(ContigClassification(
+                original_name=contig,
+                new_name="",
+                classification="chrom_fragment",
+                reversed=False,
+                cobiont_taxid=None,
+                cobiont_sci=None,
+                assigned_ref_id=ref_id,
+                ref_gene_proportion=None,
+                contig_len=contig_len,
+                gc_content=_get_gc(contig),
+                gc_deviation=gc_dev,
+                synteny_score=min(1.0, ref_cov) if ref_cov else 0.0,
+                ref_coverage=ref_cov,
+                is_full_length=False,
+                full_length_confidence="low",
+                seq_identity_vs_ref=ident if ident > 0 else None,
+                classification_confidence=confidence,
+            ))
+            n_fragment += 1
+            # Grow the anchor set so smaller contained fragments are caught
+            if fp:
+                merged, _ = merge_intervals(anchor_intervals.get(ref_id, []) + fp)
+                anchor_intervals[ref_id] = merged
+        classified_contigs.add(contig)
+
+    if n_fragment or n_fragment_debris:
+        logger.info(
+            f"Chromosome fragments: {n_fragment} chrom_fragment, "
+            f"{n_fragment_debris} reclassified as chrom_debris (contained "
+            f"≥{fragment_containment_frac:.0%}, identity ≥{fragment_debris_min_identity:.0%})"
+        )
 
     # 6. Other debris (from reference/protein alignment detection)
     # Confidence based on coverage, identity, protein hits, and GC deviation

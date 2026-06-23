@@ -159,8 +159,12 @@ def build_assembly_leaves(
 ) -> List[LeafBuscos]:
     """Split a query assembly's BUSCO hits into per-subgenome leaves.
 
-    Hits on contigs whose ``classification != 'chrom_assigned'`` are dropped
-    (we only consider chromosome-anchored BUSCOs).  Each contig contributes
+    Hits on contigs that are neither ``chrom_assigned`` nor ``chrom_fragment``
+    are dropped (we only consider chromosome-anchored BUSCOs).  Fragments are
+    included because in fragmented assemblies much chromosomal sequence — and
+    its single-copy BUSCOs — sits in sub-chromosome-length contigs; per-leaf
+    single-copy accounting tolerates the addition (a duplicated BUSCO simply
+    drops out of that leaf's single-copy set).  Each contig contributes
     to a leaf keyed by the *reference* subgenome encoded in
     ``assigned_ref_id`` (chr3A → ``A``) and the *query* subgenome assigned
     by polyploid duplication inference.  For a polyploid query against a
@@ -175,7 +179,7 @@ def build_assembly_leaves(
 
     contig_to_leaf: Dict[str, LeafId] = {}
     for clf in classifications:
-        if clf.classification != "chrom_assigned":
+        if clf.classification not in ("chrom_assigned", "chrom_fragment"):
             continue
         ref_sg: Optional[str] = None
         if clf.assigned_ref_id:
@@ -349,7 +353,7 @@ def ref_assignment_quality_by_subgenome(
     """
     sg_to_assigned: Dict[Optional[str], set] = defaultdict(set)
     for clf in classifications:
-        if clf.classification != "chrom_assigned" or not clf.assigned_ref_id:
+        if clf.classification not in ("chrom_assigned", "chrom_fragment") or not clf.assigned_ref_id:
             continue
         _, sg = split_chrom_subgenome(clf.assigned_ref_id)
         sg_to_assigned[sg].add(clf.assigned_ref_id)
@@ -467,7 +471,7 @@ def build_outgroup_leaves(
 
     contig_to_leaf: Dict[str, LeafId] = {}
     for clf in classifications:
-        if clf.classification != "chrom_assigned" or not clf.assigned_ref_id:
+        if clf.classification not in ("chrom_assigned", "chrom_fragment") or not clf.assigned_ref_id:
             continue
         _, ref_sg = split_chrom_subgenome(clf.assigned_ref_id)
         if ref_sg == "NA":

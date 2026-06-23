@@ -9,6 +9,15 @@ recomputed per leaf from the rows in `full_table_busco_format.tsv`.
 This document explains how the same BUSCO appears differently in each
 ploidy combination, so the per-leaf accounting matches biological intent.
 
+Both `chrom_assigned` and `chrom_fragment` contigs anchor BUSCOs into leaves.
+Fragments are included because in fragmented assemblies much chromosomal
+sequence — and its single-copy BUSCOs — sits in sub-chromosome-length contigs;
+excluding them would starve exactly the leaves that limit the cross-leaf
+supermatrix. The per-leaf single-copy rule is self-protecting against any
+redundant fragment that slips through the `chrom_debris` containment gate: a
+BUSCO appearing twice in a leaf simply drops out of that leaf's single-copy
+set rather than corrupting the alignment.
+
 ## Leaf identity
 
 A leaf is identified by:

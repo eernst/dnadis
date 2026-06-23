@@ -298,7 +298,7 @@ Read type to minimap2 preset mapping:
 | `--compleasm-path` | Path to compleasm executable. If unset, auto-detects from a `compleasm` conda environment or `PATH`. | auto-detect |
 | `--skip-compleasm` | Skip compleasm even if `--compleasm-lineage` is specified | off |
 
-When `--compleasm-lineage` is set, phase 18 runs compleasm on two FASTA subsets: chromosome-assigned contigs (`*.chrs.fasta`) and non-chromosome contigs (`*.non_chrs.fasta`, combining debris + unclassified + cobionts). Both runs are submitted in parallel. Results are included in the per-assembly unified HTML report and in the multi-assembly `comparison_summary.tsv`.
+When `--compleasm-lineage` is set, phase 18 runs compleasm on two FASTA subsets: chromosomal contigs (`*.chrs.fasta`, both `chrom_assigned` and `chrom_fragment`) and non-chromosome contigs (`*.non_chrs.fasta`, combining debris + unclassified + cobionts). Both runs are submitted in parallel. Results are included in the per-assembly unified HTML report and in the multi-assembly `comparison_summary.tsv`.
 
 ### Phylogeny (species tree) options
 
@@ -391,7 +391,7 @@ Produced in the top-level output directory when ≥2 assemblies complete. File n
 |--------|-------------|
 | `contig` | New contig name (with chromosome assignment) |
 | `original_name` | Original contig name from input FASTA |
-| `classification` | Category: chrom_assigned, chrom_unassigned, organelle_complete, organelle_debris, rDNA, cobiont, chrom_debris, debris, unclassified |
+| `classification` | Category: chrom_assigned, chrom_fragment, chrom_unassigned, organelle_complete, organelle_debris, rDNA, cobiont, chrom_debris, debris, unclassified |
 | `classification_confidence` | Confidence level: high, medium, or low |
 | `reversed` | Whether contig was reverse-complemented |
 | `cobiont_taxid` | NCBI taxonomy ID (for cobionts) |
@@ -475,12 +475,13 @@ Uses Infernal covariance models from Rfam 15.0 for structure-based rRNA boundary
 | Category | Description |
 |----------|-------------|
 | `chrom_assigned` | Chromosome-length contig assigned to a reference chromosome via synteny |
+| `chrom_fragment` | Sub-chromosome-length contig with a passing reference assignment — unique chromosomal sequence too short to be a full chromosome. Grouped with chromosomes in `chrs.fasta`, the per-subgenome FASTAs, and the compleasm `chrs` subset, and scaffolded against the reference. A fragment is reclassified as `chrom_debris` only when its reference footprint is largely contained (≥80%) within a longer placed contig at high identity (so it is a redundant duplicate, not unique sequence) |
 | `chrom_unassigned` | Chromosome-length contig without reference assignment (novel or failed synteny gates) |
 | `organelle_complete` | Complete organelle genome (chrC or chrM) |
 | `organelle_debris` | Partial organelle sequence |
 | `rDNA` | Ribosomal DNA repeat unit |
 | `cobiont` | Sequence from a co-occurring organism (symbiont, commensal, etc.) |
-| `chrom_debris` | High-coverage (≥80%), high-identity (≥90%) duplicate of an assembled chromosome contig |
+| `chrom_debris` | High-coverage (≥80%), high-identity (≥90%) duplicate of an assembled chromosome contig, or a sub-chromosome-length contig redundant with a longer placed contig |
 | `debris` | Assembly debris with reference nucleotide coverage (≥50%) or protein homology (≥2 miniprot hits) |
 | `unclassified` | Could not be classified |
 
@@ -496,6 +497,7 @@ Each contig is assigned a confidence level (`high`, `medium`, or `low`) indicati
 |----------------|------|--------|-----|
 | **chrom_assigned** (protein mode) | Gene proportion ≥20% AND GC deviation <2σ | Gene proportion 10-20% OR GC deviation 2-3σ | Gene proportion <10% OR GC deviation >3σ |
 | **chrom_assigned** (nucleotide mode) | Ref coverage ≥30% AND identity ≥50% AND GC deviation <2σ | Ref coverage 10-30% OR GC deviation 2-3σ | Ref coverage <10% OR identity <50% OR GC deviation >3σ |
+| **chrom_fragment** | Identity ≥80% AND GC deviation <2σ | Identity 50-80% OR GC deviation 2-3σ | Identity <50% OR GC deviation >3σ |
 | **chrom_unassigned** | — | GC deviation <2σ | GC deviation ≥2σ |
 | **organelle_complete** | Coverage ≥90% | Coverage 80-90% | — |
 | **organelle_debris** | — | Coverage ≥60% | Coverage <60% |
@@ -774,7 +776,7 @@ This produces `*.scaffolded.fasta` (chromosome pseudomolecules) and `*.scaffolde
     -t 32
 ```
 
-Compleasm runs on chromosome-assigned contigs and non-chromosome contigs in parallel. Results appear in `*.assembly_report.html` and (in multi-assembly runs) in `comparison_summary.tsv`. The pipeline auto-detects compleasm from a `compleasm` conda environment, or you can pass `--compleasm-path` explicitly.
+Compleasm runs on chromosomal contigs (`chrom_assigned` + `chrom_fragment`) and non-chromosome contigs in parallel. Results appear in `*.assembly_report.html` and (in multi-assembly runs) in `comparison_summary.tsv`. The pipeline auto-detects compleasm from a `compleasm` conda environment, or you can pass `--compleasm-path` explicitly.
 
 ### Multi-assembly mode (file-of-filenames)
 
