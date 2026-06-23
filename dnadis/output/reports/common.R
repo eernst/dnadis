@@ -188,6 +188,129 @@ gt_theme <- function(gt_obj) {
 fmt_mb <- function(x) sprintf("%.1f", x / 1e6)
 
 # ---------------------------------------------------------------------------
+# Per-chromosome contiguity / under-assembly accounting
+# ---------------------------------------------------------------------------
+
+# Total bp covered by the union of [start, end) intervals (overlaps counted once).
+merge_intervals_bp <- function(starts, ends) {
+  if (length(starts) == 0) return(0)
+  lo <- pmin(starts, ends); hi <- pmax(starts, ends)
+  ord <- order(lo)
+  lo <- lo[ord]; hi <- hi[ord]
+  total <- 0; cur_lo <- lo[1]; cur_hi <- hi[1]
+  for (i in seq_along(lo)[-1]) {
+    if (lo[i] <= cur_hi) {
+      cur_hi <- max(cur_hi, hi[i])
+    } else {
+      total <- total + (cur_hi - cur_lo)
+      cur_lo <- lo[i]; cur_hi <- hi[i]
+    }
+  }
+  total + (cur_hi - cur_lo)
+}
+
+# Per-reference-chromosome assembly state for one assembly.
+#
+# Joins the chromosomal contigs (chrom_assigned + chrom_fragment) against the
+# reference chromosome list and, when macro-block reference intervals are
+# available, computes union coverage (fraction of the reference chromosome
+# spanned by the assigned contigs, overlaps counted once).  Reference
+# chromosomes with no assigned contig are retained as "absent" rows when they
+# are at least chr_like_minlen (i.e. real chromosomes, not small scaffolds),
+# so missing chromosomes / aneuploidy are visible.
+#
+# Returns a tibble with one row per reference chromosome:
+#   ref_id, chrom_id, subgenome, ref_len, n_contigs, n_anchor, n_frag,
+#   assembled_bp, union_bp, coverage (0-1), both_telo (logical), state.
+# state in: T2T, single, multiple, fragmented, fragments_only, absent.
+#
+# n_anchor counts chrom_assigned contigs (substantial, gate-passing chromosome
+# pieces) and n_frag counts chrom_fragment contigs (sub-chr_like_minlen arms).
+# In fragmented assemblies a chrom_assigned arm is often not flagged
+# is_full_length, so the assigned/fragment *classification* — not the
+# full-length flag — is the right anchor signal; is_full_length only refines
+# the T2T call.
+compute_chrom_contiguity <- function(summary_df, ref_lengths, macro_df = NULL,
+                                     chr_like_minlen = 0) {
+  yn <- function(x) !is.na(x) & x == "yes"
+
+  chrom_contigs <- summary_df %>%
+    filter(classification %in% c("chrom_assigned", "chrom_fragment"),
+           !is.na(assigned_ref_id), nzchar(assigned_ref_id))
+
+  # Union coverage per ref_id from macro-block reference intervals, restricted
+  # to each chromosomal contig's own assigned reference.
+  cov_by_ref <- tibble(ref_id = character(), union_bp = numeric())
+  if (!is.null(macro_df) && nrow(macro_df) > 0 && nrow(chrom_contigs) > 0) {
+    pairs <- chrom_contigs %>%
+      distinct(original_name, assigned_ref_id) %>%
+      rename(contig = original_name, ref_id = assigned_ref_id)
+    cov_by_ref <- macro_df %>%
+      inner_join(pairs, by = c("contig", "ref_id")) %>%
+      group_by(ref_id) %>%
+      summarise(union_bp = merge_intervals_bp(ref_start, ref_end), .groups = "drop")
+  }
+
+  per_ref <- chrom_contigs %>%
+    group_by(ref_id = assigned_ref_id) %>%
+    summarise(
+      n_contigs    = n(),
+      n_anchor     = sum(classification == "chrom_assigned"),
+      assembled_bp = sum(length, na.rm = TRUE),
+      both_telo    = any(classification == "chrom_assigned" & yn(is_full_length) &
+                         yn(has_5p_telomere) & yn(has_3p_telomere)),
+      .groups = "drop"
+    ) %>%
+    mutate(n_frag = n_contigs - n_anchor)
+
+  # Reference chromosomes to display: any with an assigned contig, plus
+  # chromosome-scale references with none (absent), excluding small scaffolds.
+  ref_show <- ref_lengths %>%
+    filter(ref_id %in% per_ref$ref_id | ref_len >= chr_like_minlen)
+
+  ref_show %>%
+    left_join(per_ref, by = "ref_id") %>%
+    left_join(cov_by_ref, by = "ref_id") %>%
+    mutate(
+      n_contigs    = coalesce(n_contigs, 0L),
+      n_anchor     = coalesce(n_anchor, 0L),
+      n_frag       = coalesce(n_frag, 0L),
+      assembled_bp = coalesce(assembled_bp, 0),
+      both_telo    = coalesce(both_telo, FALSE),
+      union_bp     = coalesce(union_bp, 0),
+      coverage     = pmin(1, ifelse(ref_len > 0, union_bp / ref_len, 0)),
+      state = dplyr::case_when(
+        n_contigs == 0                            ~ "absent",
+        n_anchor == 0                             ~ "fragments_only",
+        n_anchor == 1 & n_frag == 0 & both_telo   ~ "T2T",
+        n_anchor == 1 & n_frag == 0               ~ "single",
+        n_anchor >= 2 & n_frag == 0               ~ "multiple",
+        TRUE                                      ~ "fragmented"
+      )
+    )
+}
+
+# Display palette / labels for chromosome assembly states (best → missing).
+chrom_state_levels <- c("T2T", "single", "multiple", "fragmented",
+                        "fragments_only", "absent")
+chrom_state_colors <- c(
+  "T2T"            = "#1a7d3c",
+  "single"         = "#5bb56e",
+  "multiple"       = "#2c7fb8",
+  "fragmented"     = "#f0a23c",
+  "fragments_only" = "#d6452f",
+  "absent"         = "#9aa0a6"
+)
+chrom_state_labels <- c(
+  "T2T"            = "T2T",
+  "single"         = "Single contig",
+  "multiple"       = "Multiple full-length",
+  "fragmented"     = "Fragmented",
+  "fragments_only" = "Fragments only",
+  "absent"         = "Absent"
+)
+
+# ---------------------------------------------------------------------------
 # Subgenome detection and color setup
 # ---------------------------------------------------------------------------
 setup_subgenomes <- function(ref_lengths) {

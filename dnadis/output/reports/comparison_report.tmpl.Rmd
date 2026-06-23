@@ -473,6 +473,7 @@ clf_gt_df <- clf_table %>%
 # Short column labels
 clf_short <- c(
   "chrom_assigned"     = "Chr",
+  "chrom_fragment"     = "ChrF",
   "chrom_unassigned"   = "Unasgn",
   "organelle_complete" = "Org",
   "organelle_debris"   = "OrgD",

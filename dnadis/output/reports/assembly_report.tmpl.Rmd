@@ -120,6 +120,7 @@ top_n_cobiont    <- as.integer(params$top_n_cobionts)
 pdf_chrom_overview <- paste0(params$out_prefix, ".chromosome_overview.pdf")
 pdf_classbar       <- paste0(params$out_prefix, ".classification_summary_bar.pdf")
 pdf_depth          <- paste0(params$out_prefix, ".depth_overview.pdf")
+pdf_contiguity     <- paste0(params$out_prefix, ".contiguity.pdf")
 ```
 
 ---
@@ -481,6 +482,164 @@ tibble(
   tab_spanner(label = "Contiguity", columns = c(Contigs, `Size (Mb)`, N50, L50, `Largest (Mb)`)) %>%
   tab_spanner(label = "Chromosomes", columns = c(`Asgn / Unasgn / Chim`, `Full-length`, `Both telo`, `Mean ref cov`, `Mean identity`)) %>%
   tab_spanner(label = "Other", columns = c(Cobionts, rDNA, chrC, chrM))
+```
+
+## Contiguity
+
+```{r contiguity_build, include=FALSE}
+# ---------------------------------------------------------------------------
+# Per-reference-chromosome contiguity / under-assembly accounting.
+# Two failure axes: completeness (union coverage of the reference chromosome)
+# and contiguity (how many query contigs reconstruct it).
+# ---------------------------------------------------------------------------
+macro_ct <- if (has_macro) {
+  readr::read_tsv(params$macro_blocks_tsv, show_col_types = FALSE,
+    col_types = cols(contig = col_character(), ref_id = col_character(),
+      ref_start = col_double(), ref_end = col_double())) %>%
+    select(contig, ref_id, ref_start, ref_end)
+} else NULL
+
+ct <- compute_chrom_contiguity(summary_df, ref_lengths, macro_ct, chr_like_minlen) %>%
+  mutate(
+    subgenome_lab = if_else(is.na(subgenome) | !nzchar(subgenome) | subgenome == "NA",
+                            "NA", subgenome),
+    state = factor(state, levels = chrom_state_levels),
+    chrom_index = suppressWarnings(as.integer(str_extract(chrom_id, "\\d+"))),
+    chrom_index = if_else(is.na(chrom_index), 9999L, chrom_index)
+  ) %>%
+  arrange(subgenome_lab, chrom_index, ref_id)
+
+has_contiguity <- nrow(ct) > 0 && any(ct$n_contigs > 0)
+
+# Assembly-level fragmentation summary counts
+state_counts <- table(factor(ct$state, levels = chrom_state_levels))
+n_ref_total  <- nrow(ct)
+frag_bp_mb   <- sum(summary_df$length[summary_df$classification == "chrom_fragment"], na.rm = TRUE) / 1e6
+chrom_bp_mb  <- sum(summary_df$length[summary_df$classification %in%
+                    c("chrom_assigned", "chrom_fragment")], na.rm = TRUE) / 1e6
+frag_pct     <- if (chrom_bp_mb > 0) frag_bp_mb / chrom_bp_mb * 100 else 0
+```
+
+```{r contiguity_stub, eval=!has_contiguity, results='asis'}
+cat('<div class="note-box">No contigs were assigned to reference chromosomes, so per-chromosome contiguity cannot be reported.</div>')
+```
+
+```{r contiguity_summary, eval=has_contiguity, results='asis'}
+cat(sprintf(
+  paste0('<p class="section-intro">Across <b>%d</b> reference chromosomes: ',
+         '<b>%d</b> T2T &middot; <b>%d</b> single-contig &middot; <b>%d</b> multiple full-length &middot; ',
+         '<b>%d</b> fragmented &middot; <b>%d</b> fragments-only &middot; <b>%d</b> absent. ',
+         'Chromosome fragment sequence: <b>%.1f Mb</b> (%.1f%% of chromosomal bp).</p>'),
+  n_ref_total,
+  state_counts[["T2T"]], state_counts[["single"]], state_counts[["multiple"]],
+  state_counts[["fragmented"]], state_counts[["fragments_only"]], state_counts[["absent"]],
+  frag_bp_mb, frag_pct))
+```
+
+```{r contiguity_scatter, eval=has_contiguity, fig.width=10, fig.height=5.5}
+# Plot 2 (primary): completeness x contiguity.  Ideal = bottom-right
+# (100% coverage, 1 contig).  Bubble area = reference chromosome length.
+sc <- ct %>% filter(n_contigs > 0)
+
+sc_tt <- sc %>% mutate(tooltip = paste0(
+  ref_id, "  (", chrom_state_labels[as.character(state)], ")",
+  "\nRef length: ", fmt_mb(ref_len), " Mb",
+  "\nUnion coverage: ", sprintf("%.1f%%", coverage * 100),
+  "\nContigs: ", n_contigs, "  (", n_anchor, " assigned / ", n_frag, " fragment)",
+  ifelse(both_telo, "\nBoth telomeres", "")))
+
+sg_pal <- if (has_subgenomes) col_dark else c("G" = oi[5], "NA" = oi[5])
+y_top <- max(sc$n_contigs, na.rm = TRUE)
+
+p_ct_scatter <- ggplot(sc_tt, aes(x = coverage * 100, y = n_contigs)) +
+  annotate("rect", xmin = 90, xmax = 102, ymin = 0.5, ymax = 1.5,
+           fill = "#1a7d3c", alpha = 0.07) +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "grey60", linewidth = 0.3) +
+  ggiraph::geom_point_interactive(
+    aes(size = ref_len / 1e6, fill = subgenome_lab, tooltip = tooltip,
+        data_id = ref_id),
+    shape = 21, color = "white", stroke = 0.3, alpha = 0.85) +
+  scale_fill_manual(values = sg_pal, name = if (has_subgenomes) "Subgenome" else NULL,
+                    guide = if (has_subgenomes) "legend" else "none") +
+  scale_size_area(max_size = 9, name = "Ref length (Mb)") +
+  scale_x_continuous(limits = c(0, 102), breaks = seq(0, 100, 25),
+                     labels = function(x) paste0(x, "%")) +
+  scale_y_continuous(limits = c(0.5, max(2, y_top) + 0.5)) +
+  theme_classic(base_family = base_family, base_size = base_font_pt) +
+  axis_theme +
+  theme(panel.grid.major = element_line(color = "grey92", linewidth = 0.3),
+        legend.position = "right") +
+  labs(
+    title = paste0("Chromosome completeness vs contiguity (", params$plot_suffix, ")"),
+    subtitle = "Ideal: 100% coverage in a single contig (lower-right, shaded)",
+    x = "Union coverage of reference chromosome", y = "Query contigs (fewer = more contiguous)")
+
+save_pdf(pdf_contiguity, p_ct_scatter, width = 7.2, height = 4.6)
+girafe_styled(p_ct_scatter, width_svg = 10, height_svg = 5.5)
+```
+
+```{r contiguity_statebar, eval=has_contiguity, fig.width=10, fig.height=7}
+# Plot 1: per-chromosome assembly-state bar.  Bar = reference length; filled
+# portion = union coverage; colour = assembly state; faceted by subgenome.
+bar_df <- ct %>%
+  mutate(chrom_y = factor(ref_id, levels = rev(unique(ref_id))),
+         covered_mb = coverage * ref_len / 1e6,
+         ref_mb = ref_len / 1e6,
+         lab = ifelse(n_contigs > 0, as.character(n_contigs), ""))
+
+facet_var <- if (has_subgenomes) "subgenome_lab" else NULL
+
+p_ct_bar <- ggplot(bar_df, aes(y = chrom_y)) +
+  geom_col(aes(x = ref_mb), fill = "grey88", width = 0.72) +
+  geom_col(aes(x = covered_mb, fill = state), width = 0.72) +
+  geom_text(aes(x = ref_mb, label = lab), hjust = -0.25,
+            size = (base_font_pt - 2) / .pt, color = "grey30") +
+  scale_fill_manual(values = chrom_state_colors, labels = chrom_state_labels,
+                    drop = FALSE, name = "State") +
+  scale_x_continuous(expand = expansion(mult = c(0, 0.12))) +
+  { if (!is.null(facet_var)) facet_wrap(vars(.data[[facet_var]]), scales = "free_y", nrow = 1) } +
+  theme_classic(base_family = base_family, base_size = base_font_pt) +
+  axis_theme +
+  theme(axis.text.y = element_text(size = base_font_pt - 2),
+        panel.grid.major.x = element_line(color = "grey92", linewidth = 0.3),
+        legend.position = "bottom") +
+  labs(title = paste0("Per-chromosome assembly state (", params$plot_suffix, ")"),
+       subtitle = "Bar = reference length; fill = union coverage; number = query contig count",
+       x = "Length (Mb)", y = NULL)
+
+girafe_styled(p_ct_bar, width_svg = 10, height_svg = 7)
+```
+
+```{r contiguity_table, eval=has_contiguity}
+tbl_df <- ct %>%
+  transmute(
+    Chromosome = ref_id,
+    Subgenome = subgenome_lab,
+    `Ref (Mb)` = round(ref_len / 1e6, 1),
+    Contigs = n_contigs,
+    `Assigned` = n_anchor,
+    `Fragment` = n_frag,
+    Coverage = coverage,
+    Telomeres = ifelse(both_telo, "both", ""),
+    State = as.character(state)
+  )
+
+tbl_df %>%
+  gt() %>%
+  gt_theme() %>%
+  tab_header(title = "Per-chromosome contiguity") %>%
+  fmt_percent(columns = Coverage, decimals = 1) %>%
+  data_color(
+    columns = State,
+    fn = function(x) unname(chrom_state_colors[x]),
+    apply_to = "text"
+  ) %>%
+  text_transform(
+    locations = cells_body(columns = State),
+    fn = function(x) chrom_state_labels[x]
+  ) %>%
+  cols_align(align = "right", columns = c(`Ref (Mb)`, Contigs, Assigned, Fragment, Coverage)) %>%
+  tab_spanner(label = "Query contigs", columns = c(Contigs, Assigned, Fragment))
 ```
 
 `r if (has_compleasm) "## BUSCO Completeness" else ""`
