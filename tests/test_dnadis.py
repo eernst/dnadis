@@ -1195,6 +1195,51 @@ def test_scaffold_contig_grouping():
     assert "ctg5" not in all_grouped
 
 
+def test_scaffold_fragment_only_reference():
+    """A reference with no full-length anchor, only chrom_fragments, still
+    seeds a scaffold group keyed by each fragment's inferred subgenome group."""
+    from dnadis.output.scaffolding import _group_contigs_by_haplotype
+    from dnadis.models import ContigClassification
+
+    clfs = [
+        # chr3A exists only as two fragments, both inferred to group 1
+        ContigClassification(
+            original_name="frag1", new_name="chr3A_f1", classification="chrom_fragment",
+            reversed=False, cobiont_taxid=None, cobiont_sci=None,
+            assigned_ref_id="chr3A", ref_gene_proportion=None, contig_len=800000,
+            query_subgenome_grp=1, seq_identity_vs_ref=0.93, is_full_length=False,
+        ),
+        ContigClassification(
+            original_name="frag2", new_name="chr3A_f2", classification="chrom_fragment",
+            reversed=False, cobiont_taxid=None, cobiont_sci=None,
+            assigned_ref_id="chr3A", ref_gene_proportion=None, contig_len=600000,
+            query_subgenome_grp=1, seq_identity_vs_ref=0.91, is_full_length=False,
+        ),
+        # A second fragment-only ref whose fragment is inferred to group 2
+        ContigClassification(
+            original_name="frag3", new_name="chr4A_B_f1", classification="chrom_fragment",
+            reversed=False, cobiont_taxid=None, cobiont_sci=None,
+            assigned_ref_id="chr4A", ref_gene_proportion=None, contig_len=500000,
+            query_subgenome_grp=2, seq_identity_vs_ref=0.88, is_full_length=False,
+        ),
+    ]
+
+    groups = _group_contigs_by_haplotype(
+        classifications=clfs,
+        best_ref={"frag1": "chr3A", "frag2": "chr3A", "frag3": "chr4A"},
+        contig_refs={"frag1": {"chr3A"}, "frag2": {"chr3A"}, "frag3": {"chr4A"}},
+        qr_best_chain_ident={
+            ("frag1", "chr3A"): 0.93, ("frag2", "chr3A"): 0.91,
+            ("frag3", "chr4A"): 0.88,
+        },
+    )
+
+    # Both chr3A fragments accumulate into one fragment-only scaffold group
+    assert set(groups[("chr3A", 1)]) == {"frag1", "frag2"}
+    # The chr4A fragment seeds its own group from its inferred subgenome grp
+    assert groups[("chr4A", 2)] == ["frag3"]
+
+
 # ----------------------------
 # Chromosome-fragment containment tests
 # ----------------------------
@@ -1317,6 +1362,11 @@ def test_classify_chrom_fragment_vs_debris():
     assert by_name["frag_unique"].assigned_ref_id == "chr1A"
     assert by_name["frag_unique"].new_name.startswith("chr1A")
     assert "_f" in by_name["frag_unique"].new_name
+    # Subgenome inference now covers fragments: the unique fragment gets a
+    # query_subgenome_grp (group 1 here, single-copy reference) and its
+    # seq_identity_vs_ref is populated.
+    assert by_name["frag_unique"].query_subgenome_grp == 1
+    assert by_name["frag_unique"].seq_identity_vs_ref == pytest.approx(0.75)
 
 
 # ----------------------------

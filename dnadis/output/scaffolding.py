@@ -238,17 +238,21 @@ def _group_contigs_by_haplotype(
 
         available_grps = ref_groups.get(ref_id)
         if not available_grps:
-            continue
-
-        if len(available_grps) == 1:
+            # No full-length anchor for this reference — the chromosome survives
+            # only as fragments.  Seed a scaffold group from the fragment's own
+            # inferred subgenome group so reference-guided scaffolding can still
+            # order these fragments along the reference (fragments of the same
+            # ref and group accumulate into one pseudomolecule).
+            target_grp = clf.query_subgenome_grp or 1
+        elif len(available_grps) == 1:
             # Single haplotype group for this ref - assign directly
             target_grp = next(iter(available_grps))
         else:
             # Multiple groups - assign by closest identity
-            debris_ident = qr_best_chain_ident.get((clf.original_name, ref_id), 0.0)
+            frag_ident = qr_best_chain_ident.get((clf.original_name, ref_id), 0.0)
             target_grp = min(
                 available_grps,
-                key=lambda g: abs(group_mean_idents.get((ref_id, g), 0.0) - debris_ident),
+                key=lambda g: abs(group_mean_idents.get((ref_id, g), 0.0) - frag_ident),
             )
 
         groups[(ref_id, target_grp)].append(clf.original_name)

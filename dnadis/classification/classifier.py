@@ -906,8 +906,18 @@ def infer_query_subgenomes(
             copies whose chain identities agree to several decimal places.
         subgenome_k: Not used by GMM (kept for API compatibility)
     """
-    # Collect identities for all chromosome-assigned contigs
-    chrom_clfs = [c for c in classifications if c.classification == "chrom_assigned" and c.assigned_ref_id]
+    # Collect identities for all reference-anchored contigs.  chrom_fragment
+    # contigs (sub-chromosome-length, is_full_length=False) participate exactly
+    # like chrom_assigned fragments: they inform the cluster fit and are
+    # assigned to the nearest cluster, but are excluded from the full-length
+    # copy count that sets k (see the copies/fragments split below).  This lets
+    # an assembly whose chromosomes survive only as large fragments still drive
+    # subgenome inference, and gives every fragment a query_subgenome so its
+    # name and scaffold placement stay consistent.
+    chrom_clfs = [
+        c for c in classifications
+        if c.classification in ("chrom_assigned", "chrom_fragment") and c.assigned_ref_id
+    ]
 
     if not chrom_clfs:
         return
