@@ -1977,6 +1977,23 @@ build_synteny_plot <- function(sg) {
   join_indicators <- list()  # red vertical lines at scaffold gaps
   pill_lw <- 1.6
 
+  # Telomere lookup for flat-vs-capped pill ends.  Keyed by
+  # assembly<US>original contig name; values are the raw telomere calls in the
+  # contig's ORIGINAL orientation (as written to the per-assembly summary).
+  .telo_ok <- has_per_asm &&
+    all(c("has_5p_telomere", "has_3p_telomere", "original_name") %in%
+        names(all_summary_df))
+  .telo_key <- if (.telo_ok)
+    paste(all_summary_df$assembly, all_summary_df$original_name, sep = "\x01") else
+    character(0)
+  t5_lu <- setNames(if (.telo_ok) all_summary_df$has_5p_telomere == "yes" else
+                      logical(0), .telo_key)
+  t3_lu <- setNames(if (.telo_ok) all_summary_df$has_3p_telomere == "yes" else
+                      logical(0), .telo_key)
+  # Raw (original-orientation) telomere presence for a contig end ("5"/"3").
+  telo_raw <- function(key, end)
+    isTRUE((if (end == "5") t5_lu else t3_lu)[[key]])
+
   for (cn_i in seq_along(sg_chrom_nums)) {
     cn <- sg_chrom_nums[cn_i]
     x_pos <- chrom_x[as.character(cn)]
@@ -1995,6 +2012,7 @@ build_synteny_plot <- function(sg) {
       contig = rid, contig_len = ref_len, reversed = FALSE,
       x_center = x_pos, x_left = x_pos - pill_w/2, x_right = x_pos + pill_w/2,
       y_center = y_ref, pill_width = pill_w,
+      cap_left = FALSE, cap_right = FALSE,
       tooltip = sprintf("Reference\n%s\n%.2f Mb", rid, ref_len / 1e6)
     )
 
@@ -2031,12 +2049,22 @@ build_synteny_plot <- function(sg) {
           component_names <- paste(component_labels, collapse = ", ")
           n_components <- nrow(comp_rows)
 
+          # Outer telomeres of a scaffold come from its terminal components,
+          # oriented by the AGP strand (the placement, not the contig's own).
+          comp_ord <- comp_rows[order(comp_rows$part_num), , drop = FALSE]
+          cf <- comp_ord[1, ]; cl <- comp_ord[nrow(comp_ord), ]
+          kf <- paste(asm, cf$component, sep = "\x01")
+          kl <- paste(asm, cl$component, sep = "\x01")
+          cap_l <- telo_raw(kf, if (identical(cf$strand, "-")) "3" else "5")
+          cap_r <- telo_raw(kl, if (identical(cl$strand, "-")) "5" else "3")
+
           pills_list[[length(pills_list) + 1]] <- tibble(
             row_name = asm, is_ref = FALSE,
             ref_id = rid, chrom_id = cid, chrom_num = cn, subgenome = sg,
             contig = sp$name, contig_len = sp$length, reversed = FALSE,
             x_center = sp_x, x_left = sp_x - sp_w/2, x_right = sp_x + sp_w/2,
             y_center = y_asm, pill_width = sp_w,
+            cap_left = cap_l, cap_right = cap_r,
             tooltip = sprintf("%s\n%s (scaffold, %d components)\n%.2f Mb\n%s",
                               asm, sp$name, n_components, sp$length / 1e6,
                               component_names)
@@ -2053,13 +2081,20 @@ build_synteny_plot <- function(sg) {
             }
           }
         } else {
-          # fragment
+          # fragment.  Telomere calls are in original orientation; the pill is
+          # drawn 5'->3' in reference (oriented) coordinates, so flip when the
+          # contig was reverse-complemented for display.
+          kfr <- paste(asm, sp$original_name, sep = "\x01")
+          o5 <- telo_raw(kfr, "5"); o3 <- telo_raw(kfr, "3")
+          cap_l <- if (isTRUE(sp$reversed)) o3 else o5
+          cap_r <- if (isTRUE(sp$reversed)) o5 else o3
           pills_list[[length(pills_list) + 1]] <- tibble(
             row_name = asm, is_ref = FALSE,
             ref_id = rid, chrom_id = cid, chrom_num = cn, subgenome = sg,
             contig = sp$name, contig_len = sp$length, reversed = sp$reversed,
             x_center = sp_x, x_left = sp_x - sp_w/2, x_right = sp_x + sp_w/2,
             y_center = y_asm, pill_width = sp_w,
+            cap_left = cap_l, cap_right = cap_r,
             tooltip = sprintf("%s\n%s (%s)\n%.2f Mb",
                               asm, sp$original_name, sp$name,
                               sp$length / 1e6)
@@ -2553,25 +2588,64 @@ build_synteny_plot <- function(sg) {
       scale_alpha_identity()
   }
 
+  # Pill ends encode telomere status: a rounded cap where a telomere was
+  # detected, a flat (butt) end where none was.  Bodies are drawn butt-ended;
+  # rounded caps are re-added only at telomere ends as short round-capped
+  # overlays, so each cap's radius matches the pill linewidth exactly (no
+  # size<->linewidth conversion).  The overlay's inner end sits under the body
+  # (same colour) and is hidden; only the outer half-disc shows.
+  build_caps <- function(pills) {
+    if (nrow(pills) == 0)
+      return(data.frame(x = numeric(0), xend = numeric(0), y = numeric(0)))
+    # A short nib into the body; clamped so it never overshoots a tiny pill.
+    nib <- pmax(1e-9, pmin(pills$pill_width * 0.012, pills$pill_width / 2))
+    rbind(
+      with(pills[pills$cap_left, , drop = FALSE],
+           data.frame(x = x_left,
+                      xend = x_left + pmin(pill_width * 0.012, pill_width / 2),
+                      y = y_center)),
+      with(pills[pills$cap_right, , drop = FALSE],
+           data.frame(x = x_right,
+                      xend = x_right - pmin(pill_width * 0.012, pill_width / 2),
+                      y = y_center))
+    )
+  }
+
   # Reference pills (darker)
   ref_pills <- all_pills %>% filter(is_ref)
+  ref_caps <- build_caps(ref_pills)
   p <- p +
     geom_segment(
       data = ref_pills,
       aes(x = x_left, xend = x_right, y = y_center, yend = y_center),
-      linewidth = pill_lw, lineend = "round", color = "grey55"
+      linewidth = pill_lw, lineend = "butt", color = "grey55"
     )
+  if (nrow(ref_caps) > 0)
+    p <- p +
+      geom_segment(
+        data = ref_caps,
+        aes(x = x, xend = xend, y = y, yend = y),
+        linewidth = pill_lw, lineend = "round", color = "grey55"
+      )
 
   # Assembly pills (lighter, interactive)
   asm_pills <- all_pills %>% filter(!is_ref)
   if (nrow(asm_pills) > 0) {
+    asm_caps <- build_caps(asm_pills)
     p <- p +
       geom_segment_interactive(
         data = asm_pills,
         aes(x = x_left, xend = x_right, y = y_center, yend = y_center,
             tooltip = tooltip, data_id = chrom_id),
-        linewidth = pill_lw, lineend = "round", color = "grey78"
+        linewidth = pill_lw, lineend = "butt", color = "grey78"
       )
+    if (nrow(asm_caps) > 0)
+      p <- p +
+        geom_segment(
+          data = asm_caps,
+          aes(x = x, xend = xend, y = y, yend = y),
+          linewidth = pill_lw, lineend = "round", color = "grey78"
+        )
   }
 
   # Scaffold join indicators (red vertical lines at gap positions)
