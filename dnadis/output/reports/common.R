@@ -279,25 +279,29 @@ compute_chrom_contiguity <- function(summary_df, ref_lengths, macro_df = NULL,
       both_telo    = coalesce(both_telo, FALSE),
       union_bp     = coalesce(union_bp, 0),
       coverage     = pmin(1, ifelse(ref_len > 0, union_bp / ref_len, 0)),
+      # State is derived from anchors only; fragment contigs (n_frag) are
+      # reported separately (see n_frag / the +N badge) rather than folded in,
+      # so a chromosome complete in one anchor stays T2T/single even when extra
+      # fragments are also assigned to it.
       state = dplyr::case_when(
-        n_contigs == 0                            ~ "absent",
-        n_anchor == 0                             ~ "fragments_only",
-        n_anchor == 1 & n_frag == 0 & both_telo   ~ "T2T",
-        n_anchor == 1 & n_frag == 0               ~ "single",
-        n_anchor >= 2 & n_frag == 0               ~ "multiple",
-        TRUE                                      ~ "fragmented"
+        n_contigs == 0             ~ "absent",
+        n_anchor == 0              ~ "fragments_only",
+        n_anchor == 1 & both_telo  ~ "T2T",
+        n_anchor == 1              ~ "single",
+        TRUE                       ~ "multiple"
       )
     )
 }
 
 # Display palette / labels for chromosome assembly states (best → missing).
-chrom_state_levels <- c("T2T", "single", "multiple", "fragmented",
+# State reflects anchor reconstruction only; fragment load is shown as a
+# separate +N badge, so there is no fragment-driven "fragmented" state.
+chrom_state_levels <- c("T2T", "single", "multiple",
                         "fragments_only", "absent")
 chrom_state_colors <- c(
   "T2T"            = "#1a7d3c",
   "single"         = "#5bb56e",
   "multiple"       = "#2c7fb8",
-  "fragmented"     = "#f0a23c",
   "fragments_only" = "#d6452f",
   "absent"         = "#9aa0a6"
 )
@@ -305,7 +309,6 @@ chrom_state_labels <- c(
   "T2T"            = "T2T",
   "single"         = "Single contig",
   "multiple"       = "Multiple full-length",
-  "fragmented"     = "Fragmented",
   "fragments_only" = "Fragments only",
   "absent"         = "Absent"
 )

@@ -17,11 +17,44 @@ from dnadis.models import (
     DepthStats,
 )
 from dnadis.output.comparison import (
+    _chrom_contiguity_state,
     _compute_n50_l50,
     build_assembly_result,
     write_chromosome_completeness_tsv,
     write_comparison_summary_tsv,
 )
+
+
+# ---------------------------------------------------------------------------
+# Contiguity state (anchor-only; fragments do not downgrade the state)
+# ---------------------------------------------------------------------------
+class TestChromContiguityState:
+    def test_empty_is_absent(self):
+        assert _chrom_contiguity_state(0, 0, False, False) == "absent"
+
+    def test_fragments_only(self):
+        assert _chrom_contiguity_state(0, 3, False, False) == "fragments_only"
+
+    def test_single_anchor_capped_is_t2t(self):
+        assert _chrom_contiguity_state(1, 0, True, True) == "T2T"
+
+    def test_single_anchor_uncapped_is_single(self):
+        assert _chrom_contiguity_state(1, 0, False, True) == "single"
+
+    def test_multiple_anchors(self):
+        assert _chrom_contiguity_state(2, 0, True, True) == "multiple"
+
+    def test_complete_anchor_plus_fragments_stays_t2t(self):
+        # The reported case: one T2T anchor + stray fragment(s) must NOT be
+        # downgraded (previously returned "fragmented").
+        assert _chrom_contiguity_state(1, 1, True, True) == "T2T"
+        assert _chrom_contiguity_state(1, 5, False, True) == "single"
+
+    def test_fragments_never_produce_fragmented(self):
+        for n_anchor in range(0, 4):
+            for n_frag in range(0, 4):
+                state = _chrom_contiguity_state(n_anchor, n_frag, False, True)
+                assert state != "fragmented"
 
 
 # ---------------------------------------------------------------------------

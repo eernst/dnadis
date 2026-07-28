@@ -525,15 +525,17 @@ cat('<div class="note-box">No contigs were assigned to reference chromosomes, so
 ```
 
 ```{r contiguity_summary, eval=has_contiguity, results='asis'}
+n_with_frag <- sum(ct$n_frag > 0, na.rm = TRUE)
 cat(sprintf(
   paste0('<p class="section-intro">Across <b>%d</b> reference chromosomes: ',
          '<b>%d</b> T2T &middot; <b>%d</b> single-contig &middot; <b>%d</b> multiple full-length &middot; ',
-         '<b>%d</b> fragmented &middot; <b>%d</b> fragments-only &middot; <b>%d</b> absent. ',
+         '<b>%d</b> fragments-only &middot; <b>%d</b> absent. ',
+         '<b>%d</b> chromosome(s) carry additional fragment contigs (+N badge). ',
          'Chromosome fragment sequence: <b>%.1f Mb</b> (%.1f%% of chromosomal bp).</p>'),
   n_ref_total,
   state_counts[["T2T"]], state_counts[["single"]], state_counts[["multiple"]],
-  state_counts[["fragmented"]], state_counts[["fragments_only"]], state_counts[["absent"]],
-  frag_bp_mb, frag_pct))
+  state_counts[["fragments_only"]], state_counts[["absent"]],
+  n_with_frag, frag_bp_mb, frag_pct))
 ```
 
 ```{r contiguity_scatter, eval=has_contiguity, fig.width=10, fig.height=5.5}
@@ -585,7 +587,10 @@ bar_df <- ct %>%
   mutate(chrom_y = factor(ref_id, levels = rev(unique(ref_id))),
          covered_mb = coverage * ref_len / 1e6,
          ref_mb = ref_len / 1e6,
-         lab = ifelse(n_contigs > 0, as.character(n_contigs), ""))
+         lab = dplyr::case_when(
+           n_contigs == 0 ~ "",
+           n_frag > 0     ~ paste0(n_contigs, " (+", n_frag, "f)"),
+           TRUE           ~ as.character(n_contigs)))
 
 facet_var <- if (has_subgenomes) "subgenome_lab" else NULL
 
@@ -604,7 +609,7 @@ p_ct_bar <- ggplot(bar_df, aes(y = chrom_y)) +
         panel.grid.major.x = element_line(color = "grey92", linewidth = 0.3),
         legend.position = "bottom") +
   labs(title = paste0("Per-chromosome assembly state (", params$plot_suffix, ")"),
-       subtitle = "Bar = reference length; fill = union coverage; number = query contig count",
+       subtitle = "Bar = reference length; fill = union coverage; number = query contig count (+Nf = extra fragment contigs)",
        x = "Length (Mb)", y = NULL)
 
 girafe_styled(p_ct_bar, width_svg = 10, height_svg = 7)
