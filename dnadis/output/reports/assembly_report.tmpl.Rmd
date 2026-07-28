@@ -110,6 +110,12 @@ rearr_df <- if (has_rearrangements) {
 has_rearrangements <- !is.null(rearr_df)
 
 has_depth <- "depth_mean" %in% names(summary_df) && !all(is.na(summary_df$depth_mean))
+# Amplification view: available when relative depth (depth_ratio) was computed.
+if ("depth_ratio" %in% names(summary_df)) {
+  summary_df$depth_ratio <- suppressWarnings(as.numeric(summary_df$depth_ratio))
+}
+has_amp <- has_depth && "depth_ratio" %in% names(summary_df) &&
+           any(!is.na(summary_df$depth_ratio))
 has_collinearity <- "collinearity_score" %in% names(summary_df)
 has_chrom_assigned <- sum(summary_df$classification == "chrom_assigned", na.rm = TRUE) > 0
 
@@ -525,15 +531,17 @@ cat('<div class="note-box">No contigs were assigned to reference chromosomes, so
 ```
 
 ```{r contiguity_summary, eval=has_contiguity, results='asis'}
+n_with_frag <- sum(ct$n_frag > 0, na.rm = TRUE)
 cat(sprintf(
   paste0('<p class="section-intro">Across <b>%d</b> reference chromosomes: ',
          '<b>%d</b> T2T &middot; <b>%d</b> single-contig &middot; <b>%d</b> multiple full-length &middot; ',
-         '<b>%d</b> fragmented &middot; <b>%d</b> fragments-only &middot; <b>%d</b> absent. ',
+         '<b>%d</b> fragments-only &middot; <b>%d</b> absent. ',
+         '<b>%d</b> chromosome(s) carry additional fragment contigs (+N badge). ',
          'Chromosome fragment sequence: <b>%.1f Mb</b> (%.1f%% of chromosomal bp).</p>'),
   n_ref_total,
   state_counts[["T2T"]], state_counts[["single"]], state_counts[["multiple"]],
-  state_counts[["fragmented"]], state_counts[["fragments_only"]], state_counts[["absent"]],
-  frag_bp_mb, frag_pct))
+  state_counts[["fragments_only"]], state_counts[["absent"]],
+  n_with_frag, frag_bp_mb, frag_pct))
 ```
 
 ```{r contiguity_scatter, eval=has_contiguity, fig.width=10, fig.height=5.5}
@@ -585,7 +593,10 @@ bar_df <- ct %>%
   mutate(chrom_y = factor(ref_id, levels = rev(unique(ref_id))),
          covered_mb = coverage * ref_len / 1e6,
          ref_mb = ref_len / 1e6,
-         lab = ifelse(n_contigs > 0, as.character(n_contigs), ""))
+         lab = dplyr::case_when(
+           n_contigs == 0 ~ "",
+           n_frag > 0     ~ paste0(n_contigs, " (+", n_frag, "f)"),
+           TRUE           ~ as.character(n_contigs)))
 
 facet_var <- if (has_subgenomes) "subgenome_lab" else NULL
 
@@ -604,7 +615,7 @@ p_ct_bar <- ggplot(bar_df, aes(y = chrom_y)) +
         panel.grid.major.x = element_line(color = "grey92", linewidth = 0.3),
         legend.position = "bottom") +
   labs(title = paste0("Per-chromosome assembly state (", params$plot_suffix, ")"),
-       subtitle = "Bar = reference length; fill = union coverage; number = query contig count",
+       subtitle = "Bar = reference length; fill = union coverage; number = query contig count (+Nf = extra fragment contigs)",
        x = "Length (Mb)", y = NULL)
 
 girafe_styled(p_ct_bar, width_svg = 10, height_svg = 7)
@@ -1616,7 +1627,7 @@ depth_classification_order <- c(
   "chrom_assigned", "chrom_fragment", "chrom_debris", "chrom_unassigned",
   "chrC", "chrC_debris", "chrM", "chrM_debris",
   "organelle_complete", "organelle_debris",
-  "rDNA", "cobiont", "debris", "unclassified"
+  "rDNA", "cobiont", "circular_element", "debris", "unclassified"
 )
 depth_classification_colors <- c(
   "chrom_assigned"     = oi[5],
@@ -1631,6 +1642,7 @@ depth_classification_colors <- c(
   "organelle_debris"   = oi[4],
   "rDNA"               = oi[1],
   "cobiont"        = oi[7],
+  "circular_element"   = "#8856a7",
   "debris"             = oi[9],
   "unclassified"       = oi[8]
 )
@@ -1659,6 +1671,8 @@ df_depth_tt <- df_depth %>%
     "\nLength: ", sprintf("%.2f", length_mb), " Mbp",
     "\nMean depth: ", sprintf("%.1f", depth_mean), "x",
     "\nMedian depth: ", sprintf("%.1f", depth_median), "x",
+    if ("depth_ratio" %in% names(.)) paste0("\nRelative depth: ",
+       ifelse(is.na(depth_ratio), "NA", sprintf("%.2fx", depth_ratio))) else "",
     "\nBreadth 1x: ", sprintf("%.1f%%", depth_breadth_1x * 100),
     "\nBreadth 10x: ", sprintf("%.1f%%", depth_breadth_10x * 100)))
 
@@ -1802,6 +1816,62 @@ depth_by_cat %>% select(all_of(sel)) %>% gt() %>% cols_label(.list = labels) %>%
   tab_header(title = md("**Depth Summary by Category**")) %>% gt_theme()
 ```
 
+
+```{r amplification_heading, eval=has_amp, results='asis'}
+cat('\n## Copy number / amplification\n')
+cat('<p class="section-intro"><b>Relative depth</b> is each contig\'s median read depth over the chromosomal baseline (median depth of full-length assigned chromosomes). ~1&times; is single-copy; values well above 1&times; indicate extra physical copies not represented in the assembly &mdash; amplification. This is the signal that separates an <b>amplified circular element</b> (an active eccDNA candidate) from an inert single-copy circle, and it flags collapsed tandem duplications. Contigs at &ge;1.5&times;, plus every circular element, are shown below.</p>')
+```
+
+```{r amplification_plot, eval=has_amp, fig.width=10, fig.height=5}
+amp_df <- summary_df %>%
+  filter(!is.na(depth_ratio)) %>%
+  mutate(is_circ = ("classification" %in% names(.) & classification == "circular_element") |
+                   ("is_circular" %in% names(.) & is_circular == "yes")) %>%
+  filter(depth_ratio >= 1.5 | is_circ) %>%
+  mutate(length_mb = as.numeric(length) / 1e6) %>%
+  arrange(desc(depth_ratio)) %>%
+  slice_head(n = 30)
+
+if (nrow(amp_df) == 0) {
+  cat('<div class="note-box">No contigs are amplified (all near 1&times;) and no circular elements were detected.</div>')
+} else {
+  amp_df <- amp_df %>%
+    mutate(
+      contig = factor(contig, levels = rev(unique(contig))),
+      tooltip = paste0("Contig: ", contig,
+        "\nClassification: ", classification_labels[classification],
+        "\nRelative depth: ", sprintf("%.2fx", depth_ratio),
+        "\nMedian depth: ", sprintf("%.1fx", depth_median),
+        "\nLength: ", sprintf("%.2f Mb", length_mb),
+        ifelse(is_circ, "\nCircular (assembler)", ""),
+        ifelse(!is.na(assigned_ref_id) & nzchar(assigned_ref_id),
+               paste0("\nHomologous to: ", assigned_ref_id), "")))
+  p_amp <- ggplot(amp_df, aes(x = depth_ratio, y = contig)) +
+    annotate("rect", xmin = 2, xmax = Inf, ymin = -Inf, ymax = Inf,
+             fill = "#8856a7", alpha = 0.05) +
+    geom_vline(xintercept = 1, linetype = "dashed", color = "grey55", linewidth = 0.3) +
+    geom_segment(aes(x = 0, xend = depth_ratio, yend = contig),
+                 color = "grey75", linewidth = 0.5) +
+    ggiraph::geom_point_interactive(
+      aes(size = length_mb, fill = classification, tooltip = tooltip, data_id = contig),
+      shape = 21, color = "white", stroke = 0.3) +
+    scale_fill_manual(values = classification_colors, labels = classification_labels,
+                      name = "Classification", drop = TRUE) +
+    scale_size_area(max_size = 6, name = "Length (Mb)") +
+    scale_x_continuous(expand = expansion(mult = c(0, 0.08))) +
+    theme_classic(base_family = base_family, base_size = base_font_pt) +
+    axis_theme +
+    theme(axis.text.y = element_text(size = base_font_pt - 2),
+          panel.grid.major.x = element_line(color = "grey92", linewidth = 0.3),
+          legend.position = "right") +
+    labs(title = paste0("Contig relative depth (copy-number signal, ", params$plot_suffix, ")"),
+         subtitle = "Dashed line = single-copy (1x); shaded band = amplified (>=2x)",
+         x = "Relative depth (x chromosomal baseline)", y = NULL)
+  save_pdf(paste0(params$out_prefix, ".amplification.pdf"), p_amp,
+           width = 7.2, height = max(2.2, nrow(amp_df) * 0.22 + 1.2))
+  girafe_styled(p_amp, width_svg = 10, height_svg = max(2.6, nrow(amp_df) * 0.3 + 1.4))
+}
+```
 
 ```{r organelle_rdna_data}
 org_df <- summary_df %>% filter(classification %in% c("organelle_complete", "organelle_debris"))

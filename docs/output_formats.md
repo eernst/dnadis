@@ -59,6 +59,8 @@ These columns describe whether a contig represents a complete chromosome based o
 | `seq_identity_vs_ref` | float | Best-chain alignment identity to the assigned reference chromosome (0.0-1.0) |
 | `has_5p_telomere` | yes/no | Telomere detected at the **start** (first 10kb) of the **raw input** contig |
 | `has_3p_telomere` | yes/no | Telomere detected at the **end** (last 10kb) of the **raw input** contig |
+| `is_circular` | yes/no | Contig is circular per assembler evidence (`--circular-fasta`/`--circular-list`, an auto-detected `*.circ.fasta*` sibling, or the hifiasm `ptg*c` name suffix). Blank when circularity could not be determined from any source. Drives the `circular_element` classification. |
+| `depth_ratio` | float | `depth_median` ÷ the chromosomal baseline (median `depth_median` of full-length `chrom_assigned` contigs). A copy-number signal: ≈1 for single-copy sequence, ≫1 for amplified sequence (e.g. an amplified circular element). Requires `--reads`. |
 | `rearrangement_candidates` | string | Comma-separated list of off-target reference chromosomes with significant synteny span (fraction ≥ `--rearrangement-threshold`), indicating potential rearrangements such as homeologous exchanges |
 
 **Important: Telomere reference frame.** The `has_5p_telomere` and `has_3p_telomere` columns report telomere positions relative to the **raw input contig**, not the reoriented output. For contigs where `reversed=yes`, the 5' and 3' ends are swapped in the output FASTA and in the chromosome overview plot. The chromosome overview visualization applies this flip automatically so telomere indicators appear at the correct reference-oriented positions. Downstream consumers of the TSV should apply the same swap when `reversed=yes`: the raw 5' telomere corresponds to the output 3' end, and vice versa.
@@ -176,6 +178,7 @@ These depth metrics are useful for:
 | `organelle_debris` | Partial organelle sequence |
 | `rDNA` | Ribosomal DNA repeat unit |
 | `cobiont` | Sequence from a co-occurring organism (symbiont, commensal, etc.) |
+| `circular_element` | Circular contig (per assembler evidence) that is not better explained as an organelle, rDNA, or cobiont — an extrachromosomal circular DNA (eccDNA) candidate rather than part of a linear nuclear chromosome. Rerouted from `chrom_fragment`/`chrom_debris`/`chrom_unassigned`/`debris`/`unclassified`; `assigned_ref_id` is kept as a "homologous to chrN" annotation. Written to `*.circular_elements.fasta` and excluded from `chrs.fasta`, the compleasm `chrs` subset, phylogeny, and scaffolding. Circularity is resolved from `--circular-fasta`/`--circular-list`, an auto-detected `*.circ.fasta*` sibling of the query, or the hifiasm `ptg*c` name suffix. See `is_circular` / `depth_ratio` for the orthogonal circularity and amplification signals. |
 | `chrom_debris` | High-coverage (≥80%), high-identity (≥90%) duplicate of an assembled chromosome, or a sub-chromosome-length contig whose reference footprint is redundant with a longer placed contig |
 | `debris` | Assembly debris with reference homology (≥50% coverage) or protein hits (≥2) |
 | `unclassified` | Could not be classified (below chromosome-length threshold) |
@@ -211,6 +214,7 @@ The `classification_confidence` column indicates how certain the classification 
 | `organelle_debris` | — | Coverage ≥60% | Coverage <60% |
 | `rDNA` | Coverage ≥80% AND identity ≥95% | Coverage 50-80% OR identity <95% | Coverage <60% |
 | `cobiont` | Coverage ≥80% OR GC deviation >2σ | Coverage 50-80% | Coverage <50% |
+| `circular_element` | Always (assembler circularity is strong structural evidence) | — | — |
 | `chrom_debris` | Coverage ≥90%, identity ≥95%, GC deviation <3σ | Coverage 80-90% OR identity 90-95% OR GC deviation ≥3σ | — |
 | `debris` | Coverage ≥80% OR ≥5 protein hits | Coverage 50-80% OR 2-5 protein hits | GC deviation >3σ AND no synteny |
 | `unclassified` | — | — | Always (no evidence) |

@@ -141,6 +141,9 @@ class ContigClassification:
     - rDNA: Ribosomal DNA repeat unit
     - cobiont: Sequence from a co-occurring organism (symbiont, commensal, or other cobiont)
     - chrom_debris: High-coverage duplicate of assembled chromosome
+    - circular_element: Circular non-organelle/non-cobiont contig (extrachromosomal
+      circular DNA candidate); circularity from the assembler, not part of a
+      linear nuclear chromosome
     - debris: Assembly fragment with reference homology
     - unclassified: No classification evidence
 
@@ -153,7 +156,7 @@ class ContigClassification:
     """
     original_name: str
     new_name: str
-    classification: str  # chrom_assigned, chrom_unassigned, chrom_debris, organelle_complete, organelle_debris, rDNA, cobiont, debris, unclassified
+    classification: str  # chrom_assigned, chrom_unassigned, chrom_debris, organelle_complete, organelle_debris, rDNA, cobiont, circular_element, debris, unclassified
     reversed: bool
     cobiont_taxid: Optional[int]  # NCBI taxonomy ID for cobionts
     cobiont_sci: Optional[str]  # Scientific name for cobionts
@@ -187,6 +190,9 @@ class ContigClassification:
     collinearity_score: Optional[float] = None  # 0.0-1.0, None if no chains
     # Rearrangement hypothesis detection
     rearrangement_candidates: Optional[str] = None  # Comma-separated off-target chromosomes (e.g., "chr2A,chr5B")
+    # Circularity + relative depth (orthogonal annotations; drive circular_element)
+    is_circular: Optional[bool] = None  # Circular contig per assembler evidence; None if unknown
+    depth_ratio: Optional[float] = None  # depth_median / chromosomal-baseline median depth (copy-number signal)
 
 
 @dataclass

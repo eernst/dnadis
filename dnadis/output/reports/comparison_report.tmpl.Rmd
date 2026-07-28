@@ -479,6 +479,7 @@ clf_short <- c(
   "organelle_debris"   = "OrgD",
   "rDNA"               = "rDNA",
   "cobiont"            = "Cob",
+  "circular_element"   = "Circ",
   "chrom_debris"       = "ChrD",
   "debris"             = "Debris",
   "unclassified"       = "Unclf"
@@ -1168,7 +1169,7 @@ ct_has <- has_any_chrom && all(c("state", "n_anchor", "n_fragment") %in% names(c
 ```
 
 ```{r contiguity_cmp_intro, eval=ct_has, results='asis'}
-cat('<p class="section-intro">Per-reference-chromosome <b>assembly state</b> across assemblies — a companion to <b>Overview</b> (which encodes copy number and identity). Each cell shows how a chromosome is assembled: a single contig, multiple full-length copies, fragmented (a full-length anchor plus fragments), fragments-only (chromosomal fragments with no full-length anchor), or absent.</p>')
+cat('<p class="section-intro">Per-reference-chromosome <b>assembly state</b> across assemblies — a companion to <b>Overview</b> (which encodes copy number and identity). Cell colour reflects how the chromosome is reconstructed from its full-length <b>anchor(s)</b>: a single contig, multiple full-length copies, fragments-only (chromosomal fragments with no full-length anchor), or absent. A <b>+N badge</b> marks chromosomes that also carry N extra fragment contigs (often divergent duplicates or eccDNA rather than a broken chromosome); the badge does not downgrade the state colour.</p>')
 ```
 
 ```{r contiguity_cmp_heatmap, eval=ct_has, fig.width=10, fig.height=max(3, n_asm * 0.34 + 2.4)}
@@ -1194,6 +1195,16 @@ p_ct_hm <- ggplot(ctdf, aes(x = chrom_num, y = assembly, fill = state)) +
   ggiraph::geom_tile_interactive(
     aes(tooltip = tooltip, data_id = paste(assembly, ref_id)),
     color = "white", linewidth = 0.3, width = 0.95, height = 0.95) +
+  # +N fragment-load badge: chromosomes carrying extra fragment contigs on top
+  # of their anchor(s).  A small white chip keeps it legible over any fill.
+  ggiraph::geom_label_interactive(
+    data = ctdf %>% filter(n_fragment > 0),
+    aes(label = paste0("+", n_fragment), tooltip = tooltip,
+        data_id = paste(assembly, ref_id)),
+    fill = "white", alpha = 0.72, color = "grey10", fontface = "bold",
+    size = (base_font_pt - 3) / .pt, label.size = 0,
+    label.padding = unit(0.05, "lines"),
+    label.r = unit(0.05, "lines")) +
   scale_fill_manual(values = chrom_state_colors, labels = chrom_state_labels,
                     drop = FALSE, name = "State") +
   { if (has_subgenomes) facet_grid(cols = vars(sg), scales = "free_x", space = "free_x") } +

@@ -136,6 +136,72 @@ def is_hifiasm_circular(contig_name: str) -> bool:
     return bool(re.match(r"ptg\d+c", contig_name))
 
 
+def _read_fasta_names(path: Path) -> Set[str]:
+    """Return the set of sequence names (first whitespace-delimited token) in a FASTA."""
+    names: Set[str] = set()
+    with open_maybe_gzip(path, "rt") as fh:
+        for line in fh:
+            if line.startswith(">"):
+                names.add(line[1:].strip().split()[0])
+    return names
+
+
+def _find_sibling_circ_fasta(query_fasta: Path) -> Optional[Path]:
+    """Locate an assembler-emitted circular-contig FASTA sibling of ``query_fasta``.
+
+    Matches the hifiasm convention where ``<stem>.fasta[.gz]`` is accompanied by
+    ``<stem>.circ.fasta[.gz]`` (e.g. ``*.bp.p_ctg.fasta.gz`` ->
+    ``*.bp.p_ctg.circ.fasta.gz``).  Returns the first match, or None.
+    """
+    name = query_fasta.name
+    for ext in (".fasta.gz", ".fa.gz", ".fasta", ".fa"):
+        if name.endswith(ext):
+            sibling = query_fasta.with_name(name[: -len(ext)] + ".circ" + ext)
+            if sibling.exists():
+                return sibling
+    # Fallback: any *.circ.fasta* in the same directory.
+    for cand in sorted(query_fasta.parent.glob("*.circ.fa*")):
+        return cand
+    return None
+
+
+def resolve_circular_contigs(
+    query_fasta: Path,
+    all_names: Set[str],
+    circular_fasta: Optional[Path] = None,
+    circular_list: Optional[Path] = None,
+) -> Tuple[Set[str], bool]:
+    """Resolve which query contigs are circular, from the best available source.
+
+    Sources are tried in priority order:
+      1. ``circular_list`` — a text file of circular contig names (one per line).
+      2. ``circular_fasta`` — a FASTA whose sequence names are the circular set
+         (e.g. hifiasm's ``*.p_ctg.circ.fasta.gz``).
+      3. an auto-detected ``*.circ.fasta*`` sibling of ``query_fasta``.
+      4. the hifiasm ``ptg\\d+c`` contig-name heuristic (only if any name matches).
+
+    Returns ``(circular_names, known)``.  ``known`` is True when a source was
+    available (so non-members are genuinely linear); when no source applies it is
+    False and ``circular_names`` is empty (circularity is simply unknown, and
+    ``is_circular`` should stay None rather than False).
+    """
+    if circular_list is not None:
+        with open(circular_list) as fh:
+            names = {ln.strip().split()[0] for ln in fh if ln.strip() and not ln.startswith("#")}
+        return (names & all_names), True
+    if circular_fasta is not None:
+        return (_read_fasta_names(circular_fasta) & all_names), True
+    sibling = _find_sibling_circ_fasta(query_fasta)
+    if sibling is not None:
+        logger.info(f"Using circular-contig set from {sibling.name}")
+        return (_read_fasta_names(sibling) & all_names), True
+    heuristic = {n for n in all_names if is_hifiasm_circular(n)}
+    if heuristic:
+        logger.info(f"Inferred {len(heuristic)} circular contig(s) from hifiasm name suffix")
+        return heuristic, True
+    return set(), False
+
+
 def calculate_gc_content(seq: str) -> float:
     """Calculate GC content of a DNA sequence.
 

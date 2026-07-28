@@ -309,7 +309,7 @@ All external tools are called via subprocess with proper error handling. Use `ut
 
 ## Output Files Reference
 
-**FASTA outputs**: `*.chrs.fasta`, `*.organelles.fasta`, `*.rdna.fasta`, `*.cobionts.fasta`, `*.debris.fasta`, `*.unclassified.fasta`, `*.non_chrs.fasta` (combined non-chromosome contigs, produced when compleasm is enabled)
+**FASTA outputs**: `*.chrs.fasta`, `*.organelles.fasta`, `*.rdna.fasta`, `*.cobionts.fasta`, `*.circular_elements.fasta`, `*.debris.fasta`, `*.unclassified.fasta`, `*.non_chrs.fasta` (combined non-chromosome contigs, produced when compleasm is enabled)
 
 **TSV outputs**:
 - `*.contig_summary.tsv` - Per-contig classification with all evidence fields
@@ -382,7 +382,9 @@ Each contig is scored independently. Multiple contigs can still be assigned to t
 9. Debris (if reference coverage >50% or protein hits ≥2)
 10. Unclassified (no evidence)
 
-**Confidence levels** are assigned by `classifier.py:assign_classification_confidence()` based on category-specific criteria (gene proportion, GC deviation, coverage, identity, protein hits).
+After the decision tree, a **circular-element reroute pass** (`classifier.py:apply_circular_reclassification()`) runs before subgenome inference and naming. It sets `is_circular` on every contig (when circularity is known) and relabels a circular contig to `circular_element` **only** if its current classification is in an explicit allowlist — `{chrom_fragment, chrom_debris, chrom_unassigned, debris, unclassified}`. Circular organelles, cobionts, rDNA arrays, and confident `chrom_assigned` chromosomes are preserved (a circular chloroplast stays `organelle_complete`; a circular bacterial cobiont stays `cobiont`). Circularity is resolved once per assembly in `cli.py` via `sequence_utils.py:resolve_circular_contigs()` (from `--circular-fasta`/`--circular-list`, an auto-detected `*.circ.fasta*` sibling, or the hifiasm `ptg*c` name heuristic). Orthogonally, `depth_ratio` (contig `depth_median` ÷ chromosomal-baseline median) is computed after read-depth analysis as an amplification signal; it annotates but does not gate the class. `circular_element` contigs get their own `*.circular_elements.fasta` and are excluded from `chrs.fasta`, the compleasm `chrs` subset, phylogeny, and scaffolding (all of which key on `{chrom_assigned, chrom_fragment}`).
+
+**Confidence levels** are assigned inline within `classify_all_contigs()` per category (gene proportion, GC deviation, coverage, identity, protein hits); `circular_element` is assigned high confidence since assembler circularity is strong structural evidence.
 
 ## When Modifying Synteny Block Building
 

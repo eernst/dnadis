@@ -23,28 +23,32 @@ from dnadis.models import (
 
 # Per-reference-chromosome assembly states (best → missing).  Mirrors the R
 # helper compute_chrom_contiguity() in reports/common.R; keep the two in sync.
+#
+# State is derived from *anchors* (chrom_assigned) only.  Fragment contigs
+# (chrom_fragment) do not change the state: a chromosome that is complete in a
+# single anchor stays "T2T"/"single" even when extra fragment contigs are also
+# assigned to it (those are surfaced separately as a fragment count / badge,
+# since they are frequently divergent duplicates or eccDNA rather than evidence
+# that the chromosome itself is broken).
 CHROM_STATE_LEVELS = [
-    "T2T", "single", "multiple", "fragmented", "fragments_only", "absent",
+    "T2T", "single", "multiple", "fragments_only", "absent",
 ]
 
 
 def _chrom_contiguity_state(
     n_anchor: int, n_fragment: int, both_telo: bool, any_full_length: bool
 ) -> str:
-    """Classify one reference chromosome's assembly state for an assembly.
+    """Classify one reference chromosome's assembly state from its anchors.
 
     n_anchor counts chrom_assigned contigs (substantial, gate-passing pieces);
-    n_fragment counts chrom_fragment contigs (sub-chr_like_minlen arms).
+    n_fragment counts chrom_fragment contigs (sub-chr_like_minlen arms) and is
+    reported alongside the state rather than folded into it.
     """
-    if n_anchor + n_fragment == 0:
-        return "absent"
     if n_anchor == 0:
-        return "fragments_only"
-    if n_anchor == 1 and n_fragment == 0:
+        return "fragments_only" if n_fragment > 0 else "absent"
+    if n_anchor == 1:
         return "T2T" if (both_telo and any_full_length) else "single"
-    if n_anchor >= 2 and n_fragment == 0:
-        return "multiple"
-    return "fragmented"
+    return "multiple"
 
 
 def _compute_n50_l50(lengths: List[int]) -> tuple[int, int]:
@@ -361,10 +365,12 @@ def write_comparison_summary_tsv(
         "chrom_assigned_bp",
         "n_chrom_fragment",
         "chrom_fragment_bp",
+        "n_circular_element",
+        "circular_element_bp",
         "n_chr_t2t",
         "n_chr_single",
         "n_chr_multiple",
-        "n_chr_fragmented",
+        "n_chr_with_fragments",
         "n_chr_fragments_only",
         "n_chr_absent",
         "n_full_length",
@@ -419,8 +425,11 @@ def write_comparison_summary_tsv(
             # Per-chromosome state tally (excludes absent refs below chr scale is
             # already handled upstream; here we count every reference chromosome).
             state_counts = defaultdict(int)
+            n_chr_with_fragments = 0
             for crs in r.chrom_ref_coverage.values():
                 state_counts[crs.state] += 1
+                if crs.n_fragment > 0:
+                    n_chr_with_fragments += 1
 
             row = [
                 r.assembly_name,
@@ -434,10 +443,12 @@ def write_comparison_summary_tsv(
                 str(r.classification_bp.get("chrom_assigned", 0)),
                 str(r.classification_counts.get("chrom_fragment", 0)),
                 str(r.classification_bp.get("chrom_fragment", 0)),
+                str(r.classification_counts.get("circular_element", 0)),
+                str(r.classification_bp.get("circular_element", 0)),
                 str(state_counts.get("T2T", 0)),
                 str(state_counts.get("single", 0)),
                 str(state_counts.get("multiple", 0)),
-                str(state_counts.get("fragmented", 0)),
+                str(n_chr_with_fragments),
                 str(state_counts.get("fragments_only", 0)),
                 str(state_counts.get("absent", 0)),
                 str(r.n_full_length),
