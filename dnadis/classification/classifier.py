@@ -1217,6 +1217,38 @@ def _containment_fraction(
     return min(1.0, overlap / span)
 
 
+# Categories eligible to be rerouted to circular_element.  This is an explicit
+# allowlist: a circular organelle (organelle_complete/organelle_debris), a
+# circular bacterial cobiont, a circular rDNA array, and confident linear
+# chromosomes (chrom_assigned) are all preserved and never rerouted.
+_REROUTABLE_TO_CIRCULAR = frozenset({
+    "chrom_fragment", "chrom_debris", "chrom_unassigned", "debris", "unclassified",
+})
+
+
+def apply_circular_reclassification(
+    classifications: List[ContigClassification],
+    circular_contigs: Set[str],
+) -> int:
+    """Flag circular contigs and reroute the eligible ones to circular_element.
+
+    Sets ``is_circular`` on every contig (True/False; callers invoke this only
+    when circularity is known, so False means genuinely linear).  A circular
+    contig whose current classification is in ``_REROUTABLE_TO_CIRCULAR`` is
+    relabelled ``circular_element`` at high confidence (assembler circularity is
+    strong structural evidence); ``assigned_ref_id`` and evidence fields are
+    preserved.  Returns the number reclassified.
+    """
+    n = 0
+    for clf in classifications:
+        clf.is_circular = clf.original_name in circular_contigs
+        if clf.is_circular and clf.classification in _REROUTABLE_TO_CIRCULAR:
+            clf.classification = "circular_element"
+            clf.classification_confidence = "high"
+            n += 1
+    return n
+
+
 # ----------------------------
 # Classification pipeline
 # ----------------------------
@@ -1255,6 +1287,8 @@ def classify_all_contigs(
     synteny_mode: str = "protein",
     fragment_containment_frac: float = 0.80,
     fragment_debris_min_identity: float = 0.90,
+    circular_contigs: Optional[Set[str]] = None,
+    circular_known: bool = False,
 ) -> List[ContigClassification]:
     """Classify all contigs and assign confidence levels.
 
@@ -1270,6 +1304,8 @@ def classify_all_contigs(
     - organelle_debris: Partial organelle sequences
     - rDNA: Ribosomal DNA repeat units
     - cobiont: Sequences from co-occurring organisms (symbionts, commensals, etc.)
+    - circular_element: Circular non-organelle/non-cobiont contigs (eccDNA
+      candidates); assigned by apply_circular_reclassification() after the tree
     - chrom_debris: High-coverage duplicates of assembled chromosomes
     - debris: Assembly fragments with reference homology
     - unclassified: Sequences with no classification evidence
@@ -1911,6 +1947,19 @@ def classify_all_contigs(
                 gc_deviation=gc_dev,
                 classification_confidence="low",
             ))
+
+    # Circular elements: reroute circular contigs from the weak, non-organelle
+    # categories to circular_element.  Runs before subgenome inference and
+    # naming so rerouted contigs are excluded from chromosome grouping.
+    if circular_known:
+        n_circular = apply_circular_reclassification(
+            classifications, circular_contigs or set()
+        )
+        if n_circular:
+            logger.info(
+                f"Circular elements: {n_circular} contig(s) reclassified as "
+                "circular_element (circular, not organelle/rDNA/cobiont/chromosome)"
+            )
 
     # Infer query subgenomes when multiple contigs map to same reference.
     # Cluster score = identity × (union_bp / contig_len) so the GMM separates

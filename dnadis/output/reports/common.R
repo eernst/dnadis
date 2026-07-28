@@ -112,6 +112,7 @@ classification_colors <- c(
   "organelle_debris"   = oi[4],
   "rDNA"               = oi[1],
   "cobiont"        = oi[7],
+  "circular_element"   = "#8856a7",  # dedicated purple (distinct from chrM=oi[6] in depth plot)
   "chrom_debris"       = lighten(oi[5], amount = 0.5),
   "debris"             = oi[9],
   "unclassified"       = oi[8]
@@ -125,6 +126,7 @@ classification_labels <- c(
   "organelle_debris"   = "Organelle (debris)",
   "rDNA"               = "rDNA",
   "cobiont"        = "Cobiont",
+  "circular_element"   = "Circular element",
   "chrom_debris"       = "Chromosome debris",
   "debris"             = "Debris",
   "unclassified"       = "Unclassified"
@@ -138,6 +140,7 @@ clf_labels_short <- c(
   "organelle_debris"   = "Organelle debris",
   "rDNA"               = "rDNA",
   "cobiont"        = "Cobiont",
+  "circular_element"   = "Circular element",
   "chrom_debris"       = "Chr debris",
   "debris"             = "Debris",
   "unclassified"       = "Unclassified"
@@ -145,7 +148,8 @@ clf_labels_short <- c(
 
 classification_levels <- c(
   "chrom_assigned", "chrom_fragment", "chrom_unassigned", "organelle_complete",
-  "organelle_debris", "rDNA", "cobiont", "chrom_debris", "debris", "unclassified"
+  "organelle_debris", "rDNA", "cobiont", "circular_element", "chrom_debris",
+  "debris", "unclassified"
 )
 
 # ---------------------------------------------------------------------------

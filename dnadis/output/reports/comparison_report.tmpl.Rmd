@@ -479,6 +479,7 @@ clf_short <- c(
   "organelle_debris"   = "OrgD",
   "rDNA"               = "rDNA",
   "cobiont"            = "Cob",
+  "circular_element"   = "Circ",
   "chrom_debris"       = "ChrD",
   "debris"             = "Debris",
   "unclassified"       = "Unclf"

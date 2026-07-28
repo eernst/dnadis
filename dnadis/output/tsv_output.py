@@ -121,6 +121,8 @@ def write_contig_summary_tsv(
         "seq_identity_vs_ref",
         "has_5p_telomere",
         "has_3p_telomere",
+        "is_circular",
+        "depth_ratio",
         "rearrangement_candidates",
         # Evidence fields
         "gc_content",
@@ -200,7 +202,8 @@ def write_contig_summary_tsv(
             # use the classification's assigned_ref_id instead of chain evidence
             clf_class = clf.classification if clf else "unclassified"
             if clf and clf_class in ("organelle_complete", "organelle_debris", "rDNA",
-                                     "cobiont", "debris", "chrom_debris", "unclassified"):
+                                     "cobiont", "circular_element", "debris",
+                                     "chrom_debris", "unclassified"):
                 assigned_ref_id = clf.assigned_ref_id if clf.assigned_ref_id else ""
             else:
                 assigned_ref_id = chain_assigned_ref_id
@@ -215,8 +218,8 @@ def write_contig_summary_tsv(
             # For non-chromosome classifications (organelles, debris, etc.), don't require
             # chain evidence (bs > 0) - they have assigned_ref_id from their detection method
             needs_chain_evidence = clf_class not in ("organelle_complete", "organelle_debris",
-                                                      "rDNA", "cobiont", "debris",
-                                                      "chrom_debris", "unclassified")
+                                                      "rDNA", "cobiont", "circular_element",
+                                                      "debris", "chrom_debris", "unclassified")
             if not assigned_ref_id or (needs_chain_evidence and bs <= 0.0):
                 assigned_chrom_id, assigned_subgenome = ("", "NA")
                 status = "NO_HITS"
@@ -262,6 +265,8 @@ def write_contig_summary_tsv(
             seq_identity = f"{clf.seq_identity_vs_ref:.6f}" if clf and clf.seq_identity_vs_ref is not None else ""
             has_5p_telo = "yes" if clf and clf.has_5p_telomere else ("no" if clf and clf.has_5p_telomere is not None else "")
             has_3p_telo = "yes" if clf and clf.has_3p_telomere else ("no" if clf and clf.has_3p_telomere is not None else "")
+            is_circular = "yes" if clf and clf.is_circular else ("no" if clf and clf.is_circular is not None else "")
+            depth_ratio = f"{clf.depth_ratio:.2f}" if clf and clf.depth_ratio is not None else ""
             rearrangement_candidates = clf.rearrangement_candidates if clf and clf.rearrangement_candidates else ""
 
             # Evidence strength columns
@@ -309,6 +314,8 @@ def write_contig_summary_tsv(
                         seq_identity,
                         has_5p_telo,
                         has_3p_telo,
+                        is_circular,
+                        depth_ratio,
                         rearrangement_candidates,
                         # Evidence fields
                         gc_content,

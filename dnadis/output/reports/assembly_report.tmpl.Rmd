@@ -1621,7 +1621,7 @@ depth_classification_order <- c(
   "chrom_assigned", "chrom_fragment", "chrom_debris", "chrom_unassigned",
   "chrC", "chrC_debris", "chrM", "chrM_debris",
   "organelle_complete", "organelle_debris",
-  "rDNA", "cobiont", "debris", "unclassified"
+  "rDNA", "cobiont", "circular_element", "debris", "unclassified"
 )
 depth_classification_colors <- c(
   "chrom_assigned"     = oi[5],
@@ -1636,6 +1636,7 @@ depth_classification_colors <- c(
   "organelle_debris"   = oi[4],
   "rDNA"               = oi[1],
   "cobiont"        = oi[7],
+  "circular_element"   = "#8856a7",
   "debris"             = oi[9],
   "unclassified"       = oi[8]
 )

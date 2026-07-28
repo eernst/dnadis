@@ -29,6 +29,7 @@ See README.md for full documentation and examples.
 from __future__ import annotations
 
 import argparse
+import statistics
 import sys
 import time
 import traceback
@@ -116,6 +117,7 @@ from dnadis.utils.sequence_utils import (
     read_fasta_lengths,
     read_gc_content_tsv,
     read_ref_gc_tsv,
+    resolve_circular_contigs,
     write_filtered_fasta,
     write_gc_content_tsv,
     write_ref_gc_tsv,
@@ -1083,6 +1085,15 @@ def run_assembly(
 
     # cobionts_filtered (coverage >= threshold) was computed before the debris
     # phase so low-coverage hits could be debris-screened; reuse it here.
+    # Resolve which contigs are circular (assembler evidence) so the classifier
+    # can route circular non-organelle/non-cobiont contigs to circular_element.
+    circular_contigs, circular_known = resolve_circular_contigs(
+        qry,
+        set(qry_lengths.keys()),
+        circular_fasta=Path(args.circular_fasta) if args.circular_fasta else None,
+        circular_list=Path(args.circular_list) if args.circular_list else None,
+    )
+
     classifications = classify_all_contigs(
         query_fasta=qry,
         query_lengths=qry_lengths,
@@ -1121,6 +1132,8 @@ def run_assembly(
         # within a longer placed contig AND it aligns at the same high identity
         # used for chromosome-debris detection.
         fragment_debris_min_identity=args.chr_debris_min_identity,
+        circular_contigs=circular_contigs,
+        circular_known=circular_known,
     )
 
     for clf in classifications:
@@ -1183,6 +1196,28 @@ def run_assembly(
                 clf.depth_std = ds.std_depth
                 clf.depth_breadth_1x = ds.breadth_1x
                 clf.depth_breadth_10x = ds.breadth_10x
+
+        # Relative depth (copy-number signal): each contig's median depth over
+        # the chromosomal baseline (median depth of full-length chrom_assigned
+        # contigs; falls back to all chrom_assigned).  A ratio >> 1 flags
+        # amplification (e.g. an amplified circular element), orthogonally to
+        # the classification itself.
+        baseline_depths = [
+            c.depth_median for c in classifications
+            if c.classification == "chrom_assigned"
+            and c.is_full_length and c.depth_median
+        ]
+        if not baseline_depths:
+            baseline_depths = [
+                c.depth_median for c in classifications
+                if c.classification == "chrom_assigned" and c.depth_median
+            ]
+        if baseline_depths:
+            baseline = statistics.median(baseline_depths)
+            if baseline > 0:
+                for clf in classifications:
+                    if clf.depth_median is not None:
+                        clf.depth_ratio = clf.depth_median / baseline
 
         if depth_stats:
             logger.done(f"Depth analysis complete for {len(depth_stats)} contigs")
@@ -1633,7 +1668,8 @@ def main():
             chrM_len_tolerance=0.20, rdna_min_cov=0.50,
             skip_rdna_consensus=False, rdna_ref_features=None,
             chr_debris_min_cov=0.80,
-            chr_debris_min_identity=0.90, cobiont_min_score=1000, cobiont_min_coverage=0.50,
+            chr_debris_min_identity=0.90, circular_fasta="", circular_list="",
+            cobiont_min_score=1000, cobiont_min_coverage=0.50,
             debris_min_cov=0.50, debris_min_protein_hits=2, preset="asm20", kmer=None, window=None, aln_minlen=10000,
             scaffold=False, scaffold_gap_size=100,
             compleasm_lineage=None, compleasm_library=None, compleasm_path=None, skip_compleasm=False,
@@ -1964,6 +2000,22 @@ def main():
     chr_debris_thresh.add_argument(
         "--chr-debris-min-identity", type=float, default=0.90,
         help="Min alignment identity vs assembled chromosomes [0.90]",
+    )
+
+    # =========================================================================
+    # Circular elements (extrachromosomal circular DNA candidates)
+    # =========================================================================
+    circular_grp = p.add_argument_group("Circular elements")
+    circular_src = circular_grp.add_mutually_exclusive_group()
+    circular_src.add_argument(
+        "--circular-fasta", type=str, default="", metavar="FASTA",
+        help="FASTA of circular contigs (e.g. hifiasm *.p_ctg.circ.fasta.gz); "
+             "its sequence names mark the circular set. Auto-detected as a "
+             "*.circ.fasta* sibling of the query if not given.",
+    )
+    circular_src.add_argument(
+        "--circular-list", type=str, default="", metavar="FILE",
+        help="Text file of circular contig names, one per line.",
     )
 
     # =========================================================================

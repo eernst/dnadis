@@ -49,6 +49,8 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
         "reference_name": "reference_name",
         "comparison_name": "comparison_name",
         "assembly_sort_order": "assembly_sort_order",
+        "circular_fasta": "circular_fasta",
+        "circular_list": "circular_list",
     },
     "read_depth": {
         "reads": "reads",
