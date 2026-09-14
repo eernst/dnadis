@@ -179,13 +179,13 @@ conda run -n dnadis pytest -q
 
 Latest tested conda package versions (CI):
 <!-- conda-versions-start -->
-- python: 3.14.5
+- python: 3.14.7
 - miniprot: 0.18
 - gffread: 0.12.9
 - blast: 2.17.0
-- mm2plus: 1.2
+- mm2plus: 1.3
 - ragtag: 2.1.0
-- centrifuger: 1.1.1
+- centrifuger: 1.1.3
 <!-- conda-versions-end -->
 
 ## Quick Start
