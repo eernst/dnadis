@@ -32,8 +32,9 @@ def _file_size_bytes(path: Path) -> int:
 def _estimate_genome_bp_from_filesize(path: Path) -> int:
     """Estimate genome size in base pairs from a FASTA file size.
 
-    For gzipped files, assumes ~3× compression ratio.
-    For plain text FASTA, assumes ~50% of file size is sequence.
+    gzip compresses nucleotide FASTA about 4-fold (one compressed byte per
+    ~4 bp); plain FASTA is ~98% sequence once headers and newlines are
+    excluded.
     """
     size = _file_size_bytes(path)
     if size == 0:
@@ -41,11 +42,8 @@ def _estimate_genome_bp_from_filesize(path: Path) -> int:
 
     name = path.name.lower()
     if name.endswith(".gz") or name.endswith(".bgz"):
-        # gzip typically achieves ~3x on FASTA; sequence is ~50% of decompressed
-        return int(size * 3 * 0.5)
-    else:
-        # Plain FASTA: roughly 50% is sequence after removing headers/newlines
-        return int(size * 0.5)
+        return int(size * 4.0)
+    return int(size * 0.98)
 
 
 # Global safety multiplier for wall-time estimates.  Under-requesting causes
