@@ -171,19 +171,45 @@ class TestResourceSpecToDict:
     reason="pysqa not installed",
 )
 class TestPatchPysqaTemplate:
-    def test_adds_qos_directive(self):
-        """Patching inserts --qos into the pysqa SLURM template."""
+    @pytest.mark.parametrize("cpu_line", [
+        "#SBATCH --ntasks={{cores}}",          # pysqa >= 1.0
+        "#SBATCH --cpus-per-task={{cores}}",   # older pysqa
+    ])
+    def test_single_node_cpus_per_task_and_qos(self, cpu_line):
+        """Patching yields one task with --cpus-per-task on one node, plus --qos."""
+        from jinja2 import Template
         from pysqa.wrapper import slurm as _slurm_mod
 
         original = _slurm_mod.template
         try:
-            # Reset to a template without qos
-            _slurm_mod.template = original.replace(
-                "{%- if qos %}\n#SBATCH --qos={{qos}}\n{%- endif %}\n", ""
+            _slurm_mod.template = (
+                "#!/bin/bash\n#SBATCH --partition={{partition}}\n"
+                f"{cpu_line}\n\n{{{{command}}}}\n"
             )
-            assert "qos" not in _slurm_mod.template
             _patch_pysqa_template()
+            out = Template(_slurm_mod.template).render(
+                partition="cpuq", cores=16, qos="cpu_snice", command="run")
+            assert "#SBATCH --nodes=1" in out
+            assert "#SBATCH --ntasks=1\n" in out
+            assert "#SBATCH --cpus-per-task=16" in out
+            assert "--ntasks=16" not in out
+            assert "#SBATCH --qos=cpu_snice" in out
+            no_qos = Template(_slurm_mod.template).render(
+                partition="cpuq", cores=4, qos=None, command="run")
+            assert "--qos" not in no_qos
+        finally:
+            _slurm_mod.template = original
+
+    def test_installed_template_is_patched(self):
+        """The template shipped with the installed pysqa is recognised."""
+        from pysqa.wrapper import slurm as _slurm_mod
+
+        original = _slurm_mod.template
+        try:
+            _patch_pysqa_template()
+            assert "#SBATCH --cpus-per-task={{cores}}" in _slurm_mod.template
             assert "#SBATCH --qos={{qos}}" in _slurm_mod.template
+            assert "--ntasks={{cores}}" not in _slurm_mod.template
         finally:
             _slurm_mod.template = original
 
@@ -231,7 +257,8 @@ class TestSbatchRetry:
     def test_retries_on_failure_then_succeeds(self):
         """Retry logic retries on CalledProcessError and returns on success."""
         import subprocess as _subprocess
-        from executorlib.standalone import scheduler as _sched_mod
+        from dnadis.utils.distributed import _find_sbatch_caller_module
+        _sched_mod = _find_sbatch_caller_module()
 
         # Clean slate: remove any prior patch
         _orig_subprocess = _sched_mod.subprocess
@@ -265,7 +292,8 @@ class TestSbatchRetry:
     def test_raises_after_max_retries(self):
         """Raises CalledProcessError after exhausting retries."""
         import subprocess as _subprocess
-        from executorlib.standalone import scheduler as _sched_mod
+        from dnadis.utils.distributed import _find_sbatch_caller_module
+        _sched_mod = _find_sbatch_caller_module()
 
         _orig_subprocess = _sched_mod.subprocess
         if hasattr(_sched_mod, "_sbatch_retry_patched"):
@@ -305,13 +333,13 @@ class TestFileHelpers:
         p = tmp_path / "genome.fa"
         p.write_bytes(b"x" * 1000)  # 1KB
         bp = _estimate_genome_bp_from_filesize(p)
-        assert bp == 500  # 50% of 1000
+        assert bp == 980  # ~98% of a plain FASTA is sequence
 
     def test_estimate_bp_gzip(self, tmp_path):
         p = tmp_path / "genome.fa.gz"
         p.write_bytes(b"x" * 1000)
         bp = _estimate_genome_bp_from_filesize(p)
-        assert bp == 1500  # 3 * 0.5 * 1000
+        assert bp == 4000  # ~4 bp per gzipped byte
 
     def test_estimate_bp_nonexistent(self):
         assert _estimate_genome_bp_from_filesize(Path("/no/file")) == 0
