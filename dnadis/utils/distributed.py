@@ -240,12 +240,21 @@ _QOS_DIRECTIVE = """\
 {%- endif %}"""
 
 
-def _patch_pysqa_template() -> None:
-    """Add ``--qos`` support to pysqa's built-in SLURM template.
+_CPU_DIRECTIVES = """\
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task={{cores}}"""
 
-    The default pysqa SLURM template does not include a ``--qos`` directive.
-    This function injects a conditional ``#SBATCH --qos={{qos}}`` line so that
-    the QoS value from :class:`ResourceSpec` flows through to ``sbatch``.
+
+def _patch_pysqa_template() -> None:
+    """Make pysqa's SLURM template request one multi-threaded task with optional QoS.
+
+    pysqa >= 1.0 renders ``#SBATCH --ntasks={{cores}}``, which lets SLURM
+    spread the requested CPUs as single-CPU tasks over several nodes while
+    the job script (and the multi-threaded tool it runs) executes only on
+    the first.  Older pysqa rendered ``--cpus-per-task={{cores}}`` without
+    ``--nodes``.  Either line is replaced with a single-node, single-task,
+    ``--cpus-per-task`` request preceded by a conditional ``--qos``.
 
     Safe to call multiple times — patches only once.
     """
@@ -253,16 +262,43 @@ def _patch_pysqa_template() -> None:
         from pysqa.wrapper import slurm as _slurm_mod  # type: ignore[import-untyped]
     except ImportError:
         return  # pysqa not installed; executor init will fail with its own error
-    if "qos" not in _slurm_mod.template:
-        _slurm_mod.template = _slurm_mod.template.replace(
-            "#SBATCH --cpus-per-task={{cores}}",
-            _QOS_DIRECTIVE + "\n#SBATCH --cpus-per-task={{cores}}",
-        )
+    tpl = _slurm_mod.template
+    if "#SBATCH --qos={{qos}}" in tpl and "#SBATCH --nodes=1" in tpl:
+        return
+    replacement = _QOS_DIRECTIVE + "\n" + _CPU_DIRECTIVES
+    for anchor in ("#SBATCH --ntasks={{cores}}", "#SBATCH --cpus-per-task={{cores}}"):
+        if anchor in tpl:
+            _slurm_mod.template = tpl.replace(anchor, replacement, 1)
+            return
+    logger.warning(
+        "pysqa SLURM template has no recognised CPU directive; jobs may not "
+        "get --cpus-per-task/--qos as requested"
+    )
 
 
 # ---------------------------------------------------------------------------
 # sbatch retry patching
 # ---------------------------------------------------------------------------
+def _find_sbatch_caller_module() -> Any:
+    """Return the executorlib module whose ``subprocess`` runs ``sbatch``.
+
+    executorlib >= 1.10 keeps ``pysqa_execute_command`` in
+    ``standalone.command_pysqa``; earlier releases used ``standalone.scheduler``.
+    Returns None when neither exists.
+    """
+    import importlib
+
+    for name in ("executorlib.standalone.command_pysqa",
+                 "executorlib.standalone.scheduler"):
+        try:
+            mod = importlib.import_module(name)
+        except ImportError:
+            continue
+        if hasattr(mod, "subprocess"):
+            return mod
+    return None
+
+
 def _patch_sbatch_retry(max_retries: int = 8, base_delay: float = 15.0) -> None:
     """Add retry-with-backoff to executorlib's sbatch submission.
 
@@ -283,9 +319,11 @@ def _patch_sbatch_retry(max_retries: int = 8, base_delay: float = 15.0) -> None:
 
     Safe to call multiple times — patches only once.
     """
-    try:
-        from executorlib.standalone import scheduler as _sched_mod  # type: ignore[import-untyped]
-    except ImportError:
+    _sched_mod = _find_sbatch_caller_module()
+    if _sched_mod is None:
+        logger.warning(
+            "executorlib sbatch caller not found; sbatch submissions will not be retried"
+        )
         return
 
     if getattr(_sched_mod, "_sbatch_retry_patched", False):
