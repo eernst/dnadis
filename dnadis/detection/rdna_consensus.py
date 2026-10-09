@@ -10,24 +10,26 @@ as a species-specific probe to:
 3. Annotate sub-feature boundaries within each rDNA locus
 4. Improve rDNA contig classification with a better-matched probe
 
-Steps (within CLI phase 13):
-  Step 1: Self-alignment → repeat boundary detection → copy extraction
+Steps (within CLI phase 14):
+  Step 1: Array extraction → repeat period detection → copy extraction
   Step 2: Clustering → exemplar/consensus selection
   Step 3: Sub-feature annotation on the consensus
   Step 4: Re-annotation of all contigs with consensus probe
 """
 from __future__ import annotations
 
+import hashlib
+import json
+import shutil
 import statistics
+import zlib
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from dnadis.alignment.external_tools import (
-    get_minimap2_exe,
     run_cdhit_est,
     run_mafft,
-    run_minimap2,
 )
 from dnadis.detection.blast import (
     run_blastn_megablast,
@@ -43,9 +45,51 @@ from dnadis.utils.sequence_utils import (
 
 logger = get_logger("rdna_consensus")
 
+# Bounds on the 45S repeat unit (bp); also the largest hit-free stretch
+# joined when extracting array regions.
+MIN_REPEAT_PERIOD = 5000
+MAX_REPEAT_PERIOD = 25000
+
+# Bump when region extraction or period detection changes, so cached
+# intermediates in an existing work directory are rebuilt.
+_CACHE_VERSION = 2
+
+
+def _reset_stale_work_dir(
+    work_dir: Path,
+    query_fasta: Path,
+    rdna_hit_intervals: Dict[str, List[Tuple[int, int]]],
+) -> None:
+    """Clear ``work_dir`` if it was built from different inputs or code.
+
+    Intermediates in the consensus work directory are reused when present,
+    so they must be discarded when the seed hits, the query, or the
+    extraction logic change.
+    """
+    try:
+        qsize = query_fasta.stat().st_size
+    except OSError:
+        qsize = None
+    payload = json.dumps({
+        "version": _CACHE_VERSION,
+        "query": str(query_fasta),
+        "query_size": qsize,
+        "hits": {c: sorted(map(list, v)) for c, v in sorted(rdna_hit_intervals.items())},
+    }, sort_keys=True)
+    key = hashlib.sha1(payload.encode()).hexdigest()
+    key_file = work_dir / "cache_key.txt"
+    if work_dir.exists():
+        old = key_file.read_text().strip() if key_file.exists() else None
+        if old != key:
+            if any(work_dir.iterdir()):
+                logger.info(f"rDNA consensus inputs changed; clearing {work_dir}")
+            shutil.rmtree(work_dir)
+    work_dir.mkdir(parents=True, exist_ok=True)
+    key_file.write_text(key + "\n")
+
 
 # ---------------------------------------------------------------------------
-# Step 1: Extract rDNA-containing regions, self-align, detect repeat period,
+# Step 1: Extract rDNA array regions, detect repeat period,
 #          extract individual 45S copies
 # ---------------------------------------------------------------------------
 
@@ -56,11 +100,14 @@ def _extract_rdna_regions(
     output_fasta: Path,
     flank_bp: int = 2000,
     min_region_bp: int = 5000,
+    merge_gap: int = MAX_REPEAT_PERIOD,
 ) -> Dict[str, Tuple[str, int, int]]:
-    """Extract rDNA-containing regions from the query assembly.
+    """Extract rDNA array regions from the query assembly.
 
-    Merges overlapping rDNA BLAST hits per contig, adds flanking context,
-    and writes the extracted regions to a FASTA file.
+    Joins rDNA BLAST hits per contig across hit-free stretches of up to
+    ``merge_gap`` bp, so that a tandem array, including IGS the probe does
+    not align to, becomes one region with consecutive copies; adds flanking
+    context and writes the regions to a FASTA file.
 
     Args:
         query_fasta: Query assembly FASTA
@@ -68,7 +115,9 @@ def _extract_rdna_regions(
         query_lengths: Contig lengths
         output_fasta: Output FASTA path for extracted regions
         flank_bp: Flanking context to add on each side [2000]
-        min_region_bp: Minimum region size to extract [5000]
+        min_region_bp: Minimum rDNA hit bp on a contig to extract [5000]
+        merge_gap: Largest hit-free stretch joined within a region
+            [MAX_REPEAT_PERIOD]
 
     Returns:
         Dict mapping region name -> (source_contig, region_start, region_end)
@@ -92,13 +141,14 @@ def _extract_rdna_regions(
     for contig, intervals in rdna_hit_intervals.items():
         if not intervals:
             continue
-        merged, total_bp = merge_intervals(intervals)
+        _, total_bp = merge_intervals(intervals)
         if total_bp < min_region_bp:
             continue
         clen = query_lengths.get(contig, 0)
+        arrays = rdna_span_segments(intervals, merge_gap)
         # Add flanking and merge again
         flanked = []
-        for s, e in merged:
+        for s, e in arrays:
             fs = max(0, s - flank_bp)
             fe = min(clen, e + flank_bp) if clen > 0 else e + flank_bp
             flanked.append((fs, fe))
@@ -133,91 +183,86 @@ def _extract_rdna_regions(
 
 def _detect_repeat_period(
     regions_fasta: Path,
-    work_dir: Path,
-    threads: int,
-    min_period: int = 8000,
-    max_period: int = 15000,
+    min_period: int = MIN_REPEAT_PERIOD,
+    max_period: int = MAX_REPEAT_PERIOD,
+    k: int = 21,
+    sample: int = 16,
+    bin_size: int = 100,
+    max_bp: int = 20_000_000,
 ) -> Optional[int]:
-    """Detect the dominant repeat period via minimap2 self-alignment.
+    """Detect the dominant tandem repeat period from k-mer recurrence.
 
-    Aligns the extracted rDNA regions against themselves, then builds
-    a histogram of inter-hit distances on the same contig to find the
-    dominant repeat unit length (expected ~10-13 kb for 45S).
+    Within each array region, records the distance from every sampled k-mer
+    to its previous occurrence on the same strand. In a tandem array that
+    distance is the repeat unit length, so the most common distance in
+    [min_period, max_period] is taken as the period (median of the
+    recurrences within one bin of the modal bin). Shorter sub-repeats
+    within the IGS fall below ``min_period``.
 
     Args:
-        regions_fasta: FASTA with extracted rDNA regions
-        work_dir: Working directory for intermediate files
-        threads: Number of threads
-        min_period: Minimum expected repeat period [8000]
-        max_period: Maximum expected repeat period [15000]
+        regions_fasta: FASTA with extracted rDNA array regions
+        min_period: Minimum expected repeat period
+        max_period: Maximum expected repeat period
+        k: k-mer length
+        sample: Keep k-mers whose CRC32 is divisible by this (subsampling)
+        bin_size: Histogram bin width (bp)
+        max_bp: Stop after scanning this much sequence
 
     Returns:
-        Detected repeat period in bp, or None if not detected
+        Detected repeat period in bp, or 10000 if no recurrence is found
+        (e.g. no region holds two consecutive copies)
     """
-    paf_out = work_dir / "rdna_self_align.paf"
-
-    mapper = get_minimap2_exe()
-    if not mapper:
-        logger.warning("minimap2 not available for self-alignment; using default period 10000")
-        return 10000
-
-    ok = run_minimap2(
-        ref=regions_fasta,
-        qry=regions_fasta,
-        paf_out=paf_out,
-        threads=threads,
-        preset="asm5",
-        extra_args=["-X"],  # self-mapping mode
-        err_path=work_dir / "self_align.err",
-    )
-
-    if not ok or not file_exists_and_valid(paf_out):
-        logger.warning("Self-alignment failed; using default period 10000")
-        return 10000
-
-    # Parse PAF: collect offsets of hits on the same query sequence
     distances: List[int] = []
-    hits_per_seq: Dict[str, List[int]] = defaultdict(list)
-
-    with paf_out.open("r") as fh:
-        for line in fh:
-            fields = line.rstrip("\n").split("\t")
-            if len(fields) < 12:
+    scanned = 0
+    for seq in read_fasta_sequences(regions_fasta).values():
+        if scanned >= max_bp:
+            break
+        seq = seq.upper()
+        scanned += len(seq)
+        last_seen: Dict[str, int] = {}
+        for i in range(len(seq) - k + 1):
+            kmer = seq[i:i + k]
+            if zlib.crc32(kmer.encode()) % sample:
                 continue
-            qname = fields[0]
-            tname = fields[5]
-            if qname != tname:
-                continue
-            try:
-                qs = int(fields[2])
-                qe = int(fields[3])
-                ts = int(fields[7])
-                te = int(fields[8])
-            except ValueError:
-                continue
-            # Skip self-alignment (diagonal)
-            if abs(qs - ts) < 1000:
-                continue
-            offset = abs(ts - qs)
-            if min_period <= offset <= max_period:
-                distances.append(offset)
+            j = last_seen.get(kmer)
+            if j is not None and min_period <= i - j <= max_period:
+                distances.append(i - j)
+            last_seen[kmer] = i
 
     if not distances:
-        logger.info("No repeat period detected from self-alignment; using default 10000")
+        logger.info("No repeat period detected from k-mer recurrence; using default 10000")
         return 10000
 
-    # Find dominant period: bin distances into 500 bp bins and take mode
-    bin_size = 500
-    binned = [d // bin_size * bin_size for d in distances]
-    counter = Counter(binned)
-    most_common_bin, count = counter.most_common(1)[0]
+    counter = Counter(d // bin_size for d in distances)
+    mode_bin, _ = counter.most_common(1)[0]
+    near = [
+        d for d in distances
+        if (mode_bin - 1) * bin_size <= d < (mode_bin + 2) * bin_size
+    ]
+    period = int(statistics.median(near))
 
-    # Refine: take median of distances in the most common bin
-    in_bin = [d for d in distances if most_common_bin <= d < most_common_bin + bin_size]
-    period = int(statistics.median(in_bin))
-
-    logger.info(f"Detected rDNA repeat period: {period} bp (from {len(distances)} measurements)")
+    logger.info(f"Detected rDNA repeat period: {period} bp (from {len(distances)} k-mer recurrences)")
     return period
+
+
+def detect_rdna_repeat_period(
+    query_fasta: Path,
+    rdna_hit_intervals: Dict[str, List[Tuple[int, int]]],
+    query_lengths: Dict[str, int],
+    work_dir: Path,
+) -> Optional[int]:
+    """Extract rDNA array regions from hit intervals and detect the period."""
+    _reset_stale_work_dir(work_dir, query_fasta, rdna_hit_intervals)
+    regions_fasta = work_dir / "rdna_regions.fa"
+    region_map = _extract_rdna_regions(
+        query_fasta=query_fasta,
+        rdna_hit_intervals=rdna_hit_intervals,
+        query_lengths=query_lengths,
+        output_fasta=regions_fasta,
+    )
+    if not region_map:
+        return None
+    return _detect_repeat_period(regions_fasta)
 
 
 def _extract_individual_copies(
@@ -1122,24 +1167,86 @@ def _detect_arrays(
 # Step 4b: Reclassify contigs using consensus-based coverage
 # ---------------------------------------------------------------------------
 
+def rdna_span_segments(
+    intervals: List[Tuple[int, int]],
+    max_gap: int,
+) -> List[Tuple[int, int]]:
+    """Segment rDNA hit intervals on one contig into contiguous array spans.
+
+    Walks the intervals in contig order from the first hit, extending the
+    current span while the next hit starts within ``max_gap`` bp of the span
+    end, and starting a new span otherwise. Sequence between copies (e.g. an
+    IGS that does not align to the probe) is counted, but a stretch longer
+    than ``max_gap`` with no hit splits the span, so unique sequence between
+    separate arrays is not counted.
+
+    Args:
+        intervals: (start, end) hit intervals on a single contig
+        max_gap: Largest hit-free stretch bridged within a span (bp)
+
+    Returns:
+        Sorted list of (start, end) spans.
+    """
+    if not intervals:
+        return []
+    ivs = sorted(intervals)
+    spans: List[Tuple[int, int]] = []
+    cur_s, cur_e = ivs[0]
+    for s, e in ivs[1:]:
+        if s - cur_e <= max_gap:
+            cur_e = max(cur_e, e)
+        else:
+            spans.append((cur_s, cur_e))
+            cur_s, cur_e = s, e
+    spans.append((cur_s, cur_e))
+    return spans
+
+
+def rdna_span_coverage(
+    intervals_by_contig: Dict[str, List[Tuple[int, int]]],
+    query_lengths: Dict[str, int],
+    max_gap: Optional[int],
+) -> Dict[str, float]:
+    """Per-contig fraction of length covered by rDNA.
+
+    With ``max_gap`` set, coverage is the summed length of the array spans
+    from rdna_span_segments(); otherwise it is the merged hit length.
+    """
+    coverage: Dict[str, float] = {}
+    for contig, intervals in intervals_by_contig.items():
+        clen = query_lengths.get(contig, 0)
+        if clen <= 0 or not intervals:
+            continue
+        if max_gap is not None:
+            covered = sum(e - s for s, e in rdna_span_segments(intervals, max_gap))
+        else:
+            _, covered = merge_intervals(intervals)
+        coverage[contig] = min(covered / clen, 1.0)
+    return coverage
+
+
 def identify_rdna_contigs_from_loci(
     loci: List[RdnaLocus],
     query_lengths: Dict[str, int],
     min_coverage: float = 0.50,
     exclude_contigs: Optional[Set[str]] = None,
+    max_gap: Optional[int] = None,
 ) -> Tuple[Set[str], Dict[str, float]]:
     """Identify contigs with significant rDNA content using consensus-based loci.
 
-    Computes per-contig rDNA coverage by merging all locus intervals and
-    comparing to contig length. This uses the species-specific consensus
-    probe, so it's more sensitive than the initial seed-based detection
-    for divergent species.
+    Per-contig rDNA coverage is computed with rdna_span_coverage(): with
+    ``max_gap`` (typically one repeat unit) it is the array span fraction,
+    which counts IGS between copies that the probe does not align to;
+    without it, the merged locus length fraction. This uses the
+    species-specific consensus probe, so it's more sensitive than the
+    initial seed-based detection for divergent species.
 
     Args:
         loci: List of RdnaLocus annotations from consensus re-annotation
         query_lengths: Contig lengths
         min_coverage: Minimum rDNA coverage fraction for reclassification [0.50]
         exclude_contigs: Contigs to exclude (e.g., already classified as chromosomes)
+        max_gap: Largest hit-free stretch bridged within an array span (bp)
 
     Returns:
         Tuple of:
@@ -1148,26 +1255,13 @@ def identify_rdna_contigs_from_loci(
     """
     exclude = exclude_contigs or set()
 
-    # Collect intervals per contig
     contig_intervals: Dict[str, List[Tuple[int, int]]] = defaultdict(list)
     for locus in loci:
-        contig_intervals[locus.contig].append((locus.start, locus.end))
+        if locus.contig not in exclude:
+            contig_intervals[locus.contig].append((locus.start, locus.end))
 
-    rdna_contigs: Set[str] = set()
-    coverage_map: Dict[str, float] = {}
-
-    for contig, intervals in contig_intervals.items():
-        if contig in exclude:
-            continue
-        clen = query_lengths.get(contig, 0)
-        if clen <= 0:
-            continue
-        _, total_bp = merge_intervals(intervals)
-        cov = total_bp / clen
-        coverage_map[contig] = cov
-        if cov >= min_coverage:
-            rdna_contigs.add(contig)
-
+    coverage_map = rdna_span_coverage(contig_intervals, query_lengths, max_gap)
+    rdna_contigs = {c for c, cov in coverage_map.items() if cov >= min_coverage}
     return rdna_contigs, coverage_map
 
 
@@ -1204,14 +1298,15 @@ def build_rdna_consensus(
     Returns:
         Tuple of (RdnaConsensus or None, list of RdnaLocus annotations, list of RdnaArray objects)
     """
-    work_dir.mkdir(parents=True, exist_ok=True)
-    logger.phase("rDNA consensus: Step 1 - Extract rDNA regions and copies")
+    logger.phase("rDNA consensus: Step 1 - Extract rDNA arrays and copies")
 
     if not rdna_hit_intervals:
         logger.warning("No rDNA hit intervals available; skipping consensus building")
         return None, [], []
 
-    # Step 1a: Extract rDNA-containing regions
+    _reset_stale_work_dir(work_dir, query_fasta, rdna_hit_intervals)
+
+    # Step 1a: Extract rDNA array regions
     regions_fasta = work_dir / "rdna_regions.fa"
     region_map = _extract_rdna_regions(
         query_fasta=query_fasta,
@@ -1224,12 +1319,8 @@ def build_rdna_consensus(
         logger.warning("No rDNA regions extracted; skipping consensus building")
         return None, [], []
 
-    # Step 1b: Detect repeat period via self-alignment
-    repeat_period = _detect_repeat_period(
-        regions_fasta=regions_fasta,
-        work_dir=work_dir / "self_align",
-        threads=threads,
-    )
+    # Step 1b: Detect repeat period from k-mer recurrence within arrays
+    repeat_period = _detect_repeat_period(regions_fasta)
 
     if not repeat_period:
         logger.warning("Could not determine repeat period; skipping consensus building")
@@ -1285,6 +1376,7 @@ def build_rdna_consensus(
         n_copies_clustered=n_clustered,
         method=method,
         sub_features=sub_features,
+        repeat_period=repeat_period,
     )
 
     # Write consensus FASTA

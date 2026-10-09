@@ -1668,6 +1668,12 @@ def classify_all_contigs(
                     confidence = "high"
                 elif hit.coverage < 0.60:
                     confidence = "low"
+            # Keep a passing synteny assignment as annotation; the contig is
+            # binned and named as rDNA and is not scaffolded by default.
+            ref_id = best_ref.get(contig) or None
+            ident = None
+            if ref_id and ev.qr_best_chain_ident:
+                ident = float(ev.qr_best_chain_ident.get((contig, ref_id), 0.0) or 0.0) or None
             classifications.append(ContigClassification(
                 original_name=contig,
                 new_name="",
@@ -1675,11 +1681,12 @@ def classify_all_contigs(
                 reversed=False,
                 cobiont_taxid=None,
                 cobiont_sci=None,
-                assigned_ref_id=None,
+                assigned_ref_id=ref_id,
                 ref_gene_proportion=None,
                 contig_len=query_lengths.get(contig, 0),
                 gc_content=_get_gc(contig),
                 gc_deviation=gc_dev,
+                seq_identity_vs_ref=ident,
                 classification_confidence=confidence,
             ))
             classified_contigs.add(contig)

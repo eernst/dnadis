@@ -320,8 +320,11 @@ A **phylogeny-only outgroup** is a distant taxon useful only for rooting (it div
 |----------|-------------|---------|
 | `--scaffold` | Produce reference-guided scaffolded chromosome sequences (uses RagTag if available, otherwise built-in scaffolder) | off |
 | `--scaffold-gap-size` | Number of Ns between contigs in scaffolded output | 100 |
+| `--scaffold-rdna-contigs` | Also scaffold rDNA contigs that passed the synteny gate for a reference chromosome (see note below) | off |
 
 When `--scaffold` is enabled, chromosome-assigned contigs are grouped by reference chromosome and ordered into pseudomolecules. The scaffolder handles haplotype-aware grouping for polyploid assemblies (e.g., contigs assigned to chr1A are scaffolded separately from chr1B). Single T2T contigs that span a full chromosome produce trivial (single-component) AGP entries. Multi-contig chromosomes are ordered by reference position, either via RagTag (if installed) or the built-in scaffolder.
+
+Contigs that consist mostly of 45S rDNA are not scaffolded by default, even when they pass the synteny gate for a reference chromosome: they are classified as `rDNA` (their reference association stays in `assigned_ref_id`). Their placement would rest on similarity to the reference's own rDNA, which is shared between NORs, so with several NORs, or a NOR that differs in position from the reference's, an rDNA contig can be placed on the wrong chromosome or chromosome end. `--scaffold-rdna-contigs` includes them as scaffolding candidates anyway; treat their placement as unverified.
 
 ### Distributed computing (SLURM cluster)
 
@@ -447,11 +450,14 @@ Reference preparation runs first: read reference genome, compute GC statistics, 
 By default, the tool builds a species-specific consensus 45S rDNA sequence from the query assembly and uses it to annotate ribosomal RNA genes with accurate sub-feature boundaries. This step runs automatically unless `--skip-rdna-consensus` is set.
 
 **Pipeline:**
-1. Extract rDNA-containing regions from the assembly using BLAST against a reference 45S sequence
-2. Self-align extracted regions to detect repeat periodicity
+1. Extract rDNA array regions from the assembly using BLAST against a reference 45S sequence (hits are joined across hit-free stretches up to 25 kb, so an array including its IGS is one region)
+2. Detect the repeat period as the most common distance between recurrences of the same k-mer within array regions (5–25 kb)
 3. Cluster individual copies and select a consensus representative
 4. Annotate rRNA sub-features (18S, 5.8S, 25S/28S) and internal transcribed spacers (ITS1, ITS2) using Infernal/cmscan with Rfam covariance models
 5. Write GFF3 file with hierarchical feature structure (rRNA_gene parent with rRNA and ITS children)
+6. Reclassify contigs that are mostly rDNA (array span ≥ `--rdna-min-cov` of the contig) as `rDNA`, including chromosome fragments; chromosome-length contigs with a reference assignment are not reclassified
+
+**rDNA span coverage:** the probe often does not align across the IGS, so the matched bp underestimate how much of a contig is rDNA array. Coverage is instead the summed length of array spans: walking the contig from the first rDNA hit, a span extends to the next hit if the hit-free stretch between them is at most one repeat unit (the period from step 2) and splits otherwise, so unique sequence between separate arrays is not counted. With `--skip-rdna-consensus` (or if no consensus is built), chromosome fragments are still reclassified the same way using the seed BLAST hits, with the period detected from them.
 
 **Sub-feature annotation:**
 Uses Infernal covariance models from Rfam 15.0 for structure-based rRNA boundary detection. Provides accurate gene boundaries based on conserved secondary structure. Bundled models (5S, 5.8S, 18S, 28S) are stored in `dnadis/data/rfam/euk-rrna.cm` and automatically pressed (indexed) on first use.
@@ -479,7 +485,7 @@ Uses Infernal covariance models from Rfam 15.0 for structure-based rRNA boundary
 | `chrom_unassigned` | Chromosome-length contig without reference assignment (novel or failed synteny gates) |
 | `organelle_complete` | Complete organelle genome (chrC or chrM) |
 | `organelle_debris` | Partial organelle sequence |
-| `rDNA` | Ribosomal DNA repeat unit |
+| `rDNA` | Contig made up mostly of 45S rDNA: seed BLAST coverage ≥ `--rdna-min-cov`, or rDNA array span coverage ≥ `--rdna-min-cov` after the consensus step (which can reroute `chrom_fragment`, debris and unclassified contigs). Named `contig_N`. If the contig also passed the synteny gate, `assigned_ref_id` is kept as a "homologous to chrN" annotation; this rests on rDNA similarity, which is shared between NORs. Written to `*.rdna.fasta` and not scaffolded unless `--scaffold-rdna-contigs`. |
 | `cobiont` | Sequence from a co-occurring organism (symbiont, commensal, etc.) |
 | `chrom_debris` | High-coverage (≥80%), high-identity (≥90%) duplicate of an assembled chromosome contig, or a sub-chromosome-length contig redundant with a longer placed contig |
 | `debris` | Assembly debris with reference nucleotide coverage (≥50%) or protein homology (≥2 miniprot hits) |

@@ -189,19 +189,24 @@ def _group_contigs_by_haplotype(
     best_ref: Dict[str, str],
     contig_refs: Dict[str, Set[str]],
     qr_best_chain_ident: Dict[Tuple[str, str], float],
+    include_rdna: bool = False,
 ) -> Dict[Tuple[str, int], List[str]]:
     """Group contigs by (ref_id, query_subgenome_grp) for haplotype-aware scaffolding.
 
     Pass 1: Chromosome-assigned contigs grouped by (assigned_ref_id, grp).
     Pass 2: chrom_fragment contigs assigned to the nearest haplotype group by
     identity (unique arms too short to be full chromosomes; chrom_debris is
-    excluded as redundant with already-placed sequence).
+    excluded as redundant with already-placed sequence). With
+    ``include_rdna``, rDNA contigs that carry an assigned_ref_id (they passed
+    the synteny gate before being moved to rDNA) are candidates too; their
+    placement rests on rDNA similarity shared between NORs.
 
     Args:
         classifications: List of ContigClassification objects.
         best_ref: Dict mapping contig -> best ref_id.
         contig_refs: Dict mapping contig -> set of ref_ids with evidence.
         qr_best_chain_ident: Dict of (contig, ref_id) -> best chain identity.
+        include_rdna: Also place rDNA contigs that have an assigned_ref_id.
 
     Returns:
         Dict mapping (ref_id, grp) -> list of contig original names.
@@ -225,11 +230,14 @@ def _group_contigs_by_haplotype(
     # Compute mean identity per group (for debris assignment)
     group_mean_idents = _compute_group_mean_idents(groups, clf_lookup)
 
-    # Pass 2: chrom_fragment candidates only
+    # Pass 2: chrom_fragment candidates (plus synteny-placed rDNA if requested)
     for clf in classifications:
         if clf.original_name in assigned_contigs:
             continue
-        if clf.classification != "chrom_fragment":
+        is_rdna_candidate = (
+            include_rdna and clf.classification == "rDNA" and bool(clf.assigned_ref_id)
+        )
+        if clf.classification != "chrom_fragment" and not is_rdna_candidate:
             continue
 
         ref_id = clf.assigned_ref_id or best_ref.get(clf.original_name, "")
@@ -705,6 +713,7 @@ def scaffold_chromosomes(
     gap_size: int = 100,
     ref_norm_to_orig: Optional[Dict[str, str]] = None,
     qr_best_chain_ident: Optional[Dict[Tuple[str, str], float]] = None,
+    include_rdna: bool = False,
 ) -> Tuple[Dict[str, str], List[str], Dict[str, Tuple[float, float, float]]]:
     """Produce scaffolded chromosome pseudomolecules.
 
@@ -728,6 +737,8 @@ def scaffold_chromosomes(
         ref_norm_to_orig: Optional mapping from normalized to original ref IDs.
         qr_best_chain_ident: Optional dict of (contig, ref_id) -> identity for
             haplotype-aware debris assignment.
+        include_rdna: Also place rDNA contigs that have an assigned_ref_id
+            (``--scaffold-rdna-contigs``).
 
     Returns:
         Tuple of (scaffolded_sequences, agp_lines, scaffold_confidences) where:
@@ -741,6 +752,7 @@ def scaffold_chromosomes(
     # Group contigs by (ref_id, haplotype group)
     groups = _group_contigs_by_haplotype(
         classifications, best_ref, contig_refs, qr_best_chain_ident or {},
+        include_rdna=include_rdna,
     )
     all_confidences: Dict[str, Tuple[float, float, float]] = {}
 
