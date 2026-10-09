@@ -1139,6 +1139,14 @@ def write_rearrangements_tsv(
         "confidence",
         "evidence",
         "misassembly_mimic",
+        "junction_start",
+        "junction_end",
+        "depth_flank_ratio",
+        "depth_junction_ratio",
+        "depth_junction_cv",
+        "fusion_call",
+        "fusion_confidence",
+        "evidence_codes",
     ]
     with output_path.open("w") as fh:
         fh.write("\t".join(header) + "\n")
@@ -1158,4 +1166,47 @@ def write_rearrangements_tsv(
                 c.confidence,
                 c.evidence,
                 c.misassembly_mimic,
+                c.junction_start,
+                c.junction_end,
+                _fmt_opt(c.depth_flank_ratio),
+                _fmt_opt(c.depth_junction_ratio),
+                _fmt_opt(c.depth_junction_cv),
+                c.fusion_call,
+                c.fusion_confidence,
+                c.evidence_codes,
             ]) + "\n")
+
+
+def _fmt_opt(v: Optional[float]) -> Optional[str]:
+    """Format an optional float to 3 decimals (None stays None)."""
+    return None if v is None else f"{v:.3f}"
+
+
+def write_fusion_junctions_tsv(output_path: Path, junctions: list) -> None:
+    """Write per-junction fusion/misjoin evidence to a TSV file.
+
+    Args:
+        output_path: Output TSV path.
+        junctions: List of FusionJunction instances.
+    """
+    header = [
+        "contig", "left_ref", "right_ref", "junction_start", "junction_end",
+        "junction_point", "contig_len", "left_span", "right_span",
+        "depth_left_median", "depth_junction_median", "depth_right_median",
+        "depth_flank_ratio", "depth_junction_ratio", "depth_junction_cv",
+        "depth_flank_cv", "depth_windows", "depth_verdict",
+        "aln_gap_bp", "aln_verdict", "clip_spanning", "clip_clipped",
+        "fusion_call", "fusion_confidence", "evidence_codes",
+    ]
+    float_cols = {"depth_left_median", "depth_junction_median", "depth_right_median",
+                  "depth_flank_ratio", "depth_junction_ratio", "depth_junction_cv",
+                  "depth_flank_cv"}
+    with output_path.open("w") as fh:
+        fh.write("\t".join(header) + "\n")
+        for j in junctions:
+            vals = []
+            for col in header:
+                v = getattr(j, col)
+                vals.append(_fmt_opt(v) if col in float_cols
+                            else ("" if v is None else str(v)))
+            fh.write("\t".join(vals) + "\n")

@@ -120,7 +120,8 @@ dnadis/
 │   ├── cobiont.py     # Centrifuger taxonomic classification
 │   └── compleasm.py       # Compleasm (BUSCO completeness) evaluation
 ├── analysis/              # Read depth analysis
-│   └── read_depth.py      # Depth calculation via mosdepth with caching
+│   ├── read_depth.py      # Depth calculation via mosdepth with caching; windowed-depth and clipping accessors
+│   └── junction_evidence.py # Depth/alignment/split-read evidence at fusion junctions (biological_fusion vs assembly_artifact)
 ├── output/                # Output generation
 │   ├── fasta_output.py    # Write classified FASTA files
 │   ├── tsv_output.py      # TSV summary tables
@@ -206,8 +207,8 @@ dnadis/
 | 9 | Orientation determination | |
 | 10 | Telomere detection | `--skip-telomeres` |
 | 11 | Classification (assign all contigs) | |
-| 12 | Rearrangement detection | |
-| 13 | Read depth analysis | requires `--reads` |
+| 12 | Read depth analysis | requires `--reads` |
+| 13 | Rearrangement detection + fusion-junction evidence | fusion scoring skippable with `--skip-fusion-evidence` |
 | 14 | rDNA consensus building | `--skip-rdna-consensus` |
 | 15 | Reference-guided scaffolding | `--scaffold` |
 | 16 | Writing FASTA outputs | |
@@ -280,9 +281,11 @@ The permissive parameters are balanced by downstream filtering (identity thresho
 
 **Sister-assembly anchoring** (`--sister-anchoring`, multi-assembly only, off by default): after every assembly's first pass, `cli.py:_run_sister_pass()` calls `alignment/sister_anchoring.py:run_sister_anchoring()`, which reads each assembly's contig_summary/evidence_summary/macro_blocks TSVs. Candidates (≥ `--sister-min-len`, < `--sister-max-ref-frac` of length reference-aligned, class in `chrom_assigned/chrom_fragment/chrom_unassigned/debris/unclassified`) are pooled into one FASTA and aligned (minimap2 `asm10`, one job per sister) to each sister's anchors — its `chrom_assigned`/`chrom_fragment` contigs at or above that fraction, taken from the **input** FASTA (with `--scaffold`, pairwise and the scaffold FASTA use scaffold names that do not match contig_summary). Votes use gap-compressed identity (`de` tag), label each hit by the anchor's *major* reference segment at the hit position (refs with ≥10% of the anchor's anchored bp; whole-contig labels mislabel translocated segments, fine-grained block labels inherit the same spurious hits as the candidate), and require `--sister-min-votes` agreeing sisters, `--sister-min-agree` agreement, and the closest sister in agreement. With reference evidence (≥ `--sister-min-ref-bp` chained bp), the call must match one of those chromosomes by chromosome number, else `conflict_keep_ref`. Assemblies with `assigned`/`reassigned` calls are rerun via `run_assembly(sister_calls=...)`, where `apply_sister_calls()` overrides `best_ref` after the synteny gate and reciprocal-translocation resolution; orientation of chromosome-length contigs comes from the sisters; status becomes `SISTER`. Only first-pass assignments act as anchors (no iteration). Inputs are rewritten only when their content changes, so the alignments are cached across runs.
 
+**Fusion junction evidence**: Phase 13 follows read depth so `analysis/junction_evidence.py:annotate_fusion_evidence()` can score each fusion `RearrangementCall`. Junctions are located between adjacent reference arms (each ≥ `--fusion-min-frac` of the contig); depth uniformity is measured from `depth.regions.bed.gz` (no BAM needed), alignment continuity from the gap between arms, and spanning-vs-clipped reads from the retained BAM (`--fusion-split-reads`, requires samtools). Verdict (`biological_fusion`/`assembly_artifact`/`inconclusive`), confidence and `evidence_codes` (`Aln`,`Depth`,`Split`) are written to extra `rearrangements.tsv` columns and `*.fusion_junctions.tsv`; the call's combined `confidence` moves up/down one level. Without `--reads`, scoring degrades to alignment continuity only.
+
 **Compleasm (BUSCO) evaluation**: Phase 18 runs compleasm once on the full assembly; `compleasm.py:derive_chrs_non_chrs_compleasm()` splits the full table into chromosomal contigs (`chrom_assigned` and `chrom_fragment`) and non-chromosome contigs (everything else). Requires `--compleasm-lineage` (e.g., `eukaryota`, `viridiplantae`, `embryophyta`). Optionally specify `--compleasm-library` for pre-downloaded lineage files to avoid runtime downloads. Results are stored as `CompleasmResult` dataclass fields on `AssemblyResult` (`compleasm_chrs`, `compleasm_non_chrs`) and included in `comparison_summary.tsv` columns (`compleasm_lineage`, `compleasm_chrs_S/D/F/I/M`, `compleasm_non_chrs_S/D/F/I/M`). The detection module is in `detection/compleasm.py`, which parses compleasm's `summary.txt` output format. Cached results are reused if the output directory already contains a `summary.txt`.
 
-**Own-assembly redundancy evidence** (`detection/redundancy.py`, annotation only): phase 5 also submits `detect_redundancy()`, an `asm20 -c` alignment of every non-chromosome-length contig (minus organelle/rDNA calls) to the chromosome-length contigs. Per contig and target it keeps the best window (about 1.5× the contig's length) by query coverage, with gap-compressed identity from the `de` tag; repeat-only hits scatter and do not fill a window. After read depth (phase 13), the best window and the median depth over it (`target_depth_ratio`, from `read_depth/depth.regions.bed.gz`) go to the `redundancy_*` contig_summary columns. Input FASTAs are rewritten only when their content changes (`io_utils.py:replace_if_changed`) and the PAF is reused only while newer than both. This is stage 1 of replacing the `chrom_debris`/`debris` classes with evidence-defined ones (haplotig, assembly duplicate, extra copy); classes do not use it yet.
+**Own-assembly redundancy evidence** (`detection/redundancy.py`, annotation only): phase 5 also submits `detect_redundancy()`, an `asm20 -c` alignment of every non-chromosome-length contig (minus organelle/rDNA calls) to the chromosome-length contigs. Per contig and target it keeps the best window (about 1.5× the contig's length) by query coverage, with gap-compressed identity from the `de` tag; repeat-only hits scatter and do not fill a window. After read depth (phase 12), the best window and the median depth over it (`target_depth_ratio`, from `read_depth/depth.regions.bed.gz`) go to the `redundancy_*` contig_summary columns. Input FASTAs are rewritten only when their content changes (`io_utils.py:replace_if_changed`) and the PAF is reused only while newer than both. This is stage 1 of replacing the `chrom_debris`/`debris` classes with evidence-defined ones (haplotig, assembly duplicate, extra copy); classes do not use it yet.
 
 ## Testing Philosophy
 
