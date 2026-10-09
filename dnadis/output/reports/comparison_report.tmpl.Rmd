@@ -3410,14 +3410,17 @@ if (show_chrC_org) {
 `r if (has_any_cobiont) "## Summary" else ""`
 
 ```{r cobionts, eval=has_any_cobiont}
+# Show every compared assembly, including cobiont-free ones (n_cobionts == 0),
+# so a clean assembly reads as an explicit zero rather than a silent omission.
+# The outgroup is already absent from comp_df, so it stays excluded.
 cobiont_tbl <- comp_df %>%
-  filter(n_cobionts > 0) %>%
   transmute(
     Assembly = assembly,
     cobiont_mb = round(cobiont_bp / 1e6, 2),
     Contigs = n_cobionts,
     Species = n_cobiont_species
-  )
+  ) %>%
+  arrange(desc(cobiont_mb), desc(Contigs), Assembly)
 
 max_cobiont_mb <- max(cobiont_tbl$cobiont_mb, na.rm = TRUE)
 
