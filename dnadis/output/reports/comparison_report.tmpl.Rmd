@@ -255,6 +255,8 @@ for (i in seq_along(rdna_arrays_paths)) {
 }
 all_rdna_arrays_df <- if (length(rdna_arrays_list) > 0) bind_rows(rdna_arrays_list) else NULL
 has_rdna_arrays <- !is.null(all_rdna_arrays_df) && nrow(all_rdna_arrays_df) > 0
+# Contig classes that make up the chromosomes (rDNA arrays on these are NORs)
+chromosomal_classes <- c("chrom_assigned", "chrom_fragment")
 
 # ---------------------------------------------------------------------------
 # Load per-assembly rearrangement TSVs (rearr_paths declared above)
@@ -1291,12 +1293,15 @@ chrom_agg <- compl_df %>%
 
 # --- rDNA array presence per chromosome -----------------------------------
 if (has_rdna_arrays) {
-  # Map rDNA array contigs to assigned_ref_id via the per-assembly summary
+  # Map rDNA array contigs to assigned_ref_id via the per-assembly summary.
+  # Only arrays on chromosomal contigs count; rDNA contigs keep an
+  # assigned_ref_id from synteny but are not part of the chromosome.
   rdna_chrom <- all_rdna_arrays_df %>%
     left_join(
-      all_summary_df %>% select(assembly, original_name, assigned_ref_id),
+      all_summary_df %>% select(assembly, original_name, classification, assigned_ref_id),
       by = c("assembly", "contig" = "original_name")
     ) %>%
+    filter(classification %in% chromosomal_classes) %>%
     filter(!is.na(assigned_ref_id) & assigned_ref_id != "NA") %>%
     distinct(assembly, assigned_ref_id) %>%
     count(assigned_ref_id, name = "n_asm_rdna")
@@ -1404,7 +1409,8 @@ chrom_summary_legend <- paste0(
   '<b>Full-length</b> / <b>Both telo</b>: count of assemblies with a contig ',
   'spanning the full reference / carrying both telomeres (<em>n</em> = ',
   n_asm, ' assemblies); bar length is the fraction.&emsp;',
-  '<b>rDNA</b>: ● = all assemblies have an rDNA array on this chromosome, ',
+  '<b>rDNA</b>: ● = all assemblies have an rDNA array on a chromosomal contig ',
+  '(chromosome or chromosome fragment) of this chromosome, ',
   '◐ = some, blank = none.&emsp;',
   '<b>Rearr</b>: number of assemblies with ≥1 rearrangement on this chromosome ',
   '(blank = none).&emsp;',
@@ -3203,7 +3209,7 @@ if (has_rdna_arrays) {
       all_summary_df %>% distinct(assembly, original_name, classification),
       by = c("assembly", "contig" = "original_name")
     ) %>%
-    mutate(on_chr = !is.na(classification) & classification == "chrom_assigned")
+    mutate(on_chr = !is.na(classification) & classification %in% chromosomal_classes)
 
   arr_counts <- arr_clf %>%
     group_by(assembly) %>%

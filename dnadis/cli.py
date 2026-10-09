@@ -158,6 +158,7 @@ from dnadis.detection.debris import detect_chromosome_debris
 from dnadis.detection.cobiont import detect_cobionts
 from dnadis.detection.compleasm import run_compleasm
 from dnadis.classification.classifier import (
+    assign_contig_names,
     classify_all_contigs,
     classify_debris_and_unclassified,
     compute_mean_gene_proportion,
@@ -1231,6 +1232,7 @@ def run_assembly(
     rdna_annotations_tsv = None
     rdna_arrays_tsv_path = None
     rdna_ref = ref_ctx.rdna_ref
+    rdna_rerouted = False
     if not args.skip_rdna_consensus and not args.skip_rdna and rdna_hit_intervals:
         logger.phase("Phase 14: Building rDNA consensus from query assembly")
         from dnadis.detection.rdna_consensus import build_rdna_consensus
@@ -1267,12 +1269,16 @@ def run_assembly(
                 exclude_from_reclass = chromosome_contigs | {chrC_contig, chrM_contig} | organelle_debris
                 exclude_from_reclass.discard(None)
 
+                # Array spans bridge hit-free stretches up to one repeat unit
+                # (e.g. IGS not aligned by the probe) and split at longer ones.
                 new_rdna_contigs, rdna_coverage_map = identify_rdna_contigs_from_loci(
                     loci=rdna_loci,
                     query_lengths=qry_lengths,
                     min_coverage=args.rdna_min_cov,
                     exclude_contigs=exclude_from_reclass,
+                    max_gap=rdna_consensus_obj.repeat_period,
                 )
+                rdna_rerouted = True
 
                 # Update classifications for newly identified rDNA contigs
                 n_reclassified = 0
@@ -1286,13 +1292,23 @@ def run_assembly(
                         cov = rdna_coverage_map.get(clf.original_name, 0.0)
                         logger.info(
                             f"Reclassified {clf.original_name} from {old_class} -> rDNA "
-                            f"(consensus coverage={cov:.2f})"
+                            f"(rDNA span coverage={cov:.2f})"
                         )
                         n_reclassified += 1
                         rdna_contigs.add(clf.original_name)
 
                 if n_reclassified:
                     logger.done(f"Reclassified {n_reclassified} contigs as rDNA using consensus probe")
+                    # A rerouted chrom_fragment would otherwise keep its
+                    # chromosome-style name; its reference association stays
+                    # in assigned_ref_id.
+                    assign_contig_names(
+                        classifications,
+                        qry_lengths,
+                        args.add_subgenome_suffix,
+                        ref_norm_to_orig=ref_norm_to_orig,
+                        overwrite=True,
+                    )
 
                 # Update clf_lookup after reclassification
                 clf_lookup = {clf.original_name: clf.classification for clf in classifications}
@@ -1331,6 +1347,42 @@ def run_assembly(
     elif not args.skip_rdna_consensus and args.skip_rdna:
         logger.info("Phase 14: Skipping rDNA consensus (--skip-rdna)")
 
+    # Without consensus-based rerouting, fall back to the seed BLAST hits so
+    # chromosome fragments made up mostly of rDNA are still moved to rDNA.
+    if not rdna_rerouted and rdna_hit_intervals:
+        from dnadis.detection.rdna_consensus import detect_rdna_repeat_period, rdna_span_coverage
+        frag_intervals = {
+            clf.original_name: rdna_hit_intervals[clf.original_name]
+            for clf in classifications
+            if clf.classification == "chrom_fragment" and clf.original_name in rdna_hit_intervals
+        }
+        if frag_intervals:
+            rdna_period = detect_rdna_repeat_period(
+                qry, rdna_hit_intervals, qry_lengths, work_dir / "rdna_period",
+            )
+            seed_cov = rdna_span_coverage(frag_intervals, qry_lengths, rdna_period)
+            n_reclassified = 0
+            for clf in classifications:
+                cov = seed_cov.get(clf.original_name)
+                if cov is not None and cov >= args.rdna_min_cov:
+                    clf.classification = "rDNA"
+                    clf.classification_confidence = "low"
+                    rdna_contigs.add(clf.original_name)
+                    logger.info(
+                        f"Reclassified {clf.original_name} from chrom_fragment -> rDNA "
+                        f"(seed rDNA span coverage={cov:.2f})"
+                    )
+                    n_reclassified += 1
+            if n_reclassified:
+                logger.done(f"Reclassified {n_reclassified} chromosome fragments as rDNA from seed hits")
+                assign_contig_names(
+                    classifications,
+                    qry_lengths,
+                    args.add_subgenome_suffix,
+                    ref_norm_to_orig=ref_norm_to_orig,
+                    overwrite=True,
+                )
+
     # --- Phase 15: Scaffolding (optional) ---
     scaffolded_seqs: Dict[str, str] = {}
     scaffold_confidences: Optional[Dict[str, tuple]] = None
@@ -1352,6 +1404,7 @@ def run_assembly(
             gap_size=args.scaffold_gap_size,
             ref_norm_to_orig=ref_norm_to_orig,
             qr_best_chain_ident=ev.qr_best_chain_ident or {},
+            include_rdna=args.scaffold_rdna_contigs,
         )
 
         if scaffolded_seqs:
@@ -1671,7 +1724,7 @@ def main():
             chr_debris_min_identity=0.90, circular_fasta="", circular_list="",
             cobiont_min_score=1000, cobiont_min_coverage=0.50,
             debris_min_cov=0.50, debris_min_protein_hits=2, preset="asm20", kmer=None, window=None, aln_minlen=10000,
-            scaffold=False, scaffold_gap_size=100,
+            scaffold=False, scaffold_gap_size=100, scaffold_rdna_contigs=False,
             compleasm_lineage=None, compleasm_library=None, compleasm_path=None, skip_compleasm=False,
             fofn=None, assembly_dir=None,
             cluster=False, max_threads_dist=64, max_mem_dist=128.0,
@@ -2138,6 +2191,13 @@ def main():
     scaffold_grp.add_argument(
         "--scaffold-gap-size", type=int, default=100,
         help="Number of Ns between contigs in scaffolded output [100]",
+    )
+    scaffold_grp.add_argument(
+        "--scaffold-rdna-contigs", action="store_true",
+        help="Also scaffold rDNA contigs that passed the synteny gate for a reference "
+             "chromosome (assigned_ref_id set). Their placement rests on rDNA similarity, "
+             "which is shared between NORs, so they can be put on the wrong chromosome or "
+             "end. Off by default.",
     )
 
     # =========================================================================

@@ -146,6 +146,7 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
     "scaffolding": {
         "scaffold": "scaffold",
         "scaffold_gap_size": "scaffold_gap_size",
+        "scaffold_rdna_contigs": "scaffold_rdna_contigs",
     },
     "compleasm": {
         "compleasm_lineage": "compleasm_lineage",

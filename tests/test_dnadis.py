@@ -626,6 +626,47 @@ def test_generate_contig_names_fragment():
     assert name_mapping["contig_002"] == "chr1A_f2"
 
 
+def test_assign_contig_names_after_reroute():
+    """A fragment moved to a non-chromosome class loses its chromosome name."""
+    from dnadis.classification.classifier import assign_contig_names
+    from dnadis.models import ContigClassification
+
+    def clf(name, cls, ref, length, ident):
+        return ContigClassification(
+            original_name=name,
+            new_name="",
+            classification=cls,
+            reversed=False,
+            cobiont_taxid=None,
+            cobiont_sci=None,
+            assigned_ref_id=ref,
+            ref_gene_proportion=0.0,
+            contig_len=length,
+            is_full_length=False,
+            seq_identity_vs_ref=ident,
+        )
+
+    clfs = [
+        clf("tig1", "chrom_fragment", "chr1A", 500000, 0.95),
+        clf("tig2", "chrom_fragment", "chr1A", 300000, 0.90),
+        clf("tig3", "debris", None, 80000, None),
+        clf("tig4", "organelle_complete", "chrC", 160000, None),
+    ]
+    clfs[3].new_name = "chrC"
+    lengths = {c.original_name: c.contig_len for c in clfs}
+
+    assign_contig_names(clfs, lengths, None)
+    assert [c.new_name for c in clfs] == ["chr1A_f1", "chr1A_f2", "contig_2", "chrC"]
+
+    clfs[0].classification = "rDNA"
+    assign_contig_names(clfs, lengths, None, overwrite=True)
+    names = {c.original_name: c.new_name for c in clfs}
+    assert names["tig1"].startswith("contig_")
+    assert names["tig2"] == "chr1A_f1"
+    assert names["tig4"] == "chrC"
+    assert clfs[0].assigned_ref_id == "chr1A"
+
+
 def test_generate_contig_names_query_subgenome():
     """Test naming with query subgenome suffix."""
     from dnadis.classification.classifier import generate_contig_names
@@ -1367,6 +1408,48 @@ def test_classify_chrom_fragment_vs_debris():
     # seq_identity_vs_ref is populated.
     assert by_name["frag_unique"].query_subgenome_grp == 1
     assert by_name["frag_unique"].seq_identity_vs_ref == pytest.approx(0.75)
+
+
+def test_classify_rdna_keeps_synteny_assignment():
+    """A BLAST-detected rDNA contig that also passed the synteny gate is
+    binned as rDNA with a contig_ name but keeps its reference assignment."""
+    from dnadis.classification.classifier import classify_all_contigs
+
+    query_lengths = {"anchor": 10_000_000, "rdna_syn": 300_000, "rdna_only": 200_000}
+    best_ref = {"anchor": "chr1A", "rdna_syn": "chr1A"}
+    macro_rows = [
+        _make_macro_row("anchor", "chr1A", "+", 0, 10_000_000, 9_000_000, 0, 10_000_000),
+        _make_macro_row("rdna_syn", "chr1A", "+", 0, 300_000, 280_000, 0, 40_000),
+    ]
+    best_chain_ident = {("anchor", "chr1A"): 0.96, ("rdna_syn", "chr1A"): 0.88}
+    ref_span_bp = {("anchor", "chr1A"): 10_000_000, ("rdna_syn", "chr1A"): 40_000}
+    ev = _minimal_chain_evidence(macro_rows, best_chain_ident, ref_span_bp)
+
+    classifications = classify_all_contigs(
+        query_fasta=Path("/nonexistent.fa"),
+        query_lengths=query_lengths,
+        best_ref=best_ref,
+        chr_like_minlen=5_000_000,
+        ev=ev,
+        ref_gene_counts={},
+        chrC_contig=None,
+        chrM_contig=None,
+        organelle_debris=set(),
+        rdna_contigs={"rdna_syn", "rdna_only"},
+        cobionts={},
+        chromosome_debris=set(),
+        other_debris=set(),
+        add_subgenome_suffix=None,
+        ref_lengths={"chr1A": 15_000_000},
+        synteny_mode="nucleotide",
+    )
+
+    by_name = {c.original_name: c for c in classifications}
+    assert by_name["rdna_syn"].classification == "rDNA"
+    assert by_name["rdna_syn"].assigned_ref_id == "chr1A"
+    assert by_name["rdna_syn"].seq_identity_vs_ref == pytest.approx(0.88)
+    assert by_name["rdna_syn"].new_name.startswith("contig_")
+    assert by_name["rdna_only"].assigned_ref_id is None
 
 
 # ----------------------------
@@ -2352,3 +2435,156 @@ def test_validate_compleasm_setup_missing_exe(tmp_path):
     )
     assert fatal is not None
     assert "missing file" in fatal
+
+
+# ----------------------------
+# rDNA span coverage and rDNA scaffolding opt-in
+# ----------------------------
+
+def test_rdna_span_segments_bridges_igs_and_splits_on_missing_unit():
+    """Hits ~12 kb apart are bridged; a hit-free stretch > one unit splits."""
+    from dnadis.detection.rdna_consensus import rdna_span_segments
+
+    # 6.5 kb matched units every 12 kb, then a 15 kb hit-free stretch.
+    ivs = [(0, 6500), (12000, 18500), (24000, 30500), (45500, 52000), (57500, 64000)]
+    assert rdna_span_segments(ivs, max_gap=12000) == [(0, 30500), (45500, 64000)]
+    assert rdna_span_segments(ivs, max_gap=20000) == [(0, 64000)]
+    assert rdna_span_segments([], max_gap=12000) == []
+
+
+def _tandem_array(unit_len, n_copies, seed=1, mut_rate=0.01, flank=3000):
+    """Random unique flanks around a tandem array of a mutated random unit."""
+    import random
+    rng = random.Random(seed)
+    unit = "".join(rng.choice("ACGT") for _ in range(unit_len))
+    copies = []
+    for _ in range(n_copies):
+        copies.append("".join(
+            rng.choice("ACGT") if rng.random() < mut_rate else b for b in unit
+        ))
+    left = "".join(rng.choice("ACGT") for _ in range(flank))
+    right = "".join(rng.choice("ACGT") for _ in range(flank))
+    return left + "".join(copies) + right
+
+
+def test_detect_repeat_period_kmer_recurrence(tmp_path):
+    """Period is the unit length of a tandem array, not a sub-unit offset."""
+    from dnadis.detection.rdna_consensus import _detect_repeat_period
+    from dnadis.utils.sequence_utils import write_fasta
+
+    fa = tmp_path / "regions.fa"
+    write_fasta({"r1": _tandem_array(12500, 5, seed=1),
+                 "r2": _tandem_array(12500, 4, seed=2)}, fa)
+    period = _detect_repeat_period(fa)
+    assert abs(period - 12500) <= 100
+
+    # A single copy has no recurrence in range -> default
+    single = tmp_path / "single.fa"
+    write_fasta({"r1": _tandem_array(12500, 1)}, single)
+    assert _detect_repeat_period(single) == 10000
+
+
+def test_extract_rdna_regions_joins_copies_across_igs(tmp_path):
+    """Hits separated by unaligned IGS end up in one array region."""
+    from dnadis.detection.rdna_consensus import _extract_rdna_regions
+    from dnadis.utils.sequence_utils import write_fasta
+
+    seq = _tandem_array(12000, 4, flank=20000)
+    qfa = tmp_path / "q.fa"
+    write_fasta({"tig1": seq}, qfa)
+    # Probe aligns to the first 7 kb of each unit only
+    hits = {"tig1": [(20000 + i * 12000, 27000 + i * 12000) for i in range(4)]}
+    region_map = _extract_rdna_regions(qfa, hits, {"tig1": len(seq)}, tmp_path / "r.fa")
+    assert list(region_map.values()) == [("tig1", 18000, 65000)]
+
+
+def test_reset_stale_work_dir(tmp_path):
+    from dnadis.detection.rdna_consensus import _reset_stale_work_dir
+
+    q = tmp_path / "q.fa"
+    q.write_text(">a\nACGT\n")
+    wd = tmp_path / "wd"
+    hits = {"a": [(0, 4)]}
+    _reset_stale_work_dir(wd, q, hits)
+    (wd / "rdna_regions.fa").write_text("cached")
+    _reset_stale_work_dir(wd, q, hits)
+    assert (wd / "rdna_regions.fa").exists()        # same inputs: kept
+    _reset_stale_work_dir(wd, q, {"a": [(0, 3)]})
+    assert not (wd / "rdna_regions.fa").exists()    # changed inputs: cleared
+
+
+def test_identify_rdna_contigs_span_vs_merged_coverage():
+    """A contig whose matched units cover < 50% but whose array spans
+    > 50% is rDNA only under span coverage."""
+    from dnadis.detection.rdna_consensus import identify_rdna_contigs_from_loci
+
+    loci = [_make_rdna_locus("tig1", s, s + 6500) for s in range(10000, 130000, 12000)]
+    lengths = {"tig1": 160000}
+
+    merged, merged_cov = identify_rdna_contigs_from_loci(loci, lengths, 0.5)
+    spanned, span_cov = identify_rdna_contigs_from_loci(loci, lengths, 0.5, max_gap=12000)
+
+    assert merged == set() and merged_cov["tig1"] < 0.5
+    assert spanned == {"tig1"} and span_cov["tig1"] > 0.7
+    # Excluded contigs get no coverage entry
+    _, cov = identify_rdna_contigs_from_loci(loci, lengths, 0.5, {"tig1"}, max_gap=12000)
+    assert cov == {}
+
+
+def test_scaffold_rdna_contigs_opt_in():
+    """rDNA contigs with an assigned_ref_id are scaffolded only on request."""
+    from dnadis.output.scaffolding import _group_contigs_by_haplotype
+    from dnadis.models import ContigClassification
+
+    def clf(name, cls, ref, length):
+        return ContigClassification(
+            original_name=name, new_name=name, classification=cls,
+            reversed=False, cobiont_taxid=None, cobiont_sci=None,
+            assigned_ref_id=ref, ref_gene_proportion=None, contig_len=length,
+            query_subgenome_grp=1, seq_identity_vs_ref=0.95,
+        )
+
+    clfs = [
+        clf("ctg1", "chrom_assigned", "chr1A", 1000000),
+        clf("rdna1", "rDNA", "chr1A", 150000),   # passed synteny gate, then rerouted
+        clf("rdna2", "rDNA", None, 120000),      # rDNA from BLAST, no reference
+    ]
+    kwargs = dict(
+        classifications=clfs,
+        best_ref={"ctg1": "chr1A", "rdna1": "chr1A"},
+        contig_refs={"ctg1": {"chr1A"}, "rdna1": {"chr1A"}},
+        qr_best_chain_ident={("ctg1", "chr1A"): 0.95, ("rdna1", "chr1A"): 0.95},
+    )
+    assert _group_contigs_by_haplotype(**kwargs)[("chr1A", 1)] == ["ctg1"]
+    groups = _group_contigs_by_haplotype(**kwargs, include_rdna=True)
+    assert groups[("chr1A", 1)] == ["ctg1", "rdna1"]
+
+
+def test_merge_hits_into_loci_splits_tandem_copies():
+    """End-to-end tandem copies give one locus each; offset sub-repeat hits
+    are absorbed into their copy instead of forming extra loci."""
+    from dnadis.detection.rdna_consensus import _merge_hits_into_loci
+
+    clen, period = 12000, 12000
+
+    def hit(s, qs, qe, strand="+"):
+        return dict(pident=99.0, aln_length=qe - qs, qstart=qs, qend=qe,
+                    sstart=s, send=s + (qe - qs), strand=strand)
+
+    hits = []
+    for i in range(3):
+        base = 1000 + i * period
+        hits.append(hit(base, 1, 10000))                      # main copy body
+        for k in range(1, 6):                                  # 170 bp sub-repeats
+            hits.append(hit(base + 10000 - k * 170, 10000, 11900))
+        hits.append(hit(base + 10000, 10000, 11999))           # IGS tail
+        hits.append(hit(base + 10500, 300, 1000, strand="-"))  # inverted IGS element
+    hits.append(hit(60000, 1, 800))                            # isolated fragment
+    hits.sort(key=lambda h: h["sstart"])
+
+    loci = _merge_hits_into_loci(hits, clen, [])
+    assert len(loci) == 4
+    assert [l["start"] for l in loci] == [1000, 13000, 25000, 60000]
+    for l in loci[:3]:
+        assert 11000 <= l["end"] - l["start"] <= 12500
+    assert loci[3]["end"] - loci[3]["start"] < 1000

@@ -343,6 +343,7 @@ class RdnaConsensus:
         method: Method used to derive consensus ("cdhit+mafft", "cdhit_rep", "blast_central")
         sub_features: List of annotated sub-features (18S, ITS1, 5.8S, ITS2, 28S)
         source_contig: Contig from which the exemplar was extracted (if applicable)
+        repeat_period: Tandem repeat period (bp) detected by self-alignment
     """
     sequence: str
     length: int
@@ -351,6 +352,7 @@ class RdnaConsensus:
     method: str
     sub_features: List[RdnaSubFeature]
     source_contig: Optional[str] = None
+    repeat_period: Optional[int] = None
 
 
 @dataclass
