@@ -99,7 +99,7 @@ def _union_query_span(blocks: List[dict]) -> int:
 # Helper: unpack a macro_block row tuple
 # ---------------------------------------------------------------------------
 
-def _unpack_row(row: Tuple) -> dict:
+def unpack_macro_block_row(row: Tuple) -> dict:
     """Unpack a macro_block_rows tuple into a labelled dict.
 
     Supports both 17-field (legacy) and 19-field (with ref_start/ref_end)
@@ -135,6 +135,9 @@ def _unpack_row(row: Tuple) -> dict:
         "n_segments": int(n_segments) if n_segments != "" else 0,
         "gene_count_chain": int(gene_count_chain) if gene_count_chain != "" else 0,
     }
+
+
+_unpack_row = unpack_macro_block_row
 
 
 # ---------------------------------------------------------------------------
