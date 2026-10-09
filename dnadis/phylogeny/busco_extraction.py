@@ -46,8 +46,9 @@ class LeafId:
       whose subgenomes diverged before the speciation events under study
       contribute multiple leaves per query assembly.
     * ``query_subgenome`` is the within-query duplication group inferred
-      by :func:`classification.classifier.infer_query_subgenomes` (often
-      ``None`` for the primary haplotype and ``"B"`` for a secondary one).
+      by :func:`classification.classifier.infer_query_subgenomes`
+      (``"s1"``, ``"s2"``, … when the query carries more than one set for
+      that reference subgenome, otherwise ``None``).
 
     Both subgenome fields are ``None`` for the reference leaf and for
     haploid queries on monoploid references.
@@ -152,6 +153,31 @@ def _leaf_for_contig(
     return contig_to_leaf.get(contig)
 
 
+def _query_set_labels(
+    classifications: List[ContigClassification],
+) -> Dict[str, Optional[str]]:
+    """Map contig -> query set label for its leaf.
+
+    Within a reference subgenome that has more than one query set, every
+    contig is labeled by its set (``s1``, ``s2``, …), including chromosomes
+    that were not split and so carry no set suffix in their name (they belong
+    to set 1).  Reference subgenomes with a single query set get ``None``.
+    """
+    multi_set_sgs = set()
+    for clf in classifications:
+        if (clf.query_subgenome_grp or 1) > 1 and clf.assigned_ref_id:
+            multi_set_sgs.add(split_chrom_subgenome(clf.assigned_ref_id)[1])
+    labels: Dict[str, Optional[str]] = {}
+    for clf in classifications:
+        if not clf.assigned_ref_id:
+            continue
+        ref_sg = split_chrom_subgenome(clf.assigned_ref_id)[1]
+        labels[clf.original_name] = (
+            f"s{clf.query_subgenome_grp or 1}" if ref_sg in multi_set_sgs else None
+        )
+    return labels
+
+
 def build_assembly_leaves(
     assembly_name: str,
     classifications: Iterable[ContigClassification],
@@ -178,6 +204,7 @@ def build_assembly_leaves(
         return []
 
     contig_to_leaf: Dict[str, LeafId] = {}
+    set_labels = _query_set_labels(classifications)
     for clf in classifications:
         if clf.classification not in ("chrom_assigned", "chrom_fragment"):
             continue
@@ -189,7 +216,7 @@ def build_assembly_leaves(
         leaf = LeafId(
             assembly=assembly_name,
             ref_subgenome=ref_sg,
-            query_subgenome=clf.query_subgenome,
+            query_subgenome=set_labels.get(clf.original_name),
         )
         # Index by both the post-rename and the original name so we can join
         # against compleasm hits regardless of which contig name was passed
@@ -470,6 +497,7 @@ def build_outgroup_leaves(
         return [], "polyploid_unusable"
 
     contig_to_leaf: Dict[str, LeafId] = {}
+    set_labels = _query_set_labels(classifications)
     for clf in classifications:
         if clf.classification not in ("chrom_assigned", "chrom_fragment") or not clf.assigned_ref_id:
             continue
@@ -481,7 +509,7 @@ def build_outgroup_leaves(
         leaf = LeafId(
             assembly=assembly_name,
             ref_subgenome=ref_sg,
-            query_subgenome=clf.query_subgenome,
+            query_subgenome=set_labels.get(clf.original_name),
         )
         contig_to_leaf[clf.new_name] = leaf
         contig_to_leaf[clf.original_name] = leaf

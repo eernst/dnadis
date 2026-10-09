@@ -107,6 +107,14 @@ def test_split_chrom_subgenome_arabidopsis_conventions():
     assert dnadis.split_chrom_subgenome("scaffold_12") == ("scaffold_12", "NA")
 
 
+def test_split_chrom_subgenome_strips_query_set_suffixes():
+    assert dnadis.split_chrom_subgenome("chr6A_s2_f1") == ("chr6", "A")
+    assert dnadis.split_chrom_subgenome("chr1A_s1") == ("chr1", "A")
+    assert dnadis.split_chrom_subgenome("chr1_s2_c1") == ("chr1", "NA")
+    # Letter set labels from earlier dnadis versions
+    assert dnadis.split_chrom_subgenome("chr6A_B_f1") == ("chr6", "A")
+
+
 def test_read_fasta_lengths_and_ref_lengths_tsv(tmp_path):
     fasta_path = tmp_path / "arabidopsis_mock.fa"
     fasta_path.write_text(
@@ -684,7 +692,7 @@ def test_generate_contig_names_query_subgenome():
             ref_gene_proportion=0.5,
             contig_len=1000000,
             is_full_length=True,
-            query_subgenome=None,  # Primary
+            query_subgenome="s1",
         ),
         ContigClassification(
             original_name="contig_002",
@@ -697,7 +705,7 @@ def test_generate_contig_names_query_subgenome():
             ref_gene_proportion=0.4,
             contig_len=900000,
             is_full_length=True,
-            query_subgenome="B",  # Query subgenome B
+            query_subgenome="s2",
         ),
     ]
 
@@ -707,8 +715,8 @@ def test_generate_contig_names_query_subgenome():
         add_subgenome_suffix=None,
     )
 
-    assert name_mapping["contig_001"] == "chr1A"  # Primary, no suffix
-    assert name_mapping["contig_002"] == "chr1A_B"  # Query subgenome B
+    assert name_mapping["contig_001"] == "chr1A_s1"
+    assert name_mapping["contig_002"] == "chr1A_s2"
 
 
 def test_generate_contig_names_multiple_full_length_copies():
@@ -1828,10 +1836,9 @@ def test_infer_query_subgenomes_two_subgenomes():
         assert high_clf.query_subgenome_grp != low_clf.query_subgenome_grp, (
             f"chr{i}A: high and low should be in different subgenome groups"
         )
-        # Primary (higher identity) should have no suffix
-        assert high_clf.query_subgenome is None
-        # Secondary should have a letter suffix
-        assert low_clf.query_subgenome is not None
+        # Every set is numbered, highest identity first
+        assert high_clf.query_subgenome == "s1"
+        assert low_clf.query_subgenome == "s2"
 
 
 def test_infer_query_subgenomes_no_split_similar_identities():
@@ -1988,8 +1995,8 @@ def test_infer_query_subgenomes_allotriploid():
         assert high.query_subgenome_grp != low.query_subgenome_grp, (
             f"chr{i}A: expected different subgenome groups"
         )
-        assert high.query_subgenome is None  # primary
-        assert low.query_subgenome is not None  # secondary (e.g. "B")
+        assert high.query_subgenome == "s1"
+        assert low.query_subgenome == "s2"
 
     # P-subgenome chromosomes should NOT be split (single copy each)
     for i in range(1, 7):
@@ -2062,12 +2069,12 @@ def test_infer_query_subgenomes_fragment_does_not_block_split():
     infer_query_subgenomes(clfs, idents)
 
     # The two full-length copies must end up in different subgenome groups,
-    # with the higher-scoring one (c1) promoted to the primary (no suffix).
+    # with the higher-scoring one (c1) in set s1.
     assert c1.query_subgenome_grp != c2.query_subgenome_grp, (
         "two full-length homeologs should split into different subgenomes"
     )
-    assert c1.query_subgenome is None, "highest-scoring copy should be primary"
-    assert c2.query_subgenome is not None, "second copy should get a suffix"
+    assert c1.query_subgenome == "s1", "highest-scoring copy should be set s1"
+    assert c2.query_subgenome == "s2", "second copy should be set s2"
     # The fragment must stay with its homeolog (c2's secondary group), not
     # form a spurious third subgenome.
     assert f1.query_subgenome_grp == c2.query_subgenome_grp, (
@@ -2300,12 +2307,12 @@ def test_infer_query_subgenomes_cluster_score_beats_raw_identity():
         high = next(c for c in clfs if c.original_name == f"{ref_id}_high")
         low = next(c for c in clfs if c.original_name == f"{ref_id}_low")
         # full-length (low-ident, high-coverage) wins the primary slot
-        assert low.query_subgenome is None, (
-            f"{ref_id}: expected high-coverage copy to be primary, "
+        assert low.query_subgenome == "s1", (
+            f"{ref_id}: expected high-coverage copy to be set s1, "
             f"got query_subgenome={low.query_subgenome!r}"
         )
-        assert high.query_subgenome is not None, (
-            f"{ref_id}: expected low-coverage copy to be secondary, "
+        assert high.query_subgenome == "s2", (
+            f"{ref_id}: expected low-coverage copy to be set s2, "
             f"got query_subgenome={high.query_subgenome!r}"
         )
 
@@ -2353,11 +2360,11 @@ def test_infer_query_subgenomes_cluster_score_defaults_to_raw_ident():
         ref_id = f"chr{i}A"
         high = next(c for c in clfs if c.original_name == f"{ref_id}_high")
         low = next(c for c in clfs if c.original_name == f"{ref_id}_low")
-        assert high.query_subgenome is None, (
-            f"{ref_id}: expected high-identity copy to be primary"
+        assert high.query_subgenome == "s1", (
+            f"{ref_id}: expected high-identity copy to be set s1"
         )
-        assert low.query_subgenome is not None, (
-            f"{ref_id}: expected low-identity copy to be secondary"
+        assert low.query_subgenome == "s2", (
+            f"{ref_id}: expected low-identity copy to be set s2"
         )
 
 
@@ -2588,3 +2595,41 @@ def test_merge_hits_into_loci_splits_tandem_copies():
     for l in loci[:3]:
         assert 11000 <= l["end"] - l["start"] <= 12500
     assert loci[3]["end"] - loci[3]["start"] < 1000
+
+
+def test_scaffold_names_carry_query_set_suffix(tmp_path):
+    """Scaffolds of a reference split into query sets are named _s1/_s2;
+    an unsplit reference keeps the bare name."""
+    from dnadis.output.scaffolding import scaffold_chromosomes
+    from dnadis.models import ContigClassification
+
+    seqs = {"ctgA1": "ACGT" * 500, "ctgA2": "TTGCA" * 400, "ctgB": "GGCAT" * 300}
+    qfa = tmp_path / "q.fa"
+    qfa.write_text("".join(f">{k}\n{v}\n" for k, v in seqs.items()))
+    rfa = tmp_path / "r.fa"
+    rfa.write_text(">chr1A\n" + "A" * 3000 + "\n>chr2A\n" + "C" * 3000 + "\n")
+
+    def clf(name, ref, sg, grp):
+        return ContigClassification(
+            # Empty new_name so single-contig scaffolds fall back to the
+            # computed scaffold name under test.
+            original_name=name, new_name="", classification="chrom_assigned",
+            reversed=False, cobiont_taxid=None, cobiont_sci=None,
+            assigned_ref_id=ref, ref_gene_proportion=None,
+            contig_len=len(seqs[name]), is_full_length=True,
+            query_subgenome=sg, query_subgenome_grp=grp, seq_identity_vs_ref=0.95,
+        )
+
+    clfs = [clf("ctgA1", "chr1A", "s1", 1), clf("ctgA2", "chr1A", "s2", 2),
+            clf("ctgB", "chr2A", None, 1)]
+    best_ref = {"ctgA1": "chr1A", "ctgA2": "chr1A", "ctgB": "chr2A"}
+    scaffolded, _, _ = scaffold_chromosomes(
+        query_fasta=qfa, classifications=clfs,
+        contig_orientations={k: False for k in seqs},
+        qr_ref_ranges={(k, v): (1, 2000) for k, v in best_ref.items()},
+        ref_fasta=rfa, ref_lengths={"chr1A": 3000, "chr2A": 3000},
+        best_ref=best_ref, contig_refs={k: {v} for k, v in best_ref.items()},
+        work_dir=tmp_path / "scaf",
+        qr_best_chain_ident={(k, v): 0.95 for k, v in best_ref.items()},
+    )
+    assert set(scaffolded) == {"chr1A_s1", "chr1A_s2", "chr2A"}

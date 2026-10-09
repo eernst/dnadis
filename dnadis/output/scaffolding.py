@@ -793,6 +793,13 @@ def scaffold_chromosomes(
     # Also collect multi-contig groups for the parallel second pass.
     work_list: List[Tuple[str, str, List[str]]] = []  # (scaffold_name, ref_id, contig_names)
 
+    # References whose contigs were split into query subgenome sets; their
+    # scaffolds carry the set suffix (_s1, _s2, …) like the contig names.
+    split_refs = {
+        clf.assigned_ref_id for clf in clf_lookup.values()
+        if clf.query_subgenome and clf.assigned_ref_id
+    }
+
     for (ref_id, grp) in sorted(groups.keys()):
         contig_names = groups[(ref_id, grp)]
         if not contig_names:
@@ -800,10 +807,10 @@ def scaffold_chromosomes(
 
         # Determine scaffold name
         base_name = ref_norm_to_orig.get(ref_id, ref_id) if ref_norm_to_orig else ref_id
-        if grp <= 1:
-            scaffold_name = base_name
+        if ref_id in split_refs or grp > 1:
+            scaffold_name = f"{base_name}_s{grp}"
         else:
-            scaffold_name = f"{base_name}_{chr(ord('A') + grp - 1)}"
+            scaffold_name = base_name
 
         # T2T handling: emit each T2T contig as its own trivial scaffold.
         # When T2T contigs exist, remaining non-anchor members (chromosome

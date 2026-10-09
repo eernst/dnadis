@@ -38,7 +38,7 @@ The main output file containing classification results and quality metrics for e
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `contig` | string | New contig name following the scheme `chr<ref>(_<subgenome>)?(_c<copy>|_f<frag>)?` for chromosome-assigned contigs, or `contig_<N>` (by descending length) for all others. Examples: `chr5A` (full-length, single copy), `chr5A_B` (full-length, query subgenome B), `chr5A_f1` (highest-identity fragment of chr5A), `chr5A_c1` (highest-identity of multiple full-length copies), `contig_1` (non-chromosome). Copy and fragment suffixes are ordered by descending alignment identity to the reference. See [Contig Naming Scheme](../README.md#contig-naming-scheme) for full suffix semantics. |
+| `contig` | string | New contig name following the scheme `chr<ref>(_s<set>)?(_c<copy>|_f<frag>)?` for chromosome-assigned contigs, or `contig_<N>` (by descending length) for all others. Examples: `chr5A` (full-length, single copy), `chr5A_s2` (full-length, query subgenome set 2), `chr5A_f1` (highest-identity fragment of chr5A), `chr5A_c1` (highest-identity of multiple full-length copies), `contig_1` (non-chromosome). Copy and fragment suffixes are ordered by descending alignment identity to the reference. See [Contig Naming Scheme](../README.md#contig-naming-scheme) for full suffix semantics. |
 | `original_name` | string | Original contig name from input FASTA |
 | `classification` | string | Classification category (see [Categories](#classification-categories)) |
 | `classification_confidence` | string | Confidence level: `high`, `medium`, or `low` (see [Confidence](#classification-confidence)) |
@@ -55,7 +55,7 @@ These columns describe whether a contig represents a complete chromosome based o
 | `ref_coverage` | float | Fraction of the assigned reference chromosome spanned by syntenic blocks (0.0-1.0) |
 | `is_full_length` | yes/no | Whether the contig is classified as full-length (based on telomeres and `ref_coverage ≥ --full-length-ref-coverage`) |
 | `full_length_confidence` | string | Confidence of full-length call: `high` (both telomeres), `medium` (one telomere + high coverage), `low` (coverage-only) |
-| `query_subgenome` | string | Inferred query subgenome cluster label (e.g., `A`, `B`) based on identity-scaled clustering, or empty |
+| `query_subgenome` | string | Inferred query subgenome set (`s1`, `s2`, …; `s1` = highest identity to the reference) from identity-scaled clustering, or empty when the chromosome was not split |
 | `seq_identity_vs_ref` | float | Best-chain alignment identity to the assigned reference chromosome (0.0-1.0) |
 | `has_5p_telomere` | yes/no | Telomere detected at the **start** (first 10kb) of the **raw input** contig |
 | `has_3p_telomere` | yes/no | Telomere detected at the **end** (last 10kb) of the **raw input** contig |

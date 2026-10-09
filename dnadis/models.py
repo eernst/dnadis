@@ -183,7 +183,7 @@ class ContigClassification:
     has_5p_telomere: Optional[bool] = None  # Telomere at 5' end
     has_3p_telomere: Optional[bool] = None  # Telomere at 3' end
     # Query subgenome inference (when multiple contigs map to same ref)
-    query_subgenome: Optional[str] = None  # "B", "C", etc. or None if primary/single
+    query_subgenome: Optional[str] = None  # "s1", "s2", etc. or None if not split
     query_subgenome_grp: Optional[int] = None  # Numeric cluster ID (1, 2, 3...)
     seq_identity_vs_ref: Optional[float] = None  # Sequence identity (0.0-1.0)
     # Collinearity score for assigned reference (fraction of aligned bp in reference order)
