@@ -849,7 +849,7 @@ ref_lines_base <- ref_sg %>%
   filter(!is.na(y_index)) %>%
   mutate(ref_len_mb = ref_len / 1e6)
 
-df_plot <- summary_df %>%
+df_all <- summary_df %>%
   mutate(
     contig_len = if_else(is.na(length), 0, as.numeric(length)),
     # Non-polyploid: map all contigs to "G" so they join cleanly with
@@ -867,8 +867,13 @@ df_plot <- summary_df %>%
     raw_3p_telo = if ("has_3p_telomere" %in% names(.)) has_3p_telomere == "yes" else FALSE,
     has_5p_telo = if_else(is_reversed, raw_3p_telo, raw_5p_telo),
     has_3p_telo = if_else(is_reversed, raw_5p_telo, raw_3p_telo)
-  ) %>%
-  filter(contig_len >= chr_like_minlen)
+  )
+df_plot <- df_all %>% filter(contig_len >= chr_like_minlen)
+# Pills also include members of multi-contig scaffolds below chr_like_minlen,
+# so a scaffold built from a chromosome plus fragments still gets its bracket.
+scaffold_members <- if (nrow(scaffold_brackets) > 0) scaffold_brackets$component else character()
+df_pills <- df_all %>%
+  filter(contig_len >= chr_like_minlen | original_name %in% scaffold_members)
 
 ev <- ev %>%
   mutate(subgenome = case_when(
@@ -876,7 +881,7 @@ ev <- ev %>%
   )) %>% filter(subgenome %in% sg_levels)
 
 # Pill sizing
-n_per_chrom <- df_plot %>%
+n_per_chrom <- df_pills %>%
   filter(assigned_chrom_id != "Un", chrom_id %in% y_tbl$chrom_id) %>%
   count(chrom_id, name = "n_contigs")
 max_n <- max(n_per_chrom$n_contigs, na.rm = TRUE)
@@ -895,7 +900,7 @@ telo_size <- max(0.8, pill_yw * mm_per_unit * 1.375)
 pill_dy <- pill_yw * 1.15
 
 # Slot positions
-df_slots <- df_plot %>%
+df_slots <- df_pills %>%
   mutate(contig_len_mb = contig_len / 1e6) %>%
   filter(assigned_chrom_id != "Un") %>%
   left_join(y_tbl, by = "chrom_id") %>%
