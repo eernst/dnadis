@@ -52,7 +52,7 @@ MAX_REPEAT_PERIOD = 25000
 
 # Bump when region extraction or period detection changes, so cached
 # intermediates in an existing work directory are rebuilt.
-_CACHE_VERSION = 2
+_CACHE_VERSION = 3
 
 
 def _reset_stale_work_dir(
@@ -838,7 +838,7 @@ def annotate_contigs_with_consensus(
         db_paths=[str(query_db)],
         output_path=blast_out,
         threads=threads,
-        max_hsps=500,
+        max_hsps=10000,
         max_target_seqs=1000,
         err_path=work_dir / "blastn_consensus_vs_contigs.err",
     )
@@ -927,14 +927,27 @@ def _merge_hits_into_loci(
     consensus_length: int,
     sub_features: List[RdnaSubFeature],
     merge_gap: int = 2000,
+    min_anchor_frac: float = 0.3,
 ) -> List[dict]:
-    """Merge overlapping BLAST hits into rDNA loci and classify them.
+    """Merge BLAST hits into rDNA loci (one per repeat copy) and classify them.
+
+    Adjacent copies in a tandem array lie end to end, so copies are told
+    apart by alignment origin (the contig position that consensus position
+    0 maps to), which differs by about one repeat period between copies.
+    Long hits (>= ``min_anchor_frac`` of the consensus) that do not largely
+    overlap a longer one anchor one copy each. Every other hit joins the
+    anchor on the same strand, within ``merge_gap`` on the contig, whose
+    origin is closest; this absorbs the short, offset hits that internal
+    sub-repeats (e.g. in the IGS) produce. Hits near no anchor are merged
+    by contig proximity into fragment loci.
 
     Args:
         hits: Sorted list of BLAST hit dicts
         consensus_length: Length of the consensus sequence
         sub_features: Sub-feature annotations on the consensus
         merge_gap: Maximum gap between hits to merge [2000]
+        min_anchor_frac: Minimum hit length, as a fraction of the
+            consensus, for a hit to anchor a copy [0.3]
 
     Returns:
         List of locus dicts with classification info
@@ -942,17 +955,62 @@ def _merge_hits_into_loci(
     if not hits:
         return []
 
-    # Merge overlapping hits on the subject (contig)
-    merged_groups: List[List[dict]] = []
-    current_group = [hits[0]]
+    def _origin(h: dict) -> int:
+        if h["strand"] == "+":
+            return h["sstart"] - h["qstart"]
+        return h["send"] + h["qstart"]
 
-    for hit in hits[1:]:
-        if hit["sstart"] <= current_group[-1]["send"] + merge_gap:
-            current_group.append(hit)
+    # Anchors: long hits, longest first, skipping ones mostly inside an anchor
+    min_anchor = min_anchor_frac * consensus_length
+    anchors: List[dict] = []
+    for h in sorted(hits, key=lambda x: x["aln_length"], reverse=True):
+        if h["aln_length"] < min_anchor:
+            break
+        span = h["send"] - h["sstart"]
+        overlapped = any(
+            min(h["send"], a["send"]) - max(h["sstart"], a["sstart"]) > 0.5 * span
+            for a in anchors
+        )
+        if not overlapped:
+            anchors.append(h)
+
+    groups: Dict[int, List[dict]] = {id(a): [a] for a in anchors}
+    unanchored: List[dict] = []
+    anchor_ids = set(groups)
+    max_origin_diff = consensus_length / 2
+    for h in hits:
+        if id(h) in anchor_ids:
+            continue
+        best = None
+        best_diff = None
+        for a in anchors:
+            if a["strand"] != h["strand"]:
+                continue
+            if h["sstart"] > a["send"] + merge_gap or h["send"] < a["sstart"] - merge_gap:
+                continue
+            diff = abs(_origin(h) - _origin(a))
+            if diff <= max_origin_diff and (best_diff is None or diff < best_diff):
+                best, best_diff = a, diff
+        if best is None:
+            unanchored.append(h)
         else:
-            merged_groups.append(current_group)
-            current_group = [hit]
-    merged_groups.append(current_group)
+            groups[id(best)].append(h)
+
+    merged_groups: List[List[dict]] = list(groups.values())
+    if unanchored:
+        unanchored.sort(key=lambda x: x["sstart"])
+        current_group = [unanchored[0]]
+        group_end = unanchored[0]["send"]
+        for hit in unanchored[1:]:
+            if hit["sstart"] <= group_end + merge_gap:
+                current_group.append(hit)
+                group_end = max(group_end, hit["send"])
+            else:
+                merged_groups.append(current_group)
+                current_group = [hit]
+                group_end = hit["send"]
+        merged_groups.append(current_group)
+    merged_groups.sort(key=lambda g: min(h["sstart"] for h in g))
 
     loci = []
     for group in merged_groups:

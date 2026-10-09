@@ -2558,3 +2558,32 @@ def test_scaffold_rdna_contigs_opt_in():
     assert _group_contigs_by_haplotype(**kwargs)[("chr1A", 1)] == ["ctg1"]
     groups = _group_contigs_by_haplotype(**kwargs, include_rdna=True)
     assert groups[("chr1A", 1)] == ["ctg1", "rdna1"]
+
+
+def test_merge_hits_into_loci_splits_tandem_copies():
+    """End-to-end tandem copies give one locus each; offset sub-repeat hits
+    are absorbed into their copy instead of forming extra loci."""
+    from dnadis.detection.rdna_consensus import _merge_hits_into_loci
+
+    clen, period = 12000, 12000
+
+    def hit(s, qs, qe, strand="+"):
+        return dict(pident=99.0, aln_length=qe - qs, qstart=qs, qend=qe,
+                    sstart=s, send=s + (qe - qs), strand=strand)
+
+    hits = []
+    for i in range(3):
+        base = 1000 + i * period
+        hits.append(hit(base, 1, 10000))                      # main copy body
+        for k in range(1, 6):                                  # 170 bp sub-repeats
+            hits.append(hit(base + 10000 - k * 170, 10000, 11900))
+        hits.append(hit(base + 10000, 10000, 11999))           # IGS tail
+    hits.append(hit(60000, 1, 800))                            # isolated fragment
+    hits.sort(key=lambda h: h["sstart"])
+
+    loci = _merge_hits_into_loci(hits, clen, [])
+    assert len(loci) == 4
+    assert [l["start"] for l in loci] == [1000, 13000, 25000, 60000]
+    for l in loci[:3]:
+        assert 11000 <= l["end"] - l["start"] <= 12500
+    assert loci[3]["end"] - loci[3]["start"] < 1000
