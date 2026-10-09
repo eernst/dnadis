@@ -52,7 +52,7 @@ MAX_REPEAT_PERIOD = 25000
 
 # Bump when region extraction or period detection changes, so cached
 # intermediates in an existing work directory are rebuilt.
-_CACHE_VERSION = 3
+_CACHE_VERSION = 4
 
 
 def _reset_stale_work_dir(
@@ -938,8 +938,10 @@ def _merge_hits_into_loci(
     overlap a longer one anchor one copy each. Every other hit joins the
     anchor on the same strand, within ``merge_gap`` on the contig, whose
     origin is closest; this absorbs the short, offset hits that internal
-    sub-repeats (e.g. in the IGS) produce. Hits near no anchor are merged
-    by contig proximity into fragment loci.
+    sub-repeats (e.g. in the IGS) produce. A hit with no such anchor joins
+    the copy whose extent it overlaps most, on either strand (inverted
+    repeats within a copy), or the nearest copy within ``merge_gap``. Hits
+    near no copy are merged by contig proximity into fragment loci.
 
     Args:
         hits: Sorted list of BLAST hit dicts
@@ -995,6 +997,29 @@ def _merge_hits_into_loci(
             unanchored.append(h)
         else:
             groups[id(best)].append(h)
+
+    # Remaining hits (other strand, e.g. inverted repeats in the IGS, or
+    # off-origin) join the copy whose extent they overlap most, or the
+    # nearest copy within merge_gap.
+    extents = {
+        gid: (min(x["sstart"] for x in g), max(x["send"] for x in g))
+        for gid, g in groups.items()
+    }
+    leftover: List[dict] = []
+    for h in unanchored:
+        best_gid = None
+        best_key = None
+        for gid, (gs, ge) in extents.items():
+            ov = min(h["send"], ge) - max(h["sstart"], gs)
+            if ov < -merge_gap:
+                continue
+            if best_key is None or ov > best_key:
+                best_gid, best_key = gid, ov
+        if best_gid is None:
+            leftover.append(h)
+        else:
+            groups[best_gid].append(h)
+    unanchored = leftover
 
     merged_groups: List[List[dict]] = list(groups.values())
     if unanchored:

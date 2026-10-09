@@ -2578,6 +2578,7 @@ def test_merge_hits_into_loci_splits_tandem_copies():
         for k in range(1, 6):                                  # 170 bp sub-repeats
             hits.append(hit(base + 10000 - k * 170, 10000, 11900))
         hits.append(hit(base + 10000, 10000, 11999))           # IGS tail
+        hits.append(hit(base + 10500, 300, 1000, strand="-"))  # inverted IGS element
     hits.append(hit(60000, 1, 800))                            # isolated fragment
     hits.sort(key=lambda h: h["sstart"])
 
