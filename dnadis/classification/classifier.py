@@ -1979,17 +1979,38 @@ def classify_all_contigs(
             subgenome_k=subgenome_k,
         )
 
-    # Generate names
-    name_mapping = generate_contig_names(
+    assign_contig_names(
         classifications,
         query_lengths,
         add_subgenome_suffix,
         ref_norm_to_orig=ref_norm_to_orig,
     )
 
-    # Update classifications with names
+    return classifications
+
+
+def assign_contig_names(
+    classifications: List[ContigClassification],
+    query_lengths: Dict[str, int],
+    add_subgenome_suffix: Optional[str],
+    ref_norm_to_orig: Optional[Dict[str, str]] = None,
+    overwrite: bool = False,
+) -> None:
+    """Set ``new_name`` on each classification from generate_contig_names().
+
+    With ``overwrite=False`` only empty names are filled. With
+    ``overwrite=True`` every name is regenerated except the fixed
+    ``organelle_complete`` names (chrC/chrM); use this after a contig has been
+    moved out of a chromosome class, so it loses its chromosome-style name.
+    """
+    name_mapping = generate_contig_names(
+        classifications,
+        query_lengths,
+        add_subgenome_suffix,
+        ref_norm_to_orig=ref_norm_to_orig,
+    )
     for clf in classifications:
+        if overwrite and clf.classification != "organelle_complete":
+            clf.new_name = ""
         if not clf.new_name:
             clf.new_name = name_mapping.get(clf.original_name, clf.original_name)
-
-    return classifications

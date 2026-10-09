@@ -158,6 +158,7 @@ from dnadis.detection.debris import detect_chromosome_debris
 from dnadis.detection.cobiont import detect_cobionts
 from dnadis.detection.compleasm import run_compleasm
 from dnadis.classification.classifier import (
+    assign_contig_names,
     classify_all_contigs,
     classify_debris_and_unclassified,
     compute_mean_gene_proportion,
@@ -1293,6 +1294,16 @@ def run_assembly(
 
                 if n_reclassified:
                     logger.done(f"Reclassified {n_reclassified} contigs as rDNA using consensus probe")
+                    # A rerouted chrom_fragment would otherwise keep its
+                    # chromosome-style name; its reference association stays
+                    # in assigned_ref_id.
+                    assign_contig_names(
+                        classifications,
+                        qry_lengths,
+                        args.add_subgenome_suffix,
+                        ref_norm_to_orig=ref_norm_to_orig,
+                        overwrite=True,
+                    )
 
                 # Update clf_lookup after reclassification
                 clf_lookup = {clf.original_name: clf.classification for clf in classifications}

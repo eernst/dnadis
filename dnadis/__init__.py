@@ -100,6 +100,7 @@ from dnadis.classification.classifier import (
     compute_mean_gene_proportion,
     classify_debris_and_unclassified,
     generate_contig_names,
+    assign_contig_names,
     classify_all_contigs,
 )
 
@@ -182,6 +183,7 @@ __all__ = [
     "compute_mean_gene_proportion",
     "classify_debris_and_unclassified",
     "generate_contig_names",
+    "assign_contig_names",
     "classify_all_contigs",
     # Output
     "write_classified_fastas",

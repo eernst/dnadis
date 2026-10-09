@@ -9,6 +9,7 @@ from dnadis.classification.classifier import (
     count_genes_per_ref_chrom,
     determine_contig_orientations,
     generate_contig_names,
+    assign_contig_names,
 )
 
 __all__ = [
@@ -18,5 +19,6 @@ __all__ = [
     "compute_mean_gene_proportion",
     "classify_debris_and_unclassified",
     "generate_contig_names",
+    "assign_contig_names",
     "classify_all_contigs",
 ]

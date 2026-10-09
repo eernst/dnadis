@@ -626,6 +626,47 @@ def test_generate_contig_names_fragment():
     assert name_mapping["contig_002"] == "chr1A_f2"
 
 
+def test_assign_contig_names_after_reroute():
+    """A fragment moved to a non-chromosome class loses its chromosome name."""
+    from dnadis.classification.classifier import assign_contig_names
+    from dnadis.models import ContigClassification
+
+    def clf(name, cls, ref, length, ident):
+        return ContigClassification(
+            original_name=name,
+            new_name="",
+            classification=cls,
+            reversed=False,
+            cobiont_taxid=None,
+            cobiont_sci=None,
+            assigned_ref_id=ref,
+            ref_gene_proportion=0.0,
+            contig_len=length,
+            is_full_length=False,
+            seq_identity_vs_ref=ident,
+        )
+
+    clfs = [
+        clf("tig1", "chrom_fragment", "chr1A", 500000, 0.95),
+        clf("tig2", "chrom_fragment", "chr1A", 300000, 0.90),
+        clf("tig3", "debris", None, 80000, None),
+        clf("tig4", "organelle_complete", "chrC", 160000, None),
+    ]
+    clfs[3].new_name = "chrC"
+    lengths = {c.original_name: c.contig_len for c in clfs}
+
+    assign_contig_names(clfs, lengths, None)
+    assert [c.new_name for c in clfs] == ["chr1A_f1", "chr1A_f2", "contig_2", "chrC"]
+
+    clfs[0].classification = "rDNA"
+    assign_contig_names(clfs, lengths, None, overwrite=True)
+    names = {c.original_name: c.new_name for c in clfs}
+    assert names["tig1"].startswith("contig_")
+    assert names["tig2"] == "chr1A_f1"
+    assert names["tig4"] == "chrC"
+    assert clfs[0].assigned_ref_id == "chr1A"
+
+
 def test_generate_contig_names_query_subgenome():
     """Test naming with query subgenome suffix."""
     from dnadis.classification.classifier import generate_contig_names
