@@ -12,7 +12,9 @@ import subprocess
 from pathlib import Path
 from typing import List, Optional
 
-from dnadis.utils.io_utils import file_exists_and_valid, have_exe, run_to_gzip
+from dnadis.utils.io_utils import (
+    file_exists_and_valid, have_exe, output_is_current, run_to_gzip,
+)
 from dnadis.utils.logging_config import get_logger
 
 logger = get_logger("external_tools")
@@ -408,7 +410,7 @@ def run_mafft(
     if not have_exe("mafft"):
         return False
 
-    if file_exists_and_valid(output_fasta):
+    if output_is_current(output_fasta, input_fasta):
         (logger.debug if quiet else logger.info)(f"MAFFT output exists, reusing: {output_fasta}")
         return True
 
@@ -470,7 +472,7 @@ def run_trimal(
     if not have_exe("trimal"):
         return False
 
-    if file_exists_and_valid(output_msa):
+    if output_is_current(output_msa, input_msa):
         (logger.debug if quiet else logger.info)(f"trimAl output exists, reusing: {output_msa}")
         return True
 
@@ -547,9 +549,6 @@ def run_iqtree(
         return False
 
     treefile = Path(f"{prefix}.treefile")
-    if file_exists_and_valid(treefile):
-        logger.info(f"IQ-TREE output exists, reusing: {treefile}")
-        return True
 
     validate_extra_args(models, arg_name="iqtree models")
     if outgroup is not None:
@@ -571,6 +570,15 @@ def run_iqtree(
     if outgroup:
         cmd.extend(["-o", outgroup])
 
+    # Reuse a tree only if it is newer than the supermatrix and was built
+    # with the same command (model set, replicates, outgroup, ...).
+    cmd_record = Path(f"{prefix}.cmd")
+    cmd_text = " ".join(cmd) + "\n"
+    if output_is_current(treefile, supermatrix) and file_exists_and_valid(cmd_record):
+        if cmd_record.read_text() == cmd_text:
+            logger.info(f"IQ-TREE output exists, reusing: {treefile}")
+            return True
+
     logger.info(f"Running {exe} -> {treefile}")
 
     try:
@@ -587,4 +595,7 @@ def run_iqtree(
         logger.warning(f"IQ-TREE failed: {e}")
         return False
 
-    return file_exists_and_valid(treefile)
+    if not file_exists_and_valid(treefile):
+        return False
+    cmd_record.write_text(cmd_text)
+    return True
