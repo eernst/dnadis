@@ -14,6 +14,7 @@ from typing import Dict, List, Optional, Tuple
 
 from dnadis.alignment.external_tools import run_mafft, run_trimal
 from dnadis.phylogeny.busco_extraction import BuscoHit, LeafBuscos, LeafId
+from dnadis.utils.io_utils import write_text_if_changed
 from dnadis.utils.logging_config import get_logger
 
 logger = get_logger("phylogeny")
@@ -107,6 +108,15 @@ def _resolve_sequence(
     return None
 
 
+def _format_fasta(records: List[Tuple[str, str]]) -> str:
+    """Format ``(name, sequence)`` records as FASTA text, 80 columns per line."""
+    lines: List[str] = []
+    for name, seq in records:
+        lines.append(f">{name}")
+        lines.extend(seq[i:i + 80] for i in range(0, len(seq), 80))
+    return "\n".join(lines) + "\n" if lines else ""
+
+
 def write_per_gene_fastas(
     leaves: List[LeafBuscos],
     shared_genes: List[str],
@@ -150,11 +160,8 @@ def write_per_gene_fastas(
             logger.debug(f"Skipping {bid}: missing protein for at least one leaf")
             continue
         fasta = out_dir / f"{bid}.faa"
-        with fasta.open("w") as out:
-            for name, seq in records:
-                out.write(f">{name}\n")
-                for i in range(0, len(seq), 80):
-                    out.write(seq[i:i + 80] + "\n")
+        # Unchanged genes keep their mtime so their MSAs are reused.
+        write_text_if_changed(fasta, _format_fasta(records))
         gene_to_fasta[bid] = fasta
 
     return gene_to_fasta, leaf_labels
@@ -385,12 +392,11 @@ def concatenate_supermatrix(
         n_cols += width
         n_genes += 1
 
-    with out_fasta.open("w") as out:
-        for label in leaf_order:
-            seq = "".join(concat[label])
-            out.write(f">{label}\n")
-            for i in range(0, len(seq), 80):
-                out.write(seq[i:i + 80] + "\n")
+    # An unchanged supermatrix keeps its mtime so the tree is reused.
+    write_text_if_changed(
+        out_fasta,
+        _format_fasta([(label, "".join(concat[label])) for label in leaf_order]),
+    )
 
     return SupermatrixResult(
         supermatrix_fasta=out_fasta,

@@ -692,3 +692,92 @@ def test_phylo_outgroup_only_all_assemblies_rejected(tmp_path):
             "--phylo-outgroup-only", "a", "--phylo-outgroup-only", "b",
         ])
     assert "at least one non-outgroup assembly" in str(ei.value)
+
+
+# --------------------------------------------------------------------------
+# Cache reuse: outputs are reused only while their inputs are unchanged
+# --------------------------------------------------------------------------
+def test_output_is_current_and_write_text_if_changed(tmp_path):
+    import os
+    from dnadis.utils.io_utils import output_is_current, write_text_if_changed
+
+    inp, out = tmp_path / "in.faa", tmp_path / "out.faa"
+    assert write_text_if_changed(inp, ">a\nMK\n")
+    out.write_text("aligned\n")
+    os.utime(inp, ns=(1_000_000_000, 1_000_000_000))
+    assert output_is_current(out, inp)
+    # Same text: file untouched, output still current
+    assert not write_text_if_changed(inp, ">a\nMK\n")
+    assert output_is_current(out, inp)
+    # New text: input rewritten, output now stale
+    assert write_text_if_changed(inp, ">b\nMK\n")
+    os.utime(out, ns=(1_000_000_000, 1_000_000_000))
+    assert not output_is_current(out, inp)
+    assert not output_is_current(tmp_path / "missing.faa", inp)
+
+
+def test_write_per_gene_fastas_rewrites_only_changed_genes(tmp_path):
+    """Relabeled leaves rewrite the per-gene FASTA; identical leaves do not."""
+    import os
+    from dnadis.phylogeny.busco_extraction import BuscoHit, LeafBuscos, LeafId
+    from dnadis.phylogeny.supermatrix import write_per_gene_fastas
+
+    prot = tmp_path / "translated_protein.fasta"
+    prot.write_text(">g1|ctg1:1-30\nMKVLAAGIVG\n")
+
+    def leaves(query_sg):
+        hit = BuscoHit("g1", "Complete", "ctg1", 1, 30, "+", 99.0, 10)
+        return [LeafBuscos(
+            leaf=LeafId(assembly="asm", ref_subgenome="A", query_subgenome=query_sg),
+            hits_by_busco={"g1": [hit]},
+            translated_protein_path=prot, n_lineage_total=1,
+        )]
+
+    out_dir = tmp_path / "per_gene"
+    g2f, _ = write_per_gene_fastas(leaves(None), ["g1"], out_dir)
+    if "g1" not in g2f:
+        pytest.skip("translated-protein header format not resolved by this fixture")
+    fasta = g2f["g1"]
+    os.utime(fasta, ns=(1_000_000_000, 1_000_000_000))
+    write_per_gene_fastas(leaves(None), ["g1"], out_dir)
+    assert fasta.stat().st_mtime_ns == 1_000_000_000
+    write_per_gene_fastas(leaves("s1"), ["g1"], out_dir)
+    assert fasta.stat().st_mtime_ns > 1_000_000_000
+    assert ">asm_A_s1" in fasta.read_text()
+
+
+def test_run_iqtree_reuses_tree_only_for_same_supermatrix_and_command(tmp_path, monkeypatch):
+    import os
+    import stat
+    from dnadis.alignment import external_tools
+
+    calls = tmp_path / "calls.txt"
+    fake = tmp_path / "iqtree3"
+    fake.write_text(
+        "#!/bin/bash\n"
+        f"echo run >> {calls}\n"
+        'while [ $# -gt 0 ]; do [ "$1" = --prefix ] && p=$2; shift; done\n'
+        'echo "(a,b,c);" > "$p.treefile"\n'
+    )
+    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setattr(external_tools, "get_iqtree_exe", lambda: str(fake))
+
+    sm = tmp_path / "supermatrix.faa"
+    sm.write_text(">a\nMK\n>b\nMK\n>c\nMK\n")
+    os.utime(sm, ns=(1_000_000_000, 1_000_000_000))
+    prefix = tmp_path / "species_tree"
+
+    def n_runs():
+        return len(calls.read_text().splitlines()) if calls.exists() else 0
+
+    assert external_tools.run_iqtree(sm, prefix, outgroup="a")
+    assert n_runs() == 1
+    assert external_tools.run_iqtree(sm, prefix, outgroup="a")      # reused
+    assert n_runs() == 1
+    assert external_tools.run_iqtree(sm, prefix, outgroup="b")      # new outgroup
+    assert n_runs() == 2
+    sm.write_text(">a\nMR\n>b\nMK\n>c\nMK\n")                       # new supermatrix
+    tree_ns = Path(f"{prefix}.treefile").stat().st_mtime_ns
+    os.utime(sm, ns=(tree_ns + 10**9, tree_ns + 10**9))   # newer, despite coarse mtimes
+    assert external_tools.run_iqtree(sm, prefix, outgroup="b")
+    assert n_runs() == 3

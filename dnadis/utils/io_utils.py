@@ -72,6 +72,37 @@ def file_exists_and_valid(path: Path, min_size: int = 1) -> bool:
         return False
 
 
+def output_is_current(output: Path, *inputs: Path) -> bool:
+    """True if *output* is a valid file at least as new as every input.
+
+    Used to reuse a cached tool output only when its inputs have not been
+    rewritten since.  A missing input counts as changed.
+    """
+    if not file_exists_and_valid(output):
+        return False
+    try:
+        out_mtime = output.stat().st_mtime_ns
+        return all(Path(p).stat().st_mtime_ns <= out_mtime for p in inputs)
+    except OSError:
+        return False
+
+
+def write_text_if_changed(path: Path, text: str) -> bool:
+    """Write *text* to *path* unless the file already holds exactly that text.
+
+    Leaving unchanged files untouched keeps their mtimes, so downstream
+    outputs checked with :func:`output_is_current` stay reusable.  Returns
+    True if the file was written.
+    """
+    try:
+        if path.read_text() == text:
+            return False
+    except (OSError, UnicodeDecodeError):
+        pass
+    path.write_text(text)
+    return True
+
+
 def run_to_gzip(cmd: list[str], gz_out: Path, err_path: Path, timeout: int = 7200) -> None:
     """Run a command, streaming stdout into a gzipped file. Stderr -> err_path.
 
