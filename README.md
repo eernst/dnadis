@@ -18,7 +18,7 @@
 - **Debris detection** for assembly fragments (chromosome debris, organelle debris)
 - **Chimera flagging** for contigs with evidence from multiple chromosomes
 - **Orientation determination** for chromosome-assigned contigs
-- **Contig renaming** to reference-based names following the scheme `chr<ref>(_<subgenome>)?(_c<copy>|_f<frag>)?` — for example: `chr1A` (full-length, single copy), `chr1A_B` (full-length, query subgenome B), `chr1A_f1`/`chr1A_f2` (chromosome fragments by descending length), `chr1A_c1`/`chr1A_c2` (rare duplicate full-length copies), `chr1A_B_f1` (fragment from subgenome B); non-chromosome contigs are named `contig_1`, `contig_2`, etc. by descending length (see [Contig Naming Scheme](#contig-naming-scheme))
+- **Contig renaming** to reference-based names following the scheme `chr<ref>(_s<set>)?(_c<copy>|_f<frag>)?` — for example: `chr1A` (full-length, single copy), `chr1A_s1`/`chr1A_s2` (full-length, query subgenome sets 1 and 2), `chr1A_f1`/`chr1A_f2` (chromosome fragments by descending length), `chr1A_c1`/`chr1A_c2` (rare duplicate full-length copies), `chr1A_s2_f1` (fragment from set 2); non-chromosome contigs are named `contig_1`, `contig_2`, etc. by descending length (see [Contig Naming Scheme](#contig-naming-scheme))
 - **BUSCO completeness evaluation** (optional) via compleasm, run separately on chromosome-assigned and non-chromosome contigs
 - **Reference-guided scaffolding** (optional) producing chromosome-scale pseudomolecules with AGP output (uses RagTag if available, otherwise built-in scaffolder)
 - **Read depth analysis** (optional) with automated downsampling and caching
@@ -29,28 +29,28 @@
 
 ## Contig Naming Scheme
 
-Chromosome-assigned contigs are renamed using the pattern `chr<ref>(_<subgenome>)?(_c<copy>|_f<frag>)?`, where `<ref>` is the reference chromosome identifier (e.g., `1A`, `3B`). Non-chromosome contigs are named `contig_1`, `contig_2`, etc., ordered by descending length.
+Chromosome-assigned contigs are renamed using the pattern `chr<ref>(_s<set>)?(_c<copy>|_f<frag>)?`, where `<ref>` is the reference chromosome identifier (e.g., `1A`, `3B`). Non-chromosome contigs are named `contig_1`, `contig_2`, etc., ordered by descending length.
 
 ### Chromosome name suffixes
 
 | Suffix | Meaning | Example |
 |--------|---------|---------|
-| _(none)_ | Primary contig assigned to this reference chromosome — either the only copy, or the highest-identity copy when multiple query subgenomes are detected | `chr1A` |
-| `_B`, `_C`, … | Secondary query subgenome label — the query assembly carries multiple homeologous copies that map to the same reference chromosome, resolved into distinct subgenomes by identity clustering. The primary (highest-identity) copy is always unsuffixed. | `chr1A_B` |
+| _(none)_ | The only contig assigned to this reference chromosome, or contigs of a chromosome that was not split into query subgenome sets | `chr1A` |
+| `_s1`, `_s2`, … | Query subgenome set — the query assembly carries multiple homeologous copies that map to the same reference chromosome, resolved into distinct sets by identity clustering. Sets are numbered by descending identity to the reference (`_s1` is closest), and every set is numbered once a chromosome is split. | `chr1A_s1`, `chr1A_s2` |
 | `_c1`, `_c2`, … | Multiple full-length copies that could not be resolved into distinct subgenomes — the copies align to the reference at nearly identical identity levels, so the GMM clustering cannot distinguish them. This typically arises when both haplotypes of a phased assembly are provided in a single query FASTA, or when the assembler produces near-identical duplicate copies. Ordered by descending alignment identity; `_c1` is always the highest-identity copy. See [Limitations](#limitations-and-expectations) for details. | `chr1A_c1`, `chr1A_c2` |
 | `_f1`, `_f2`, … | Chromosome fragments (contigs not classified as full-length), ordered by descending alignment identity to the reference | `chr1A_f1`, `chr1A_f2` |
 
-Suffixes compose left-to-right: subgenome first, then copy/fragment. For example, `chr1A_B_f1` is the longest fragment of chr1A from query subgenome B.
+Suffixes compose left-to-right: set first, then copy/fragment. For example, `chr1A_s2_f1` is the highest-identity fragment of chr1A from query set 2.
 
 A contig is classified as **full-length** when its syntenic coverage of the reference chromosome meets `--full-length-ref-coverage` (default: 0.70) and/or it has telomeres at both ends. The `_f` suffix therefore flags genuine assembly fragmentation rather than short contigs of arbitrary origin.
 
-Subgenome labels (`_B`, `_C`, …) are inferred by clustering query contigs that all map to the same reference chromosome by sequence-identity similarity. The label letters are assigned in order of cluster size (largest cluster = A, or inherits the reference subgenome letter when the reference already carries one, e.g., `chr1A` → `chr1A_B` means the new subgenome differs from subgenome A).
+Set labels (`_s1`, `_s2`, …) are inferred by clustering query contigs that all map to the same reference chromosome by sequence-identity similarity. Sets are numbered by descending cluster identity, so `_s1` is the set closest to the reference. The reference's own subgenome letter stays part of `<ref>`: `chr1A_s2` is the second query set matching reference chromosome 1A. A chromosome with a single contig keeps the bare reference name even when other chromosomes are split; its set membership is still recorded in `query_subgenome_grp`. Names from earlier dnadis versions used letters (`_B`, `_C`) for the second and later sets and left the first set unsuffixed.
 
 The authoritative implementation is `dnadis/classification/classifier.py:generate_contig_names()`. See [Output Formats](docs/output_formats.md#contig_summarytsv) for the corresponding `contig` TSV column.
 
 ## Query Subgenome Segmentation
 
-When multiple contigs from the query assembly map to the same reference chromosome — as is expected for polyploid genomes where two or more homeologous chromosome sets are present — `dnadis` automatically attempts to assign each contig to a distinct query subgenome. The result appears in the contig name as a subgenome suffix (`_B`, `_C`, …) or, when segmentation is not possible, as a copy suffix (`_c1`, `_c2`, …).
+When multiple contigs from the query assembly map to the same reference chromosome — as is expected for polyploid genomes where two or more homeologous chromosome sets are present — `dnadis` automatically attempts to assign each contig to a distinct query subgenome. The result appears in the contig name as a set suffix (`_s1`, `_s2`, …) or, when segmentation is not possible, as a copy suffix (`_c1`, `_c2`, …).
 
 ### How it works
 
@@ -58,7 +58,7 @@ Subgenome assignment is based on the observation that homeologous chromosomes fr
 
 1. **Global identity clustering**: Alignment identities from all multi-copy reference chromosomes are pooled and fitted with a GMM. The number of components is selected by BIC (Bayesian Information Criterion). Fitting across multiple chromosomes simultaneously provides more signal than fitting each chromosome independently.
 2. **Paired validation**: For chromosomes with exactly _k_ copies, each copy should land in a different cluster. The model is accepted if at least 70% of testable chromosomes satisfy this pairing requirement. If BIC initially selects a model that fails paired validation, the tool attempts rescue by testing alternative component counts.
-3. **Per-chromosome assignment**: Once global cluster means are established, each contig is assigned to the nearest cluster. Chromosomes where all copies land in the same cluster despite rescue attempts are rank-assigned by identity (highest identity = primary subgenome).
+3. **Per-chromosome assignment**: Once global cluster means are established, each contig is assigned to the nearest cluster. Chromosomes where all copies land in the same cluster despite rescue attempts are rank-assigned by identity (highest identity = set `s1`).
 
 No user configuration is required. The feature runs automatically whenever multiple contigs map to the same reference chromosome.
 
@@ -70,7 +70,7 @@ No user configuration is required. The feature runs automatically whenever multi
 
 **Haplotype-collapsed assemblies**: Assemblers that produce a single primary assembly (e.g., in primary/alternate mode) collapse both haplotypes of each chromosome into one contig. There is nothing to segment — the tool correctly reports a single copy with no subgenome suffix. This is expected behavior.
 
-**Haplotype-phased assemblies**: Assemblers like hifiasm (Hi-C mode) produce separate FASTA files per haplotype (e.g., `h1tg`/`h2tg` contigs). If both haplotypes are combined into a single query FASTA, they typically align to the reference at nearly identical identity levels and may not be separable by the GMM. The tool will label them `_c1`/`_c2` (unsegmented copies) rather than `_B` (distinct subgenome). This is the correct outcome: the two copies represent haplotypes of the same subgenome, not distinct homeologous subgenomes. Note that dnadis does not parse assembler-specific contig name conventions (e.g., `h1tg`/`h2tg`) to infer haplotype groupings — its segmentation is based solely on alignment identity to the reference, so the resulting `_c1`/`_c2` ordering may not correspond to the assembler's `h1`/`h2` labels.
+**Haplotype-phased assemblies**: Assemblers like hifiasm (Hi-C mode) produce separate FASTA files per haplotype (e.g., `h1tg`/`h2tg` contigs). If both haplotypes are combined into a single query FASTA, they typically align to the reference at nearly identical identity levels and may not be separable by the GMM. The tool will label them `_c1`/`_c2` (unsegmented copies) rather than `_s1`/`_s2` (distinct subgenome sets). This is the correct outcome: the two copies represent haplotypes of the same subgenome, not distinct homeologous subgenomes. Note that dnadis does not parse assembler-specific contig name conventions (e.g., `h1tg`/`h2tg`) to infer haplotype groupings — its segmentation is based solely on alignment identity to the reference, so the resulting `_c1`/`_c2` ordering may not correspond to the assembler's `h1`/`h2` labels.
 
 **Recommended workflow for phased assemblies**: Rather than combining haplotypes into a single FASTA, run each haplotype as a separate assembly using `--fofn` or `--assembly-dir`. Each haplotype gets clean chromosome names without `_c` suffixes, and the multi-assembly comparison report shows how the haplotypes differ.
 

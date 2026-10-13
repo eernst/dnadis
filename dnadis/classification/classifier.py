@@ -892,8 +892,8 @@ def infer_query_subgenomes(
        for chromosomes with exactly k copies, each copy should land in a
        different cluster.
     2. **Per-chromosome assignment**: Use the global cluster means to assign
-       each contig to a query subgenome.  Single-copy chromosomes are left
-       unsuffixed (group 1).
+       each contig to a query subgenome set (s1, s2, …, highest identity
+       first).  Single-copy chromosomes are left unsuffixed (group 1).
 
     Args:
         classifications: List of ContigClassification objects (modified in place)
@@ -1027,7 +1027,7 @@ def infer_query_subgenomes(
         fragments = [c for c in ref_clfs if c.is_full_length is False]
 
         # Sort copies by cluster score descending so the highest-identity copy
-        # maps to the primary (unsuffixed) subgenome.
+        # maps to set s1.
         copies.sort(
             key=lambda c: qr_cluster_score.get((c.original_name, ref_id), 0.0),
             reverse=True,
@@ -1038,7 +1038,7 @@ def infer_query_subgenomes(
 
         # Rescue: if this chromosome has exactly k full-length copies but they
         # all landed in the same cluster, rank-assign instead (highest
-        # identity → primary, next → B, etc.).  This is safe because the global
+        # identity → s1, next → s2, etc.).  This is safe because the global
         # split is already validated across chromosomes; these are borderline
         # cases where the per-chromosome gap is smaller than the distance
         # between cluster means.
@@ -1054,10 +1054,8 @@ def infer_query_subgenomes(
             list(zip(copies, copy_assign)) + list(zip(fragments, frag_assign))
         ):
             clf.query_subgenome_grp = cluster + 1  # 1-based
-            if cluster == 0:
-                clf.query_subgenome = None  # Primary — no suffix
-            else:
-                clf.query_subgenome = chr(ord('A') + cluster)  # B, C, …
+            # Every set is numbered once a chromosome splits: s1, s2, …
+            clf.query_subgenome = f"s{cluster + 1}"
 
 
 # ----------------------------
@@ -1071,18 +1069,18 @@ def generate_contig_names(
 ) -> Dict[str, str]:
     """Generate new contig names with full-length/fragment distinction.
 
-    Naming scheme: chr<ref>(_<query_subgenome>)?(_c<copy>|_f<frag>)?
+    Naming scheme: chr<ref>(_s<set>)?(_c<copy>|_f<frag>)?
 
     Suffixes compose left-to-right; subgenome comes before copy/fragment:
     - chr1A:           Full-length chr1A, single copy, no resolved subgenome
-    - chr1A_B:         Full-length chr1A, query subgenome B
+    - chr1A_s1/s2:     Full-length chr1A, query subgenome sets 1 and 2
     - chr1A_c1/c2:     Multiple full-length copies, ordered by descending identity
     - chr1A_f1/f2:     Chromosome fragments, ordered by descending identity
-    - chr1A_B_f1:      Highest-identity fragment of chr1A from query subgenome B
+    - chr1A_s2_f1:     Highest-identity fragment of chr1A from query set 2
 
     Copies and fragments are ordered by alignment identity to the reference
-    (highest first), consistent with the subgenome cluster ordering where the
-    primary (unsuffixed) copy has the highest identity.
+    (highest first), consistent with the subgenome set ordering where set s1
+    has the highest identity.
 
     Non-chromosome contigs are named contig_1, contig_2, … by descending length.
 
@@ -1130,8 +1128,8 @@ def generate_contig_names(
 
         # Sort by identity descending (primary key) then length descending
         # (tiebreaker).  Identity-based ordering keeps _c1/_c2 consistent
-        # with subgenome cluster ordering (_B), so the highest-identity
-        # copy is always _c1 / unsuffixed.
+        # with subgenome set ordering (_s1, _s2), so the highest-identity
+        # copy is always _c1 / _s1.
         full_length.sort(
             key=lambda c: (c.seq_identity_vs_ref or 0.0, c.contig_len),
             reverse=True,

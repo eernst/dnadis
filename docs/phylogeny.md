@@ -26,8 +26,9 @@ A leaf is identified by:
 - **ref_subgenome**: suffix of the assigned reference chromosome name
   (e.g. `chr3A` → `A`, `chr3P` → `P`); `None` if the reference is monoploid
 - **query_subgenome**: within-query duplication group inferred by
-  `classifier.infer_query_subgenomes()` (primary haplotype = `None`,
-  secondary = `B`, etc.)
+  `classifier.infer_query_subgenomes()`: `s1`, `s2`, … when the query
+  carries more than one set for that reference subgenome (chromosomes that
+  were not split count as set `s1`), otherwise `None`
 
 The leaf label is `assembly[_ref_sg][_query_sg]`.  Examples:
 
@@ -35,8 +36,8 @@ The leaf label is `assembly[_ref_sg][_query_sg]`.  Examples:
 |----------|--------|----------|--------------|
 | asm1     | None   | None     | `asm1`       |
 | asm1     | `A`    | None     | `asm1_A`     |
-| asm1     | None   | `B`      | `asm1_B`     |
-| asm1     | `A`    | `B`      | `asm1_A_B`   |
+| asm1     | None   | `s2`     | `asm1_s2`    |
+| asm1     | `A`    | `s2`     | `asm1_A_s2`  |
 
 ## How compleasm labels rows under each ploidy combination
 
@@ -51,8 +52,8 @@ single-copy.
 |---|---|---|---|---|
 | Collapsed haploid / diploid query, monoploid reference | 1 hit on the chrom set | `Complete` | `(asm, None, None)`: 1 | ✓ in the single leaf |
 | Polyploid reference, haploid/collapsed query (chr1A *and* chr1P present) | 2 hits — one on the A-mapped contig, one on the P-mapped contig | `Duplicated` | `(asm, A, None)`: 1, `(asm, P, None)`: 1 | ✓ in **both** leaves |
-| Monoploid reference, polyploid query (primary + alt haplotypes on the same chr) | 2 hits — one on each haplotype contig | `Duplicated` | `(asm, None, None)`: 1, `(asm, None, B)`: 1 | ✓ in **both** leaves |
-| Polyploid reference *and* polyploid query | 4 hits — one per (ref_sg × query_sg) combination | `Duplicated` | `(asm, A, None)`: 1, `(asm, A, B)`: 1, `(asm, P, None)`: 1, `(asm, P, B)`: 1 | ✓ in **all four** leaves |
+| Monoploid reference, polyploid query (primary + alt haplotypes on the same chr) | 2 hits — one on each haplotype contig | `Duplicated` | `(asm, None, s1)`: 1, `(asm, None, s2)`: 1 | ✓ in **both** leaves |
+| Polyploid reference *and* polyploid query | 4 hits — one per (ref_sg × query_sg) combination | `Duplicated` | `(asm, A, s1)`: 1, `(asm, A, s2)`: 1, `(asm, P, s1)`: 1, `(asm, P, s2)`: 1 | ✓ in **all four** leaves |
 | Genuine duplication within one subgenome (e.g. tandem duplicate on chr3A) | ≥2 hits, all on contigs assigned to the same subgenome | `Duplicated` | `(asm, A, None)`: 2+ | ✗ in that leaf (excluded from supermatrix for *that* gene) |
 | Subgenome-specific loss (present in A, missing from P) | 1 hit on the A-mapped contig | `Complete` | `(asm, A, None)`: 1, `(asm, P, None)`: 0 | ✓ in A only |
 | Fragmented (partial hit, low score) | hit row with `Fragmented` status | `Fragmented` | excluded at parse time | ✗ everywhere — translated protein is unreliable |

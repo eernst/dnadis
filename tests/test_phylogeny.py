@@ -84,6 +84,7 @@ def _mk_classification(contig: str, ref_id: str, subgenome=None) -> ContigClassi
         ref_gene_proportion=None,
         contig_len=1_000_000,
         query_subgenome=subgenome,
+        query_subgenome_grp=int(subgenome[1:]) if subgenome else None,
     )
 
 
@@ -158,15 +159,39 @@ def test_build_assembly_leaves_combines_ref_and_query_subgenome(tmp_path):
         ],
     )
     classifications = [
-        _mk_classification("ctg1A_primary", "chr1A", subgenome=None),
-        _mk_classification("ctg1A_alt",     "chr1A", subgenome="B"),
-        _mk_classification("ctg1P_primary", "chr1P", subgenome=None),
-        _mk_classification("ctg1P_alt",     "chr1P", subgenome="B"),
+        _mk_classification("ctg1A_primary", "chr1A", subgenome="s1"),
+        _mk_classification("ctg1A_alt",     "chr1A", subgenome="s2"),
+        _mk_classification("ctg1P_primary", "chr1P", subgenome="s1"),
+        _mk_classification("ctg1P_alt",     "chr1P", subgenome="s2"),
     ]
     leaves = build_assembly_leaves("asm1", classifications, _mk_compleasm(ft))
     assert {lb.leaf.label for lb in leaves} == {
-        "asm1_A", "asm1_A_B", "asm1_P", "asm1_P_B",
+        "asm1_A_s1", "asm1_A_s2", "asm1_P_s1", "asm1_P_s2",
     }
+
+
+def test_build_assembly_leaves_pools_unsplit_chromosomes_into_set_1(tmp_path):
+    """An unsplit chromosome joins set s1 when its reference subgenome has
+    more than one query set; a single-set reference subgenome stays bare."""
+    ft = _write_full_table(
+        tmp_path / "full_table.tsv",
+        [
+            ("g1", "Complete", "ctg1A_s1", 1, 100, "+", 90.0, 99),
+            ("g1", "Duplicated", "ctg1A_s2", 1, 100, "+", 90.0, 99),
+            ("g2", "Complete", "ctg2A_lone", 1, 100, "+", 90.0, 99),
+            ("g3", "Complete", "ctg1P_lone", 1, 100, "+", 90.0, 99),
+        ],
+    )
+    classifications = [
+        _mk_classification("ctg1A_s1", "chr1A", subgenome="s1"),
+        _mk_classification("ctg1A_s2", "chr1A", subgenome="s2"),
+        _mk_classification("ctg2A_lone", "chr2A", subgenome=None),
+        _mk_classification("ctg1P_lone", "chr1P", subgenome=None),
+    ]
+    leaves = {lb.leaf.label: lb for lb in
+              build_assembly_leaves("asm1", classifications, _mk_compleasm(ft))}
+    assert set(leaves) == {"asm1_A_s1", "asm1_A_s2", "asm1_P"}
+    assert set(leaves["asm1_A_s1"].hits_by_busco) == {"g1", "g2"}
 
 
 def test_build_assembly_leaves_skips_unclassified_contigs(tmp_path):
