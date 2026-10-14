@@ -185,6 +185,12 @@ class ContigClassification:
     # Query subgenome inference (when multiple contigs map to same ref)
     query_subgenome: Optional[str] = None  # "s1", "s2", etc. or None if not split
     query_subgenome_grp: Optional[int] = None  # Numeric cluster ID (1, 2, 3...)
+    # How the set was decided on a split reference: "copy" (full-length copy),
+    # "footprint" (the only set whose copies do not already cover the
+    # fragment's reference region), "score" (nearest cluster score),
+    # "extra_copy" (every set already covers the fragment's region; left
+    # without a set).  None when the reference is not split.
+    subgenome_basis: Optional[str] = None
     seq_identity_vs_ref: Optional[float] = None  # Sequence identity (0.0-1.0)
     # Collinearity score for assigned reference (fraction of aligned bp in reference order)
     collinearity_score: Optional[float] = None  # 0.0-1.0, None if no chains

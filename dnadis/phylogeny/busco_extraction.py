@@ -169,7 +169,7 @@ def _query_set_labels(
             multi_set_sgs.add(split_chrom_subgenome(clf.assigned_ref_id)[1])
     labels: Dict[str, Optional[str]] = {}
     for clf in classifications:
-        if not clf.assigned_ref_id:
+        if not clf.assigned_ref_id or clf.subgenome_basis == "extra_copy":
             continue
         ref_sg = split_chrom_subgenome(clf.assigned_ref_id)[1]
         labels[clf.original_name] = (
@@ -207,6 +207,9 @@ def build_assembly_leaves(
     set_labels = _query_set_labels(classifications)
     for clf in classifications:
         if clf.classification not in ("chrom_assigned", "chrom_fragment"):
+            continue
+        # Extra copies of a region belong to no query set.
+        if clf.subgenome_basis == "extra_copy":
             continue
         ref_sg: Optional[str] = None
         if clf.assigned_ref_id:
@@ -500,6 +503,8 @@ def build_outgroup_leaves(
     set_labels = _query_set_labels(classifications)
     for clf in classifications:
         if clf.classification not in ("chrom_assigned", "chrom_fragment") or not clf.assigned_ref_id:
+            continue
+        if clf.subgenome_basis == "extra_copy":
             continue
         _, ref_sg = split_chrom_subgenome(clf.assigned_ref_id)
         if ref_sg == "NA":

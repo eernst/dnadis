@@ -760,12 +760,80 @@ def _gmm_1d_bic(
     return best_k, weights, means, stds, labels
 
 
+# Minimum overlap, as a fraction of the smaller reference footprint, for two
+# contigs on the same reference chromosome to count as separate copies.
+_COPY_MIN_REF_OVERLAP = 0.5
+
+
+def _overlapping_copies(
+    ref_clfs: List['ContigClassification'],
+    ref_id: str,
+    ref_footprints: Dict[Tuple[str, str], List[Tuple[int, int]]],
+    min_overlap: float = _COPY_MIN_REF_OVERLAP,
+) -> List['ContigClassification']:
+    """Return the contigs that overlap another contig's reference footprint.
+
+    Homeologous copies align to the same reference region.  Contigs that
+    tile different parts of a reference chromosome are pieces of one copy,
+    so they are not evidence of a subgenome split.  Two contigs overlap when
+    the shared span is at least ``min_overlap`` of the smaller footprint.
+    """
+    fps = [ref_footprints.get((c.original_name, ref_id)) or [] for c in ref_clfs]
+    keep = [False] * len(ref_clfs)
+    for i in range(len(ref_clfs)):
+        for j in range(i + 1, len(ref_clfs)):
+            if not fps[i] or not fps[j]:
+                continue
+            frac = max(
+                _containment_fraction(fps[i], fps[j]),
+                _containment_fraction(fps[j], fps[i]),
+            )
+            if frac >= min_overlap:
+                keep[i] = keep[j] = True
+    return [c for c, k in zip(ref_clfs, keep) if k]
+
+
+# A copy "covers" a fragment's reference region when at least this fraction of
+# the fragment's footprint lies within the copy's footprint, and "lacks" it
+# below the second threshold.
+_GAP_FILL_COVERED = 0.5
+_GAP_FILL_LACKING = 0.2
+
+
+def _copies_covering_fragment(
+    fragment: 'ContigClassification',
+    copies: List['ContigClassification'],
+    ref_id: str,
+    ref_footprints: Dict[Tuple[str, str], List[Tuple[int, int]]],
+) -> Optional[List[int]]:
+    """Indices of the full-length copies that cover a fragment's reference region.
+
+    A copy covers the region when it contains at least ``_GAP_FILL_COVERED``
+    of the fragment's footprint and lacks it below ``_GAP_FILL_LACKING``.
+    Returns None when the fragment has no footprint, there are no copies, or
+    any copy falls between the two thresholds.
+    """
+    frag_fp = ref_footprints.get((fragment.original_name, ref_id))
+    if not frag_fp or not copies:
+        return None
+    covering = []
+    for i, copy in enumerate(copies):
+        copy_fp = ref_footprints.get((copy.original_name, ref_id)) or []
+        frac = _containment_fraction(frag_fp, copy_fp) if copy_fp else 0.0
+        if frac >= _GAP_FILL_COVERED:
+            covering.append(i)
+        elif frac >= _GAP_FILL_LACKING:
+            return None
+    return covering
+
+
 def _select_subgenome_k(
     all_idents: List[float],
     ref_to_clfs: Dict[str, List['ContigClassification']],
     ref_ids: List[str],
     qr_cluster_score: Dict[Tuple[str, str], float],
     min_consistency: float = 0.70,
+    ref_footprints: Optional[Dict[Tuple[str, str], List[Tuple[int, int]]]] = None,
 ) -> Tuple[int, List[float], List[float]]:
     """Select the number of query subgenomes using GMM + paired validation.
 
@@ -790,6 +858,10 @@ def _select_subgenome_k(
             for clustering (same definition as values in ``all_idents``).
         min_consistency: Minimum fraction of 2-copy chromosomes that must
             have their copies in different clusters (default 0.70).
+        ref_footprints: Optional ``(contig, ref_id) -> merged reference
+            intervals``.  When given, only contigs whose footprint overlaps
+            another contig's on the same reference count as copies in the
+            paired validation (see :func:`_overlapping_copies`).
 
     Returns:
         (best_k, sorted_means, sorted_stds) with means sorted descending.
@@ -808,6 +880,9 @@ def _select_subgenome_k(
         may have more than k contigs (e.g., one full-length + several
         fragments) — the key question is whether the contigs span k
         different identity clusters, not whether there are exactly k copies.
+        With ``ref_footprints``, only contigs that overlap another contig on
+        the reference are considered, since non-overlapping pieces cannot be
+        separate copies.
         """
         if k < 2:
             return True
@@ -816,6 +891,8 @@ def _select_subgenome_k(
         n_consistent = 0
         for ref_id in ref_ids:
             ref_clfs = ref_to_clfs[ref_id]
+            if ref_footprints is not None:
+                ref_clfs = _overlapping_copies(ref_clfs, ref_id, ref_footprints)
             if len(ref_clfs) < k:
                 continue
             n_testable += 1
@@ -881,6 +958,7 @@ def infer_query_subgenomes(
     qr_best_chain_ident: Dict[Tuple[str, str], float],
     qr_cluster_score: Optional[Dict[Tuple[str, str], float]] = None,
     subgenome_k: float = 1.0,
+    ref_footprints: Optional[Dict[Tuple[str, str], List[Tuple[int, int]]]] = None,
 ) -> None:
     """Infer query subgenomes when multiple contigs map to the same reference.
 
@@ -905,6 +983,13 @@ def infer_query_subgenomes(
             ``ident × union_bp / contig_len``) to spread near-tied homeologous
             copies whose chain identities agree to several decimal places.
         subgenome_k: Not used by GMM (kept for API compatibility)
+        ref_footprints: Optional ``(contig, ref_id) -> merged reference
+            intervals``.  When given, the paired validation counts only
+            contigs that overlap on the reference as copies, so pieces of one
+            copy tiling a chromosome cannot validate a split on their own,
+            and a fragment is never placed in the set of a copy that
+            already covers its reference region; one whose region every set
+            already covers gets no set (see :func:`_copies_covering_fragment`).
     """
     # Collect identities for all reference-anchored contigs.  chrom_fragment
     # contigs (sub-chromosome-length, is_full_length=False) participate exactly
@@ -971,6 +1056,7 @@ def infer_query_subgenomes(
         # Fit candidate GMMs (k=1..3)
         best_k, sorted_means, sorted_stds = _select_subgenome_k(
             all_idents, ref_to_clfs, ref_ids, qr_cluster_score,
+            ref_footprints=ref_footprints,
         )
 
         ref_sg_gmm[ref_sg] = (best_k, sorted_means)
@@ -1046,13 +1132,42 @@ def infer_query_subgenomes(
             # copies is sorted by score descending above
             copy_assign = list(range(gmm_k))
 
-        # Fragments follow their nearest cluster mean — a fragment is not an
-        # independent copy, so it never participates in the rescue.
-        frag_assign = [nearest_cluster(c) for c in fragments]
+        # A fragment is not an independent copy, so it never participates in
+        # the rescue.  A fragment cannot be a second, non-identical piece of
+        # a copy that already spans its reference region, so the sets of
+        # copies covering that region are ruled out.  If one set remains the
+        # fragment joins it; if none remain it is an extra copy of the region
+        # (collapsed duplicate, divergent haplotig, segmental duplication)
+        # and gets no set.  Otherwise the nearest cluster mean among the
+        # remaining sets decides.  The cluster score rises as a contig's
+        # unaligned (repeat) fraction falls, so it is biased by contig size
+        # and is used only when the footprints do not decide.
+        frag_assign: List[Tuple[ContigClassification, Optional[int], str]] = []
+        for frag in fragments:
+            covering = None
+            if ref_footprints is not None:
+                covering = _copies_covering_fragment(
+                    frag, copies, ref_id, ref_footprints,
+                )
+            covered_sets = {copy_assign[i] for i in covering} if covering else set()
+            candidates = [j for j in range(gmm_k) if j not in covered_sets]
+            if not candidates:
+                frag_assign.append((frag, None, "extra_copy"))
+            elif len(candidates) == 1:
+                frag_assign.append((frag, candidates[0], "footprint"))
+            else:
+                score = qr_cluster_score.get((frag.original_name, ref_id), 0.0)
+                cluster = min(candidates, key=lambda j: abs(score - sorted_means[j]))
+                frag_assign.append((frag, cluster, "score"))
 
-        for clf, cluster in (
-            list(zip(copies, copy_assign)) + list(zip(fragments, frag_assign))
+        for clf, cluster, basis in (
+            [(c, a, "copy") for c, a in zip(copies, copy_assign)] + frag_assign
         ):
+            clf.subgenome_basis = basis
+            if cluster is None:
+                clf.query_subgenome = None
+                clf.query_subgenome_grp = None
+                continue
             clf.query_subgenome_grp = cluster + 1  # 1-based
             # Every set is numbered once a chromosome splits: s1, s2, …
             clf.query_subgenome = f"s{cluster + 1}"
@@ -1982,6 +2097,7 @@ def classify_all_contigs(
             qr_best_chain_ident=ev.qr_best_chain_ident,
             qr_cluster_score=qr_cluster_score,
             subgenome_k=subgenome_k,
+            ref_footprints=ref_footprints,
         )
 
     assign_contig_names(

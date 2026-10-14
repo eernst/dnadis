@@ -194,9 +194,10 @@ def _group_contigs_by_haplotype(
     """Group contigs by (ref_id, query_subgenome_grp) for haplotype-aware scaffolding.
 
     Pass 1: Chromosome-assigned contigs grouped by (assigned_ref_id, grp).
-    Pass 2: chrom_fragment contigs assigned to the nearest haplotype group by
-    identity (unique arms too short to be full chromosomes; chrom_debris is
-    excluded as redundant with already-placed sequence). With
+    Pass 2: chrom_fragment contigs join the group of their query subgenome
+    set, or the nearest haplotype group by identity when they have none
+    (unique arms too short to be full chromosomes; chrom_debris and extra
+    copies of a region every set already spans are excluded as redundant). With
     ``include_rdna``, rDNA contigs that carry an assigned_ref_id (they passed
     the synteny gate before being moved to rDNA) are candidates too; their
     placement rests on rDNA similarity shared between NORs.
@@ -214,9 +215,13 @@ def _group_contigs_by_haplotype(
     groups: Dict[Tuple[str, int], List[str]] = defaultdict(list)
     clf_lookup = {clf.original_name: clf for clf in classifications}
 
-    # Pass 1: chromosome-assigned contigs
+    # Pass 1: chromosome-assigned contigs.  An extra copy of a region already
+    # spanned by every set (a sub-full-length chrom_assigned contig can be
+    # one) would duplicate sequence in the pseudomolecule.
     assigned_contigs: Set[str] = set()
     for clf in classifications:
+        if clf.subgenome_basis == "extra_copy":
+            continue
         if clf.classification == "chrom_assigned" and clf.assigned_ref_id:
             grp = clf.query_subgenome_grp or 1
             groups[(clf.assigned_ref_id, grp)].append(clf.original_name)
@@ -239,6 +244,8 @@ def _group_contigs_by_haplotype(
         )
         if clf.classification != "chrom_fragment" and not is_rdna_candidate:
             continue
+        if clf.subgenome_basis == "extra_copy":
+            continue
 
         ref_id = clf.assigned_ref_id or best_ref.get(clf.original_name, "")
         if not ref_id:
@@ -255,6 +262,10 @@ def _group_contigs_by_haplotype(
         elif len(available_grps) == 1:
             # Single haplotype group for this ref - assign directly
             target_grp = next(iter(available_grps))
+        elif clf.query_subgenome and clf.query_subgenome_grp in available_grps:
+            # Follow the set chosen by subgenome inference, so the scaffold
+            # matches the contig name.
+            target_grp = clf.query_subgenome_grp
         else:
             # Multiple groups - assign by closest identity
             frag_ident = qr_best_chain_ident.get((clf.original_name, ref_id), 0.0)

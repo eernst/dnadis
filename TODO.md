@@ -1,5 +1,25 @@
 # TODO
 
+## Classification for extra copies of a chromosomal region
+
+On a chromosome split into query subgenome sets, a fragment whose reference
+footprint is already covered by every full-length copy, but which is not
+near-identical to any of them (so phase-5 chromosome debris misses it), is
+flagged `subgenome_basis = extra_copy` and left without a set. It stays
+`chrom_fragment`. These contigs mix several origins that read depth partly
+separates:
+
+- collapsed duplicates or amplified regions (depth ratio ~2×)
+- divergent haplotigs of one homeolog (depth ratio ~0.5×)
+- segmental duplications or an extra homeolog of a region (depth ratio ~1×)
+
+Consider a dedicated classification (e.g. `chrom_extra_copy`) with its own
+FASTA, report colour and comparison columns, annotated with depth ratio.
+Related: the footprint-containment route to `chrom_debris` gates on identity
+to the *reference* (`--chr-debris-min-identity`), which never passes against
+a divergent reference; a containment rule based on coverage by the assembled
+copies would catch these contigs regardless of reference distance.
+
 ## True contaminant (adapter / vector) detection phase
 
 The centrifuger screen (phase 6) classifies contigs by taxonomy and is best

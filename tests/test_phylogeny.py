@@ -170,6 +170,30 @@ def test_build_assembly_leaves_combines_ref_and_query_subgenome(tmp_path):
     }
 
 
+def test_build_assembly_leaves_skips_extra_copy_fragments(tmp_path):
+    """An extra-copy fragment (no set) adds no BUSCOs to any leaf."""
+    ft = _write_full_table(
+        tmp_path / "full_table.tsv",
+        [
+            ("g1", "Duplicated", "ctg_s1", 1, 100, "+", 90.0, 99),
+            ("g1", "Duplicated", "ctg_s2", 1, 100, "+", 90.0, 99),
+            ("g1", "Duplicated", "ctg_extra", 1, 100, "+", 90.0, 99),
+        ],
+    )
+    extra = _mk_classification("ctg_extra", "chr1A")
+    extra.classification = "chrom_fragment"
+    extra.subgenome_basis = "extra_copy"
+    classifications = [
+        _mk_classification("ctg_s1", "chr1A", subgenome="s1"),
+        _mk_classification("ctg_s2", "chr1A", subgenome="s2"),
+        extra,
+    ]
+    leaves = build_assembly_leaves("asm1", classifications, _mk_compleasm(ft))
+    by_label = {lb.leaf.label: lb for lb in leaves}
+    assert set(by_label) == {"asm1_A_s1", "asm1_A_s2"}
+    assert by_label["asm1_A_s1"].single_copy_genes() == {"g1"}
+
+
 def test_build_assembly_leaves_pools_unsplit_chromosomes_into_set_1(tmp_path):
     """An unsplit chromosome joins set s1 when its reference subgenome has
     more than one query set; a single-set reference subgenome stays bare."""
