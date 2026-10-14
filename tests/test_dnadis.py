@@ -2082,6 +2082,211 @@ def test_infer_query_subgenomes_fragment_does_not_block_split():
     )
 
 
+def _chromosome_plus_fragment_locus(n_refs, frag_ref_start):
+    """Build loci of one full-length contig plus one fragment per reference.
+
+    Full-length contigs score ~0.37 and fragments ~0.60, a bimodal split.
+    The full-length footprint covers reference 0-5 Mb; the fragment covers
+    ``frag_ref_start`` + 200 kb.
+    """
+    from dnadis.models import ContigClassification
+
+    clfs, scores, footprints = [], {}, {}
+    for i in range(1, n_refs + 1):
+        ref_id = f"chr{i}A"
+        for name, full, score, fp in [
+            (f"chr_{i}", True, 0.37 + 0.002 * i, [(0, 5_000_000)]),
+            (f"frag_{i}", False, 0.60 + 0.002 * i,
+             [(frag_ref_start, frag_ref_start + 200_000)]),
+        ]:
+            c = ContigClassification(
+                original_name=name, new_name="",
+                classification="chrom_assigned" if full else "chrom_fragment",
+                reversed=False, cobiont_taxid=None, cobiont_sci=None,
+                assigned_ref_id=ref_id, ref_gene_proportion=0.5,
+                contig_len=20_000_000 if full else 200_000,
+            )
+            c.is_full_length = full
+            clfs.append(c)
+            scores[(name, ref_id)] = score
+            footprints[(name, ref_id)] = fp
+    return clfs, scores, footprints
+
+
+def test_infer_query_subgenomes_tiling_fragments_do_not_split():
+    """Fragments that fill gaps beside their chromosome are not a second copy.
+
+    Their scores separate from the full-length contigs, but their reference
+    footprints do not overlap, so the split is not validated.
+    """
+    from dnadis.classification.classifier import infer_query_subgenomes
+
+    clfs, scores, footprints = _chromosome_plus_fragment_locus(9, 6_000_000)
+    infer_query_subgenomes(
+        clfs, scores, qr_cluster_score=scores, ref_footprints=footprints,
+    )
+    assert all(c.query_subgenome is None for c in clfs)
+    assert all(c.query_subgenome_grp == 1 for c in clfs)
+
+
+def test_infer_query_subgenomes_overlapping_fragments_still_split():
+    """Fragments overlapping their chromosome on the reference count as copies."""
+    from dnadis.classification.classifier import infer_query_subgenomes
+
+    clfs, scores, footprints = _chromosome_plus_fragment_locus(9, 1_000_000)
+    infer_query_subgenomes(
+        clfs, scores, qr_cluster_score=scores, ref_footprints=footprints,
+    )
+    by_name = {c.original_name: c for c in clfs}
+    assert by_name["frag_1"].query_subgenome == "s1"
+    assert by_name["chr_1"].query_subgenome == "s2"
+
+
+def _two_copy_loci_with_fragment(frag_fp):
+    """Nine reference chromosomes, each with two full-length homeologs.
+
+    Set s1 copies score ~0.69 and s2 copies ~0.60.  On chr1A the s1 copy
+    spans reference 0-10 Mb and the s2 copy spans 0-4 Mb and 6-10 Mb.  A
+    fragment on chr1A with footprint ``frag_fp`` scores like set s1.
+    """
+    from dnadis.models import ContigClassification
+
+    clfs, scores, footprints = [], {}, {}
+
+    def add(name, ref_id, full, score, fp, length):
+        c = ContigClassification(
+            original_name=name, new_name="",
+            classification="chrom_assigned" if full else "chrom_fragment",
+            reversed=False, cobiont_taxid=None, cobiont_sci=None,
+            assigned_ref_id=ref_id, ref_gene_proportion=0.5,
+            contig_len=length,
+        )
+        c.is_full_length = full
+        clfs.append(c)
+        scores[(name, ref_id)] = score
+        footprints[(name, ref_id)] = fp
+        return c
+
+    for i in range(1, 10):
+        ref_id = f"chr{i}A"
+        s2_fp = [(0, 4_000_000), (6_000_000, 10_000_000)] if i == 1 else [(0, 10_000_000)]
+        add(f"hi_{i}", ref_id, True, 0.69 + 0.001 * i, [(0, 10_000_000)], 20_000_000)
+        add(f"lo_{i}", ref_id, True, 0.60 + 0.001 * i, s2_fp, 20_000_000)
+    frag = add("frag", "chr1A", False, 0.70, frag_fp, 2_000_000)
+    return clfs, scores, footprints, frag
+
+
+def test_infer_query_subgenomes_fragment_joins_copy_with_reference_gap():
+    """A fragment filling one homeolog's reference gap joins that homeolog,
+    even when its cluster score is nearer the other set."""
+    from dnadis.classification.classifier import infer_query_subgenomes
+
+    clfs, scores, footprints, frag = _two_copy_loci_with_fragment(
+        [(4_100_000, 5_900_000)]
+    )
+    infer_query_subgenomes(
+        clfs, scores, qr_cluster_score=scores, ref_footprints=footprints,
+    )
+    assert frag.query_subgenome == "s2"
+
+
+def test_infer_query_subgenomes_fragment_covered_by_both_is_extra_copy():
+    """A fragment whose region every copy already covers gets no set."""
+    from dnadis.classification.classifier import infer_query_subgenomes
+
+    clfs, scores, footprints, frag = _two_copy_loci_with_fragment(
+        [(7_000_000, 9_000_000)]
+    )
+    infer_query_subgenomes(
+        clfs, scores, qr_cluster_score=scores, ref_footprints=footprints,
+    )
+    assert frag.query_subgenome is None
+    assert frag.query_subgenome_grp is None
+    assert frag.subgenome_basis == "extra_copy"
+    by_name = {c.original_name: c for c in clfs}
+    assert by_name["hi_1"].subgenome_basis == "copy"
+
+
+def test_infer_query_subgenomes_fragment_outside_both_uses_score():
+    """With no copy covering the region, a fragment follows its cluster score."""
+    from dnadis.classification.classifier import infer_query_subgenomes
+
+    clfs, scores, footprints, frag = _two_copy_loci_with_fragment(
+        [(12_000_000, 14_000_000)]
+    )
+    infer_query_subgenomes(
+        clfs, scores, qr_cluster_score=scores, ref_footprints=footprints,
+    )
+    assert frag.query_subgenome == "s1"
+    assert frag.subgenome_basis == "score"
+
+
+def test_infer_query_subgenomes_fragment_inside_single_copy_takes_other_set():
+    """A fragment inside the region of a reference's only full-length copy
+    belongs to the other set, even when it scores like that copy's set."""
+    from dnadis.classification.classifier import infer_query_subgenomes
+
+    clfs, scores, footprints, _ = _two_copy_loci_with_fragment([(0, 1)])
+    # chr9A keeps only its s1 copy; its s2 homeolog is a fragment.
+    clfs = [c for c in clfs if c.original_name not in ("lo_9", "frag")]
+    from dnadis.models import ContigClassification
+    frag = ContigClassification(
+        original_name="frag9", new_name="", classification="chrom_fragment",
+        reversed=False, cobiont_taxid=None, cobiont_sci=None,
+        assigned_ref_id="chr9A", ref_gene_proportion=0.5, contig_len=1_000_000,
+    )
+    frag.is_full_length = False
+    clfs.append(frag)
+    scores[("frag9", "chr9A")] = 0.70
+    footprints[("frag9", "chr9A")] = [(2_000_000, 3_000_000)]
+    infer_query_subgenomes(
+        clfs, scores, qr_cluster_score=scores, ref_footprints=footprints,
+    )
+    assert frag.query_subgenome == "s2"
+    assert frag.subgenome_basis == "footprint"
+
+
+def test_scaffold_fragment_follows_query_subgenome_set():
+    """On a split reference, a fragment joins its own set's scaffold group
+    rather than the group with the nearest mean identity; extra copies are
+    left out."""
+    from dnadis.output.scaffolding import _group_contigs_by_haplotype
+    from dnadis.models import ContigClassification
+
+    def mk(name, cls, grp, basis, full):
+        return ContigClassification(
+            original_name=name, new_name=name, classification=cls,
+            reversed=False, cobiont_taxid=None, cobiont_sci=None,
+            assigned_ref_id="chr1A", ref_gene_proportion=0.5,
+            contig_len=20_000_000 if full else 1_000_000,
+            is_full_length=full,
+            query_subgenome=f"s{grp}" if grp else None,
+            query_subgenome_grp=grp, subgenome_basis=basis,
+        )
+
+    clfs = [
+        mk("hi", "chrom_assigned", 1, "copy", True),
+        mk("lo", "chrom_assigned", 2, "copy", True),
+        mk("gap", "chrom_fragment", 2, "footprint", False),
+        mk("extra", "chrom_fragment", None, "extra_copy", False),
+        mk("extra_long", "chrom_assigned", None, "extra_copy", False),
+    ]
+    names = [c.original_name for c in clfs]
+    groups = _group_contigs_by_haplotype(
+        classifications=clfs,
+        best_ref={n: "chr1A" for n in names},
+        contig_refs={n: {"chr1A"} for n in names},
+        # "gap" has an s1-like identity but was placed in s2.
+        qr_best_chain_ident={
+            ("hi", "chr1A"): 0.70, ("lo", "chr1A"): 0.60,
+            ("gap", "chr1A"): 0.71, ("extra", "chr1A"): 0.65,
+            ("extra_long", "chr1A"): 0.65,
+        },
+    )
+    assert groups[("chr1A", 1)] == ["hi"]
+    assert groups[("chr1A", 2)] == ["lo", "gap"]
+
+
 # ===================================================================
 # Reciprocal translocation assignment tests
 # ===================================================================

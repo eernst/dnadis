@@ -56,6 +56,7 @@ These columns describe whether a contig represents a complete chromosome based o
 | `is_full_length` | yes/no | Whether the contig is classified as full-length (based on telomeres and `ref_coverage ≥ --full-length-ref-coverage`) |
 | `full_length_confidence` | string | Confidence of full-length call: `high` (both telomeres), `medium` (one telomere + high coverage), `low` (coverage-only) |
 | `query_subgenome` | string | Inferred query subgenome set (`s1`, `s2`, …; `s1` = highest identity to the reference) from identity-scaled clustering, or empty when the chromosome was not split |
+| `subgenome_basis` | string | How `query_subgenome` was decided on a split chromosome: `copy` (full-length copy, by clustering), `footprint` (the only set whose full-length copies do not already cover the fragment's reference region), `score` (fragment joined the nearest cluster), `extra_copy` (every set's copies already cover the fragment's reference region; no set, excluded from scaffolding and phylogeny set leaves). Empty when the chromosome was not split |
 | `seq_identity_vs_ref` | float | Best-chain alignment identity to the assigned reference chromosome (0.0-1.0) |
 | `has_5p_telomere` | yes/no | Telomere detected at the **start** (first 10kb) of the **raw input** contig |
 | `has_3p_telomere` | yes/no | Telomere detected at the **end** (last 10kb) of the **raw input** contig |

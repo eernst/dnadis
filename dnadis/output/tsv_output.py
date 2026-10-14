@@ -118,6 +118,7 @@ def write_contig_summary_tsv(
         "is_full_length",
         "full_length_confidence",
         "query_subgenome",
+        "subgenome_basis",
         "seq_identity_vs_ref",
         "has_5p_telomere",
         "has_3p_telomere",
@@ -262,6 +263,7 @@ def write_contig_summary_tsv(
             is_full_length = "yes" if clf and clf.is_full_length else ("no" if clf and clf.is_full_length is not None else "")
             fl_confidence = clf.full_length_confidence if clf and clf.full_length_confidence else ""
             query_subgenome = clf.query_subgenome if clf and clf.query_subgenome else ""
+            subgenome_basis = clf.subgenome_basis if clf and clf.subgenome_basis else ""
             seq_identity = f"{clf.seq_identity_vs_ref:.6f}" if clf and clf.seq_identity_vs_ref is not None else ""
             has_5p_telo = "yes" if clf and clf.has_5p_telomere else ("no" if clf and clf.has_5p_telomere is not None else "")
             has_3p_telo = "yes" if clf and clf.has_3p_telomere else ("no" if clf and clf.has_3p_telomere is not None else "")
@@ -311,6 +313,7 @@ def write_contig_summary_tsv(
                         is_full_length,
                         fl_confidence,
                         query_subgenome,
+                        subgenome_basis,
                         seq_identity,
                         has_5p_telo,
                         has_3p_telo,
