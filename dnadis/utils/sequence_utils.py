@@ -6,6 +6,7 @@ Contains functions for FASTA reading, writing, and DNA sequence manipulation.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -107,6 +108,47 @@ def write_fasta(sequences: Dict[str, str], output_path: Path, wrap: int = 80) ->
             out.write(f">{name}\n")
             for i in range(0, len(seq), wrap):
                 out.write(seq[i:i + wrap] + "\n")
+
+
+def _fasta_records(sequences: Dict[str, str], wrap: int):
+    """Yield the text of each FASTA record as written by :func:`write_fasta`."""
+    for name, seq in sequences.items():
+        lines = [f">{name}\n"]
+        lines.extend(seq[i:i + wrap] + "\n" for i in range(0, len(seq), wrap))
+        yield "".join(lines)
+
+
+def write_fasta_if_changed(
+    sequences: Dict[str, str], output_path: Path, wrap: int = 80,
+) -> bool:
+    """Write a FASTA unless *output_path* already holds exactly that content.
+
+    Leaving an unchanged file untouched keeps its mtime, so downstream
+    outputs checked with ``io_utils.output_is_current`` stay reusable.
+    Returns True if the file was written.
+    """
+    new_size = 0
+    new_hash = hashlib.md5()
+    for rec in _fasta_records(sequences, wrap):
+        b = rec.encode()
+        new_size += len(b)
+        new_hash.update(b)
+    try:
+        if output_path.stat().st_size == new_size:
+            old_hash = hashlib.md5()
+            with output_path.open("rb") as fh:
+                for chunk in iter(lambda: fh.read(1 << 20), b""):
+                    old_hash.update(chunk)
+            if old_hash.digest() == new_hash.digest():
+                return False
+    except OSError:
+        pass
+    tmp_path = output_path.with_name(output_path.name + ".tmp")
+    with tmp_path.open("w") as out:
+        for rec in _fasta_records(sequences, wrap):
+            out.write(rec)
+    tmp_path.replace(output_path)
+    return True
 
 
 def write_filtered_fasta(

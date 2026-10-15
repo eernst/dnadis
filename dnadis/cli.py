@@ -108,7 +108,7 @@ def _positive_int(value: str) -> int:
         raise argparse.ArgumentTypeError(f"Value must be positive, got {value}")
     return ivalue
 
-from dnadis.utils.io_utils import file_exists_and_valid
+from dnadis.utils.io_utils import file_exists_and_valid, output_is_current
 from dnadis.utils.sequence_utils import (
     calculate_gc_content_fasta,
     calculate_gc_stats,
@@ -579,7 +579,7 @@ def run_assembly(
     if args.synteny_mode == "protein":
         logger.phase("Phase 2: Protein-anchor synteny analysis")
 
-        if file_exists_and_valid(miniprot_paf_gz):
+        if output_is_current(miniprot_paf_gz, qry, proteins_faa):
             logger.info(f"Reusing cached miniprot PAF: {miniprot_paf_gz}")
             synteny_future = LocalFuture(lambda: None)
         else:
@@ -615,7 +615,7 @@ def run_assembly(
         logger.info("Note: Nucleotide mode is optimized for within-species or closely related genomes. "
                     "For highly divergent species, protein mode may provide more reliable assignments.")
 
-        if file_exists_and_valid(paf_gz):
+        if output_is_current(paf_gz, ref, qry):
             logger.info(f"Reusing cached minimap2 PAF: {paf_gz}")
             synteny_future = LocalFuture(lambda: None)
         else:
@@ -2656,7 +2656,7 @@ def main():
                         left_fasta = left.per_subgenome_chrs[sg]
                         right_fasta = right.per_subgenome_chrs[sg]
                         macro_tsv = Path(str(pair_prefix) + ".macro_blocks.tsv")
-                        if file_exists_and_valid(macro_tsv):
+                        if output_is_current(macro_tsv, left_fasta, right_fasta):
                             logger.info(f"Reusing cached pairwise: {macro_tsv}")
                             pairwise_pairs.append((pair_name, macro_tsv))
                         else:
@@ -2690,7 +2690,7 @@ def main():
                     left_fasta = Path(str(left.outprefix) + ".chrs.fasta")
                     right_fasta = Path(str(right.outprefix) + ".chrs.fasta")
                     macro_tsv = Path(str(pair_prefix) + ".macro_blocks.tsv")
-                    if file_exists_and_valid(macro_tsv):
+                    if output_is_current(macro_tsv, left_fasta, right_fasta):
                         logger.info(f"Reusing cached pairwise: {macro_tsv}")
                         pairwise_pairs.append((pair_name, macro_tsv))
                     else:
@@ -2755,7 +2755,7 @@ def main():
                     pair_prefix = nonadj_dir / pair_name
                     left_fasta, right_fasta = get_fasta(left), get_fasta(right)
                     macro_tsv = Path(str(pair_prefix) + ".macro_blocks.tsv")
-                    if file_exists_and_valid(macro_tsv):
+                    if output_is_current(macro_tsv, left_fasta, right_fasta):
                         logger.info(f"Reusing cached pairwise: {macro_tsv}")
                         pairwise_pairs.append((pair_name, macro_tsv))
                     else:

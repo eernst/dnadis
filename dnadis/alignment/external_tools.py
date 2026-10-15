@@ -199,7 +199,7 @@ def run_minimap2_synteny(
     Raises:
         RuntimeError: If neither mm2plus nor minimap2 is available
     """
-    if file_exists_and_valid(paf_gz_out):
+    if output_is_current(paf_gz_out, ref, qry):
         logger.info(f"PAF.gz exists, reusing: {paf_gz_out}")
         return
 
@@ -296,7 +296,7 @@ def run_miniprot(
     Here target = query genome, query = reference proteins.
     Output is gzipped PAF.
     """
-    if file_exists_and_valid(paf_gz_out):
+    if output_is_current(paf_gz_out, query_fasta, proteins_faa):
         logger.info(f"miniprot PAF.gz exists, reusing: {paf_gz_out}")
         return
 
