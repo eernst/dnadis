@@ -793,6 +793,59 @@ def _overlapping_copies(
     return [c for c, k in zip(ref_clfs, keep) if k]
 
 
+def demote_tiling_full_length(
+    classifications: List['ContigClassification'],
+    ref_footprints: Dict[Tuple[str, str], List[Tuple[int, int]]],
+    min_overlap: float = _COPY_MIN_REF_OVERLAP,
+) -> int:
+    """Mark full-length contigs that tile another one's reference as fragments.
+
+    Two full-length copies of a chromosome align to the same reference
+    region.  A full-length contig whose footprint does not overlap that of a
+    stronger full-length contig on the same reference (higher ref_coverage,
+    then length) is a piece of a chromosome copy, not a separate copy.
+    Overlap uses the same rule as :func:`_overlapping_copies`.
+
+    Returns the number of contigs demoted.
+    """
+    by_ref: Dict[str, List[ContigClassification]] = defaultdict(list)
+    for clf in classifications:
+        if (
+            clf.classification == "chrom_assigned"
+            and clf.is_full_length
+            and clf.assigned_ref_id
+            and ref_footprints.get((clf.original_name, clf.assigned_ref_id))
+        ):
+            by_ref[clf.assigned_ref_id].append(clf)
+
+    n_demoted = 0
+    for ref_id, clfs in by_ref.items():
+        if len(clfs) < 2:
+            continue
+        clfs.sort(key=lambda c: (c.ref_coverage or 0.0, c.contig_len), reverse=True)
+        kept: List[ContigClassification] = []
+        for clf in clfs:
+            fp = ref_footprints[(clf.original_name, ref_id)]
+            tiles = None
+            for other in kept:
+                ofp = ref_footprints[(other.original_name, ref_id)]
+                frac = max(_containment_fraction(fp, ofp), _containment_fraction(ofp, fp))
+                if frac < min_overlap:
+                    tiles = other
+                    break
+            if tiles is None:
+                kept.append(clf)
+                continue
+            clf.is_full_length = False
+            clf.full_length_confidence = "medium"
+            n_demoted += 1
+            logger.info(
+                f"{clf.original_name}: fragment of {ref_id}, reference footprint "
+                f"does not overlap {tiles.original_name}"
+            )
+    return n_demoted
+
+
 # A copy "covers" a fragment's reference region when at least this fraction of
 # the fragment's footprint lies within the copy's footprint, and "lacks" it
 # below the second threshold.
@@ -1966,6 +2019,7 @@ def classify_all_contigs(
                 confidence = "low"
             elif gc_dev is not None and gc_dev > 2.0 and confidence == "high":
                 confidence = "medium"
+            telo = (telomere_results or {}).get(contig)
             classifications.append(ContigClassification(
                 original_name=contig,
                 new_name="",
@@ -1982,6 +2036,8 @@ def classify_all_contigs(
                 ref_coverage=ref_cov,
                 is_full_length=False,
                 full_length_confidence="low",
+                has_5p_telomere=telo.has_5p_telomere if telo else False,
+                has_3p_telomere=telo.has_3p_telomere if telo else False,
                 seq_identity_vs_ref=ident if ident > 0 else None,
                 classification_confidence=confidence,
             ))
@@ -2080,6 +2136,8 @@ def classify_all_contigs(
                 f"Circular elements: {n_circular} contig(s) reclassified as "
                 "circular_element (circular, not organelle/rDNA/cobiont/chromosome)"
             )
+
+    demote_tiling_full_length(classifications, ref_footprints)
 
     # Infer query subgenomes when multiple contigs map to same reference.
     # Cluster score = identity × (union_bp / contig_len) so the GMM separates

@@ -82,13 +82,17 @@ class TelomereResult:
     Attributes:
         has_5p_telomere: Telomere detected at 5' end
         has_3p_telomere: Telomere detected at 3' end
-        telomere_5p_count: Number of telomere repeats at 5' end
-        telomere_3p_count: Number of telomere repeats at 3' end
+        telomere_5p_count: Longest telomere repeat run at 5' end (repeats)
+        telomere_3p_count: Longest telomere repeat run at 3' end (repeats)
+        telomere_5p_bp: Total bp of telomere repeat runs at 5' end
+        telomere_3p_bp: Total bp of telomere repeat runs at 3' end
     """
     has_5p_telomere: bool
     has_3p_telomere: bool
     telomere_5p_count: int
     telomere_3p_count: int
+    telomere_5p_bp: int = 0
+    telomere_3p_bp: int = 0
 
 
 @dataclass

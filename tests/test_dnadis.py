@@ -417,26 +417,25 @@ def test_filter_overlapping_hits_higher_identity_wins():
 # ----------------------------
 def test_telomere_detection_plant_motif():
     """Test telomere detection with plant telomere motif TTTAGGG."""
-    from dnadis.detection.telomere import detect_telomeres_single, _count_telomere_repeats
+    from dnadis.detection.telomere import _telomere_runs
 
-    # Test _count_telomere_repeats directly
     # Plant telomere motif: TTTAGGG (forward) / CCCTAAA (reverse)
     motif = "TTTAGGG"
 
     # Sequence with 5 forward repeats
     seq_with_telomere = "TTTAGGGTTTAGGGTTTAGGGTTTAGGGTTTAGGG"
-    count = _count_telomere_repeats(seq_with_telomere, motif, min_repeats=3)
-    assert count == 5, f"Expected 5 repeats, got {count}"
+    assert _telomere_runs(seq_with_telomere, motif, min_repeats=3) == (35, 5)
 
     # Sequence with reverse complement repeats
     seq_with_rc_telomere = "CCCTAAACCCTAAACCCTAAACCCTAAA"
-    count_rc = _count_telomere_repeats(seq_with_rc_telomere, motif, min_repeats=3)
-    assert count_rc == 4, f"Expected 4 RC repeats, got {count_rc}"
+    assert _telomere_runs(seq_with_rc_telomere, motif, min_repeats=3) == (28, 4)
 
-    # Sequence with only 2 repeats (below threshold)
-    seq_short = "TTTAGGGTTTAGGG"
-    count_short = _count_telomere_repeats(seq_short, motif, min_repeats=3)
-    assert count_short == 0, f"Expected 0 (below threshold), got {count_short}"
+    # Sequence with only 2 repeats (below run length)
+    assert _telomere_runs("TTTAGGGTTTAGGG", motif, min_repeats=3) == (0, 0)
+
+    # Runs broken by variant repeats are summed
+    broken = ("TTTAGGG" * 5 + "TTAGGG") * 3
+    assert _telomere_runs(broken, motif, min_repeats=3) == (105, 5)
 
 
 def test_telomere_detection_at_contig_ends():
@@ -456,6 +455,7 @@ def test_telomere_detection_at_contig_ends():
         motif="TTTAGGG",
         window_size=100,
         min_repeats=3,
+        min_bp=60,
     )
 
     assert result.has_5p_telomere, "Should detect 5' telomere"
@@ -482,6 +482,23 @@ def test_telomere_detection_no_telomeres():
     assert not result.has_3p_telomere
     assert result.telomere_5p_count == 0
     assert result.telomere_3p_count == 0
+
+
+def test_telomere_detection_ignores_short_runs():
+    """A few telomere repeats in other simple sequence are not a telomere."""
+    from dnadis.detection.telomere import detect_telomeres_single
+
+    microsat = "AG" * 2000
+    chance = microsat[:1000] + "CCCTAAA" * 3 + microsat[1000:]
+    array = "TTTAGGG" * 300
+    contig = chance + "ACGT" * 5000 + array
+
+    result = detect_telomeres_single(contig, motif="TTTAGGG", window_size=10000)
+
+    assert not result.has_5p_telomere
+    assert result.telomere_5p_bp == 21
+    assert result.has_3p_telomere
+    assert result.telomere_3p_bp == 2100
 
 
 # ----------------------------
@@ -2142,6 +2159,57 @@ def test_infer_query_subgenomes_overlapping_fragments_still_split():
     assert by_name["chr_1"].query_subgenome == "s2"
 
 
+def _full_length_clf(name, ref_id, ref_coverage, contig_len):
+    from dnadis.models import ContigClassification
+
+    c = ContigClassification(
+        original_name=name, new_name="", classification="chrom_assigned",
+        reversed=False, cobiont_taxid=None, cobiont_sci=None,
+        assigned_ref_id=ref_id, ref_gene_proportion=0.5, contig_len=contig_len,
+    )
+    c.is_full_length = True
+    c.ref_coverage = ref_coverage
+    return c
+
+
+def test_demote_tiling_full_length_pieces_of_one_copy():
+    """A full-length contig tiling beside another copy's piece is a fragment.
+
+    Set s1 spans the whole reference; s2 is split into an arm (0-3 Mb) and
+    the rest (4-16 Mb), each full-length on its own.
+    """
+    from dnadis.classification.classifier import demote_tiling_full_length
+
+    s1 = _full_length_clf("s1", "chr16A", 0.48, 18_400_000)
+    arm = _full_length_clf("arm", "chr16A", 0.10, 4_000_000)
+    rest = _full_length_clf("rest", "chr16A", 0.25, 14_200_000)
+    footprints = {
+        ("s1", "chr16A"): [(0, 16_000_000)],
+        ("arm", "chr16A"): [(100_000, 3_000_000)],
+        ("rest", "chr16A"): [(4_100_000, 15_800_000)],
+    }
+    assert demote_tiling_full_length([s1, arm, rest], footprints) == 1
+    assert s1.is_full_length and rest.is_full_length
+    assert arm.is_full_length is False
+
+
+def test_demote_tiling_full_length_keeps_overlapping_copies():
+    """Full-length copies over the same reference region are all kept."""
+    from dnadis.classification.classifier import demote_tiling_full_length
+
+    clfs = [
+        _full_length_clf(f"c{i}", "chr1A", 0.5 - 0.1 * i, 20_000_000)
+        for i in range(3)
+    ]
+    footprints = {
+        ("c0", "chr1A"): [(0, 20_000_000)],
+        ("c1", "chr1A"): [(500_000, 19_000_000)],
+        ("c2", "chr1A"): [(2_000_000, 12_000_000)],
+    }
+    assert demote_tiling_full_length(clfs, footprints) == 0
+    assert all(c.is_full_length for c in clfs)
+
+
 def _two_copy_loci_with_fragment(frag_fp):
     """Nine reference chromosomes, each with two full-length homeologs.
 
@@ -2838,3 +2906,20 @@ def test_scaffold_names_carry_query_set_suffix(tmp_path):
         qr_best_chain_ident={(k, v): 0.95 for k, v in best_ref.items()},
     )
     assert set(scaffolded) == {"chr1A_s1", "chr1A_s2", "chr2A"}
+
+
+def test_dump_config_lists_every_schema_key(monkeypatch, capsys):
+    """Every config key maps to a CLI option and appears in the template."""
+    from dnadis import cli
+    from dnadis.utils.config import CONFIG_SCHEMA
+
+    monkeypatch.setattr(sys, "argv", ["dnadis.py", "--dump-config"])
+    with pytest.raises(SystemExit):
+        cli.main()
+    template = capsys.readouterr().out
+    keys = {
+        line.split(" = ")[0] for line in template.splitlines() if " = " in line
+    }
+    expected = {k for section in CONFIG_SCHEMA.values() for k in section}
+    assert expected <= keys, sorted(expected - keys)
+    assert "telomere_min_bp = 200" in template
