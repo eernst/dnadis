@@ -23,7 +23,7 @@ from dnadis.alignment.chain_parsing import (
 from dnadis.alignment.external_tools import run_minimap2_synteny, run_miniprot
 from dnadis.models import Block
 from dnadis.output.tsv_output import write_macro_blocks_tsv
-from dnadis.utils.io_utils import file_exists_and_valid, open_maybe_gzip
+from dnadis.utils.io_utils import file_exists_and_valid, open_maybe_gzip, output_is_current
 from dnadis.utils.logging_config import get_logger
 from dnadis.utils.sequence_utils import read_fasta_lengths
 
@@ -114,6 +114,14 @@ def compute_pairwise_synteny(
 
     outprefix.parent.mkdir(parents=True, exist_ok=True)
     macro_blocks_tsv = Path(str(outprefix) + ".macro_blocks.tsv")
+    if file_exists_and_valid(macro_blocks_tsv) and not output_is_current(
+        macro_blocks_tsv, left_fasta, right_fasta,
+    ):
+        logger.info(
+            f"Pairwise {left_name} vs {right_name}: input FASTA changed since "
+            f"{macro_blocks_tsv}; recomputing"
+        )
+        macro_blocks_tsv.unlink()
     if file_exists_and_valid(macro_blocks_tsv):
         # Mode-aware cache validation.  Only invalidate when the
         # intermediate file from the *other* synteny_mode is present and the

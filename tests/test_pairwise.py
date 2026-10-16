@@ -128,6 +128,42 @@ class TestComputePairwiseSynteny:
         )
         assert result == macro_tsv
 
+    def test_recomputes_when_input_fasta_is_newer(self, tmp_path, monkeypatch):
+        """A cached macro_blocks TSV older than an input FASTA is discarded."""
+        import os
+        import dnadis.alignment.pairwise as pw
+
+        left_fasta = tmp_path / "left.chrs.fasta"
+        right_fasta = tmp_path / "right.chrs.fasta"
+        left_fasta.write_text(">chr1\nACGT\n")
+        right_fasta.write_text(">chr1\nACGT\n")
+        pair_prefix = tmp_path / "pairwise" / "left_vs_right"
+        pair_prefix.parent.mkdir(parents=True)
+        macro_tsv = Path(str(pair_prefix) + ".macro_blocks.tsv")
+        macro_tsv.write_text("contig\tcontig_len\tref_id\n")
+        old = macro_tsv.stat().st_mtime - 100
+        os.utime(macro_tsv, (old, old))
+
+        class Realigned(Exception):
+            pass
+
+        def fake_minimap2(*args, **kwargs):
+            raise Realigned
+
+        monkeypatch.setattr(pw, "run_minimap2_synteny", fake_minimap2)
+        with pytest.raises(Realigned):
+            compute_pairwise_synteny(
+                left_fasta=left_fasta,
+                right_fasta=right_fasta,
+                left_name="left",
+                right_name="right",
+                outprefix=pair_prefix,
+                threads=1,
+                **_CHAIN_KWARGS,
+            )
+        assert not macro_tsv.exists()
+
+
     def test_creates_output_directory(self, tmp_path):
         """Should create the pairwise output directory if it doesn't exist."""
         left_fasta = tmp_path / "left" / "left.chrs.fasta"
@@ -321,3 +357,54 @@ class TestPairwiseImport:
     def test_import(self):
         from dnadis.alignment.pairwise import compute_pairwise_synteny
         assert callable(compute_pairwise_synteny)
+
+def test_write_fasta_if_changed_keeps_unchanged_file(tmp_path):
+    import os
+    from dnadis.utils.sequence_utils import write_fasta, write_fasta_if_changed
+
+    seqs = {"chr1A": "ACGT" * 50, "chr2A": "GGCC" * 10}
+    path = tmp_path / "x.fasta"
+    assert write_fasta_if_changed(seqs, path)
+    reference = tmp_path / "ref.fasta"
+    write_fasta(seqs, reference)
+    assert path.read_text() == reference.read_text()
+
+    old = path.stat().st_mtime - 100
+    os.utime(path, (old, old))
+    assert not write_fasta_if_changed(seqs, path)
+    assert path.stat().st_mtime == old
+
+    # Same length and size, different name: rewritten.
+    assert write_fasta_if_changed({"chr1B": seqs["chr1A"], "chr2A": seqs["chr2A"]}, path)
+    assert path.read_text().startswith(">chr1B\n")
+
+
+def test_minimap2_paf_reused_only_when_newer_than_inputs(tmp_path, monkeypatch):
+    import os
+    import dnadis.alignment.external_tools as et
+
+    ref = tmp_path / "ref.fa"
+    qry = tmp_path / "qry.fa"
+    paf = tmp_path / "out.paf.gz"
+    for p in (ref, qry, paf):
+        p.write_text(">a\nACGT\n")
+
+    class Realigned(Exception):
+        pass
+
+    def no_mapper():
+        raise Realigned
+
+    monkeypatch.setattr(et, "get_minimap2_exe", no_mapper)
+    kwargs = dict(threads=1, preset="asm20", k=None, w=None,
+                  err_path=tmp_path / "err.log")
+
+    old = qry.stat().st_mtime - 100
+    os.utime(ref, (old, old))
+    os.utime(qry, (old, old))
+    et.run_minimap2_synteny(ref, qry, paf, **kwargs)  # cached: no mapper call
+
+    newer = paf.stat().st_mtime + 100
+    os.utime(qry, (newer, newer))
+    with pytest.raises(Realigned):
+        et.run_minimap2_synteny(ref, qry, paf, **kwargs)

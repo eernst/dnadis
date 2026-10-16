@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from dnadis.models import ContigClassification
+from dnadis.utils.io_utils import write_text_if_changed
 from dnadis.utils.logging_config import get_logger
 
 logger = get_logger("fasta_output")
@@ -16,7 +17,7 @@ from dnadis.utils.reference_utils import split_chrom_subgenome
 from dnadis.utils.sequence_utils import (
     read_fasta_sequences,
     reverse_complement,
-    write_fasta,
+    write_fasta_if_changed,
 )
 
 
@@ -95,15 +96,15 @@ def write_classified_fastas(
                     scaffolded_seqs.items(),
                     key=lambda x: sort_key(x[0]),
                 ))
-                write_fasta(sorted_seqs, output_path)
+                write_fasta_if_changed(sorted_seqs, output_path)
                 logger.done(f"{category}: {output_path} ({len(sorted_seqs)} scaffolded chromosomes)")
             else:
-                output_path.write_text("")
+                write_text_if_changed(output_path, "")
             continue
 
         if not clfs:
             # Write empty file
-            output_path.write_text("")
+            write_text_if_changed(output_path, "")
             continue
 
         # Build output sequences dict with new names and orientation
@@ -120,7 +121,7 @@ def write_classified_fastas(
             out_seqs[clf.new_name] = orig_seq
 
         sorted_seqs = dict(sorted(out_seqs.items(), key=lambda x: sort_key(x[0])))
-        write_fasta(sorted_seqs, output_path)
+        write_fasta_if_changed(sorted_seqs, output_path)
 
         logger.done(f"{category}: {output_path} ({len(sorted_seqs)} contigs)")
 
@@ -167,7 +168,7 @@ def write_per_subgenome_chrs_fastas(
     for sg in sorted(sg_seqs):
         out_path = Path(f"{output_prefix}.chrs.{sg}.fasta")
         sorted_seqs = dict(sorted(sg_seqs[sg].items(), key=lambda x: sort_key(x[0])))
-        write_fasta(sorted_seqs, out_path)
+        write_fasta_if_changed(sorted_seqs, out_path)
         result[sg] = out_path
         logger.info(f"Per-subgenome FASTA ({sg}): {out_path} ({len(sorted_seqs)} contigs)")
 
