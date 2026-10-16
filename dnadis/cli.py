@@ -1071,12 +1071,15 @@ def run_assembly(
     if not args.skip_telomeres:
         logger.phase("Phase 10: Telomere detection")
         from dnadis.detection.telomere import detect_telomeres
+        # Every contig with a reference assignment, including those shorter
+        # than chr_like_minlen that can become chromosome fragments.
         telomere_results = detect_telomeres(
             query_fasta=qry,
-            contig_names=chromosome_contigs,  # Only analyze chromosome-assigned contigs
+            contig_names={c for c, r in best_ref.items() if r},
             motif=args.telomere_motif,
             window_size=args.telomere_window,
             min_repeats=args.telomere_min_repeats,
+            min_bp=args.telomere_min_bp,
         )
     else:
         logger.info("Phase 10: Skipping telomere detection (--skip-telomeres)")
@@ -1694,54 +1697,6 @@ def run_outgroup_assembly(
 # main: argument parsing, validation, dispatch
 # ---------------------------------------------------------------------------
 def main():
-    # Handle --dump-config early, before argument parsing
-    # This allows generating config template without providing required args
-    if '--dump-config' in sys.argv:
-        from dnadis.utils.config import dump_config_template
-        # Create a minimal namespace with defaults
-        defaults = argparse.Namespace(
-            ref=None, query=None, output_dir=None, ref_gff3=None,
-            threads=8, skip_plot=False, assembly_name="", reference_name="",
-            verbose=False, quiet=False,
-            log_file=None, config=None, dump_config=True, chr_like_minlen=None,
-            add_subgenome_suffix=None, ref_id_pattern=None, reads=None,
-            reads_type="lrhq", skip_depth=False, depth_window_size=1000,
-            depth_target_coverage=0, keep_depth_bam=False, synteny_mode="nucleotide",
-            skip_organelles=False, skip_rdna=False, skip_cobionts=False,
-            miniprot="miniprot", miniprot_args="",
-            chrC_ref=None, chrM_ref=None, rdna_ref=None, centrifuger_idx=None,
-            assign_min_frac=0.10, assign_min_ratio=1.25, chimera_primary_frac=0.8,
-            chimera_secondary_frac=0.2, low_ref_span_threshold=0.75,
-            assign_minlen=10000, assign_minlen_protein=150, assign_minmapq=0,
-            assign_min_ident=0.0, assign_tp="PI", chain_q_gap=200000,
-            chain_r_gap=400000, chain_diag_slop=150000, assign_chain_min_bp=0,
-            assign_chain_score="matches", assign_chain_topk=3, assign_ref_score="all",
-            miniprot_min_genes=3, miniprot_min_segments=5, min_span_frac=0.20,
-            min_synteny_span=50000, organelle_min_cov=0.80, chrC_len_tolerance=0.05,
-            chrM_len_tolerance=0.20, rdna_min_cov=0.50,
-            skip_rdna_consensus=False, rdna_ref_features=None,
-            chr_debris_min_cov=0.80,
-            chr_debris_min_identity=0.90, circular_fasta="", circular_list="",
-            cobiont_min_score=1000, cobiont_min_coverage=0.50,
-            debris_min_cov=0.50, debris_min_protein_hits=2, preset="asm20", kmer=None, window=None, aln_minlen=10000,
-            scaffold=False, scaffold_gap_size=100, scaffold_rdna_contigs=False,
-            compleasm_lineage=None, compleasm_library=None, compleasm_path=None, skip_compleasm=False,
-            fofn=None, assembly_dir=None,
-            cluster=False, max_threads_dist=64, max_mem_dist=128.0,
-            max_time_dist=720, partition="cpuq", qos="",
-            keep_executor_cache=False,
-            skip_phylogeny=False, phylo_min_busco_completeness=50.0,
-            phylo_outgroup="none", phylo_outgroup_only=[],
-            phylo_skip_reference=False,
-            phylo_outgroup_min_ref_assignment=0.5,
-            phylo_max_mem_gb=8, phylo_bootstrap_reps=1000,
-            phylo_alrt_reps=1000, phylo_models="LG,WAG,JTT",
-            phylo_msa_chunk_size=256, phylo_msa_inner_threads=4,
-            phylo_iqtree_threads=16, phylo_iqtree_time_minutes=720,
-        )
-        print(dump_config_template(defaults))
-        sys.exit(0)
-
     p = argparse.ArgumentParser(
         description="Genome assembly comprehension and curation tool for contig classification using synteny evidence (protein-anchored or nucleotide whole-genome alignment).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -2127,7 +2082,12 @@ def main():
     )
     fl_grp.add_argument(
         "--telomere-min-repeats", type=int, default=3,
-        help="Minimum consecutive telomere repeats to call telomere [3]",
+        help="Minimum consecutive telomere repeats counted as a run [3]",
+    )
+    fl_grp.add_argument(
+        "--telomere-min-bp", type=int, default=200,
+        help="Minimum total bp of telomere repeat runs within the end window "
+             "to call a telomere [200]",
     )
     fl_grp.add_argument(
         "--subgenome-k", type=float, default=1.0,
@@ -2286,6 +2246,16 @@ def main():
         "--phylo-iqtree-time-minutes", type=int, default=720, metavar="MIN",
         help="In --cluster mode, SLURM --time request for the IQ-TREE job. IQ-TREE with -B 1000 on a large supermatrix can run for hours. [720]",
     )
+
+    # --dump-config prints the parser's defaults before parse_args() enforces
+    # the required arguments.
+    if '--dump-config' in sys.argv:
+        from dnadis.utils.config import dump_config_template
+        defaults = argparse.Namespace(**{
+            a.dest: a.default for a in p._actions if a.dest != argparse.SUPPRESS
+        })
+        print(dump_config_template(defaults))
+        sys.exit(0)
 
     args = p.parse_args()
 

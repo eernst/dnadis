@@ -53,13 +53,13 @@ These columns describe whether a contig represents a complete chromosome based o
 | Column | Type | Description |
 |--------|------|-------------|
 | `ref_coverage` | float | Fraction of the assigned reference chromosome spanned by syntenic blocks (0.0-1.0) |
-| `is_full_length` | yes/no | Whether the contig is classified as full-length (based on telomeres and `ref_coverage ≥ --full-length-ref-coverage`) |
+| `is_full_length` | yes/no | Whether the contig is classified as full-length (based on telomeres and `ref_coverage ≥ --full-length-ref-coverage`). A contig whose reference footprint does not overlap that of a stronger full-length contig on the same reference is a piece of a copy and is `no` |
 | `full_length_confidence` | string | Confidence of full-length call: `high` (both telomeres), `medium` (one telomere + high coverage), `low` (coverage-only) |
 | `query_subgenome` | string | Inferred query subgenome set (`s1`, `s2`, …; `s1` = highest identity to the reference) from identity-scaled clustering, or empty when the chromosome was not split |
 | `subgenome_basis` | string | How `query_subgenome` was decided on a split chromosome: `copy` (full-length copy, by clustering), `footprint` (the only set whose full-length copies do not already cover the fragment's reference region), `score` (fragment joined the nearest cluster), `extra_copy` (every set's copies already cover the fragment's reference region; no set, excluded from scaffolding and phylogeny set leaves). Empty when the chromosome was not split |
 | `seq_identity_vs_ref` | float | Best-chain alignment identity to the assigned reference chromosome (0.0-1.0) |
-| `has_5p_telomere` | yes/no | Telomere detected at the **start** (first 10kb) of the **raw input** contig |
-| `has_3p_telomere` | yes/no | Telomere detected at the **end** (last 10kb) of the **raw input** contig |
+| `has_5p_telomere` | yes/no | Telomere detected at the **start** (first `--telomere-window`, 10 kb) of the **raw input** contig: telomere repeat runs total ≥ `--telomere-min-bp` (200 bp). Set for `chrom_assigned` and `chrom_fragment` contigs |
+| `has_3p_telomere` | yes/no | Telomere detected at the **end** (last `--telomere-window`, 10 kb) of the **raw input** contig, by the same rule |
 | `is_circular` | yes/no | Contig is circular per assembler evidence (`--circular-fasta`/`--circular-list`, an auto-detected `*.circ.fasta*` sibling, or the hifiasm `ptg*c` name suffix). Blank when circularity could not be determined from any source. Drives the `circular_element` classification. |
 | `depth_ratio` | float | `depth_median` ÷ the chromosomal baseline (median `depth_median` of full-length `chrom_assigned` contigs). A copy-number signal: ≈1 for single-copy sequence, ≫1 for amplified sequence (e.g. an amplified circular element). Requires `--reads`. |
 | `rearrangement_candidates` | string | Comma-separated list of off-target reference chromosomes with significant synteny span (fraction ≥ `--rearrangement-threshold`), indicating potential rearrangements such as homeologous exchanges |
