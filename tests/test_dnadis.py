@@ -2923,3 +2923,29 @@ def test_dump_config_lists_every_schema_key(monkeypatch, capsys):
     expected = {k for section in CONFIG_SCHEMA.values() for k in section}
     assert expected <= keys, sorted(expected - keys)
     assert "telomere_min_bp = 200" in template
+
+
+def test_ragtag_agp_keeps_unplaced_contigs_out_of_the_scaffold(tmp_path):
+    """Only rows of <ref>_RagTag are placed; RagTag's own scaffolds for
+    unplaced contigs (also suffixed _RagTag) are reported as unplaced, even
+    when the input contig name itself ends in _RagTag."""
+    from dnadis.output.scaffolding import _scaffold_from_ragtag_agp
+
+    agp = tmp_path / "ragtag.scaffold.agp"
+    agp.write_text(
+        "## agp-version 2.1\n"
+        "chr1A_RagTag\t1\t4\t1\tW\tctgA\t1\t4\t+\n"
+        "chr1A_RagTag\t5\t104\t2\tU\t100\tscaffold\tyes\talign_genus\n"
+        "chr1A_RagTag\t105\t107\t3\tW\tup_RagTag\t1\t3\t-\n"
+        "ctgB_RagTag\t1\t2\t1\tW\tctgB\t1\t2\t+\n"
+        "prev_RagTag_RagTag\t1\t2\t1\tW\tprev_RagTag\t1\t2\t+\n"
+    )
+    seqs = {"ctgA": "AAAA", "up_RagTag": "CCG", "ctgB": "TT", "prev_RagTag": "GG"}
+
+    seq, agp_lines, unplaced = _scaffold_from_ragtag_agp(
+        agp, seqs, "chr1A", 10, "chr1A",
+    )
+
+    assert seq == "AAAA" + "N" * 10 + "CGG"
+    assert [l.split("\t")[5] for l in agp_lines] == ["ctgA", "10", "up_RagTag"]
+    assert unplaced == ["ctgB", "prev_RagTag"]

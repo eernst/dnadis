@@ -418,12 +418,13 @@ def _scaffold_from_ragtag_agp(
     query_seqs: Dict[str, str],
     scaffold_name: str,
     gap_size: int,
+    ref_seq_key: str,
 ) -> Tuple[Optional[str], List[str], List[str]]:
     """Build scaffold sequence + dnadis-style AGP lines from RagTag's AGP.
 
     Bypasses RagTag's own FASTA writer (``ragtag_agp2fa.py``), which is
     broken on pysam >= 0.23 (it calls ``.decode('utf-8')`` on a ``str``).
-    Reads only the placed-scaffold rows (scaffold name suffix ``_RagTag``)
+    Reads only the rows of the placed scaffold, ``<ref_seq_key>_RagTag``,
     and reconstructs the sequence from the in-memory contig map using the
     AGP component coordinates and orientations.  Gap rows in the RagTag
     AGP are normalized to the caller's ``gap_size`` (RagTag's default 100
@@ -435,16 +436,20 @@ def _scaffold_from_ragtag_agp(
         scaffold_name: Output scaffold name (replaces RagTag's
             ``<refchr>_RagTag`` name).
         gap_size: Number of Ns between adjacent components.
+        ref_seq_key: Name of the reference sequence RagTag scaffolded
+            against.  With ``-u``, RagTag writes each contig it cannot place
+            as its own scaffold, also suffixed ``_RagTag``, and input contig
+            names may already end in ``_RagTag``, so only the exact placed
+            scaffold name identifies placed rows.
 
     Returns:
         Tuple of (scaffold_seq, agp_lines, unplaced).
         - ``scaffold_seq`` is None if no placed components were resolved.
         - ``agp_lines`` are dnadis-style AGP rows for the placed scaffold.
         - ``unplaced`` lists component names that RagTag emitted as their
-          own scaffolds (i.e. could not place under ``-u``).  Reported so
-          the caller can decide whether to surface them as trivial
-          scaffolds; the current caller logs and drops them.
+          own scaffolds (i.e. could not place under ``-u``).
     """
+    placed_name = f"{ref_seq_key}_RagTag"
     placed: List[Tuple[str, str, int, int, str]] = []
     unplaced: List[str] = []
     with agp_path.open() as fh:
@@ -455,7 +460,7 @@ def _scaffold_from_ragtag_agp(
             if len(fields) < 9:
                 continue
             scaf, kind = fields[0], fields[4]
-            if not scaf.endswith("_RagTag"):
+            if scaf != placed_name:
                 if kind == "W":
                     unplaced.append(fields[5])
                 continue
@@ -572,6 +577,7 @@ class _ScaffoldGroupResult:
     scaffold_seq: Optional[str] = None
     agp_lines: List[str] = field(default_factory=list)
     confidences: Dict[str, Tuple[float, float, float]] = field(default_factory=dict)
+    unplaced: List[str] = field(default_factory=list)
 
 
 def _scaffold_group(
@@ -669,15 +675,16 @@ def _scaffold_group(
 
             if agp_path:
                 scaffold_seq, agp_lines, unplaced = _scaffold_from_ragtag_agp(
-                    agp_path, query_seqs, scaffold_name, gap_size,
+                    agp_path, query_seqs, scaffold_name, gap_size, ref_seq_key,
                 )
                 if scaffold_seq and agp_lines:
                     if unplaced:
                         logger.warning(
                             f"{scaffold_name}: RagTag could not place "
                             f"{len(unplaced)} contig(s): {', '.join(unplaced)} "
-                            f"(dropped from scaffolded output)"
+                            f"(emitted as separate scaffolds)"
                         )
+                    result.unplaced = unplaced
                     result.scaffold_seq = scaffold_seq
                     result.agp_lines = agp_lines
                     conf_path = ragtag_dir / "ragtag.scaffold.confidence.txt"
@@ -886,6 +893,24 @@ def scaffold_chromosomes(
         # Multi-contig group: needs scaffolding — add to work list
         work_list.append((scaffold_name, ref_id, contig_names))
 
+    def _collect_group_result(result: _ScaffoldGroupResult) -> None:
+        if not result.scaffold_seq:
+            return
+        all_scaffolded[result.scaffold_name] = result.scaffold_seq
+        all_agp.extend(result.agp_lines)
+        all_confidences.update(result.confidences)
+        # Contigs RagTag could not place keep their contig names, like
+        # single-contig groups.
+        for contig in result.unplaced:
+            clf = clf_lookup.get(contig)
+            name = clf.new_name if clf and clf.new_name else contig
+            if name in all_scaffolded:
+                name = contig
+            _emit_trivial_scaffold(
+                name, contig, query_seqs, contig_orientations,
+                all_scaffolded, all_agp, log_label="unplaced by RagTag",
+            )
+
     # ---- Second pass: scaffold multi-contig groups (possibly in parallel) ----
     if work_list:
         n_jobs = len(work_list)
@@ -911,10 +936,7 @@ def scaffold_chromosomes(
                 gap_size=gap_size,
                 assembly_context=_asm_ctx,
             )
-            if result.scaffold_seq:
-                all_scaffolded[result.scaffold_name] = result.scaffold_seq
-                all_agp.extend(result.agp_lines)
-                all_confidences.update(result.confidences)
+            _collect_group_result(result)
         else:
             # Multiple jobs: run in parallel
             max_workers = min(n_jobs, max(1, threads // 4))
@@ -948,11 +970,7 @@ def scaffold_chromosomes(
                 futures = [pool.submit(_submit_job, item) for item in work_list]
                 # Collect results in submission order (= sorted key order)
                 for future in futures:
-                    result = future.result()
-                    if result.scaffold_seq:
-                        all_scaffolded[result.scaffold_name] = result.scaffold_seq
-                        all_agp.extend(result.agp_lines)
-                        all_confidences.update(result.confidences)
+                    _collect_group_result(future.result())
 
     logger.done(f"Scaffolded {len(all_scaffolded)} chromosomes")
     return all_scaffolded, all_agp, all_confidences
