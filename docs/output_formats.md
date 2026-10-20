@@ -64,6 +64,17 @@ These columns describe whether a contig represents a complete chromosome based o
 | `depth_ratio` | float | `depth_median` ÷ the chromosomal baseline (median `depth_median` of full-length `chrom_assigned` contigs). A copy-number signal: ≈1 for single-copy sequence, ≫1 for amplified sequence (e.g. an amplified circular element). Requires `--reads`. |
 | `rearrangement_candidates` | string | Comma-separated list of off-target reference chromosomes with significant synteny span (fraction ≥ `--rearrangement-threshold`), indicating potential rearrangements such as homeologous exchanges |
 
+### Sister-Assembly Anchoring Columns
+
+Filled only with `--sister-anchoring` (multi-assembly mode), for the contigs the second pass revisited; see [sister_anchoring.tsv](#sister_anchoringtsv).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `sister_decision` | string | Outcome of the sister vote: `assigned` (no reference assignment; placed by sisters), `reassigned` (reference assignment replaced), `confirmed` (sisters agree with the reference), `conflict_keep_ref` (sisters chose a chromosome the reference gives no evidence for; reference result kept), `no_call_chimeric`, `no_call_disagree`, `no_call_few_votes`, `no_call_closest`, `no_vote` |
+| `sister_ref_id` | string | Reference chromosome the agreeing sisters place the contig on |
+| `sister_votes` | string | Agreeing / voting sister assemblies (e.g. `11/11`) |
+| `sister_identity` | float | Median gap-compressed identity of the agreeing sisters' alignments (0.0-1.0) |
+
 **Important: Telomere reference frame.** The `has_5p_telomere` and `has_3p_telomere` columns report telomere positions relative to the **raw input contig**, not the reoriented output. For contigs where `reversed=yes`, the 5' and 3' ends are swapped in the output FASTA and in the chromosome overview plot. The chromosome overview visualization applies this flip automatically so telomere indicators appear at the correct reference-oriented positions. Downstream consumers of the TSV should apply the same swap when `reversed=yes`: the raw 5' telomere corresponds to the output 3' end, and vice versa.
 
 ### Scaffold Confidence Columns
@@ -113,7 +124,7 @@ These depth metrics are useful for:
 | `assigned_subgenome` | string | Subgenome identifier (e.g., `A`, `B`, `At`, `Dt`) or `NA` if none |
 | `assigned_ref_id` | string | Best-matching reference chromosome ID (e.g., `chr5A`) or `NA`. In nucleotide mode, assignment uses reference span fraction (`ref_span_bp / ref_length`) as the primary metric. This is size-normalized and answers the biologically meaningful question: what fraction of the reference chromosome does this contig represent? In protein mode, raw synteny score is used because miniprot PAF does not carry reference chromosome lengths. |
 | `assigned_chrom_id` | string | Chromosome number without subgenome (e.g., `chr5`) |
-| `status` | string | Assignment status: `OK`, `NO_HITS`, `AMBIG_LOW_FRAC`, or `AMBIG_LOW_RATIO` |
+| `status` | string | Assignment status: `OK`, `NO_HITS`, `AMBIG_LOW_FRAC`, `AMBIG_LOW_RATIO`, or `SISTER` |
 
 ### Size and Coverage Columns
 
@@ -228,6 +239,32 @@ The `classification_confidence` column indicates how certain the classification 
 | `NO_HITS` | No synteny evidence found |
 | `AMBIG_LOW_FRAC` | Best reference coverage below `--assign-min-frac` threshold |
 | `AMBIG_LOW_RATIO` | Score ratio below `--assign-min-ratio` threshold |
+| `SISTER` | Assignment made by sister-assembly anchoring (`--sister-anchoring`); the score columns still describe the contig's reference evidence |
+
+---
+
+## sister_anchoring.tsv
+
+Written to `{output_dir}/sister_anchoring/` with `--sister-anchoring`. One row per revisited contig: length ≥ `--sister-min-len`, less than `--sister-max-ref-frac` of its length aligned to the reference, and classified `chrom_assigned`, `chrom_fragment`, `chrom_unassigned`, `debris` or `unclassified` in the first pass.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `assembly` | string | Assembly name |
+| `contig` | string | Original contig name |
+| `length` | int | Contig length (bp) |
+| `first_classification` | string | First-pass classification |
+| `first_ref_id` | string | First-pass reference assignment (`NA` if none) |
+| `ref_candidates` | string | Reference chromosomes with ≥ `--sister-min-ref-bp` of chained alignment to the contig; a sister call must share a chromosome number with one of them |
+| `decision` | string | See `sister_decision` in contig_summary.tsv |
+| `sister_ref_id` | string | Majority sister label (`NA` if no votes) |
+| `sister_votes` | string | Agreeing / voting sister assemblies |
+| `closest_sister` | string | Sister with the highest identity on this contig; must agree with the majority |
+| `sister_identity` | float | Median gap-compressed identity of the agreeing sisters |
+| `sister_coverage` | float | Median fraction of the contig covered by the agreeing sisters' alignments |
+| `reversed` | yes/no | Orientation relative to the reference from the agreeing sisters (applied to chromosome-length contigs) |
+| `per_sister` | string | `sister:label@identity/coverage` for every voting sister; `CHIMERIC` when one sister's alignments cover two chromosomes |
+
+A sister votes when its alignments (primary, ≥ `--sister-min-aln` bp, gap-compressed identity ≥ `--sister-min-identity`) cover ≥ `--sister-min-cov` of the contig. Each alignment is labelled with the reference chromosome of the anchor's major synteny segment at the alignment position, so anchors carrying a translocation label each segment by its own origin.
 
 ---
 

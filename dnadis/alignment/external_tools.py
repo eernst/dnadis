@@ -182,6 +182,9 @@ def run_minimap2_synteny(
 
     Permissive mode (default for nucleotide mode):
         Parameters: -c -f1 -B2 -O1,24 -s 10 --max-chain-skip=300 -z 10000,1000 -r 50000
+        - -f1 sets the minimizer occurrence cutoff to 1: only minimizers that
+          occur once in the reference seed alignments (an explicit count is not
+          raised to the preset's -U lower bound)
         - Chains through repetitive regions and small gaps (kb-scale)
         - Creates continuous megabase-scale blocks for chromosome architecture analysis
         - Suitable for both within-species and cross-species comparisons
@@ -212,7 +215,7 @@ def run_minimap2_synteny(
         cmd = [
             mapper,
             "-c",  # Generate CIGAR
-            "-f1",  # Filter: keep all alignments
+            "-f1",  # Seed only from minimizers occurring once in the reference (mid_occ=1)
             "-B2",  # Mismatch penalty (low for nearly identical sequences)
             "-O1,24",  # Gap open penalty (low extension, high open)
             "-s", "10",  # Minimal chaining score
