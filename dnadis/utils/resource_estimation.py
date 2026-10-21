@@ -179,6 +179,27 @@ def estimate_pairwise_resources(
     return clamp_resources(spec, config)
 
 
+def estimate_sister_alignment_resources(
+    anchors_fasta: Path,
+    config: ClusterConfig,
+) -> ResourceSpec:
+    """Estimate resources for aligning pooled candidates to one sister's anchors."""
+    target_bp = _estimate_genome_bp_from_filesize(anchors_fasta)
+
+    # minimap2 index of the anchors dominates memory; the query set is small.
+    mem_gb = max(4.0, target_bp * 8 / 1e9 + 2.0)
+    time_min = _scale_time(30, target_bp)
+    cores = min(32, config.max_threads)
+
+    spec = ResourceSpec(
+        cores=cores,
+        memory_gb=mem_gb,
+        time_minutes=time_min,
+        job_name="sister_aln",
+    )
+    return clamp_resources(spec, config)
+
+
 def estimate_compleasm_resources(
     fasta_path: Path,
     config: ClusterConfig,

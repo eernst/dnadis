@@ -125,6 +125,10 @@ def write_contig_summary_tsv(
         "is_circular",
         "depth_ratio",
         "rearrangement_candidates",
+        "sister_decision",
+        "sister_ref_id",
+        "sister_votes",
+        "sister_identity",
         # Evidence fields
         "gc_content",
         "gc_deviation",
@@ -239,6 +243,16 @@ def write_contig_summary_tsv(
                 elif score_ratio < float(assign_min_ratio):
                     status = "AMBIG_LOW_RATIO"
 
+            # Assignment taken from sister assemblies rather than the reference
+            sister_applied = bool(
+                clf and clf.sister_decision in ("assigned", "reassigned")
+                and needs_chain_evidence and chain_assigned_ref_id
+            )
+            if sister_applied:
+                assigned_ref_id_out = _denormalize_ref_id(chain_assigned_ref_id, ref_norm_to_orig)
+                assigned_chrom_id, assigned_subgenome = split_chrom_subgenome(assigned_ref_id_out)
+                status = "SISTER"
+
             chimeric = "no"
             chimera_reason = ""
             if total_aligned_bp > 0 and n_ref_hits > 1:
@@ -270,6 +284,10 @@ def write_contig_summary_tsv(
             is_circular = "yes" if clf and clf.is_circular else ("no" if clf and clf.is_circular is not None else "")
             depth_ratio = f"{clf.depth_ratio:.2f}" if clf and clf.depth_ratio is not None else ""
             rearrangement_candidates = clf.rearrangement_candidates if clf and clf.rearrangement_candidates else ""
+            sister_decision = clf.sister_decision if clf and clf.sister_decision else ""
+            sister_ref_id = clf.sister_ref_id if clf and clf.sister_ref_id else ""
+            sister_votes = clf.sister_votes if clf and clf.sister_votes else ""
+            sister_identity = f"{clf.sister_identity:.4f}" if clf and clf.sister_identity is not None else ""
 
             # Evidence strength columns
             gc_content = f"{clf.gc_content:.4f}" if clf and clf.gc_content is not None else ""
@@ -320,6 +338,10 @@ def write_contig_summary_tsv(
                         is_circular,
                         depth_ratio,
                         rearrangement_candidates,
+                        sister_decision,
+                        sister_ref_id,
+                        sister_votes,
+                        sister_identity,
                         # Evidence fields
                         gc_content,
                         gc_deviation,

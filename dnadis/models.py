@@ -203,6 +203,11 @@ class ContigClassification:
     # Circularity + relative depth (orthogonal annotations; drive circular_element)
     is_circular: Optional[bool] = None  # Circular contig per assembler evidence; None if unknown
     depth_ratio: Optional[float] = None  # depth_median / chromosomal-baseline median depth (copy-number signal)
+    # Sister-assembly anchoring (multi-assembly second pass; None when not a candidate)
+    sister_decision: Optional[str] = None  # assigned, reassigned, confirmed, conflict_keep_ref, no_call_*, no_vote
+    sister_ref_id: Optional[str] = None  # Reference chromosome the agreeing sisters place the contig on
+    sister_votes: Optional[str] = None  # "agreeing/voting" sister assemblies
+    sister_identity: Optional[float] = None  # Median gap-compressed identity of the agreeing sisters
 
 
 @dataclass

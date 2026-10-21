@@ -174,6 +174,17 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
         "fofn": "fofn",
         "assembly_dir": "assembly_dir",
     },
+    "sister_anchoring": {
+        "sister_anchoring": "sister_anchoring",
+        "sister_min_len": "sister_min_len",
+        "sister_max_ref_frac": "sister_max_ref_frac",
+        "sister_min_identity": "sister_min_identity",
+        "sister_min_aln": "sister_min_aln",
+        "sister_min_cov": "sister_min_cov",
+        "sister_min_agree": "sister_min_agree",
+        "sister_min_votes": "sister_min_votes",
+        "sister_min_ref_bp": "sister_min_ref_bp",
+    },
     "distributed": {
         "cluster": "cluster",
         "max_threads_dist": "max_threads_dist",

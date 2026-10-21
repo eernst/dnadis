@@ -222,6 +222,26 @@ Latest tested conda package versions (CI):
 
 `--fofn` and `--assembly-dir` are mutually exclusive and cannot be combined with `-q`. When ≥2 assemblies complete, cross-assembly comparison outputs (summary TSV, chromosome completeness TSV, and an interactive comparison HTML report) are written to the top-level output directory (see [Multi-assembly outputs](#multi-assembly-outputs)).
 
+#### Sister-assembly anchoring
+
+Contigs with few reference anchors, such as transposon-dense sequence that the reference lacks or has diverged from, may be assigned to the wrong chromosome or not at all. With `--sister-anchoring`, a second pass aligns them to the confidently assigned contigs of the other assemblies in the run ("sisters"), which vote for the chromosome. Assemblies whose assignments change are rerun with the sister assignments applied. Off by default.
+
+A call needs at least `--sister-min-votes` agreeing sisters making up `--sister-min-agree` of the votes, including the sister most similar to the contig. When the contig has reference evidence, the call must share a chromosome number with one of the chromosomes that evidence supports (the subgenome may differ); otherwise the reference result is kept and the conflict is reported. This keeps structural variants shared by the sisters, but absent from the assembly being placed, from moving its contigs.
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--sister-anchoring` | off | Run the second pass (multi-assembly mode only) |
+| `--sister-min-len` | 100000 | Minimum contig length to revisit |
+| `--sister-max-ref-frac` | 0.25 | Revisit contigs with less than this fraction aligned to the reference; chromosome contigs at or above it are anchors |
+| `--sister-min-identity` | 0.98 | Minimum gap-compressed identity of a sister alignment |
+| `--sister-min-aln` | 10000 | Minimum sister alignment block length (bp) |
+| `--sister-min-cov` | 0.20 | Fraction of the contig a sister's alignments must cover for it to vote |
+| `--sister-min-agree` | 0.75 | Fraction of voting sisters that must agree |
+| `--sister-min-votes` | 2 | Number of agreeing sisters required |
+| `--sister-min-ref-bp` | 10000 | Chained reference alignment (bp) that makes a chromosome a reference candidate for the contig |
+
+Gap-compressed identity (minimap2 `de`) is used because accessions differ by insertions, such as transposon insertion polymorphisms, which lower BLAST-style identity even where the shared sequence is nearly identical.
+
 ### Common options
 
 | Argument | Description | Default |
@@ -388,6 +408,7 @@ Produced in the top-level output directory when ≥2 assemblies complete. File n
 | `{prefix}_summary.tsv` | Per-assembly classification counts and BUSCO completeness scores (S/D/F/I/M) for chromosome and non-chromosome contig sets |
 | `{prefix}_chromosome_completeness.tsv` | Per-reference-chromosome coverage and completeness across all assemblies |
 | `{prefix}.comparison_report.html` | Interactive HTML comparison report with gt tables summarizing classification and BUSCO results across assemblies |
+| `sister_anchoring/sister_anchoring.tsv` | Per-contig decisions of the sister-assembly anchoring pass (`--sister-anchoring`); see [docs/output_formats.md](docs/output_formats.md#sister_anchoringtsv) |
 
 ### Key columns in `contig_summary.tsv`
 

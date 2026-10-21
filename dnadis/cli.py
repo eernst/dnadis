@@ -469,6 +469,7 @@ def run_assembly(
     outprefix: Path,
     executor=None,
     cluster_config=None,
+    sister_calls: Optional[Dict[str, "SisterCall"]] = None,
 ) -> AssemblyResult:
     """Run the full analysis pipeline for a single query assembly.
 
@@ -483,6 +484,10 @@ def run_assembly(
         assembly_name: Short name for this assembly (used in logs/plots).
         reads: Path to reads for depth analysis, or ``None``.
         outprefix: Output prefix for this assembly's files.
+        sister_calls: Second-pass calls from sister-assembly anchoring
+            (original contig name -> :class:`SisterCall`).  Calls that change
+            an assignment replace the reference assignment after the synteny
+            gate; all calls are recorded on the contigs' classifications.
 
     Returns:
         :class:`AssemblyResult` summarizing the assembly's classification.
@@ -798,6 +803,14 @@ def run_assembly(
     if ranking_score:
         best_ref = _resolve_reciprocal_translocations(best_ref, ranking_score)
 
+    # Second pass: assignments decided by sister assemblies replace the
+    # reference assignment of contigs with few reference anchors.
+    sister_applied: Set[str] = set()
+    if sister_calls:
+        from dnadis.alignment.sister_anchoring import apply_sister_calls
+        sister_applied = apply_sister_calls(best_ref, sister_calls, ref_orig_to_norm)
+        logger.info(f"Sister anchoring: {len(sister_applied)} contig assignments from sister assemblies")
+
     if args.synteny_mode == "protein":
         plot_suffix = "protein-anchor synteny"
         logger.done(f"Proteins:         {proteins_faa}")
@@ -1065,6 +1078,11 @@ def run_assembly(
         chromosome_contigs=chromosome_contigs,
         query_lengths=qry_lengths,
     )
+    # Sister-placed contigs have few or no reference blocks to vote on
+    # orientation; use the agreeing sisters' orientation instead.
+    for contig in sister_applied & set(contig_orientations):
+        if sister_calls[contig].reversed is not None:
+            contig_orientations[contig] = sister_calls[contig].reversed
 
     # --- Phase 10: Telomere detection (optional) ---
     telomere_results = None
@@ -1142,6 +1160,12 @@ def run_assembly(
 
     for clf in classifications:
         clf.reversed = contig_orientations.get(clf.original_name, False)
+        call = sister_calls.get(clf.original_name) if sister_calls else None
+        if call is not None:
+            clf.sister_decision = call.decision
+            clf.sister_ref_id = call.ref_id or None
+            clf.sister_votes = call.votes_str or None
+            clf.sister_identity = call.identity
 
     # --- Phase 12: Rearrangement detection ---
     logger.phase("Phase 12: Rearrangement detection")
@@ -1693,6 +1717,89 @@ def run_outgroup_assembly(
     )
 
 
+def _run_sister_pass(
+    args,
+    ref_ctx: ReferenceContext,
+    results: list,
+    assemblies: list,
+    output_dir: Path,
+    executor,
+    cluster_config,
+) -> list:
+    """Run sister-assembly anchoring and rerun assemblies whose assignments change.
+
+    Returns *results* with the rerun assemblies' results substituted; an
+    assembly whose rerun fails keeps its first-pass result.
+    """
+    from dnadis.alignment.sister_anchoring import run_sister_anchoring
+    from dnadis.utils.logging_config import clear_assembly_context, get_logger
+    logger = get_logger("cli")
+    clear_assembly_context()
+    logger.phase("Sister-assembly anchoring (second pass)")
+
+    calls = run_sister_anchoring(
+        results,
+        output_dir / "sister_anchoring",
+        min_len=args.sister_min_len,
+        max_ref_frac=args.sister_max_ref_frac,
+        min_identity=args.sister_min_identity,
+        min_aln=args.sister_min_aln,
+        min_cov=args.sister_min_cov,
+        min_agree=args.sister_min_agree,
+        min_votes=args.sister_min_votes,
+        min_ref_bp=args.sister_min_ref_bp,
+        threads=args.threads,
+        executor=executor,
+        cluster_config=cluster_config,
+    )
+    rerun = [
+        r for r in results
+        if any(c.applies for c in calls.get(r.assembly_name, {}).values())
+    ]
+    if not rerun:
+        logger.info("Sister anchoring: no assignments changed; no assemblies rerun")
+        return results
+    logger.info(
+        f"Sister anchoring: rerunning {len(rerun)} assemblies with sister "
+        f"assignments: {', '.join(r.assembly_name for r in rerun)}"
+    )
+
+    inputs = {name: (path, name, reads) for path, name, reads in assemblies}
+
+    def _rerun(name: str):
+        path, _name, reads = inputs[name]
+        logger.phase(f"=== Assembly: {name} (sister-anchoring rerun) ===")
+        return run_assembly(
+            args, ref_ctx, path, name, reads, output_dir / name / name,
+            executor=executor, cluster_config=cluster_config,
+            sister_calls=calls[name],
+        )
+
+    replaced = {}
+    names = [r.assembly_name for r in rerun]
+    if cluster_config.enabled and len(names) > 1:
+        from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
+        with _ThreadPoolExecutor(max_workers=len(names)) as pool:
+            futs = {name: pool.submit(_rerun, name) for name in names}
+        for name, fut in futs.items():
+            try:
+                replaced[name] = fut.result()
+            except Exception as e:
+                logger.error(
+                    f"Sister-anchoring rerun of '{name}' failed; keeping first-pass "
+                    f"result: {e}\n{traceback.format_exc()}"
+                )
+    else:
+        for name in names:
+            try:
+                replaced[name] = _rerun(name)
+            except Exception as e:
+                logger.error(
+                    f"Sister-anchoring rerun of '{name}' failed; keeping first-pass result: {e}"
+                )
+    return [replaced.get(r.assembly_name, r) for r in results]
+
+
 # ---------------------------------------------------------------------------
 # main: argument parsing, validation, dispatch
 # ---------------------------------------------------------------------------
@@ -1729,6 +1836,53 @@ def main():
     multi.add_argument(
         "--assembly-dir", type=_validate_input_dir, default=None,
         help="Directory of FASTA files to process as multiple assemblies",
+    )
+
+    sister = p.add_argument_group(
+        "Sister-assembly anchoring (multi-assembly second pass)",
+        "Contigs with few reference anchors (e.g. transposon-dense sequence the "
+        "reference lacks) are aligned to the confidently assigned contigs of the "
+        "other assemblies, which vote for their chromosome. A vote outside the "
+        "chromosomes the reference supports for the contig is reported as a "
+        "conflict and not applied. Assemblies whose assignments change are rerun.",
+    )
+    sister.add_argument(
+        "--sister-anchoring", action="store_true",
+        help="Run the sister-assembly anchoring pass (multi-assembly mode only). Off by default.",
+    )
+    sister.add_argument(
+        "--sister-min-len", type=int, default=100_000,
+        help="Minimum contig length to revisit [100000]",
+    )
+    sister.add_argument(
+        "--sister-max-ref-frac", type=float, default=0.25,
+        help="Contigs with less than this fraction of their length aligned to the reference "
+             "are revisited; chromosome contigs at or above it serve as anchors [0.25]",
+    )
+    sister.add_argument(
+        "--sister-min-identity", type=float, default=0.98,
+        help="Minimum gap-compressed identity of a sister alignment [0.98]",
+    )
+    sister.add_argument(
+        "--sister-min-aln", type=int, default=10_000,
+        help="Minimum sister alignment block length (bp) [10000]",
+    )
+    sister.add_argument(
+        "--sister-min-cov", type=float, default=0.20,
+        help="Minimum fraction of the contig a sister's hits must cover to vote [0.20]",
+    )
+    sister.add_argument(
+        "--sister-min-agree", type=float, default=0.75,
+        help="Minimum fraction of voting sisters that must agree [0.75]",
+    )
+    sister.add_argument(
+        "--sister-min-votes", type=int, default=2,
+        help="Minimum number of agreeing sister assemblies for a call [2]",
+    )
+    sister.add_argument(
+        "--sister-min-ref-bp", type=int, default=10_000,
+        help="Chained reference alignment (bp) that makes a chromosome one of the contig's "
+             "reference candidates; sister calls must fall on one of them [10000]",
     )
 
     # =========================================================================
@@ -2283,6 +2437,17 @@ def main():
     if args.synteny_mode == "protein" and not args.ref_gff3:
         sys.exit("[error] --ref-gff3 is required when using --synteny-mode protein")
 
+    if args.sister_anchoring and not is_multi:
+        sys.exit("[error] --sister-anchoring requires multi-assembly mode (--fofn or --assembly-dir)")
+    for flag, val in (("--sister-max-ref-frac", args.sister_max_ref_frac),
+                      ("--sister-min-identity", args.sister_min_identity),
+                      ("--sister-min-cov", args.sister_min_cov),
+                      ("--sister-min-agree", args.sister_min_agree)):
+        if not 0.0 <= val <= 1.0:
+            sys.exit(f"[error] {flag} must be between 0.0 and 1.0, got {val}")
+    if args.sister_min_votes < 1:
+        sys.exit(f"[error] --sister-min-votes must be at least 1, got {args.sister_min_votes}")
+
     if not 0.0 <= args.cobiont_min_coverage <= 1.0:
         sys.exit(f"[error] --cobiont-min-coverage must be between 0.0 and 1.0, got {args.cobiont_min_coverage}")
 
@@ -2524,6 +2689,15 @@ def main():
             except Exception as e:
                 logger.error(f"Outgroup '{asm_name}' failed: {e}")
                 failures.append((asm_name, str(e)))
+
+        # --- Sister-assembly anchoring (second pass) ---
+        # Needs every assembly's first-pass outputs, so it runs after the
+        # per-assembly loop; assemblies whose assignments change are rerun.
+        if args.sister_anchoring and len(results) >= 2:
+            results = _run_sister_pass(
+                args, ref_ctx, results, assemblies, output_dir,
+                executor, cluster_config,
+            )
 
         # Sort `results` by AssemblyResult.weighted_identity (descending) when
         # the user asked for identity ordering, matching the report's sort key
