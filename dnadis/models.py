@@ -203,6 +203,15 @@ class ContigClassification:
     # Circularity + relative depth (orthogonal annotations; drive circular_element)
     is_circular: Optional[bool] = None  # Circular contig per assembler evidence; None if unknown
     depth_ratio: Optional[float] = None  # depth_median / chromosomal-baseline median depth (copy-number signal)
+    # Own-assembly redundancy (detection/redundancy.py): the region of a
+    # chromosome-length contig that best explains this contig, and the depth
+    # of that region.  None for chromosome-length contigs and contigs with no
+    # alignment.
+    redundancy_target: Optional[str] = None  # target contig (new name)
+    redundancy_region: Optional[str] = None  # "start-end" on the target (1-based)
+    redundancy_cov: Optional[float] = None  # fraction of this contig in that region
+    redundancy_identity: Optional[float] = None  # gap-compressed identity there
+    target_depth_ratio: Optional[float] = None  # median depth of the region / baseline
     # Sister-assembly anchoring (multi-assembly second pass; None when not a candidate)
     sister_decision: Optional[str] = None  # assigned, reassigned, confirmed, conflict_keep_ref, no_call_*, no_vote
     sister_ref_id: Optional[str] = None  # Reference chromosome the agreeing sisters place the contig on

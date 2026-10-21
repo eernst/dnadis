@@ -48,6 +48,7 @@ _WORKDIR_BULK = [
     "rdna_period",
     "scaffolding",
     "chr_debris/*.fa",
+    "redundancy/*.fa",
     "debris/*.fa",
     "cobionts/contigs.fq",
     "rdna_consensus/reannotation/query_db.*",

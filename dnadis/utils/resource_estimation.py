@@ -204,7 +204,7 @@ def estimate_compleasm_resources(
     fasta_path: Path,
     config: ClusterConfig,
 ) -> ResourceSpec:
-    """Estimate resources for compleasm BUSCO evaluation (phase 17)."""
+    """Estimate resources for compleasm BUSCO evaluation (phase 18)."""
     qry_bp = _estimate_genome_bp_from_filesize(fasta_path)
     # compleasm/miniprot: memory scales modestly with genome size
     mem_gb = max(4.0, qry_bp * 4 / 1e9 + 2.0)
@@ -224,7 +224,7 @@ def estimate_depth_resources(
     assembly_path: Path,
     config: ClusterConfig,
 ) -> ResourceSpec:
-    """Estimate resources for read depth analysis (phase 12)."""
+    """Estimate resources for read depth analysis (phase 13)."""
     asm_bp = _estimate_genome_bp_from_filesize(assembly_path)
     reads_bytes = _file_size_bytes(reads_path)
 

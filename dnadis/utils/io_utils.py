@@ -6,6 +6,7 @@ Contains functions for file handling, gzip operations, and subprocess management
 """
 from __future__ import annotations
 
+import filecmp
 import gzip
 import os
 import re
@@ -201,6 +202,20 @@ def output_is_current(output: Path, *inputs: Path) -> bool:
         return all(Path(p).stat().st_mtime_ns <= out_mtime for p in inputs)
     except OSError:
         return False
+
+
+def replace_if_changed(tmp: Path, final: Path) -> bool:
+    """Move *tmp* to *final* unless *final* already has identical content.
+
+    Keeping an unchanged file keeps its mtime, so outputs checked with
+    :func:`output_is_current` stay reusable across runs.  Returns True if
+    *final* was replaced.
+    """
+    if final.exists() and filecmp.cmp(tmp, final, shallow=False):
+        tmp.unlink()
+        return False
+    tmp.replace(final)
+    return True
 
 
 def write_text_if_changed(path: Path, text: str) -> bool:
