@@ -124,6 +124,11 @@ def write_contig_summary_tsv(
         "has_3p_telomere",
         "is_circular",
         "depth_ratio",
+        "redundancy_target",
+        "redundancy_region",
+        "redundancy_cov",
+        "redundancy_identity",
+        "target_depth_ratio",
         "rearrangement_candidates",
         "sister_decision",
         "sister_ref_id",
@@ -283,6 +288,11 @@ def write_contig_summary_tsv(
             has_3p_telo = "yes" if clf and clf.has_3p_telomere else ("no" if clf and clf.has_3p_telomere is not None else "")
             is_circular = "yes" if clf and clf.is_circular else ("no" if clf and clf.is_circular is not None else "")
             depth_ratio = f"{clf.depth_ratio:.2f}" if clf and clf.depth_ratio is not None else ""
+            redundancy_target = clf.redundancy_target if clf and clf.redundancy_target else ""
+            redundancy_region = clf.redundancy_region if clf and clf.redundancy_region else ""
+            redundancy_cov = f"{clf.redundancy_cov:.3f}" if clf and clf.redundancy_cov is not None else ""
+            redundancy_identity = f"{clf.redundancy_identity:.4f}" if clf and clf.redundancy_identity is not None else ""
+            target_depth_ratio = f"{clf.target_depth_ratio:.2f}" if clf and clf.target_depth_ratio is not None else ""
             rearrangement_candidates = clf.rearrangement_candidates if clf and clf.rearrangement_candidates else ""
             sister_decision = clf.sister_decision if clf and clf.sister_decision else ""
             sister_ref_id = clf.sister_ref_id if clf and clf.sister_ref_id else ""
@@ -337,6 +347,11 @@ def write_contig_summary_tsv(
                         has_3p_telo,
                         is_circular,
                         depth_ratio,
+                        redundancy_target,
+                        redundancy_region,
+                        redundancy_cov,
+                        redundancy_identity,
+                        target_depth_ratio,
                         rearrangement_candidates,
                         sister_decision,
                         sister_ref_id,

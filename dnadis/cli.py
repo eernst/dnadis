@@ -970,6 +970,7 @@ def run_assembly(
 
     chromosome_debris: Set[str] = set()
     chrom_debris_hits: Dict = {}
+    redundancy_hits: Dict = {}
     if chromosome_contigs:
         if use_cluster:
             from dnadis.utils.resource_estimation import estimate_debris_resources
@@ -989,8 +990,22 @@ def run_assembly(
             exclude_contigs=already_classified,
             resource_spec=debris_spec if use_cluster else None,
         )
+        # Own-assembly redundancy evidence (annotation only): permissive
+        # alignment of every non-chromosome-length contig to the
+        # chromosome-length contigs.
+        from dnadis.detection.redundancy import detect_redundancy
+        redundancy_future = executor.submit(
+            detect_redundancy,
+            query_fasta=qry,
+            chromosome_contigs=chromosome_contigs,
+            candidate_contigs=set(qry_lengths) - chromosome_contigs - already_classified,
+            work_dir=work_dir / "redundancy",
+            threads=_job_threads(debris_spec),
+            resource_spec=debris_spec if use_cluster else None,
+        )
         chromosome_debris, chrom_debris_hits = debris_future.result()
         already_classified = already_classified | chromosome_debris
+        redundancy_hits = redundancy_future.result()
 
     # --- Phase 6: Cobiont detection ---
     cobionts: Dict[str, Tuple[int, str]] = {}
@@ -1192,6 +1207,7 @@ def run_assembly(
 
     # --- Phase 13: Read depth analysis (optional) ---
     depth_stats: Dict[str, 'DepthStats'] = {}
+    depth_baseline: Optional[float] = None
     if reads and not args.skip_depth:
         logger.phase("Phase 13: Read depth analysis")
         from dnadis.analysis.read_depth import calculate_depth_metrics
@@ -1247,6 +1263,7 @@ def run_assembly(
         if baseline_depths:
             baseline = statistics.median(baseline_depths)
             if baseline > 0:
+                depth_baseline = baseline
                 for clf in classifications:
                     if clf.depth_median is not None:
                         clf.depth_ratio = clf.depth_median / baseline
@@ -1255,6 +1272,32 @@ def run_assembly(
             logger.done(f"Depth analysis complete for {len(depth_stats)} contigs")
     elif reads and args.skip_depth:
         logger.info("Phase 13: Skipping depth analysis (--skip-depth)")
+
+    if redundancy_hits:
+        from dnadis.detection.redundancy import best_hit, region_depth_median
+        new_names = {c.original_name: c.new_name or c.original_name for c in classifications}
+        best = {
+            c.original_name: best_hit(redundancy_hits[c.original_name])
+            for c in classifications if c.original_name in redundancy_hits
+        }
+        region_depth: Dict = {}
+        regions_bed = work_dir / "read_depth" / "depth.regions.bed.gz"
+        if depth_baseline and regions_bed.exists():
+            regions: Dict[str, list] = defaultdict(list)
+            for h in best.values():
+                regions[h.target].append((h.target_start, h.target_end))
+            region_depth = region_depth_median(regions_bed, regions)
+        for clf in classifications:
+            h = best.get(clf.original_name)
+            if h is None:
+                continue
+            clf.redundancy_target = new_names.get(h.target, h.target)
+            clf.redundancy_region = f"{h.target_start + 1}-{h.target_end}"
+            clf.redundancy_cov = h.coverage
+            clf.redundancy_identity = h.identity
+            d = region_depth.get((h.target, h.target_start, h.target_end))
+            if d is not None:
+                clf.target_depth_ratio = d / depth_baseline
 
     # --- Phase 14: rDNA consensus building (optional) ---
     rdna_consensus_obj = None

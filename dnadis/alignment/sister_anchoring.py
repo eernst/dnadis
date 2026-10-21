@@ -37,7 +37,6 @@ that change an assignment are rerun with those calls applied (see
 from __future__ import annotations
 
 import csv
-import filecmp
 import os
 import re
 from collections import Counter, defaultdict
@@ -51,6 +50,7 @@ from dnadis.utils.io_utils import (
     merge_intervals,
     open_maybe_gzip,
     output_is_current,
+    replace_if_changed,
     run_to_gzip,
 )
 from dnadis.utils.logging_config import get_logger
@@ -240,19 +240,6 @@ def _write_fasta_subset(
     return n
 
 
-def _replace_if_changed(tmp: Path, final: Path) -> bool:
-    """Move *tmp* to *final* unless *final* already has identical content.
-
-    Keeping an unchanged file keeps its mtime, so alignments checked with
-    ``output_is_current`` stay reusable across runs.
-    """
-    if final.exists() and filecmp.cmp(tmp, final, shallow=False):
-        tmp.unlink()
-        return False
-    tmp.replace(final)
-    return True
-
-
 def write_inputs(
     assemblies: Dict[str, Path],
     candidates: Dict[str, Set[str]],
@@ -274,7 +261,7 @@ def write_inputs(
             n_cand += _write_fasta_subset(
                 assemblies[name], tmp, candidates[name], prefix=f"{name}{_SEP}",
             )
-    _replace_if_changed(tmp, cand_fa)
+    replace_if_changed(tmp, cand_fa)
 
     anchor_fas: Dict[str, Path] = {}
     anchor_dir = work_dir / "anchors"
@@ -287,7 +274,7 @@ def write_inputs(
         tmp.unlink(missing_ok=True)
         tmp.touch()
         if _write_fasta_subset(assemblies[name], tmp, anchors[name]):
-            _replace_if_changed(tmp, fa)
+            replace_if_changed(tmp, fa)
             anchor_fas[name] = fa
         else:
             tmp.unlink()
