@@ -74,6 +74,10 @@ pytest -m "not integration"
 ./dnadis.py -r ref.fasta --ref-gff3 ref.gff3 \
     --fofn assemblies.tsv -o multi_output/ --cluster
 
+# Remove bulky intermediates after a run (outputs, report inputs, rerun caches kept)
+./dnadis.py cleanup results/ --dry-run
+./dnadis.py cleanup results/
+
 # Dump config template
 ./dnadis.py --dump-config > config.toml
 
@@ -95,6 +99,7 @@ pytest -m "not integration"
 dnadis/
 ├── models.py              # Data models (ReferenceContext, Block, Chain, ContigClassification, etc.)
 ├── cli.py                 # Main entry point: prepare_reference(), run_assembly(), main()
+├── cleanup.py             # `dnadis cleanup RESULTS_DIR` subcommand (dispatched at the top of cli.main)
 ├── data/                  # Bundled reference data
 │   └── rfam/              # Rfam 15.0 subset: eukaryotic rRNA covariance models (auto-pressed on first use)
 ├── alignment/             # Alignment and synteny block building
