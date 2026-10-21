@@ -285,8 +285,8 @@ def test_contig_orientation_detection(tmp_path):
     macro_blocks = output_prefix.with_suffix(".macro_blocks.tsv")
     assert macro_blocks.exists(), "macro_blocks.tsv not created"
 
-    chrs_fasta = Path(f"{output_prefix}.chrs.fasta")
-    assert chrs_fasta.exists(), "chrs.fasta not created"
+    chrs_fasta = Path(f"{output_prefix}.chrs.fasta.gz")
+    assert chrs_fasta.exists(), "chrs.fasta.gz not created"
 
     # Parse the contig_summary.tsv to check orientation detection
     classifications = {}

@@ -7,11 +7,16 @@ Contains functions for file handling, gzip operations, and subprocess management
 from __future__ import annotations
 
 import gzip
+import os
 import re
 import shutil
 import stat as stat_module
+import struct
 import subprocess
+import zlib
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import List, Optional, Union
 
 
 _FILENAME_UNSAFE_RE = re.compile(r"[\s/\\]+")
@@ -37,9 +42,120 @@ def open_maybe_gzip(path: Path, mode: str):
     Open plain or gzipped text/binary files based on suffix.
     mode should be compatible with open()/gzip.open().
     """
-    if path.suffix == ".gz" or path.suffix == ".bgz":
+    if is_gzip_path(path):
         return gzip.open(path, mode)
     return open(path, mode)
+
+
+# BGZF (blocked gzip, as written by htslib's bgzip): a series of gzip members
+# of at most 64 KiB uncompressed each, carrying their compressed size in a
+# 'BC' extra field, terminated by an empty EOF member.  Plain gzip readers
+# decompress it as one stream; samtools faidx can index it for random access.
+_BGZF_BLOCK_SIZE = 0xFF00  # uncompressed bytes per block (htslib default)
+_BGZF_EOF = bytes.fromhex(
+    "1f8b08040000000000ff0600424302001b0003000000000000000000"
+)
+
+
+def _bgzf_block(data: bytes, level: int) -> bytes:
+    """Compress *data* (<= 64 KiB) into one BGZF block."""
+    comp = zlib.compressobj(level, zlib.DEFLATED, -15)
+    cdata = comp.compress(data) + comp.flush()
+    header = struct.pack(
+        "<4BI2BH2BHH",
+        0x1F, 0x8B, 8, 4,     # magic, deflate, FEXTRA
+        0,                    # mtime 0 keeps output reproducible
+        0, 0xFF,              # XFL, OS unknown
+        6,                    # XLEN
+        ord("B"), ord("C"), 2,
+        len(cdata) + 25,      # BSIZE = total block size - 1
+    )
+    trailer = struct.pack("<II", zlib.crc32(data) & 0xFFFFFFFF, len(data))
+    return header + cdata + trailer
+
+
+class BgzfWriter:
+    """Write text to a BGZF-compressed file, compressing blocks in parallel.
+
+    zlib releases the GIL, so blocks compress concurrently on *threads*
+    threads.  Usable as a context manager; the EOF block is written on close.
+    """
+
+    def __init__(self, path: Path, threads: int = 1, level: int = 6) -> None:
+        self._fh = open(path, "wb")
+        self._level = level
+        self._buf = bytearray()
+        self._threads = max(1, threads)
+        self._batch = _BGZF_BLOCK_SIZE * 16 * self._threads
+        self._pool: Optional[ThreadPoolExecutor] = (
+            ThreadPoolExecutor(max_workers=self._threads) if self._threads > 1 else None
+        )
+
+    def write(self, text: Union[str, bytes]) -> None:
+        self._buf += text.encode() if isinstance(text, str) else text
+        if len(self._buf) >= self._batch:
+            self._flush(final=False)
+
+    def _flush(self, final: bool) -> None:
+        n = len(self._buf) if final else len(self._buf) - len(self._buf) % _BGZF_BLOCK_SIZE
+        chunks: List[bytes] = [
+            bytes(self._buf[i:i + _BGZF_BLOCK_SIZE]) for i in range(0, n, _BGZF_BLOCK_SIZE)
+        ]
+        del self._buf[:n]
+        if self._pool is not None:
+            blocks = self._pool.map(lambda c: _bgzf_block(c, self._level), chunks)
+        else:
+            blocks = (_bgzf_block(c, self._level) for c in chunks)
+        for block in blocks:
+            self._fh.write(block)
+
+    def close(self) -> None:
+        if self._fh.closed:
+            return
+        try:
+            self._flush(final=True)
+            self._fh.write(_BGZF_EOF)
+        finally:
+            self._fh.close()
+            if self._pool is not None:
+                self._pool.shutdown()
+
+    def __enter__(self) -> "BgzfWriter":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+
+def is_gzip_path(path: Path) -> bool:
+    """True if *path* names a gzip/BGZF file by suffix."""
+    return path.suffix in (".gz", ".bgz")
+
+
+def open_text_writer(path: Path, threads: int = 1):
+    """Open *path* for text writing: BGZF if it ends in .gz/.bgz, else plain."""
+    if is_gzip_path(path):
+        return BgzfWriter(path, threads=threads)
+    return open(path, "w")
+
+
+def symlink_if_needed(link: Path, target: Path) -> bool:
+    """Make *link* a relative symlink to *target* (same directory).
+
+    Replaces whatever is at *link* unless it already points at *target*.
+    Returns True if the link was (re)created.
+    """
+    try:
+        if link.is_symlink() and os.readlink(link) == target.name:
+            return False
+    except OSError:
+        pass
+    tmp = link.with_name(link.name + ".tmp")
+    if tmp.is_symlink() or tmp.exists():
+        tmp.unlink()
+    os.symlink(target.name, tmp)
+    tmp.replace(link)
+    return True
 
 
 def have_exe(exe: str) -> bool:

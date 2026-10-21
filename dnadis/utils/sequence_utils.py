@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
-from dnadis.utils.io_utils import open_maybe_gzip
+from dnadis.utils.io_utils import BgzfWriter, is_gzip_path, open_maybe_gzip, open_text_writer
 from dnadis.utils.logging_config import get_logger
 
 logger = get_logger("sequence_utils")
@@ -101,13 +101,32 @@ def read_fasta_sequences(fasta_path: Path, warn_size_gb: float = 2.0) -> Dict[st
     return sequences
 
 
-def write_fasta(sequences: Dict[str, str], output_path: Path, wrap: int = 80) -> None:
-    """Write sequences to FASTA file with line wrapping."""
-    with output_path.open("w") as out:
-        for name, seq in sequences.items():
-            out.write(f">{name}\n")
-            for i in range(0, len(seq), wrap):
-                out.write(seq[i:i + wrap] + "\n")
+def fasta_has_records(path: Path) -> bool:
+    """True if *path* (plain or gzipped) exists and holds at least one record.
+
+    Unlike a file-size check, this treats an empty BGZF file (EOF block only)
+    as empty.
+    """
+    try:
+        with open_maybe_gzip(path, "rt") as fh:
+            for line in fh:
+                if line.strip():
+                    return line.startswith(">")
+    except (OSError, EOFError):
+        pass
+    return False
+
+
+def write_fasta(
+    sequences: Dict[str, str], output_path: Path, wrap: int = 80, threads: int = 1,
+) -> None:
+    """Write sequences to FASTA file with line wrapping.
+
+    A ``.gz``/``.bgz`` *output_path* is written BGZF-compressed.
+    """
+    with open_text_writer(output_path, threads=threads) as out:
+        for rec in _fasta_records(sequences, wrap):
+            out.write(rec)
 
 
 def _fasta_records(sequences: Dict[str, str], wrap: int):
@@ -119,14 +138,17 @@ def _fasta_records(sequences: Dict[str, str], wrap: int):
 
 
 def write_fasta_if_changed(
-    sequences: Dict[str, str], output_path: Path, wrap: int = 80,
+    sequences: Dict[str, str], output_path: Path, wrap: int = 80, threads: int = 1,
 ) -> bool:
     """Write a FASTA unless *output_path* already holds exactly that content.
 
-    Leaving an unchanged file untouched keeps its mtime, so downstream
-    outputs checked with ``io_utils.output_is_current`` stay reusable.
-    Returns True if the file was written.
+    A ``.gz``/``.bgz`` *output_path* is written BGZF-compressed and compared
+    on its decompressed content.  Leaving an unchanged file untouched keeps
+    its mtime, so downstream outputs checked with
+    ``io_utils.output_is_current`` stay reusable.  Returns True if the file
+    was written.
     """
+    compressed = is_gzip_path(output_path)
     new_size = 0
     new_hash = hashlib.md5()
     for rec in _fasta_records(sequences, wrap):
@@ -134,17 +156,20 @@ def write_fasta_if_changed(
         new_size += len(b)
         new_hash.update(b)
     try:
-        if output_path.stat().st_size == new_size:
+        if compressed or output_path.stat().st_size == new_size:
             old_hash = hashlib.md5()
-            with output_path.open("rb") as fh:
+            old_size = 0
+            with open_maybe_gzip(output_path, "rb") as fh:
                 for chunk in iter(lambda: fh.read(1 << 20), b""):
+                    old_size += len(chunk)
                     old_hash.update(chunk)
-            if old_hash.digest() == new_hash.digest():
+            if old_size == new_size and old_hash.digest() == new_hash.digest():
                 return False
-    except OSError:
+    except (OSError, EOFError):
         pass
     tmp_path = output_path.with_name(output_path.name + ".tmp")
-    with tmp_path.open("w") as out:
+    out = BgzfWriter(tmp_path, threads=threads) if compressed else tmp_path.open("w")
+    with out:
         for rec in _fasta_records(sequences, wrap):
             out.write(rec)
     tmp_path.replace(output_path)

@@ -41,6 +41,7 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
     "common": {
         "threads": "threads",
         "skip_plot": "skip_plot",
+        "uncompressed_fasta": "uncompressed_fasta",
         "no_self_contained_html": "no_self_contained_html",
         "chr_like_minlen": "chr_like_minlen",
         "add_subgenome_suffix": "add_subgenome_suffix",
