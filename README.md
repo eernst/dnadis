@@ -319,7 +319,7 @@ Read type to minimap2 preset mapping:
 | `--compleasm-path` | Path to compleasm executable. If unset, auto-detects from a `compleasm` conda environment or `PATH`. | auto-detect |
 | `--skip-compleasm` | Skip compleasm even if `--compleasm-lineage` is specified | off |
 
-When `--compleasm-lineage` is set, phase 18 runs compleasm on two FASTA subsets: chromosomal contigs (`*.chrs.fasta`, both `chrom_assigned` and `chrom_fragment`) and non-chromosome contigs (`*.non_chrs.fasta`, combining debris + unclassified + cobionts). Both runs are submitted in parallel. Results are included in the per-assembly unified HTML report and in the multi-assembly `comparison_summary.tsv`.
+When `--compleasm-lineage` is set, phase 18 runs compleasm once on the full assembly and splits its results by classification: chromosomal contigs (`chrom_assigned` and `chrom_fragment`) and non-chromosome contigs (everything else). Results are included in the per-assembly unified HTML report and in the multi-assembly `comparison_summary.tsv`.
 
 ### Phylogeny (species tree) options
 
@@ -368,17 +368,23 @@ When `--cluster` is enabled, compute-intensive phases (synteny alignment, BLAST 
 
 ### FASTA outputs
 
+FASTA outputs are bgzip-compressed (`*.fasta.gz`; index with `samtools faidx` for random access). `--uncompressed-fasta` writes plain `*.fasta` instead. Every contig is written to exactly one of the class files below.
+
 | File | Description |
 |------|-------------|
-| `*.chrs.fasta` | Chromosome-assigned contigs (renamed and reoriented; scaffolded pseudomolecules if `--scaffold`) |
-| `*.organelles.fasta` | Organelle contigs (chrC, chrM) |
-| `*.rdna.fasta` | rDNA-containing contigs |
-| `*.cobionts.fasta` | Cobiont contigs |
-| `*.debris.fasta` | Assembly debris (fragments, duplicates) |
-| `*.unclassified.fasta` | Contigs that couldn't be classified |
-| `*.non_chrs.fasta` | Combined non-chromosome contigs (debris + unclassified + cobionts; produced when `--compleasm-lineage` is set) |
-| `*.scaffolded.fasta` | Scaffolded chromosome pseudomolecules (if `--scaffold`) |
-| `*.scaffolded.agp` | AGP 2.0 file describing scaffold structure (if `--scaffold`) |
+| `*.chrs.fasta.gz` | Chromosome contigs (`chrom_assigned` + `chrom_fragment`), renamed and reoriented; always contig-level, with or without `--scaffold` |
+| `*.chrs.<sg>.fasta.gz` | Per-subgenome split of `chrs` (e.g. `chrs.A`, `chrs.B`). When all chromosome contigs belong to one subgenome, this is a symlink to `*.chrs.fasta.gz` |
+| `*.organelles.fasta.gz` | Organelle contigs (chrC, chrM) |
+| `*.rdna.fasta.gz` | rDNA-containing contigs |
+| `*.cobionts.fasta.gz` | Cobiont contigs |
+| `*.circles.fasta.gz` | Circular elements (`circular_element`) |
+| `*.debris.fasta.gz` | Assembly debris (fragments, duplicates) |
+| `*.unclassified.fasta.gz` | Contigs that couldn't be classified |
+| `*.chrs.scaffolds.fasta.gz` | Scaffolded chromosome pseudomolecules plus the chromosome contigs not joined into one (if `--scaffold`). A symlink to `*.chrs.fasta.gz` when scaffolding made no joins |
+| `*.chrs.scaffolds.<sg>.fasta.gz` | Per-subgenome split of the scaffolds (if `--scaffold`; symlinked like `chrs.<sg>`) |
+| `*.chrs.scaffolds.agp` | AGP 2.0 file describing scaffold structure (if `--scaffold`) |
+
+dnadis warns about FASTA/AGP files at the output prefix that the current run did not write (outputs from earlier runs with other settings or older file names); it does not delete them.
 
 ### Summary tables
 
@@ -465,7 +471,7 @@ Reference preparation runs first: read reference genome, compute GC statistics, 
 | 15 | **Reference-guided scaffolding** — order and orient contigs into chromosome-scale pseudomolecules with AGP output (optional, `--scaffold`) |
 | 16 | **Write FASTA outputs** — classified FASTA files (chromosomes, organelles, rDNA, etc.) |
 | 17 | **Write summary TSV** — per-contig classification table, evidence summaries, and visualizations |
-| 18 | **BUSCO completeness evaluation** — compleasm run on `*.chrs.fasta` and `*.non_chrs.fasta` in parallel (optional, requires `--compleasm-lineage`; skip with `--skip-compleasm`) |
+| 18 | **BUSCO completeness evaluation** — compleasm run once on the full assembly, reported for chromosomal and non-chromosome contigs (optional, requires `--compleasm-lineage`; skip with `--skip-compleasm`) |
 
 ## rDNA Consensus and Annotation
 
@@ -503,11 +509,11 @@ Uses Infernal covariance models from Rfam 15.0 for structure-based rRNA boundary
 | Category | Description |
 |----------|-------------|
 | `chrom_assigned` | Chromosome-length contig assigned to a reference chromosome via synteny |
-| `chrom_fragment` | Sub-chromosome-length contig with a passing reference assignment — unique chromosomal sequence too short to be a full chromosome. Grouped with chromosomes in `chrs.fasta`, the per-subgenome FASTAs, and the compleasm `chrs` subset, and scaffolded against the reference. A fragment is reclassified as `chrom_debris` only when its reference footprint is largely contained (≥80%) within a longer placed contig at high identity (so it is a redundant duplicate, not unique sequence) |
+| `chrom_fragment` | Sub-chromosome-length contig with a passing reference assignment — unique chromosomal sequence too short to be a full chromosome. Grouped with chromosomes in `chrs.fasta.gz`, the per-subgenome FASTAs, and the compleasm `chrs` subset, and scaffolded against the reference. A fragment is reclassified as `chrom_debris` only when its reference footprint is largely contained (≥80%) within a longer placed contig at high identity (so it is a redundant duplicate, not unique sequence) |
 | `chrom_unassigned` | Chromosome-length contig without reference assignment (novel or failed synteny gates) |
 | `organelle_complete` | Complete organelle genome (chrC or chrM) |
 | `organelle_debris` | Partial organelle sequence |
-| `rDNA` | Contig made up mostly of 45S rDNA: seed BLAST coverage ≥ `--rdna-min-cov`, or rDNA array span coverage ≥ `--rdna-min-cov` after the consensus step (which can reroute `chrom_fragment`, debris and unclassified contigs). Named `contig_N`. If the contig also passed the synteny gate, `assigned_ref_id` is kept as a "homologous to chrN" annotation; this rests on rDNA similarity, which is shared between NORs. Written to `*.rdna.fasta` and not scaffolded unless `--scaffold-rdna-contigs`. |
+| `rDNA` | Contig made up mostly of 45S rDNA: seed BLAST coverage ≥ `--rdna-min-cov`, or rDNA array span coverage ≥ `--rdna-min-cov` after the consensus step (which can reroute `chrom_fragment`, debris and unclassified contigs). Named `contig_N`. If the contig also passed the synteny gate, `assigned_ref_id` is kept as a "homologous to chrN" annotation; this rests on rDNA similarity, which is shared between NORs. Written to `*.rdna.fasta.gz` and not scaffolded unless `--scaffold-rdna-contigs`. |
 | `cobiont` | Sequence from a co-occurring organism (symbiont, commensal, etc.) |
 | `chrom_debris` | High-coverage (≥80%), high-identity (≥90%) duplicate of an assembled chromosome contig, or a sub-chromosome-length contig redundant with a longer placed contig |
 | `debris` | Assembly debris with reference nucleotide coverage (≥50%) or protein homology (≥2 miniprot hits) |
@@ -736,7 +742,7 @@ Note: Nucleotide mode does not require `--ref-gff3`, but if provided, gene count
     -t 32
 ```
 
-This produces `*.scaffolded.fasta` (chromosome pseudomolecules) and `*.scaffolded.agp` (AGP 2.0 describing scaffold structure). If RagTag is installed, it is used for ordering; otherwise, the built-in scaffolder orders contigs by reference position.
+This produces `*.chrs.scaffolds.fasta.gz` (chromosome pseudomolecules, plus chromosome contigs not joined into one) and `*.chrs.scaffolds.agp` (AGP 2.0 describing scaffold structure); `*.chrs.fasta.gz` keeps the contig-level chromosomes. If RagTag is installed, it is used for ordering; otherwise, the built-in scaffolder orders contigs by reference position.
 
 ### With read depth analysis (HiFi reads)
 

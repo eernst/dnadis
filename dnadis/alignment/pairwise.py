@@ -25,7 +25,7 @@ from dnadis.models import Block
 from dnadis.output.tsv_output import write_macro_blocks_tsv
 from dnadis.utils.io_utils import file_exists_and_valid, open_maybe_gzip, output_is_current
 from dnadis.utils.logging_config import get_logger
-from dnadis.utils.sequence_utils import read_fasta_lengths
+from dnadis.utils.sequence_utils import fasta_has_records, read_fasta_lengths
 
 logger = get_logger("pairwise")
 
@@ -99,13 +99,13 @@ def compute_pairwise_synteny(
         Path to the pairwise macro_blocks TSV, or None if alignment could not
         be performed (e.g., missing chrs.fasta).
     """
-    if not file_exists_and_valid(left_fasta):
+    if not fasta_has_records(left_fasta):
         logger.warning(
             f"Skipping pairwise {left_name} vs {right_name}: "
             f"left FASTA not found or empty: {left_fasta}"
         )
         return None
-    if not file_exists_and_valid(right_fasta):
+    if not fasta_has_records(right_fasta):
         logger.warning(
             f"Skipping pairwise {left_name} vs {right_name}: "
             f"right FASTA not found or empty: {right_fasta}"

@@ -165,7 +165,11 @@ from dnadis.classification.classifier import (
     count_genes_per_ref_chrom,
     determine_contig_orientations,
 )
-from dnadis.output.fasta_output import write_classified_fastas, write_per_subgenome_chrs_fastas
+from dnadis.output.fasta_output import (
+    find_stale_outputs,
+    write_classified_fastas,
+    write_per_subgenome_chrs_fastas,
+)
 from dnadis.output.tsv_output import (
     build_segment_support_from_rows,
     write_chain_segments_tsv,
@@ -1413,6 +1417,7 @@ def run_assembly(
     # --- Phase 15: Scaffolding (optional) ---
     scaffolded_seqs: Dict[str, str] = {}
     scaffold_confidences: Optional[Dict[str, tuple]] = None
+    agp_path = Path(str(outprefix) + ".chrs.scaffolds.agp")
     if args.scaffold:
         logger.phase("Phase 15: Reference-guided scaffolding")
         from dnadis.output.scaffolding import scaffold_chromosomes, write_agp, orientations_from_agp
@@ -1435,12 +1440,6 @@ def run_assembly(
         )
 
         if scaffolded_seqs:
-            from dnadis.utils.sequence_utils import write_fasta as _write_fasta
-            scaffolded_fasta = Path(str(outprefix) + ".scaffolded.fasta")
-            _write_fasta(scaffolded_seqs, scaffolded_fasta)
-            logger.done(f"Scaffolded FASTA:  {scaffolded_fasta} ({len(scaffolded_seqs)} chromosomes)")
-
-            agp_path = Path(str(outprefix) + ".scaffolded.agp")
             write_agp(agp_lines, agp_path)
             logger.done(f"Scaffolded AGP:    {agp_path}")
 
@@ -1456,17 +1455,41 @@ def run_assembly(
 
     # --- Phase 16: Write FASTA outputs ---
     logger.phase("Phase 16: Writing FASTA outputs")
-    write_classified_fastas(
+    compress_fasta = not args.uncompressed_fasta
+    fasta_paths = write_classified_fastas(
         query_fasta=qry,
         classifications=classifications,
         contig_orientations=contig_orientations,
         output_prefix=outprefix,
         scaffolded_seqs=scaffolded_seqs if args.scaffold else None,
+        compress=compress_fasta,
+        threads=args.threads,
     )
 
-    # Split chrs.fasta into per-subgenome files (for polyploid pairwise synteny)
-    chrs_fasta = Path(str(outprefix) + ".chrs.fasta")
-    per_sg_chrs = write_per_subgenome_chrs_fastas(chrs_fasta, outprefix)
+    # Per-subgenome splits (for polyploid pairwise synteny).  Pairwise synteny
+    # runs on the scaffolds when present: the comparison report lays out its
+    # pills from the AGP.
+    written_outputs = list(fasta_paths.values())
+    per_sg_chrs = write_per_subgenome_chrs_fastas(
+        fasta_paths["chrs"], outprefix, threads=args.threads,
+    )
+    written_outputs.extend(per_sg_chrs.values())
+    pairwise_fasta = fasta_paths["chrs"]
+    if "chrs_scaffolds" in fasta_paths:
+        pairwise_fasta = fasta_paths["chrs_scaffolds"]
+        per_sg_chrs = write_per_subgenome_chrs_fastas(
+            pairwise_fasta, outprefix, kind="chrs.scaffolds", threads=args.threads,
+        )
+        written_outputs.extend(per_sg_chrs.values())
+        written_outputs.append(agp_path)
+
+    stale = find_stale_outputs(outprefix, written_outputs)
+    if stale:
+        logger.warning(
+            f"{len(stale)} FASTA/AGP file(s) at this output prefix were not written by "
+            f"this run (earlier run with other settings or older dnadis file names): "
+            + ", ".join(p.name for p in stale)
+        )
 
     # --- Phase 17: Write summary TSV ---
     logger.phase("Phase 17: Writing summary TSV")
@@ -1599,7 +1622,8 @@ def run_assembly(
         cobionts_tsv_path=cobionts_tsv if cobionts_filtered else None,
         rdna_annotations_tsv=rdna_annotations_tsv,
         rdna_arrays_tsv=rdna_arrays_tsv_path,
-        agp_tsv=Path(str(outprefix) + ".scaffolded.agp") if args.scaffold and scaffolded_seqs else None,
+        agp_tsv=agp_path if args.scaffold and scaffolded_seqs else None,
+        chrs_fasta=pairwise_fasta,
         per_subgenome_chrs=per_sg_chrs,
         compleasm_full=compleasm_full_result,
         compleasm_chrs=compleasm_chrs_result,
@@ -1891,6 +1915,11 @@ def main():
     common = p.add_argument_group("Common options")
     common.add_argument("-t", "--threads", type=_positive_int, default=8, help="Threads for minimap2/miniprot [8]")
     common.add_argument("--skip-plot", action="store_true", help="Skip unified HTML report generation")
+    common.add_argument(
+        "--uncompressed-fasta", action="store_true",
+        help="Write classified FASTA outputs uncompressed (*.fasta). "
+             "Default: bgzip-compressed (*.fasta.gz), indexable with samtools faidx.",
+    )
     common.add_argument("--no-self-contained-html", action="store_true",
                         help="Produce non-self-contained HTML reports (HTML + companion _files/ directory). "
                              "Default: self-contained (all resources embedded in a single portable file).")
@@ -2831,8 +2860,8 @@ def main():
                     left, right = results[i], results[i + 1]
                     pair_name = f"{left.assembly_name}_vs_{right.assembly_name}"
                     pair_prefix = pairwise_dir / pair_name
-                    left_fasta = Path(str(left.outprefix) + ".chrs.fasta")
-                    right_fasta = Path(str(right.outprefix) + ".chrs.fasta")
+                    left_fasta = left.chrs_fasta
+                    right_fasta = right.chrs_fasta
                     macro_tsv = Path(str(pair_prefix) + ".macro_blocks.tsv")
                     if output_is_current(macro_tsv, left_fasta, right_fasta):
                         logger.info(f"Reusing cached pairwise: {macro_tsv}")
@@ -2939,7 +2968,7 @@ def main():
                     _submit_nonadj_pairs(
                         results,
                         pairwise_dir / "nonadj",
-                        get_fasta=lambda r: Path(str(r.outprefix) + ".chrs.fasta"),
+                        get_fasta=lambda r: r.chrs_fasta,
                     )
 
             # Collect all pairwise results (adjacent + non-adjacent)

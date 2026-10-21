@@ -740,6 +740,9 @@ def scaffold_chromosomes(
     - Runs RagTag scaffold per group (if installed)
     - Falls back to built-in ordering by reference position
 
+    Chromosome contigs not placed in any scaffold are emitted on their own,
+    so the scaffold set holds every chrom_assigned/chrom_fragment contig.
+
     Args:
         query_fasta: Path to query assembly FASTA.
         classifications: List of ContigClassification objects.
@@ -832,8 +835,9 @@ def scaffold_chromosomes(
 
         # T2T handling: emit each T2T contig as its own trivial scaffold.
         # When T2T contigs exist, remaining non-anchor members (chromosome
-        # fragments) are excluded from scaffolded output — the T2T contig(s)
-        # already represent the complete chromosome.
+        # fragments) are not joined to them; they are emitted unplaced below.
+        # Fragments redundant with the T2T contig were already demoted to
+        # chrom_debris, so the ones left here carry sequence it lacks.
         chrom_assigned_in_group = [
             c for c in contig_names
             if clf_lookup.get(c) and clf_lookup[c].classification == "chrom_assigned"
@@ -864,8 +868,8 @@ def scaffold_chromosomes(
             n_dropped = len(contig_names) - len(chrom_assigned_in_group)
             if n_dropped > 0:
                 logger.info(
-                    f"{scaffold_name}: dropping {n_dropped} fragment contig(s) "
-                    f"(T2T copy exists)"
+                    f"{scaffold_name}: leaving {n_dropped} fragment contig(s) "
+                    f"unplaced (T2T copy exists)"
                 )
             for contig in non_t2t_chrom:
                 clf = clf_lookup.get(contig)
@@ -971,6 +975,27 @@ def scaffold_chromosomes(
                 # Collect results in submission order (= sorted key order)
                 for future in futures:
                     _collect_group_result(future.result())
+
+    # Every chromosome contig belongs in the scaffold set.  Contigs not placed
+    # above (fragments beside a T2T copy, extra copies, fragments without a
+    # reference, groups that produced no scaffold) are emitted on their own
+    # under their contig names, like contigs RagTag could not place.
+    placed = {
+        fields[5] for fields in (line.split("\t") for line in all_agp)
+        if len(fields) > 5 and fields[4] == "W"
+    }
+    for clf in classifications:
+        if clf.classification not in ("chrom_assigned", "chrom_fragment"):
+            continue
+        if clf.original_name in placed:
+            continue
+        name = clf.new_name or clf.original_name
+        if name in all_scaffolded:
+            name = clf.original_name
+        _emit_trivial_scaffold(
+            name, clf.original_name, query_seqs, contig_orientations,
+            all_scaffolded, all_agp, log_label="unplaced",
+        )
 
     logger.done(f"Scaffolded {len(all_scaffolded)} chromosomes")
     return all_scaffolded, all_agp, all_confidences

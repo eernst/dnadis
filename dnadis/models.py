@@ -644,7 +644,11 @@ class AssemblyResult:
     rdna_arrays_tsv: Optional[Path] = None
     agp_tsv: Optional[Path] = None
 
-    # Per-subgenome chrs.fasta paths (polyploid references)
+    # Oriented chromosome FASTA used for pairwise synteny: chrs.scaffolds
+    # when --scaffold produced scaffolds, else chrs.
+    chrs_fasta: Optional[Path] = None
+
+    # Per-subgenome splits of chrs_fasta (polyploid references)
     per_subgenome_chrs: Dict[str, Path] = field(default_factory=dict)
 
     # Compleasm (BUSCO) completeness results.  ``compleasm_full`` is the
