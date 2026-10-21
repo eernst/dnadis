@@ -13,7 +13,9 @@ These scripts support development and CI, not the main `dnadis` pipeline.
 - **`bundle_reports.py`** — end-user utility that packs the HTML reports from a
   dnadis output folder into a compressed tarball, preserving the per-assembly
   subdirectories so the comparison report's links still resolve. Point it at an
-  output directory: `python scripts/bundle_reports.py OUTPUT_DIR`.
+  output directory: `python scripts/bundle_reports.py OUTPUT_DIR`. Add `--tsv` to
+  include the TSV tables too (top-level ones and each subdirectory's
+  `NAME/NAME.*.tsv`).
 
 The top-level `refresh_reports.py` is a separate developer utility for
 re-rendering HTML reports from updated R/Rmd templates; see its `--help` output
