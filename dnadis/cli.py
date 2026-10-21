@@ -1828,8 +1828,14 @@ def _run_sister_pass(
 # main: argument parsing, validation, dispatch
 # ---------------------------------------------------------------------------
 def main():
+    # Subcommands are dispatched before the main parser, whose -r/-o are required.
+    if len(sys.argv) > 1 and sys.argv[1] == "cleanup":
+        from dnadis.cleanup import main as cleanup_main
+        sys.exit(cleanup_main(sys.argv[2:]))
+
     p = argparse.ArgumentParser(
         description="Genome assembly comprehension and curation tool for contig classification using synteny evidence (protein-anchored or nucleotide whole-genome alignment).",
+        epilog="Subcommands:\n  dnadis.py cleanup RESULTS_DIR   remove bulky intermediates after a run (see cleanup --help)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 

@@ -386,6 +386,17 @@ FASTA outputs are bgzip-compressed (`*.fasta.gz`; index with `samtools faidx` fo
 
 dnadis warns about FASTA/AGP files at the output prefix that the current run did not write (outputs from earlier runs with other settings or older file names); it does not delete them.
 
+### Cleaning up after a run
+
+The per-assembly work directories (`{name}/{name}_classification/`) hold intermediates that can be much larger than the outputs: copies of the input split by class, BLAST databases, RagTag work directories, and compleasm's raw miniprot/hmmsearch output. `cleanup` removes them and keeps the outputs, everything the reports and phylogeny read, and the caches that save hours on a rerun (compleasm summaries, full tables and translated proteins; read-depth regions; synteny PAFs; cached debris alignments and centrifuger results):
+
+```bash
+./dnadis.py cleanup results/ --dry-run   # list what would go and the space freed
+./dnadis.py cleanup results/
+```
+
+Read-alignment BAMs (present when the run used `--keep-depth-bam`) are removed unless `--keep-bams` is given. `--sister-anchors` also removes the sister-anchoring anchor/candidate FASTAs (a rerun with `--sister-anchoring` then redoes the sister alignments). `--legacy-outputs` removes outputs under pre-bgzip file names (`*.fasta`, `*.scaffolded.*`, `*.circular_elements.fasta`), but only where the current-name file exists.
+
 ### Summary tables
 
 | File | Description |
