@@ -476,8 +476,8 @@ Reference preparation runs first: read reference genome, compute GC statistics, 
 | 9 | **Orientation determination** — determine strand for chromosome contigs based on synteny votes |
 | 10 | **Telomere detection** — scan contig ends for telomeric repeats (skip with `--skip-telomeres`) |
 | 11 | **Classification** — assign all contigs to categories with confidence levels; rename contigs to reference-based names (e.g., `chr1A`, `chr1A_f1`, `contig_1`) |
-| 12 | **Rearrangement detection** — identify contigs with evidence from multiple reference chromosomes |
-| 13 | **Read depth analysis** — align reads and compute per-contig depth metrics (optional, requires `--reads`) |
+| 12 | **Read depth analysis** — align reads and compute per-contig depth metrics (optional, requires `--reads`) |
+| 13 | **Rearrangement detection** — identify contigs with evidence from multiple reference chromosomes; score each fusion junction as `biological_fusion`, `assembly_artifact` or `inconclusive` from read depth, alignment continuity and (with `--fusion-split-reads`) split reads (skip scoring with `--skip-fusion-evidence`) |
 | 14 | **rDNA consensus building** — build species-specific 45S rDNA consensus and annotate rRNA sub-features (skip with `--skip-rdna-consensus`) |
 | 15 | **Reference-guided scaffolding** — order and orient contigs into chromosome-scale pseudomolecules with AGP output (optional, `--scaffold`) |
 | 16 | **Write FASTA outputs** — classified FASTA files (chromosomes, organelles, rDNA, etc.) |
