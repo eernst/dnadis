@@ -244,6 +244,17 @@ class RearrangementCall:
         confidence: 'high', 'medium', or 'low'.
         evidence: Brief description of the supporting evidence.
         misassembly_mimic: Assembly artifact that could produce the same signature.
+        junction_start: Fusion only: start of the query interval between the two
+            reference-assigned arms.
+        junction_end: Fusion only: end of that interval.
+        depth_flank_ratio: Fusion only: min/max of left and right flank median depth.
+        depth_junction_ratio: Fusion only: junction median depth over mean flank depth.
+        depth_junction_cv: Fusion only: coefficient of variation of junction-zone depth.
+        fusion_call: Fusion only: 'biological_fusion', 'assembly_artifact',
+            or 'inconclusive'.
+        fusion_confidence: Fusion only: confidence of ``fusion_call``.
+        evidence_codes: Fusion only: comma-separated evidence lines that were
+            available and supportive (subset of Aln, Depth, Split).
     """
     contig: str
     original_name: str
@@ -259,6 +270,70 @@ class RearrangementCall:
     confidence: str
     evidence: str
     misassembly_mimic: str = ""
+    junction_start: Optional[int] = None
+    junction_end: Optional[int] = None
+    depth_flank_ratio: Optional[float] = None
+    depth_junction_ratio: Optional[float] = None
+    depth_junction_cv: Optional[float] = None
+    fusion_call: str = ""
+    fusion_confidence: str = ""
+    evidence_codes: str = ""
+
+
+@dataclass
+class FusionJunction:
+    """Evidence summary for one contig-internal junction between two reference arms.
+
+    Attributes:
+        contig: Query contig name (original).
+        left_ref: Reference whose alignments lie on the lower-coordinate side.
+        right_ref: Reference whose alignments lie on the higher-coordinate side.
+        junction_start: Start of the query interval separating the two arms.
+        junction_end: End of that interval (equal to start when arms abut or overlap).
+        junction_point: Representative breakpoint coordinate on the contig.
+        contig_len: Contig length.
+        left_span: Merged query bases aligned to ``left_ref``.
+        right_span: Merged query bases aligned to ``right_ref``.
+        depth_left_median / depth_junction_median / depth_right_median:
+            Median depth in each zone (None when depth is unavailable).
+        depth_flank_ratio: min/max of the flank medians.
+        depth_junction_ratio: junction median over mean flank median.
+        depth_junction_cv: Coefficient of variation of junction-zone windows.
+        depth_flank_cv: Coefficient of variation of flank windows.
+        depth_windows: Number of informative windows used.
+        depth_verdict: 'uniform', 'drop', 'spike', 'asymmetric', or
+            'insufficient_depth'.
+        aln_gap_bp: Unaligned contig bases between the two arms (negative = overlap).
+        aln_verdict: 'abutting', 'gapped', or 'overlapping'.
+        clip_spanning / clip_clipped: Reads spanning vs clipped/split at the
+            breakpoint (None when no BAM was available).
+        fusion_call / fusion_confidence / evidence_codes: Final verdict.
+    """
+    contig: str
+    left_ref: str
+    right_ref: str
+    junction_start: int
+    junction_end: int
+    junction_point: int
+    contig_len: int
+    left_span: int
+    right_span: int
+    depth_left_median: Optional[float] = None
+    depth_junction_median: Optional[float] = None
+    depth_right_median: Optional[float] = None
+    depth_flank_ratio: Optional[float] = None
+    depth_junction_ratio: Optional[float] = None
+    depth_junction_cv: Optional[float] = None
+    depth_flank_cv: Optional[float] = None
+    depth_windows: int = 0
+    depth_verdict: str = ""
+    aln_gap_bp: int = 0
+    aln_verdict: str = ""
+    clip_spanning: Optional[int] = None
+    clip_clipped: Optional[int] = None
+    fusion_call: str = "inconclusive"
+    fusion_confidence: str = "low"
+    evidence_codes: str = ""
 
 
 @dataclass
@@ -672,3 +747,5 @@ class AssemblyResult:
     # Rearrangement calls
     rearrangements: List['RearrangementCall'] = field(default_factory=list)
     rearrangements_tsv: Optional[Path] = None
+    fusion_junctions: List['FusionJunction'] = field(default_factory=list)
+    fusion_junctions_tsv: Optional[Path] = None

@@ -224,7 +224,7 @@ def estimate_depth_resources(
     assembly_path: Path,
     config: ClusterConfig,
 ) -> ResourceSpec:
-    """Estimate resources for read depth analysis (phase 13)."""
+    """Estimate resources for read depth analysis (phase 12)."""
     asm_bp = _estimate_genome_bp_from_filesize(assembly_path)
     reads_bytes = _file_size_bytes(reads_path)
 

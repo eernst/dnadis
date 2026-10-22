@@ -1186,30 +1186,12 @@ def run_assembly(
             clf.sister_votes = call.votes_str or None
             clf.sister_identity = call.identity
 
-    # --- Phase 12: Rearrangement detection ---
-    logger.phase("Phase 12: Rearrangement detection")
-    from dnadis.detection.rearrangements import detect_rearrangements
-    from dnadis.output.tsv_output import write_rearrangements_tsv
-
-    rearrangement_calls = detect_rearrangements(
-        macro_block_rows=ev.macro_block_rows,
-        best_ref=best_ref,
-        ref_lengths=ref_lengths,
-        query_lengths=qry_lengths,
-        classifications=classifications,
-        synteny_mode=args.synteny_mode,
-    )
-    rearrangements_tsv: Optional[Path] = None
-    if rearrangement_calls:
-        rearrangements_tsv = Path(str(outprefix) + ".rearrangements.tsv")
-        write_rearrangements_tsv(rearrangements_tsv, rearrangement_calls)
-        logger.done(f"Rearrangements:    {rearrangements_tsv}")
-
-    # --- Phase 13: Read depth analysis (optional) ---
+    # --- Phase 12: Read depth analysis (optional) ---
     depth_stats: Dict[str, 'DepthStats'] = {}
     depth_baseline: Optional[float] = None
+    depth_work_dir = work_dir / "read_depth"
     if reads and not args.skip_depth:
-        logger.phase("Phase 13: Read depth analysis")
+        logger.phase("Phase 12: Read depth analysis")
         from dnadis.analysis.read_depth import calculate_depth_metrics
         from dnadis.models import DepthStats
 
@@ -1219,7 +1201,6 @@ def run_assembly(
         else:
             depth_spec = ResourceSpec()
 
-        depth_work_dir = work_dir / "read_depth"
         depth_future = executor.submit(
             calculate_depth_metrics,
             reads=reads,
@@ -1230,7 +1211,7 @@ def run_assembly(
             reads_type=args.reads_type,
             window_size=args.depth_window_size,
             target_coverage=args.depth_target_coverage if args.depth_target_coverage > 0 else None,
-            keep_bam=args.keep_depth_bam,
+            keep_bam=args.keep_depth_bam or args.fusion_split_reads,
             resource_spec=depth_spec if use_cluster else None,
         )
         depth_stats = depth_future.result()
@@ -1271,7 +1252,85 @@ def run_assembly(
         if depth_stats:
             logger.done(f"Depth analysis complete for {len(depth_stats)} contigs")
     elif reads and args.skip_depth:
-        logger.info("Phase 13: Skipping depth analysis (--skip-depth)")
+        logger.info("Phase 12: Skipping depth analysis (--skip-depth)")
+
+    # --- Phase 13: Rearrangement detection ---
+    logger.phase("Phase 13: Rearrangement detection")
+    from dnadis.detection.rearrangements import detect_rearrangements
+    from dnadis.output.tsv_output import write_rearrangements_tsv
+
+    rearrangement_calls = detect_rearrangements(
+        macro_block_rows=ev.macro_block_rows,
+        best_ref=best_ref,
+        ref_lengths=ref_lengths,
+        query_lengths=qry_lengths,
+        classifications=classifications,
+        synteny_mode=args.synteny_mode,
+    )
+    fusion_junctions: list = []
+    fusion_junctions_tsv: Optional[Path] = None
+    if rearrangement_calls and not args.skip_fusion_evidence:
+        from dnadis.analysis.junction_evidence import (
+            FusionThresholds, annotate_fusion_evidence,
+        )
+        depth_regions = (depth_work_dir / "depth.regions.bed.gz"
+                         if reads and not args.skip_depth else None)
+        fusion_bam: Optional[Path] = None
+        if args.fusion_split_reads and reads:
+            cand = depth_work_dir / "aligned_reads.sorted.bam"
+            if cand.exists():
+                fusion_bam = cand
+            elif str(reads).endswith(".bam"):
+                fusion_bam = Path(str(reads))
+            else:
+                logger.warning("--fusion-split-reads: no BAM available; "
+                               "skipping split-read evidence")
+        fusion_junctions = annotate_fusion_evidence(
+            rearrangement_calls,
+            macro_block_rows=ev.macro_block_rows,
+            query_lengths=qry_lengths,
+            depth_regions_path=depth_regions,
+            bam_path=fusion_bam,
+            thr=FusionThresholds(
+                min_fusion_frac=args.fusion_min_frac,
+                flank_bp=args.fusion_junction_flank,
+                drop_ratio=args.fusion_depth_drop_ratio,
+                spike_ratio=args.fusion_depth_spike_ratio,
+                min_evidence_depth=args.fusion_min_evidence_depth,
+                max_junction_gap_bp=args.fusion_max_junction_gap,
+            ),
+        )
+        if depth_regions is None:
+            logger.info("Fusion evidence: no read depth; using alignment continuity only")
+        for j in fusion_junctions:
+            logger.info(f"Fusion junction {j.contig} {j.left_ref}|{j.right_ref} "
+                        f"@{j.junction_point:,}: {j.fusion_call} "
+                        f"({j.fusion_confidence}; {j.evidence_codes or 'no evidence'})")
+        # Fragments of a fused arm's reference that sit in a different subgenome
+        # group than the fusion contig cannot co-scaffold with it.
+        clf_by_orig = {c.original_name: c for c in classifications}
+        for j in fusion_junctions:
+            if j.fusion_call != "biological_fusion":
+                continue
+            fc = clf_by_orig.get(j.contig)
+            for frag in classifications:
+                if (frag.classification == "chrom_fragment"
+                        and frag.assigned_ref_id in (j.left_ref, j.right_ref)
+                        and frag.query_subgenome_grp != (fc.query_subgenome_grp if fc else None)):
+                    logger.info(f"Fragment {frag.new_name} ({frag.assigned_ref_id}) is in a "
+                                f"different subgenome group than fusion contig "
+                                f"{fc.new_name if fc else j.contig}; it will not "
+                                f"co-scaffold with it")
+        if fusion_junctions:
+            from dnadis.output.tsv_output import write_fusion_junctions_tsv
+            fusion_junctions_tsv = Path(str(outprefix) + ".fusion_junctions.tsv")
+            write_fusion_junctions_tsv(fusion_junctions_tsv, fusion_junctions)
+            logger.done(f"Fusion junctions: {fusion_junctions_tsv}")
+    rearrangements_tsv: Optional[Path] = None
+    if rearrangement_calls:
+        rearrangements_tsv = Path(str(outprefix) + ".rearrangements.tsv")
+        write_rearrangements_tsv(rearrangements_tsv, rearrangement_calls)
+        logger.done(f"Rearrangements:    {rearrangements_tsv}")
 
     if redundancy_hits:
         from dnadis.detection.redundancy import best_hit, region_depth_median
@@ -1675,6 +1734,8 @@ def run_assembly(
     )
     result.rearrangements = rearrangement_calls
     result.rearrangements_tsv = rearrangements_tsv
+    result.fusion_junctions = fusion_junctions
+    result.fusion_junctions_tsv = fusion_junctions_tsv
 
     if not args.skip_plot:
         agp_tsv = result.agp_tsv
@@ -2335,6 +2396,43 @@ def main():
              "required for off-target clusters.  Lower values detect gene-poor "
              "rearrangements (e.g. pericentromeric); higher values are more "
              "conservative.  Ignored in nucleotide mode. [0.10]",
+    )
+
+    fu_grp = p.add_argument_group("Fusion / misjoin evidence")
+    fu_grp.add_argument(
+        "--skip-fusion-evidence", action="store_true",
+        help="Skip depth/alignment scoring of fusion junctions",
+    )
+    fu_grp.add_argument(
+        "--fusion-min-frac", type=float, default=0.30,
+        help="Minimum contig fraction aligned to a reference for it to count "
+             "as a fusion arm [0.30]",
+    )
+    fu_grp.add_argument(
+        "--fusion-junction-flank", type=int, default=5000,
+        help="Flank size (bp) on each side of a junction for depth comparison [5000]",
+    )
+    fu_grp.add_argument(
+        "--fusion-depth-drop-ratio", type=float, default=0.65,
+        help="Junction/flank depth ratio below which a junction is a depth drop [0.65]",
+    )
+    fu_grp.add_argument(
+        "--fusion-depth-spike-ratio", type=float, default=1.5,
+        help="Junction/flank depth ratio above which a junction is a depth spike [1.5]",
+    )
+    fu_grp.add_argument(
+        "--fusion-min-evidence-depth", type=float, default=10.0,
+        help="Minimum flank median depth for depth evidence to be used [10]",
+    )
+    fu_grp.add_argument(
+        "--fusion-max-junction-gap", type=int, default=100000,
+        help="Largest unaligned contig gap (bp) between arms still counted as "
+             "abutting [100000]",
+    )
+    fu_grp.add_argument(
+        "--fusion-split-reads", action="store_true",
+        help="Count spanning vs clipped/split reads at each junction (retains "
+             "the depth BAM; requires samtools)",
     )
 
     # =========================================================================

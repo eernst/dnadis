@@ -39,7 +39,7 @@ import statistics
 import subprocess
 from enum import Enum
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from dnadis.models import DepthStats
 from dnadis.utils.io_utils import file_exists_and_valid, have_exe
@@ -853,6 +853,187 @@ def run_mosdepth(
     except Exception as e:
         logger.error(f"mosdepth failed: {e}")
         return False
+
+
+def read_depth_windows(
+    regions_bed_gz: Optional[Path],
+    contig: str,
+    start: int,
+    end: int,
+) -> List[Tuple[int, int, float]]:
+    """Return mosdepth windows overlapping ``[start, end)`` on one contig.
+
+    Streams the gzipped BED without building a per-contig table.  Returns an
+    empty list when the file is absent or unreadable.
+
+    Args:
+        regions_bed_gz: Path to mosdepth *.regions.bed.gz (None allowed).
+        contig: Contig name as written in the BED.
+        start: Interval start (0-based).
+        end: Interval end (exclusive).
+
+    Returns:
+        List of (win_start, win_end, depth) tuples in file order.
+    """
+    if regions_bed_gz is None or end <= start:
+        return []
+    out: List[Tuple[int, int, float]] = []
+    seen_contig = False
+    try:
+        with gzip.open(regions_bed_gz, "rt") as fh:
+            for line in fh:
+                parts = line.split("\t")
+                if len(parts) < 4:
+                    continue
+                if parts[0] != contig:
+                    if seen_contig:
+                        break  # mosdepth writes each contig contiguously
+                    continue
+                seen_contig = True
+                try:
+                    ws = int(parts[1])
+                    we = int(parts[2])
+                    depth = float(parts[3])
+                except ValueError:
+                    continue
+                if we <= start:
+                    continue
+                if ws >= end:
+                    break
+                out.append((ws, we, depth))
+    except (OSError, EOFError):
+        return []
+    return out
+
+
+def read_depth_windows_for_contigs(
+    regions_bed_gz: Optional[Path],
+    contigs,
+) -> Dict[str, List[Tuple[int, int, float]]]:
+    """Load all mosdepth windows for a set of contigs in a single pass.
+
+    Returns an empty dict when the file is absent or unreadable.
+    """
+    wanted = set(contigs)
+    out: Dict[str, List[Tuple[int, int, float]]] = {c: [] for c in wanted}
+    if regions_bed_gz is None or not wanted:
+        return {}
+    remaining = set(wanted)
+    current = None
+    try:
+        with gzip.open(regions_bed_gz, "rt") as fh:
+            for line in fh:
+                parts = line.split("\t")
+                if len(parts) < 4:
+                    continue
+                c = parts[0]
+                if c != current:
+                    if current in remaining:
+                        remaining.discard(current)
+                        if not remaining:
+                            break
+                    current = c
+                if c in wanted:
+                    try:
+                        out[c].append((int(parts[1]), int(parts[2]), float(parts[3])))
+                    except ValueError:
+                        continue
+    except (OSError, EOFError):
+        return {}
+    return out
+
+
+def parse_clipping_sam(
+    sam_lines,
+    breakpoint_start: int,
+    breakpoint_end: int,
+    tolerance: int = 50,
+) -> Tuple[int, int]:
+    """Count reads spanning vs clipped/split at a breakpoint from SAM text.
+
+    A read is *spanning* when its aligned block covers the whole breakpoint
+    interval (extended by ``tolerance``) with no soft/hard clip inside the
+    tolerance of either breakpoint edge.  A read is *clipped* when it carries
+    an ``SA`` tag or a clip of at least 20 bp whose clipped end lies within
+    ``tolerance`` of the interval.
+
+    Args:
+        sam_lines: Iterable of SAM record lines (header lines are skipped).
+        breakpoint_start: Breakpoint interval start (0-based).
+        breakpoint_end: Breakpoint interval end.
+        tolerance: Slack in bp around the interval.
+
+    Returns:
+        (spanning, clipped) read counts.
+    """
+    import re
+    cigar_re = re.compile(r"(\d+)([MIDNSHP=X])")
+    lo = breakpoint_start - tolerance
+    hi = breakpoint_end + tolerance
+    spanning = 0
+    clipped = 0
+    for line in sam_lines:
+        if not line or line.startswith("@"):
+            continue
+        f = line.rstrip("\n").split("\t")
+        if len(f) < 11:
+            continue
+        try:
+            flag = int(f[1])
+            pos0 = int(f[3]) - 1
+        except ValueError:
+            continue
+        if flag & 0x4 or flag & 0x100:
+            continue  # unmapped or secondary
+        ops = [(int(n), op) for n, op in cigar_re.findall(f[5])]
+        if not ops:
+            continue
+        ref_len = sum(n for n, op in ops if op in "MDN=X")
+        aln_start = pos0
+        aln_end = pos0 + ref_len
+        has_sa = any(t.startswith("SA:Z:") for t in f[11:])
+        left_clip = ops[0][0] if ops[0][1] in "SH" else 0
+        right_clip = ops[-1][0] if ops[-1][1] in "SH" else 0
+        clip_at_bp = (
+            (left_clip >= 20 and lo <= aln_start <= hi)
+            or (right_clip >= 20 and lo <= aln_end <= hi)
+        )
+        if clip_at_bp or (has_sa and (lo <= aln_start <= hi or lo <= aln_end <= hi)):
+            clipped += 1
+        elif aln_start <= lo and aln_end >= hi:
+            spanning += 1
+    return spanning, clipped
+
+
+def clipping_pileup(
+    bam_path: Path,
+    contig: str,
+    breakpoint_start: int,
+    breakpoint_end: int,
+    tolerance: int = 50,
+) -> Optional[Tuple[int, int]]:
+    """Count spanning vs clipped/split reads at a breakpoint using samtools.
+
+    Returns None when samtools or the BAM is unavailable, or the query fails.
+    """
+    if bam_path is None or not file_exists_and_valid(Path(bam_path), min_size=1):
+        return None
+    if not have_exe("samtools"):
+        return None
+    lo = max(0, breakpoint_start - tolerance)
+    hi = breakpoint_end + tolerance
+    region = f"{contig}:{lo + 1}-{hi}"
+    try:
+        proc = subprocess.run(
+            ["samtools", "view", str(bam_path), region],
+            capture_output=True, text=True, check=False,
+        )
+    except OSError:
+        return None
+    if proc.returncode != 0:
+        return None
+    return parse_clipping_sam(proc.stdout.splitlines(), breakpoint_start,
+                              breakpoint_end, tolerance)
 
 
 def parse_mosdepth_regions(
