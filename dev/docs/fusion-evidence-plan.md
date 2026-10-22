@@ -1,6 +1,7 @@
 # Implementation plan: read-depth & alignment evidence for fusion / misjoin discrimination
 
-Status: **planned** (not yet implemented).
+Status: **implemented** (`dnadis/analysis/junction_evidence.py`). Translocation breakpoints
+and support for alternative joins are not scored yet.
 Governing TODO: `dev/docs/TODO.md` → "Read depth evidence for rearrangement confidence" (Detection section).
 
 ## 1. Motivation
