@@ -1480,6 +1480,7 @@ def run_assembly(
             ref_norm_to_orig=ref_norm_to_orig,
             qr_best_chain_ident=ev.qr_best_chain_ident or {},
             include_rdna=args.scaffold_rdna_contigs,
+            no_join=sister_applied,
         )
 
         if scaffolded_seqs:
