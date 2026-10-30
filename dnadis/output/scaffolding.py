@@ -732,6 +732,7 @@ def scaffold_chromosomes(
     ref_norm_to_orig: Optional[Dict[str, str]] = None,
     qr_best_chain_ident: Optional[Dict[Tuple[str, str], float]] = None,
     include_rdna: bool = False,
+    no_join: Optional[Set[str]] = None,
 ) -> Tuple[Dict[str, str], List[str], Dict[str, Tuple[float, float, float]]]:
     """Produce scaffolded chromosome pseudomolecules.
 
@@ -760,6 +761,9 @@ def scaffold_chromosomes(
             haplotype-aware debris assignment.
         include_rdna: Also place rDNA contigs that have an assigned_ref_id
             (``--scaffold-rdna-contigs``).
+        no_join: Contigs never joined to others; each is emitted as its own
+            scaffold.  Used for sister-placed contigs, whose assignment says
+            which chromosome they belong to but not where on it.
 
     Returns:
         Tuple of (scaffolded_sequences, agp_lines, scaffold_confidences) where:
@@ -775,6 +779,12 @@ def scaffold_chromosomes(
         classifications, best_ref, contig_refs, qr_best_chain_ident or {},
         include_rdna=include_rdna,
     )
+    no_join = no_join or set()
+    if no_join:
+        groups = {
+            key: [c for c in members if c not in no_join]
+            for key, members in groups.items()
+        }
     all_confidences: Dict[str, Tuple[float, float, float]] = {}
 
     if not groups:
@@ -978,8 +988,9 @@ def scaffold_chromosomes(
 
     # Every chromosome contig belongs in the scaffold set.  Contigs not placed
     # above (fragments beside a T2T copy, extra copies, fragments without a
-    # reference, groups that produced no scaffold) are emitted on their own
-    # under their contig names, like contigs RagTag could not place.
+    # reference, no_join contigs, groups that produced no scaffold) are
+    # emitted on their own under their contig names, like contigs RagTag
+    # could not place.
     placed = {
         fields[5] for fields in (line.split("\t") for line in all_agp)
         if len(fields) > 5 and fields[4] == "W"
@@ -994,7 +1005,8 @@ def scaffold_chromosomes(
             name = clf.original_name
         _emit_trivial_scaffold(
             name, clf.original_name, query_seqs, contig_orientations,
-            all_scaffolded, all_agp, log_label="unplaced",
+            all_scaffolded, all_agp,
+            log_label="sister-placed, not joined" if clf.original_name in no_join else "unplaced",
         )
 
     logger.done(f"Scaffolded {len(all_scaffolded)} chromosomes")

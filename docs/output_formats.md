@@ -75,7 +75,7 @@ Filled only with `--sister-anchoring` (multi-assembly mode), for the contigs the
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `sister_decision` | string | Outcome of the sister vote: `assigned` (no reference assignment; placed by sisters), `reassigned` (reference assignment replaced), `confirmed` (sisters agree with the reference), `conflict_keep_ref` (sisters chose a chromosome the reference gives no evidence for; reference result kept), `no_call_chimeric`, `no_call_disagree`, `no_call_few_votes`, `no_call_closest`, `no_vote` |
+| `sister_decision` | string | Outcome of the sister vote: `assigned` (no reference assignment; placed by sisters), `reassigned` (reference assignment replaced), `confirmed` (sisters agree with the reference), `conflict_keep_ref` (sisters chose a chromosome the reference gives no evidence for; reference result kept), `no_call_redundant` (the contig is a second copy of sequence in its own chromosome contigs, by the `redundancy_*` and depth columns; first-pass result kept), `no_call_chimeric`, `no_call_disagree`, `no_call_few_votes`, `no_call_closest`, `no_vote` |
 | `sister_ref_id` | string | Reference chromosome the agreeing sisters place the contig on |
 | `sister_votes` | string | Agreeing / voting sister assemblies (e.g. `11/11`) |
 | `sister_identity` | float | Median gap-compressed identity of the agreeing sisters' alignments (0.0-1.0) |

@@ -15,6 +15,7 @@ from dnadis.alignment.sister_anchoring import (
     load_anchor_segments,
     load_ref_candidates,
     parse_sister_votes,
+    redundant_with_own_chromosome,
     segment_label,
     select_anchors,
     select_candidates,
@@ -180,6 +181,39 @@ def test_build_call_summarizes_agreeing_sisters():
     assert abs(call.identity - 0.995) < 1e-9 and abs(call.coverage - 0.7) < 1e-9
     assert call.reversed is True
 
+
+
+def _redundancy(row, cov, ident, depth="NA", target_depth="NA"):
+    row.update(redundancy_cov=str(cov), redundancy_identity=str(ident),
+               depth_ratio=str(depth), target_depth_ratio=str(target_depth))
+    return row
+
+
+def test_redundant_with_own_chromosome():
+    def red(*args):
+        return redundant_with_own_chromosome(_redundancy(_row("c", "debris", 1, 0), *args))
+    # Haplotig: collinear, both copies at about half depth
+    assert red(1.0, 0.985, 0.5, 0.55)
+    # Same alignment at full depth (e.g. a homeologous region): kept
+    assert not red(1.0, 0.985, 1.0, 0.95)
+    assert not red(1.0, 0.985, 0.5, 1.0)
+    # Near-identical copy: redundant with or without depth
+    assert red(0.9, 0.9995)
+    # Partial overlap, low identity, or no evidence: kept
+    assert not red(0.3, 0.9995, 0.5, 0.5)
+    assert not red(1.0, 0.95, 0.5, 0.5)
+    assert not red(1.0, 0.985)
+    assert not redundant_with_own_chromosome(_row("c", "debris", 1, 0))
+
+
+def test_build_call_does_not_promote_redundant_contig():
+    votes = {s: SisterVote("chr1A", 0.9, 0.995, False) for s in "ab"}
+    row = _redundancy(_row("hap", "unclassified", 200_000, 0), 1.0, 0.999, 0.6, 0.55)
+    call = build_call("asm", row, votes, set(), 0.75)
+    assert call.decision == "no_call_redundant" and not call.applies
+    assert call.ref_id == "chr1A"
+    row = _redundancy(_row("frag", "unclassified", 200_000, 0), 0.2, 0.999, 0.6, 0.55)
+    assert build_call("asm", row, votes, set(), 0.75).decision == "assigned"
 
 def test_apply_sister_calls_only_applies_changes():
     def call(decision, ref):

@@ -186,3 +186,49 @@ def test_scaffolds_keep_fragments_beside_t2t(tmp_path):
     )
     assert scaffolded == {"chr1A": seqs["t2t"], "chr1A_f1": reverse_complement(seqs["frag"])}
     assert {line.split("\t")[5] for line in agp} == {"t2t", "frag"}
+
+
+def test_no_join_contigs_are_scaffolded_alone(tmp_path, monkeypatch):
+    """A no_join contig (sister-placed) is never joined to its chromosome's
+    other contigs; it is emitted on its own, oriented as given."""
+    from dnadis.output import scaffolding
+
+    monkeypatch.setattr(scaffolding, "have_exe", lambda exe: False)
+    seqs = {"anchor": "ACGT" * 500, "frag": "TTGCA" * 100, "sister": "GGATC" * 80}
+    qfa = tmp_path / "q.fa"
+    qfa.write_text("".join(f">{k}\n{v}\n" for k, v in seqs.items()))
+    rfa = tmp_path / "r.fa"
+    rfa.write_text(">chr1A\n" + "A" * 3000 + "\n")
+    clfs = [
+        _clf("anchor", "chr1A", "chrom_assigned", "chr1A", is_full_length=True,
+             query_subgenome_grp=1, seq_identity_vs_ref=0.95),
+        _clf("frag", "chr1A_f1", "chrom_fragment", "chr1A",
+             query_subgenome_grp=1, seq_identity_vs_ref=0.95),
+        _clf("sister", "chr1A_f2", "chrom_fragment", "chr1A",
+             query_subgenome_grp=1, seq_identity_vs_ref=0.95),
+    ]
+    best_ref = {c.original_name: "chr1A" for c in clfs}
+    kwargs = dict(
+        query_fasta=qfa, classifications=clfs,
+        contig_orientations={"anchor": False, "frag": False, "sister": True},
+        qr_ref_ranges={("anchor", "chr1A"): (1, 2000), ("frag", "chr1A"): (2100, 2500),
+                       ("sister", "chr1A"): (1, 10)},
+        ref_fasta=rfa, ref_lengths={"chr1A": 3000},
+        best_ref=best_ref, contig_refs={k: {v} for k, v in best_ref.items()},
+        qr_best_chain_ident={(k, v): 0.95 for k, v in best_ref.items()},
+        gap_size=10,
+    )
+
+    # Without no_join, all three are joined into one scaffold.
+    joined, _, _ = scaffolding.scaffold_chromosomes(work_dir=tmp_path / "a", **kwargs)
+    assert set(joined) == {"chr1A"}
+
+    scaffolded, agp, _ = scaffolding.scaffold_chromosomes(
+        work_dir=tmp_path / "b", no_join={"sister"}, **kwargs,
+    )
+    assert scaffolded == {
+        "chr1A": seqs["anchor"] + "N" * 10 + seqs["frag"],
+        "chr1A_f2": reverse_complement(seqs["sister"]),
+    }
+    sister_lines = [line for line in agp if line.split("\t")[5] == "sister"]
+    assert len(sister_lines) == 1 and sister_lines[0].split("\t")[0] == "chr1A_f2"
