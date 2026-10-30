@@ -28,6 +28,10 @@ contig's assignment, subject to these rules:
   A call outside that set keeps the reference result and is reported as a
   conflict.  This guards against structural variants shared by the sisters
   but absent from the assembly being placed.
+* A contig that the first pass found collinear with one of its own
+  assembly's chromosome contigs is a second copy of sequence already in the
+  chromosome set (a haplotig, or an assembly duplicate), not a missing piece
+  of it, and is not promoted (``no_call_redundant``).
 
 The pass reads each assembly's first-pass outputs (contig summary, evidence
 summary, macro blocks) and returns per-assembly calls; assemblies with calls
@@ -77,6 +81,17 @@ APPLIED_DECISIONS = frozenset({"assigned", "reassigned"})
 _MAJOR_FRAC = 0.10
 _MAJOR_MIN_BP = 100_000
 
+# Own-assembly redundancy (first-pass redundancy_* and depth columns).  A
+# candidate covered at least _REDUNDANT_MIN_COV by one window of a chromosome
+# contig is redundant when the copies are near-identical (reads cannot tell
+# them apart), or when both it and the matched region sit at about half the
+# chromosomal depth (two haplotypes of one locus).  A homeologous region of a
+# polyploid aligns at similar identity but at full depth, so it is kept.
+_REDUNDANT_MIN_COV = 0.50
+_DUPLICATE_MIN_IDENTITY = 0.999
+_HAPLOTIG_MIN_IDENTITY = 0.98
+_HAPLOTIG_MAX_DEPTH_RATIO = 0.75
+
 
 @dataclass
 class SisterVote:
@@ -121,6 +136,31 @@ class SisterCall:
 def _ref_frac(row: dict) -> float:
     length = int(row["length"] or 0)
     return int(row["total_aligned_bp"] or 0) / length if length > 0 else 0.0
+
+
+def _float_or_none(value: Optional[str]) -> Optional[float]:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def redundant_with_own_chromosome(row: dict) -> bool:
+    """True when the first-pass evidence in contig-summary *row* shows the
+    contig is a second copy of sequence in its assembly's chromosome set."""
+    cov = _float_or_none(row.get("redundancy_cov"))
+    ident = _float_or_none(row.get("redundancy_identity"))
+    if cov is None or ident is None or cov < _REDUNDANT_MIN_COV:
+        return False
+    if ident >= _DUPLICATE_MIN_IDENTITY:
+        return True
+    depth = _float_or_none(row.get("depth_ratio"))
+    target_depth = _float_or_none(row.get("target_depth_ratio"))
+    return (
+        ident >= _HAPLOTIG_MIN_IDENTITY
+        and depth is not None and depth <= _HAPLOTIG_MAX_DEPTH_RATIO
+        and target_depth is not None and target_depth <= _HAPLOTIG_MAX_DEPTH_RATIO
+    )
 
 
 def read_contig_summary(path: Path) -> List[dict]:
@@ -418,6 +458,8 @@ def build_call(
     decision, ref_id, n_agree, closest = decide(
         votes, first_ref, ref_candidates, min_agree, min_votes,
     )
+    if decision in APPLIED_DECISIONS and redundant_with_own_chromosome(row):
+        decision = "no_call_redundant"
     call = SisterCall(
         assembly=assembly,
         contig=row["original_name"],
