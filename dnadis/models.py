@@ -121,6 +121,10 @@ class ChainEvidenceResult:
     qr_ref_span_bp: Dict[Tuple[str, str], int] = None  # (contig, ref_id) -> reference span bp
     # Best chain identity per (contig, ref_id) for subgenome inference
     qr_best_chain_ident: Dict[Tuple[str, str], float] = None  # (contig, ref_id) -> identity
+    # Gap-compressed identity (1 - de) per (contig, ref_id), weighted by aligned query bp over
+    # all kept alignments; None when the PAF carries no de tags (e.g. miniprot)
+    qr_gc_ident: Dict[Tuple[str, str], float] = None
+    qr_gc_ident_bp: Dict[Tuple[str, str], int] = None  # aligned query bp behind qr_gc_ident
     # Reference coordinate ranges per (contig, ref_id) for scaffolding
     qr_ref_ranges: Dict[Tuple[str, str], Tuple[int, int]] = None  # (contig, ref_id) -> (ref_min, ref_max)
     # Collinearity score per (contig, ref_id) — fraction of aligned bp in reference order

@@ -333,6 +333,8 @@ def parse_paf_chain_evidence_and_segments(
     blocks = defaultdict(list)  # (q, ref_id, strand) -> [Block,...]
     qlens_from_paf: dict[str, int] = {}
     rlens_from_paf: dict[str, int] = {}  # ref_id -> length from PAF
+    gc_ident_sum: dict[tuple[str, str], float] = defaultdict(float)  # (q, ref_id) -> sum of bp * (1 - de)
+    gc_ident_bp: dict[tuple[str, str], int] = defaultdict(int)
 
     with open_maybe_gzip(paf_gz_path, "rt") as f:
         for line in f:
@@ -390,6 +392,15 @@ def parse_paf_chain_evidence_and_segments(
                     gene_id=None,
                 )
             )
+            # Gap-compressed divergence counts an indel once, not per base, so it
+            # separates diverged copies that matches/aln_len blurs
+            de = paf_tag_value(fields, "de:f:")
+            if de is not None:
+                try:
+                    gc_ident_sum[(qname, ref_id)] += (qe - qs) * (1.0 - float(de))
+                    gc_ident_bp[(qname, ref_id)] += qe - qs
+                except ValueError:
+                    pass
 
     # Warn if no alignments were found
     if not blocks:
@@ -399,7 +410,7 @@ def parse_paf_chain_evidence_and_segments(
             f"(minlen={assign_minlen}, minmapq={assign_minmapq}, min_ident={assign_min_ident})."
         )
 
-    return _chains_to_evidence_and_segments(
+    result = _chains_to_evidence_and_segments(
         blocks=blocks,
         contig_lengths=contig_lengths,
         qlens_from_paf=qlens_from_paf,
@@ -414,6 +425,10 @@ def parse_paf_chain_evidence_and_segments(
         segments_strand_from_blocks=True,
         rlens_from_paf=rlens_from_paf,
     )
+    if gc_ident_bp:
+        result.qr_gc_ident = {k: gc_ident_sum[k] / n for k, n in gc_ident_bp.items() if n > 0}
+        result.qr_gc_ident_bp = {k: n for k, n in gc_ident_bp.items() if n > 0}
+    return result
 
 
 def _filter_overlapping_hits_by_identity(
