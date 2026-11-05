@@ -357,7 +357,7 @@ One row per rearrangement call (translocation, inversion, fusion, fission). The 
 
 ## fusion_junctions.tsv
 
-Written when at least one fusion junction is scored. One row per junction with arm references and spans, per-zone median depths (`depth_left_median`, `depth_junction_median`, `depth_right_median`), ratios and CVs, `depth_verdict` (`uniform`, `drop`, `spike`, `discontinuous`, `asymmetric`, `insufficient_depth`), `aln_gap_bp` and `aln_verdict` (`abutting`, `gapped`, `overlapping`), `clip_spanning`/`clip_clipped` read counts (empty without `--fusion-split-reads`), and the final `fusion_call`, `fusion_confidence`, `evidence_codes`.
+Written when at least one fusion junction is scored. One row per junction with arm references and spans, per-zone median depths (`depth_left_median`, `depth_junction_median`, `depth_right_median`), ratios and CVs, `depth_verdict` (`uniform`, `drop`, `spike`, `discontinuous`, `asymmetric`, `insufficient_depth`), `aln_gap_bp` and `aln_verdict` (`abutting`, `gapped`, `overlapping`), `clip_spanning`/`clip_clipped` read counts (empty without `--fusion-split-reads`, for overlapping arms, and for junction intervals over 5 kb), and the final `fusion_call`, `fusion_confidence`, `evidence_codes`.
 
 ## ref_lengths.tsv
 

@@ -1277,10 +1277,15 @@ def run_assembly(
                          if reads and not args.skip_depth else None)
         fusion_bam: Optional[Path] = None
         if args.fusion_split_reads and reads:
+            from dnadis.analysis.read_depth import ReadFormat, detect_read_format
             cand = depth_work_dir / "aligned_reads.sorted.bam"
+            try:
+                reads_aligned = detect_read_format(Path(str(reads))) == ReadFormat.ALIGNED_BAM
+            except ValueError:
+                reads_aligned = False
             if cand.exists():
                 fusion_bam = cand
-            elif str(reads).endswith(".bam"):
+            elif reads_aligned:
                 fusion_bam = Path(str(reads))
             else:
                 logger.warning("--fusion-split-reads: no BAM available; "
@@ -1301,26 +1306,31 @@ def run_assembly(
             ),
         )
         if depth_regions is None:
-            logger.info("Fusion evidence: no read depth; using alignment continuity only")
+            logger.info("Fusion evidence: no read depth; alignment continuity is reported "
+                        "but verdicts stay inconclusive")
         for j in fusion_junctions:
             logger.info(f"Fusion junction {j.contig} {j.left_ref}|{j.right_ref} "
                         f"@{j.junction_point:,}: {j.fusion_call} "
                         f"({j.fusion_confidence}; {j.evidence_codes or 'no evidence'})")
         # Fragments of a fused arm's reference that sit in a different subgenome
         # group than the fusion contig cannot co-scaffold with it.
+        # Fragments whose own group has a chromosome contig for that reference
+        # scaffold with it and are not reported.
         clf_by_orig = {c.original_name: c for c in classifications}
+        anchored = {(c.assigned_ref_id, c.query_subgenome_grp) for c in classifications
+                    if c.classification == "chrom_assigned"}
         for j in fusion_junctions:
-            if j.fusion_call != "biological_fusion":
-                continue
             fc = clf_by_orig.get(j.contig)
+            if j.fusion_call != "biological_fusion" or fc is None:
+                continue
             for frag in classifications:
                 if (frag.classification == "chrom_fragment"
                         and frag.assigned_ref_id in (j.left_ref, j.right_ref)
-                        and frag.query_subgenome_grp != (fc.query_subgenome_grp if fc else None)):
+                        and frag.query_subgenome_grp != fc.query_subgenome_grp
+                        and (frag.assigned_ref_id, frag.query_subgenome_grp) not in anchored):
                     logger.info(f"Fragment {frag.new_name} ({frag.assigned_ref_id}) is in a "
                                 f"different subgenome group than fusion contig "
-                                f"{fc.new_name if fc else j.contig}; it will not "
-                                f"co-scaffold with it")
+                                f"{fc.new_name}; it will not co-scaffold with it")
         if fusion_junctions:
             from dnadis.output.tsv_output import write_fusion_junctions_tsv
             fusion_junctions_tsv = Path(str(outprefix) + ".fusion_junctions.tsv")

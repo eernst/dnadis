@@ -14,6 +14,8 @@ Depth evidence needs only the persisted mosdepth ``regions.bed.gz``.
 """
 from __future__ import annotations
 
+import dataclasses
+import math
 import statistics
 from collections import defaultdict
 from dataclasses import dataclass
@@ -37,6 +39,13 @@ _CLIPPED_FRAC_OK = 0.10
 _MIN_FLANK_RATIO = 0.70
 _MIN_FLANK_WINDOWS = 2
 _MIN_CV_WINDOWS = 3
+# Split reads are only counted when reads can span the junction interval.
+_MAX_SPLIT_INTERVAL_BP = 5000
+# Aligned stretches of one reference closer than this form one cluster; an
+# arm's extent covers the clusters holding at least _MIN_ARM_CLUSTER_FRAC of
+# its aligned bases, so a small stray block inside another arm is ignored.
+_ARM_MAX_INTERNAL_GAP = 1_000_000
+_MIN_ARM_CLUSTER_FRAC = 0.10
 
 
 @dataclass
@@ -54,6 +63,19 @@ class FusionThresholds:
 # ---------------------------------------------------------------------------
 # Junction location
 # ---------------------------------------------------------------------------
+
+def _arm_bounds(merged: List[Tuple[int, int]], span: int) -> Tuple[int, int]:
+    """Query extent of an arm from its merged, sorted aligned intervals."""
+    clusters: List[List[int]] = []  # [start, end, aligned bp]
+    for s, e in merged:
+        if clusters and s - clusters[-1][1] <= _ARM_MAX_INTERNAL_GAP:
+            clusters[-1][1] = max(clusters[-1][1], e)
+            clusters[-1][2] += e - s
+        else:
+            clusters.append([s, e, e - s])
+    core = [c for c in clusters if c[2] >= _MIN_ARM_CLUSTER_FRAC * span] or clusters
+    return min(c[0] for c in core), max(c[1] for c in core)
+
 
 def find_fusion_junctions(
     macro_block_rows: Sequence[Tuple],
@@ -87,11 +109,9 @@ def find_fusion_junctions(
             continue
         arms: List[Tuple[str, int, int, int]] = []  # (ref, span, q_min, q_max)
         for ref_id, blocks in ref_blocks.items():
-            _, span = merge_intervals([(b["qstart"], b["qend"]) for b in blocks])
+            merged, span = merge_intervals([(b["qstart"], b["qend"]) for b in blocks])
             if span / contig_len >= min_fusion_frac:
-                arms.append((ref_id, span,
-                             min(b["qstart"] for b in blocks),
-                             max(b["qend"] for b in blocks)))
+                arms.append((ref_id, span, *_arm_bounds(merged, span)))
         if len(arms) < 2:
             continue
         arms.sort(key=lambda a: a[2])
@@ -304,14 +324,21 @@ def annotate_fusion_evidence(
 
     # Only junctions that correspond to a reported fusion call are scored.
     matched: List[Tuple[RearrangementCall, FusionJunction]] = []
+    # A call's two references must meet at the junction; calls for two arms
+    # that are not adjacent have no junction of their own and stay unscored.
     for call in fusion_calls:
-        cands = [j for j in by_contig.get(call.original_name, [])
+        contig_js = by_contig.get(call.original_name, [])
+        cands = [j for j in contig_js
                  if call.partner_ref_id in (j.left_ref, j.right_ref)]
-        if cands:
-            pick = next((j for j in cands
-                         if call.assigned_ref_id in (j.left_ref, j.right_ref)),
-                        cands[0])
-            matched.append((call, pick))
+        both = [j for j in cands
+                if call.assigned_ref_id in (j.left_ref, j.right_ref)]
+        arm_refs = {r for j in contig_js for r in (j.left_ref, j.right_ref)}
+        if both:
+            matched.append((call, both[0]))
+        elif call.assigned_ref_id not in arm_refs and len(cands) == 1:
+            # The assigned reference is not an arm; the partner's only
+            # junction is unambiguous.
+            matched.append((call, cands[0]))
     junctions = list({id(j): j for _, j in matched}.values())
     if not junctions:
         return []
@@ -320,9 +347,19 @@ def annotate_fusion_evidence(
     if have_depth:
         table = read_depth_windows_for_contigs(
             depth_regions_path, {j.contig for j in junctions})
+        # Zones must hold enough whole windows at any mosdepth window size.
+        widths = [we - ws for wins in table.values() for ws, we, _ in wins]
+        if widths:
+            win = statistics.median(widths)
+            thr = dataclasses.replace(
+                thr,
+                flank_bp=max(thr.flank_bp, math.ceil(_MIN_FLANK_WINDOWS * win)),
+                pad_bp=max(thr.pad_bp, math.ceil(_MIN_CV_WINDOWS * win / 2)),
+            )
 
+        # Each window belongs to the zone holding its midpoint.
         def windows_fn(c, s, e):
-            return [w for w in table.get(c, ()) if w[1] > s and w[0] < e]
+            return [w for w in table.get(c, ()) if s <= (w[0] + w[1]) / 2 < e]
     else:
         def windows_fn(c, s, e):
             return []
@@ -330,10 +367,13 @@ def annotate_fusion_evidence(
     for j in junctions:
         score_depth_uniformity(j, windows_fn, thr)
         assess_alignment_continuity(j, thr)
-        if bam_path is not None:
-            lo, hi = ((j.junction_start, j.junction_end)
-                      if j.junction_end > j.junction_start
-                      else (j.junction_point, j.junction_point))
+        lo, hi = ((j.junction_start, j.junction_end)
+                  if j.junction_end > j.junction_start
+                  else (j.junction_point, j.junction_point))
+        # Overlapping arms are never scored on reads, and reads cannot span a
+        # long unaligned gap, so the breakpoint inside it is unknown.
+        if (bam_path is not None and j.aln_verdict != "overlapping"
+                and hi - lo <= _MAX_SPLIT_INTERVAL_BP):
             res = clipping_pileup(bam_path, j.contig, lo, hi, breakpoint_tolerance)
             if res is not None:
                 j.clip_spanning, j.clip_clipped = res

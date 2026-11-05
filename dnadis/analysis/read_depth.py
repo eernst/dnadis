@@ -97,6 +97,16 @@ def detect_read_format(reads_path: Path) -> ReadFormat:
     raise ValueError(f"Cannot determine format of reads file: {reads_path}")
 
 
+def _aligned_bam_missing(work_dir: Path, reads: Path) -> bool:
+    """True when *reads* need aligning and ``aligned_reads.sorted.bam`` is gone."""
+    try:
+        if detect_read_format(reads) in (ReadFormat.ALIGNED_BAM, ReadFormat.ALIGNED_CRAM):
+            return False
+    except ValueError:
+        return False
+    return not file_exists_and_valid(work_dir / "aligned_reads.sorted.bam", min_size=100)
+
+
 def is_aligned_bam(bam_path: Path) -> bool:
     """Check if a BAM/CRAM file contains aligned reads.
 
@@ -855,57 +865,6 @@ def run_mosdepth(
         return False
 
 
-def read_depth_windows(
-    regions_bed_gz: Optional[Path],
-    contig: str,
-    start: int,
-    end: int,
-) -> List[Tuple[int, int, float]]:
-    """Return mosdepth windows overlapping ``[start, end)`` on one contig.
-
-    Streams the gzipped BED without building a per-contig table.  Returns an
-    empty list when the file is absent or unreadable.
-
-    Args:
-        regions_bed_gz: Path to mosdepth *.regions.bed.gz (None allowed).
-        contig: Contig name as written in the BED.
-        start: Interval start (0-based).
-        end: Interval end (exclusive).
-
-    Returns:
-        List of (win_start, win_end, depth) tuples in file order.
-    """
-    if regions_bed_gz is None or end <= start:
-        return []
-    out: List[Tuple[int, int, float]] = []
-    seen_contig = False
-    try:
-        with gzip.open(regions_bed_gz, "rt") as fh:
-            for line in fh:
-                parts = line.split("\t")
-                if len(parts) < 4:
-                    continue
-                if parts[0] != contig:
-                    if seen_contig:
-                        break  # mosdepth writes each contig contiguously
-                    continue
-                seen_contig = True
-                try:
-                    ws = int(parts[1])
-                    we = int(parts[2])
-                    depth = float(parts[3])
-                except ValueError:
-                    continue
-                if we <= start:
-                    continue
-                if ws >= end:
-                    break
-                out.append((ws, we, depth))
-    except (OSError, EOFError):
-        return []
-    return out
-
-
 def read_depth_windows_for_contigs(
     regions_bed_gz: Optional[Path],
     contigs,
@@ -983,8 +942,8 @@ def parse_clipping_sam(
             pos0 = int(f[3]) - 1
         except ValueError:
             continue
-        if flag & 0x4 or flag & 0x100:
-            continue  # unmapped or secondary
+        if flag & 0x904:
+            continue  # unmapped, secondary or supplementary (counted via SA)
         ops = [(int(n), op) for n, op in cigar_re.findall(f[5])]
         if not ops:
             continue
@@ -1205,8 +1164,11 @@ def calculate_depth_metrics(
 
     if check_depth_cache(regions_file, metadata_path, reads, assembly,
                          reads_type, target_coverage, window_size):
-        logger.info(f"Reusing cached depth output: {regions_file}")
-        return parse_mosdepth_regions(regions_file, contig_lengths)
+        if keep_bam and _aligned_bam_missing(work_dir, reads):
+            logger.info("Depth output is cached but the BAM to keep is not; realigning")
+        else:
+            logger.info(f"Reusing cached depth output: {regions_file}")
+            return parse_mosdepth_regions(regions_file, contig_lengths)
 
     # Detect read format
     try:
