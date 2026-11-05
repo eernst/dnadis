@@ -137,9 +137,6 @@ def unpack_macro_block_row(row: Tuple) -> dict:
     }
 
 
-_unpack_row = unpack_macro_block_row
-
-
 # ---------------------------------------------------------------------------
 # Confidence scoring
 # ---------------------------------------------------------------------------
@@ -542,7 +539,7 @@ def detect_rearrangements(
         lambda: defaultdict(list)
     )
     for row in macro_block_rows:
-        b = _unpack_row(row)
+        b = unpack_macro_block_row(row)
         contig_ref_blocks[b["contig"]][b["ref_id"]].append(b)
 
     # ---- Build reciprocal partner index ----

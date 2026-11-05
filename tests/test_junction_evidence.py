@@ -7,7 +7,7 @@ from dnadis.analysis.junction_evidence import (
     FusionThresholds, annotate_fusion_evidence, assess_alignment_continuity,
     classify_fusion_evidence, find_fusion_junctions, score_depth_uniformity,
 )
-from dnadis.analysis.read_depth import parse_clipping_sam, read_depth_windows
+from dnadis.analysis.read_depth import parse_clipping_sam, read_depth_windows_for_contigs
 from dnadis.models import FusionJunction, RearrangementCall
 from dnadis.output.tsv_output import write_fusion_junctions_tsv, write_rearrangements_tsv
 
@@ -130,17 +130,17 @@ def test_classification_matrix():
         assert j.fusion_call == "inconclusive" and j.evidence_codes == ""
 
 
-def test_read_depth_windows(tmp_path):
+def test_read_depth_windows_for_contigs(tmp_path):
     bed = tmp_path / "d.regions.bed.gz"
     with gzip.open(bed, "wt") as fh:
         for c in ("a", "b"):
             for i in range(10):
                 fh.write(f"{c}\t{i*1000}\t{(i+1)*1000}\t{i+1}.5\n")
-    w = read_depth_windows(bed, "b", 2500, 5000)
-    assert [x[0] for x in w] == [2000, 3000, 4000]
-    assert read_depth_windows(bed, "zzz", 0, 100) == []
-    assert read_depth_windows(tmp_path / "missing.gz", "a", 0, 10) == []
-    assert read_depth_windows(None, "a", 0, 10) == []
+    w = read_depth_windows_for_contigs(bed, {"b", "zzz"})
+    assert [x[0] for x in w["b"]][:3] == [0, 1000, 2000] and len(w["b"]) == 10
+    assert w["zzz"] == [] and "a" not in w
+    assert read_depth_windows_for_contigs(tmp_path / "missing.gz", {"a"}) == {}
+    assert read_depth_windows_for_contigs(None, {"a"}) == {}
 
 
 def test_parse_clipping_sam():
@@ -229,3 +229,37 @@ def test_only_junctions_with_a_fusion_call_are_scored():
     js = annotate_fusion_evidence([call], rows, {"ctg": 18 * MB, "other": MB},
                                   None, None, FusionThresholds())
     assert [j.contig for j in js] == ["ctg"]
+
+
+def test_stray_block_does_not_make_arms_overlap():
+    rows = _rows() + [_row("ctg", 18 * MB, "chr1", 15 * MB, 15 * MB + 30_000)]
+    j = find_fusion_junctions(rows, {"ctg": 18 * MB})[0]
+    assert j.aln_gap_bp == 0 and j.junction_point == 12 * MB
+
+
+def test_supplementary_and_unspannable_gaps_not_counted():
+    sa = "\tSA:Z:x,1,+,1M,60,0;"
+    lines = [f"r\t0\tctg\t2001\t60\t1000M500S\t*\t0\t0\tA\tA{sa}",
+             f"r\t2048\tctg\t3001\t60\t500H1000M\t*\t0\t0\tA\tA{sa}"]
+    assert parse_clipping_sam(lines, 3000, 3000) == (0, 1)
+    # A 200 kb gap cannot be spanned by reads: no split evidence is gathered.
+    call = RearrangementCall("ctg", "ctg", "chr1", "fusion", "chr2", 0, 1, 0, 0,
+                             1, "+", "medium", "e")
+    js = annotate_fusion_evidence([call], _rows(gap=200_000), {"ctg": 18 * MB},
+                                  None, "missing.bam", FusionThresholds())
+    assert js[0].clip_spanning is None
+
+
+def test_non_adjacent_fusion_pair_is_not_scored():
+    rows = [_row("ctg", 18 * MB, "chr1", 0, 6 * MB),
+            _row("ctg", 18 * MB, "chr2", 6 * MB, 12 * MB),
+            _row("ctg", 18 * MB, "chr3", 12 * MB, 18 * MB)]
+
+    def call(partner):
+        return RearrangementCall("ctg", "ctg", "chr1", "fusion", partner, 0, 1, 0, 0,
+                                 1, "+", "medium", "e")
+    ab, ac = call("chr2"), call("chr3")
+    annotate_fusion_evidence([ab, ac], rows, {"ctg": 18 * MB}, None, None,
+                             FusionThresholds())
+    assert ab.junction_start == 6 * MB
+    assert ac.junction_start is None and ac.fusion_call == ""
