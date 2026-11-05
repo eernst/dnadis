@@ -227,6 +227,69 @@ class TestPatchPysqaTemplate:
             _slurm_mod.template = original
 
 
+class _FakeExecutorlib:
+    """Records how the wrapper shuts executorlib down."""
+
+    def __init__(self):
+        from concurrent.futures import Future
+        self._Future = Future
+        self.calls = []
+
+    def submit(self, fn, *args, **kwargs):
+        return self._Future()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.calls.append("exit")
+
+    def shutdown(self, wait=True, *, cancel_futures=False):
+        self.calls.append(("shutdown", wait, cancel_futures))
+
+
+class TestExecutorlibWrapperShutdown:
+    def test_waits_when_every_job_was_collected(self, tmp_path):
+        inner = _FakeExecutorlib()
+        cache = tmp_path / "cache"
+        cache.mkdir()
+        with _ExecutorlibWrapper(inner, cache_dir=cache) as ex:
+            fut = ex.submit(len, "abc")
+            fut.set_result(3)
+        assert inner.calls == ["exit"]
+        assert not cache.exists()
+
+    def test_cancels_jobs_nobody_waited_for(self):
+        inner = _FakeExecutorlib()
+        with _ExecutorlibWrapper(inner) as ex:
+            ex.submit(len, "abc").set_result(3)
+            ex.submit(len, "never collected")
+        assert inner.calls == [("shutdown", False, True)]
+
+
+class TestSubmitReferenceCompleasm:
+    def _args(self):
+        return types.SimpleNamespace(
+            skip_phylogeny=False, compleasm_lineage="liliopsida", skip_compleasm=False,
+            phylo_skip_reference=False, threads=4, compleasm_library=None, compleasm_path=None)
+
+    def test_not_submitted_without_a_tree(self, tmp_path):
+        from dnadis.phylogeny.pipeline import submit_reference_compleasm
+        ex = LocalExecutor()
+        with patch.object(ex, "submit") as submit:
+            fut = submit_reference_compleasm(self._args(), types.SimpleNamespace(ref="ref.fa"),
+                                             tmp_path, ex, ClusterConfig(), n_taxa=1)
+        assert fut is None and not submit.called
+
+    def test_submitted_for_two_taxa(self, tmp_path):
+        from dnadis.phylogeny.pipeline import submit_reference_compleasm
+        ex = LocalExecutor()
+        with patch.object(ex, "submit", return_value="future") as submit:
+            fut = submit_reference_compleasm(self._args(), types.SimpleNamespace(ref="ref.fa"),
+                                             tmp_path, ex, ClusterConfig(), n_taxa=2)
+        assert fut == "future" and submit.called
+
+
 class TestCreateExecutor:
     def test_disabled_returns_local(self):
         cfg = ClusterConfig(enabled=False)

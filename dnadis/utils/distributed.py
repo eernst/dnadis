@@ -175,6 +175,8 @@ class _ExecutorlibWrapper:
         self._submit_lock = __import__("threading").Lock()
         self._cache_dir = cache_dir
         self._keep_cache = keep_cache
+        # Futures not yet done, so jobs nobody waited on can be cancelled at exit
+        self._pending: list = []
 
     def submit(
         self,
@@ -189,7 +191,10 @@ class _ExecutorlibWrapper:
         # executorlib is not thread-safe; serialise concurrent submit() calls
         # that arrive from the ThreadPoolExecutor in multi-assembly mode.
         with self._submit_lock:
-            return self._executor.submit(fn, *args, **kwargs)
+            fut = self._executor.submit(fn, *args, **kwargs)
+            self._pending = [f for f in self._pending if not f.done()]
+            self._pending.append(fut)
+            return fut
 
     def __enter__(self) -> _ExecutorlibWrapper:
         self._executor.__enter__()
@@ -198,11 +203,24 @@ class _ExecutorlibWrapper:
     def __exit__(self, *exc: Any) -> None:
         import threading
 
-        t = threading.Thread(
-            target=self._executor.__exit__,
-            args=exc,
-            daemon=True,
-        )
+        # A job still running at exit has no caller waiting for it (one was
+        # submitted for a step that never ran, or the run is failing).  A
+        # waiting shutdown would block until it finishes, and executorlib's
+        # non-daemon scheduler thread keeps the process alive until then, so
+        # cancel such jobs instead.
+        with self._submit_lock:
+            stragglers = [f for f in self._pending if not f.done()]
+        if stragglers:
+            logger.warning(
+                f"{len(stragglers)} submitted job(s) still running with no "
+                f"caller waiting; cancelling them instead of waiting."
+            )
+            target = self._executor.shutdown
+            kwargs = {"wait": False, "cancel_futures": True}
+            args: tuple = ()
+        else:
+            target, args, kwargs = self._executor.__exit__, exc, {}
+        t = threading.Thread(target=target, args=args, kwargs=kwargs, daemon=True)
         t.start()
         t.join(timeout=self.SHUTDOWN_TIMEOUT)
         clean_shutdown = not t.is_alive()
