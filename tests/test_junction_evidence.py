@@ -191,6 +191,28 @@ def test_annotate_without_depth_is_alignment_only():
     assert call.fusion_call == "inconclusive" and call.confidence == "medium"
 
 
+def test_junction_tsv_writes_missing_depth_as_empty(tmp_path):
+    # No depth at all, and depth on the right flank only
+    bed = tmp_path / "depth.regions.bed.gz"
+    with gzip.open(bed, "wt") as fh:
+        for ws in range(12 * MB, 12 * MB + 8000, 1000):
+            fh.write(f"ctg\t{ws}\t{ws+1000}\t30\n")
+    js = []
+    for depth in (None, bed):
+        call = RearrangementCall("ctg", "ctg", "chr1", "fusion", "chr2", 0, 1, 0, 0,
+                                 1, "+", "medium", "e")
+        js += annotate_fusion_evidence([call], _rows(), {"ctg": 18 * MB}, depth, None,
+                                       FusionThresholds())
+    assert js[0].depth_left_median is None and js[1].depth_flank_ratio is None
+    out = tmp_path / "j.tsv"
+    write_fusion_junctions_tsv(out, js)
+    lines = out.read_text().splitlines()
+    hdr = lines[0].split("\t")
+    assert len(lines) == 3 and all(len(l.split("\t")) == len(hdr) for l in lines[1:])
+    assert lines[1].split("\t")[hdr.index("depth_left_median")] == ""
+    assert lines[2].split("\t")[hdr.index("depth_flank_ratio")] == ""
+
+
 def test_config_template_has_fusion_section():
     import argparse
     from dnadis.utils.config import dump_config_template, CONFIG_SCHEMA

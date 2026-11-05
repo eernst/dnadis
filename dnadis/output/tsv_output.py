@@ -1207,6 +1207,8 @@ def write_fusion_junctions_tsv(output_path: Path, junctions: list) -> None:
             vals = []
             for col in header:
                 v = getattr(j, col)
-                vals.append(_fmt_opt(v) if col in float_cols
-                            else ("" if v is None else str(v)))
+                if v is None:
+                    vals.append("")
+                else:
+                    vals.append(_fmt_opt(v) if col in float_cols else str(v))
             fh.write("\t".join(vals) + "\n")
