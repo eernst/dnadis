@@ -424,7 +424,7 @@ Produced in the top-level output directory when ≥2 assemblies complete. File n
 |------|-------------|
 | `{prefix}_summary.tsv` | Per-assembly classification counts and BUSCO completeness scores (S/D/F/I/M) for chromosome and non-chromosome contig sets |
 | `{prefix}_chromosome_completeness.tsv` | Per-reference-chromosome coverage and completeness across all assemblies |
-| `{prefix}.comparison_report.html` | Interactive HTML comparison report with gt tables summarizing classification and BUSCO results across assemblies |
+| `{prefix}.comparison_report.html` | Interactive HTML comparison report with gt tables summarizing classification, scaffolding (with `--scaffold`) and BUSCO results across assemblies |
 | `sister_anchoring/sister_anchoring.tsv` | Per-contig decisions of the sister-assembly anchoring pass (`--sister-anchoring`); see [docs/output_formats.md](docs/output_formats.md#sister_anchoringtsv) |
 
 ### Key columns in `contig_summary.tsv`
