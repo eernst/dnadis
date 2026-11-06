@@ -2807,6 +2807,7 @@ def main():
         from dnadis.phylogeny.pipeline import submit_reference_compleasm
         ref_compleasm_future = submit_reference_compleasm(
             args, ref_ctx, output_dir, executor, cluster_config,
+            n_taxa=n_total + len(outgroup_assemblies),
         )
 
         if cluster_config.enabled and n_total > 1:

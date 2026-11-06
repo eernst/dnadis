@@ -1006,12 +1006,50 @@ def _select_subgenome_k(
 # ----------------------------
 # Query subgenome inference
 # ----------------------------
+# Aligned bp below which a contig's gap-compressed identity rests on a handful of
+# hits (ten at the default --assign-minlen) and is left out of the GMM fit
+_MIN_FIT_ALIGNED_BP = 100_000
+
+
+def subgenome_cluster_scores(
+    ev: ChainEvidenceResult,
+    query_lengths: Dict[str, int],
+) -> Tuple[Dict[Tuple[str, str], float], Optional[Set[Tuple[str, str]]]]:
+    """Per-(contig, ref_id) score that separates copies in :func:`infer_query_subgenomes`.
+
+    Gap-compressed identity over all of the contig's alignments to that
+    reference, when the PAF has ``de`` tags.  It does not depend on contig size
+    or repeat content, so pieces of a fragmented copy score like its full-length
+    contigs.  Without ``de`` tags (protein mode), best-chain identity ×
+    (union_bp / contig_len), which spreads near-tied copies by coverage.
+
+    Returns:
+        (scores, fit_pairs): fit_pairs are the pairs whose identity rests on at
+        least ``_MIN_FIT_ALIGNED_BP`` aligned bp, so a repeat array with a few
+        divergent hits cannot add a cluster of its own; None (fit on all) for
+        the coverage-weighted score.
+    """
+    if ev.qr_gc_ident:
+        scores = {k: v for k, v in ev.qr_gc_ident.items() if v > 0}
+        bp = ev.qr_gc_ident_bp or {}
+        return scores, {k for k in scores if bp.get(k, 0) >= _MIN_FIT_ALIGNED_BP}
+    scores = {}
+    for (q, ref_id), ident in (ev.qr_best_chain_ident or {}).items():
+        qlen = query_lengths.get(q, 0)
+        if qlen <= 0 or ident <= 0:
+            continue
+        union_bp = int(ev.qr_union_bp.get((q, ref_id), 0) or 0)
+        scores[(q, ref_id)] = ident * (union_bp / qlen)
+    return scores, None
+
+
 def infer_query_subgenomes(
     classifications: List[ContigClassification],
     qr_best_chain_ident: Dict[Tuple[str, str], float],
     qr_cluster_score: Optional[Dict[Tuple[str, str], float]] = None,
     subgenome_k: float = 1.0,
     ref_footprints: Optional[Dict[Tuple[str, str], List[Tuple[int, int]]]] = None,
+    cluster_fit_pairs: Optional[Set[Tuple[str, str]]] = None,
 ) -> None:
     """Infer query subgenomes when multiple contigs map to the same reference.
 
@@ -1032,10 +1070,13 @@ def infer_query_subgenomes(
             Used only to populate ``seq_identity_vs_ref`` on each contig.
         qr_cluster_score: Optional dict of (contig, ref_id) -> per-contig
             score used for GMM clustering and ranking.  Defaults to
-            ``qr_best_chain_ident``.  Pass a coverage-weighted metric (e.g.
-            ``ident × union_bp / contig_len``) to spread near-tied homeologous
-            copies whose chain identities agree to several decimal places.
+            ``qr_best_chain_ident``.  The caller passes gap-compressed
+            identity when the alignments carry ``de`` tags, else a
+            coverage-weighted metric (``ident × union_bp / contig_len``).
         subgenome_k: Not used by GMM (kept for API compatibility)
+        cluster_fit_pairs: Optional ``(contig, ref_id)`` pairs whose scores
+            inform the GMM fit; when given, other contigs are still assigned
+            to the nearest cluster but do not shape it.
         ref_footprints: Optional ``(contig, ref_id) -> merged reference
             intervals``.  When given, the paired validation counts only
             contigs that overlap on the reference as copies, so pieces of one
@@ -1094,7 +1135,8 @@ def infer_query_subgenomes(
         for ref_id in ref_ids:
             for clf in ref_to_clfs[ref_id]:
                 score = qr_cluster_score.get((clf.original_name, ref_id), 0.0)
-                if score > 0:
+                if score > 0 and (cluster_fit_pairs is None
+                                  or (clf.original_name, ref_id) in cluster_fit_pairs):
                     all_idents.append(score)
 
         if len(all_idents) < 4:
@@ -2140,22 +2182,15 @@ def classify_all_contigs(
     demote_tiling_full_length(classifications, ref_footprints)
 
     # Infer query subgenomes when multiple contigs map to same reference.
-    # Cluster score = identity × (union_bp / contig_len) so the GMM separates
-    # copies by alignment coverage in addition to chain identity.
     if ev.qr_best_chain_ident:
-        qr_cluster_score: Dict[Tuple[str, str], float] = {}
-        for (q, ref_id), ident in ev.qr_best_chain_ident.items():
-            qlen = query_lengths.get(q, 0)
-            if qlen <= 0 or ident <= 0:
-                continue
-            union_bp = int(ev.qr_union_bp.get((q, ref_id), 0) or 0)
-            qr_cluster_score[(q, ref_id)] = ident * (union_bp / qlen)
+        cluster_scores, fit_pairs = subgenome_cluster_scores(ev, query_lengths)
         infer_query_subgenomes(
             classifications=classifications,
             qr_best_chain_ident=ev.qr_best_chain_ident,
-            qr_cluster_score=qr_cluster_score,
+            qr_cluster_score=cluster_scores,
             subgenome_k=subgenome_k,
             ref_footprints=ref_footprints,
+            cluster_fit_pairs=fit_pairs,
         )
 
     assign_contig_names(

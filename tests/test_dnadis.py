@@ -230,6 +230,55 @@ def test_parse_paf_chain_evidence_for_subgenome_assignment(tmp_path):
     assert ev.best_ref["contigA"] == "chr1A"
     assert ev.best_bp["contigA"] == 400
     assert ev.contig_total["contigA"] == 550
+    # No de tags: no gap-compressed identity
+    assert ev.qr_gc_ident is None
+
+
+def test_parse_paf_chain_evidence_gap_compressed_identity(tmp_path):
+    """qr_gc_ident is 1 - de, weighted by aligned query bp, per (contig, ref)."""
+    paf_path = tmp_path / "de.paf"
+    paf_path.write_text(
+        "contigA\t1000\t0\t200\t+\tchr1A\t1000\t0\t200\t150\t220\t60\ttp:A:P\tde:f:0.05\n"
+        "contigA\t1000\t300\t700\t+\tchr1A\t1000\t300\t700\t300\t440\t60\ttp:A:P\tde:f:0.08\n"
+        "contigA\t1000\t0\t150\t+\tchr1B\t1000\t0\t150\t120\t150\t60\ttp:A:P\tde:f:0.10\n"
+        # Shorter than assign_minlen: ignored
+        "contigA\t1000\t800\t850\t+\tchr1A\t1000\t800\t850\t50\t50\t60\ttp:A:P\tde:f:0.0\n"
+    )
+    ev = dnadis.parse_paf_chain_evidence_and_segments(
+        paf_gz_path=paf_path, contig_lengths={"contigA": 1000},
+        assign_minlen=100, assign_minmapq=20, assign_tp="P",
+        chain_q_gap=200, chain_r_gap=200, chain_diag_slop=10,
+        assign_min_ident=0.6, assign_chain_topk=1, assign_chain_score="matches",
+        assign_chain_min_bp=100, assign_ref_score="topk",
+    )
+    assert ev.qr_gc_ident[("contigA", "chr1A")] == pytest.approx((200 * 0.95 + 400 * 0.92) / 600)
+    assert ev.qr_gc_ident[("contigA", "chr1B")] == pytest.approx(0.90)
+
+
+def test_subgenome_cluster_scores_prefer_gap_compressed_identity():
+    """Copies of differing divergence keep their order however fragmented they are."""
+    from types import SimpleNamespace
+    from dnadis.classification.classifier import subgenome_cluster_scores
+
+    # A short, repeat-rich piece of the closer copy aligns over little of its
+    # length; the coverage-weighted score would rank it below the distant copy
+    ev = SimpleNamespace(
+        qr_gc_ident={("near_piece", "chr1A"): 0.935, ("far_contig", "chr1A"): 0.89},
+        qr_gc_ident_bp={("near_piece", "chr1A"): 60_000, ("far_contig", "chr1A"): 8_500_000},
+        qr_best_chain_ident={("near_piece", "chr1A"): 0.70, ("far_contig", "chr1A"): 0.66},
+        qr_union_bp={("near_piece", "chr1A"): 300_000, ("far_contig", "chr1A"): 9_000_000},
+    )
+    lengths = {"near_piece": 1_000_000, "far_contig": 10_000_000}
+    s, fit = subgenome_cluster_scores(ev, lengths)
+    assert s[("near_piece", "chr1A")] > s[("far_contig", "chr1A")]
+    # Only identities resting on enough alignment shape the clusters
+    assert fit == {("far_contig", "chr1A")}
+
+    ev.qr_gc_ident = None
+    s, fit = subgenome_cluster_scores(ev, lengths)
+    assert s[("near_piece", "chr1A")] == pytest.approx(0.70 * 0.3)
+    assert s[("near_piece", "chr1A")] < s[("far_contig", "chr1A")]
+    assert fit is None
 
 
 def test_parse_paf_chain_evidence_excludes_organelles_from_best_ref(tmp_path):
@@ -1856,6 +1905,39 @@ def test_infer_query_subgenomes_two_subgenomes():
         # Every set is numbered, highest identity first
         assert high_clf.query_subgenome == "s1"
         assert low_clf.query_subgenome == "s2"
+
+
+def test_infer_query_subgenomes_outlier_left_out_of_fit():
+    """A divergent repeat fragment must not stop two clean copy clusters from splitting."""
+    from dnadis.classification.classifier import infer_query_subgenomes
+    from dnadis.models import ContigClassification
+
+    def clf(name, ref, length):
+        c = ContigClassification(
+            original_name=name, new_name="", classification="chrom_assigned",
+            reversed=False, cobiont_taxid=None, cobiont_sci=None,
+            assigned_ref_id=ref, ref_gene_proportion=0.5, contig_len=length)
+        c.is_full_length = True
+        return c
+
+    clfs, scores = [], {}
+    for i in range(1, 11):
+        ref = f"chr{i}A"
+        clfs += [clf(f"near_{i}", ref, 20_000_000), clf(f"far_{i}", ref, 20_000_000)]
+        scores[(f"near_{i}", ref)] = 0.935 + (i % 3) * 0.002
+        scores[(f"far_{i}", ref)] = 0.890 + (i % 3) * 0.002
+    junk = clf("repeat_array", "chr1A", 250_000)
+    junk.is_full_length = False
+    clfs.append(junk)
+    scores[("repeat_array", "chr1A")] = 0.754
+    fit = {k for k in scores if k[0] != "repeat_array"}
+
+    infer_query_subgenomes(clfs, scores, scores, cluster_fit_pairs=fit)
+
+    by = {c.original_name: c for c in clfs}
+    for i in range(1, 11):
+        assert by[f"near_{i}"].query_subgenome == "s1"
+        assert by[f"far_{i}"].query_subgenome == "s2"
 
 
 def test_infer_query_subgenomes_no_split_similar_identities():

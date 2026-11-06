@@ -48,6 +48,7 @@ def submit_reference_compleasm(
     output_dir: Path,
     executor,
     cluster_config,
+    n_taxa: int,
 ):
     """Submit the reference compleasm job at the start of the executor scope.
 
@@ -56,8 +57,12 @@ def submit_reference_compleasm(
     straggler that only starts once every assembly has finished.  Returns
     a future whose ``.result()`` yields a :class:`CompleasmResult` (or
     ``None``), or ``None`` if the reference run is not needed.
+
+    ``n_taxa`` counts the query assemblies, phylogeny-only outgroups
+    included.  With fewer than two no tree is built, so nothing would
+    collect the job and the executor would wait for it at shutdown.
     """
-    if args.skip_phylogeny:
+    if args.skip_phylogeny or n_taxa < 2:
         return None
     if not args.compleasm_lineage or args.skip_compleasm:
         return None
