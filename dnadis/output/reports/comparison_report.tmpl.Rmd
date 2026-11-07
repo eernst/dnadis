@@ -679,6 +679,10 @@ scaf_gt_df %>%
   tab_spanner(label = "N50 (Mb)", columns = c(ctg_n50, scaf_n50)) %>%
   tab_spanner(label = "Chromosomes in one piece",
               columns = c(one_ctg, one_scaf, n_slots)) %>%
+  # A wrapped spanner label sits lower than the others, so its rule does
+  # not line up with theirs.
+  tab_style(style = cell_text(whitespace = "nowrap"),
+            locations = cells_column_spanners()) %>%
   cols_align(align = "right",
              columns = c(chr_mb, joined_pct, frag_placed_mb, unplaced_mb, joins,
                          ctg_n50, scaf_n50, one_ctg, one_scaf, n_slots)) %>%
