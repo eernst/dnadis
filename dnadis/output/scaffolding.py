@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
+from dnadis.detection.redundancy import is_own_assembly_copy
 from dnadis.models import ContigClassification
 from dnadis.utils.io_utils import have_exe
 from dnadis.utils.logging_config import get_logger
@@ -184,6 +185,24 @@ def _compute_group_mean_idents(
     return result
 
 
+def _is_redundant_fragment(clf: ContigClassification) -> bool:
+    """A chrom_fragment whose sequence is already in a chromosome-length
+    contig of the same assembly (own-assembly redundancy evidence).
+
+    The reference-footprint check that demotes fragments to chrom_debris
+    misses such copies when the reference is divergent, and RagTag then
+    places them at a chromosome end with near-zero location confidence.
+    """
+    return clf.classification == "chrom_fragment" and is_own_assembly_copy(
+        clf.redundancy_cov, clf.redundancy_identity,
+        clf.depth_ratio, clf.target_depth_ratio,
+    )
+
+
+def _fmt_ratio(value: Optional[float]) -> str:
+    return "NA" if value is None else f"{value:.2f}"
+
+
 def _group_contigs_by_haplotype(
     classifications: List[ContigClassification],
     best_ref: Dict[str, str],
@@ -196,8 +215,10 @@ def _group_contigs_by_haplotype(
     Pass 1: Chromosome-assigned contigs grouped by (assigned_ref_id, grp).
     Pass 2: chrom_fragment contigs join the group of their query subgenome
     set, or the nearest haplotype group by identity when they have none
-    (unique arms too short to be full chromosomes; chrom_debris and extra
-    copies of a region every set already spans are excluded as redundant). With
+    (unique arms too short to be full chromosomes; chrom_debris, extra
+    copies of a region every set already spans, and fragments that are copies
+    of sequence in a chromosome-length contig of the same assembly are
+    excluded as redundant). With
     ``include_rdna``, rDNA contigs that carry an assigned_ref_id (they passed
     the synteny gate before being moved to rDNA) are candidates too; their
     placement rests on rDNA similarity shared between NORs.
@@ -245,6 +266,16 @@ def _group_contigs_by_haplotype(
         if clf.classification != "chrom_fragment" and not is_rdna_candidate:
             continue
         if clf.subgenome_basis == "extra_copy":
+            continue
+        if _is_redundant_fragment(clf):
+            logger.info(
+                f"{clf.new_name or clf.original_name}: not joined; copy of "
+                f"{clf.redundancy_target}:{clf.redundancy_region} "
+                f"(coverage={clf.redundancy_cov:.2f}, "
+                f"identity={clf.redundancy_identity:.4f}, "
+                f"depth ratio={_fmt_ratio(clf.depth_ratio)}, "
+                f"target depth ratio={_fmt_ratio(clf.target_depth_ratio)})"
+            )
             continue
 
         ref_id = clf.assigned_ref_id or best_ref.get(clf.original_name, "")
@@ -987,8 +1018,9 @@ def scaffold_chromosomes(
                     _collect_group_result(future.result())
 
     # Every chromosome contig belongs in the scaffold set.  Contigs not placed
-    # above (fragments beside a T2T copy, extra copies, fragments without a
-    # reference, no_join contigs, groups that produced no scaffold) are
+    # above (fragments beside a T2T copy, extra copies, fragments that copy
+    # own-chromosome sequence, fragments without a reference, no_join
+    # contigs, groups that produced no scaffold) are
     # emitted on their own under their contig names, like contigs RagTag
     # could not place.
     placed = {
@@ -1006,7 +1038,12 @@ def scaffold_chromosomes(
         _emit_trivial_scaffold(
             name, clf.original_name, query_seqs, contig_orientations,
             all_scaffolded, all_agp,
-            log_label="sister-placed, not joined" if clf.original_name in no_join else "unplaced",
+            log_label=(
+                "sister-placed, not joined" if clf.original_name in no_join
+                else "copy of own chromosome sequence, not joined"
+                if _is_redundant_fragment(clf)
+                else "unplaced"
+            ),
         )
 
     logger.done(f"Scaffolded {len(all_scaffolded)} chromosomes")

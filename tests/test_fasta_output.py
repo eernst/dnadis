@@ -232,3 +232,58 @@ def test_no_join_contigs_are_scaffolded_alone(tmp_path, monkeypatch):
     }
     sister_lines = [line for line in agp if line.split("\t")[5] == "sister"]
     assert len(sister_lines) == 1 and sister_lines[0].split("\t")[0] == "chr1A_f2"
+
+
+def test_fragments_copying_own_chromosome_are_not_joined(tmp_path, monkeypatch, caplog):
+    """A chrom_fragment that is a copy of sequence in a chromosome-length
+    contig of the same assembly (haplotig: both copies at about half depth,
+    or a near-identical duplicate) is emitted on its own, not joined; a
+    full-depth fragment matching at the same identity (homeologous region)
+    is still joined."""
+    import logging
+
+    from dnadis.output import scaffolding
+
+    monkeypatch.setattr(scaffolding, "have_exe", lambda exe: False)
+    seqs = {
+        "anchor": "ACGT" * 500, "hap": "TTGCA" * 100,
+        "dup": "GGATC" * 80, "homeo": "CATG" * 90,
+    }
+    qfa = tmp_path / "q.fa"
+    qfa.write_text("".join(f">{k}\n{v}\n" for k, v in seqs.items()))
+    rfa = tmp_path / "r.fa"
+    rfa.write_text(">chr1A\n" + "A" * 3000 + "\n")
+    frag = dict(query_subgenome_grp=1, seq_identity_vs_ref=0.95,
+                redundancy_target="chr1A", redundancy_region="1-500")
+    clfs = [
+        _clf("anchor", "chr1A", "chrom_assigned", "chr1A", is_full_length=True,
+             has_5p_telomere=True, query_subgenome_grp=1, seq_identity_vs_ref=0.95),
+        _clf("hap", "chr1A_f1", "chrom_fragment", "chr1A", redundancy_cov=0.71,
+             redundancy_identity=0.963, depth_ratio=0.46, target_depth_ratio=0.44, **frag),
+        _clf("dup", "chr1A_f2", "chrom_fragment", "chr1A", redundancy_cov=0.96,
+             redundancy_identity=0.9995, **frag),
+        _clf("homeo", "chr1A_f3", "chrom_fragment", "chr1A", redundancy_cov=0.71,
+             redundancy_identity=0.963, depth_ratio=0.98, target_depth_ratio=1.02, **frag),
+    ]
+    best_ref = {c.original_name: "chr1A" for c in clfs}
+    with caplog.at_level(logging.INFO):
+        scaffolded, agp, _ = scaffolding.scaffold_chromosomes(
+            query_fasta=qfa, classifications=clfs,
+            contig_orientations={k: False for k in seqs},
+            qr_ref_ranges={("anchor", "chr1A"): (1, 2000), ("hap", "chr1A"): (2100, 2400),
+                           ("dup", "chr1A"): (2500, 2600), ("homeo", "chr1A"): (2700, 2900)},
+            ref_fasta=rfa, ref_lengths={"chr1A": 3000},
+            best_ref=best_ref, contig_refs={k: {v} for k, v in best_ref.items()},
+            work_dir=tmp_path / "scaf",
+            qr_best_chain_ident={(k, v): 0.95 for k, v in best_ref.items()},
+            gap_size=10,
+        )
+    assert scaffolded == {
+        "chr1A": seqs["anchor"] + "N" * 10 + seqs["homeo"],
+        "chr1A_f1": seqs["hap"],
+        "chr1A_f2": seqs["dup"],
+    }
+    assert {line.split("\t")[5] for line in agp if line.split("\t")[4] == "W"} == set(seqs)
+    assert "chr1A_f1: not joined; copy of chr1A:1-500" in caplog.text
+    assert "chr1A_f2: not joined; copy of chr1A:1-500" in caplog.text
+    assert "chr1A_f3: not joined" not in caplog.text

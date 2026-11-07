@@ -41,6 +41,16 @@ logger = get_logger("redundancy")
 _WINDOW_FACTOR = 1.5
 _WINDOW_PAD = 20_000
 
+# is_own_assembly_copy() thresholds.  The haplotig arm rests on depth: both
+# copies at <= 0.75 of the chromosomal depth (midway between one and two
+# haplotypes).  Its identity floor only excludes unrelated sequence; asm20
+# rarely aligns half a contig collinearly below it, and haplotypes of a
+# heterozygous hybrid can differ by 4-8%.
+REDUNDANT_MIN_COV = 0.50
+DUPLICATE_MIN_IDENTITY = 0.999
+HAPLOTIG_MIN_IDENTITY = 0.90
+HAPLOTIG_MAX_DEPTH_RATIO = 0.75
+
 
 @dataclass
 class RedundancyHit:
@@ -128,6 +138,34 @@ def parse_redundancy_paf(paf: Path) -> Dict[str, Dict[str, RedundancyHit]]:
         if per_target:
             result[query] = per_target
     return result
+
+
+def is_own_assembly_copy(
+    cov: Optional[float],
+    identity: Optional[float],
+    depth_ratio: Optional[float],
+    target_depth_ratio: Optional[float],
+) -> bool:
+    """True when a contig is a second copy of sequence in its assembly's
+    chromosome-length contigs.
+
+    The contig must be covered at least ``REDUNDANT_MIN_COV`` by one window of
+    a chromosome-length contig.  It is then a copy when the two are
+    near-identical (reads cannot tell them apart), or when both it and the
+    matched region sit at about half the chromosomal depth (two haplotypes of
+    one locus, which can differ by several percent).  A homeologous region of
+    a polyploid aligns at similar identity but at full depth, so it is kept.
+    """
+    if cov is None or identity is None or cov < REDUNDANT_MIN_COV:
+        return False
+    if identity >= DUPLICATE_MIN_IDENTITY:
+        return True
+    return (
+        identity >= HAPLOTIG_MIN_IDENTITY
+        and depth_ratio is not None and depth_ratio <= HAPLOTIG_MAX_DEPTH_RATIO
+        and target_depth_ratio is not None
+        and target_depth_ratio <= HAPLOTIG_MAX_DEPTH_RATIO
+    )
 
 
 def best_hit(per_target: Dict[str, RedundancyHit]) -> RedundancyHit:
