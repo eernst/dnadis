@@ -199,9 +199,12 @@ def test_redundant_with_own_chromosome():
     assert not red(1.0, 0.985, 0.5, 1.0)
     # Near-identical copy: redundant with or without depth
     assert red(0.9, 0.9995)
+    # Divergent haplotypes of a heterozygous hybrid, both at half depth
+    assert red(0.71, 0.963, 0.46, 0.44)
+    assert not red(0.71, 0.963, 0.98, 1.02)
     # Partial overlap, low identity, or no evidence: kept
     assert not red(0.3, 0.9995, 0.5, 0.5)
-    assert not red(1.0, 0.95, 0.5, 0.5)
+    assert not red(1.0, 0.85, 0.5, 0.5)
     assert not red(1.0, 0.985)
     assert not redundant_with_own_chromosome(_row("c", "debris", 1, 0))
 
