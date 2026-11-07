@@ -990,7 +990,7 @@ def run_assembly(
             exclude_contigs=already_classified,
             resource_spec=debris_spec if use_cluster else None,
         )
-        # Own-assembly redundancy evidence (annotation only): permissive
+        # Own-assembly redundancy evidence (classes do not use it): permissive
         # alignment of every non-chromosome-length contig to the
         # chromosome-length contigs.
         from dnadis.detection.redundancy import detect_redundancy
