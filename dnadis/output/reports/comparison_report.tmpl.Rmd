@@ -419,6 +419,98 @@ has_compleasm <- "compleasm_chrs_S" %in% names(comp_df) &&
   any(!is.na(comp_df$compleasm_chrs_S) & comp_df$compleasm_chrs_S != "", na.rm = TRUE)
 ```
 
+```{r scaffolding_setup, include=FALSE}
+# Post-scaffolding state of the chromosome set (chrom_assigned +
+# chrom_fragment) per assembly with an AGP.  Each chromosome contig is
+#   joined   - a component of a multi-contig scaffold
+#   single   - a chrom_assigned contig left on its own
+#   unplaced - a chrom_fragment contig left on its own
+# A contig missing from the AGP counts as left on its own.
+scaf_states <- c("joined", "single", "unplaced")
+scaf_state_colors <- c(
+  joined   = unname(classification_colors["chrom_assigned"]),
+  single   = lighten(classification_colors[["chrom_assigned"]], amount = 0.45),
+  unplaced = oi[6]
+)
+scaf_state_labels <- c(
+  joined   = "In joined scaffolds",
+  single   = "Chromosome contig on its own",
+  unplaced = "Fragment on its own"
+)
+
+n50_bp <- function(x) {
+  x <- sort(x[!is.na(x)], decreasing = TRUE)
+  if (length(x) == 0) return(NA_real_)
+  x[which(cumsum(x) >= sum(x) / 2)[1]]
+}
+
+scaf_tbl <- NULL
+if (has_per_asm && !is.null(all_agp_df) && nrow(all_agp_df) > 0) {
+  agp_w <- all_agp_df %>% filter(type == "W")
+  scaf_info <- all_agp_df %>%
+    group_by(assembly, scaffold) %>%
+    summarise(scaf_len = max(end), n_comp = sum(type == "W"), .groups = "drop")
+  memb <- agp_w %>%
+    select(assembly, component, scaffold) %>%
+    distinct(assembly, component, .keep_all = TRUE) %>%
+    left_join(scaf_info, by = c("assembly", "scaffold"))
+
+  chr_ctg <- all_summary_df %>%
+    filter(classification %in% c("chrom_assigned", "chrom_fragment"),
+           assembly %in% unique(agp_w$assembly)) %>%
+    select(assembly, original_name, classification, length,
+           assigned_ref_id, query_subgenome) %>%
+    left_join(memb, by = c("assembly", "original_name" = "component")) %>%
+    mutate(
+      n_comp = coalesce(as.integer(n_comp), 1L),
+      unit = coalesce(scaffold, original_name),
+      unit_len = coalesce(scaf_len, as.numeric(length)),
+      state = case_when(
+        n_comp > 1 ~ "joined",
+        classification == "chrom_assigned" ~ "single",
+        TRUE ~ "unplaced"
+      ),
+      # Reference chromosome x copy set.  Its members are its chrom_assigned
+      # contigs, or its fragments when it has none (as in the contiguity
+      # states).
+      slot = paste(assigned_ref_id, coalesce(as.character(query_subgenome), ""),
+                   sep = "\x01")
+    )
+
+  slot_tbl <- chr_ctg %>%
+    group_by(assembly, slot) %>%
+    filter(if (any(classification == "chrom_assigned"))
+             classification == "chrom_assigned" else TRUE) %>%
+    summarise(n_ctg = n(), n_unit = n_distinct(unit), .groups = "drop") %>%
+    group_by(assembly) %>%
+    summarise(n_slots = n(),
+              one_ctg = sum(n_ctg == 1),
+              one_scaf = sum(n_unit == 1),
+              .groups = "drop")
+
+  scaf_tbl <- chr_ctg %>%
+    group_by(assembly) %>%
+    summarise(
+      chr_mb = sum(length) / 1e6,
+      joined_mb = sum(length[state == "joined"]) / 1e6,
+      single_mb = sum(length[state == "single"]) / 1e6,
+      unplaced_mb = sum(length[state == "unplaced"]) / 1e6,
+      frag_placed_mb = sum(length[classification == "chrom_fragment" &
+                                    state == "joined"]) / 1e6,
+      ctg_n50 = n50_bp(length) / 1e6,
+      scaf_n50 = n50_bp(unit_len[!duplicated(unit)]) / 1e6,
+      joins = sum(n_comp[!duplicated(unit)] - 1L),
+      .groups = "drop"
+    ) %>%
+    left_join(slot_tbl, by = "assembly") %>%
+    mutate(joined_pct = 100 * joined_mb / chr_mb,
+           assembly = factor(assembly, levels = asm_names)) %>%
+    arrange(assembly) %>%
+    mutate(assembly = as.character(assembly))
+}
+has_scaffolding <- !is.null(scaf_tbl) && nrow(scaf_tbl) > 0
+```
+
 ## Classification
 
 ```{r classification_table, eval=has_per_asm, results='asis'}
@@ -508,7 +600,7 @@ clf_gt_df %>%
   cols_align(align = "right", columns = any_of(nonzero_mb)) %>%
   tab_header(
     title = md("**Classification**"),
-    subtitle = "Mb per category"
+    subtitle = "Mb per category, by contig"
   ) %>%
   tab_source_note(md(paste0(
     paste(sapply(classification_levels[classification_levels %in%
@@ -519,6 +611,98 @@ clf_gt_df %>%
               classification_colors[cl], classification_labels[cl])
     }), collapse = " &nbsp; ")
   ))) %>%
+  { if (has_scaffolding) tab_source_note(., md(
+      "Classes are per contig. The Scaffolding tab shows how Chr and ChrF contigs were joined into scaffolds."
+    )) else . } %>%
+  tab_style(
+    style = css(vertical_align = "middle"),
+    locations = cells_body()
+  ) %>%
+  gt_theme()
+```
+
+`r if (has_scaffolding) "## Scaffolding" else ""`
+
+```{r scaffolding_table, eval=has_scaffolding, results='asis'}
+make_scaf_bar <- function(joined, single, unplaced) {
+  vals <- c(joined, single, unplaced)
+  cols <- unname(scaf_state_colors[scaf_states])
+  total <- sum(vals, na.rm = TRUE)
+  if (is.na(total) || total == 0) return("")
+  bar_w <- 200; bar_h <- 14; x <- 0; rects <- ""
+  for (j in seq_along(vals)) {
+    w <- vals[j] / total * bar_w
+    if (!is.na(w) && w > 0.1) {
+      rects <- paste0(rects, sprintf(
+        '<rect x="%.1f" y="0" width="%.1f" height="%d" fill="%s"/>', x, w, bar_h, cols[j]))
+      x <- x + w
+    }
+  }
+  sprintf('<svg width="%d" height="%d" style="vertical-align:middle" xmlns="http://www.w3.org/2000/svg">%s</svg>',
+          bar_w, bar_h, rects)
+}
+
+scaf_gt_df <- scaf_tbl %>%
+  rowwise() %>%
+  mutate(bar = make_scaf_bar(joined_mb, single_mb, unplaced_mb)) %>%
+  ungroup() %>%
+  transmute(
+    Assembly = assembly, bar,
+    chr_mb, joined_pct, frag_placed_mb, unplaced_mb, joins,
+    ctg_n50, scaf_n50,
+    one_ctg, one_scaf, n_slots
+  )
+
+missing_agp <- setdiff(asm_names, scaf_tbl$assembly)
+
+scaf_gt_df %>%
+  gt() %>%
+  fmt(columns = bar, fns = function(x) lapply(x, html)) %>%
+  fmt(columns = Assembly, fns = function(x) lapply(asm_report_link(x), html)) %>%
+  fmt_number(columns = c(chr_mb, frag_placed_mb, unplaced_mb), decimals = 1) %>%
+  fmt_number(columns = joined_pct, decimals = 0, pattern = "{x}%") %>%
+  fmt_number(columns = c(ctg_n50, scaf_n50), decimals = 1) %>%
+  fmt_integer(columns = c(joins, one_ctg, one_scaf, n_slots)) %>%
+  cols_label(
+    bar = "", chr_mb = "Chr + ChrF", joined_pct = "Joined",
+    frag_placed_mb = "ChrF placed", unplaced_mb = "ChrF alone",
+    joins = "Joins",
+    ctg_n50 = "Contig", scaf_n50 = "Scaffold",
+    one_ctg = "Contigs", one_scaf = "Scaffolds", n_slots = "Of"
+  ) %>%
+  tab_spanner(label = "Chromosome sequence (Mb)",
+              columns = c(chr_mb, joined_pct, frag_placed_mb, unplaced_mb)) %>%
+  tab_spanner(label = "N50 (Mb)", columns = c(ctg_n50, scaf_n50)) %>%
+  tab_spanner(label = "Chromosomes in one piece",
+              columns = c(one_ctg, one_scaf, n_slots)) %>%
+  # A wrapped spanner label sits lower than the others, so its rule does
+  # not line up with theirs.
+  tab_style(style = cell_text(whitespace = "nowrap"),
+            locations = cells_column_spanners()) %>%
+  cols_align(align = "right",
+             columns = c(chr_mb, joined_pct, frag_placed_mb, unplaced_mb, joins,
+                         ctg_n50, scaf_n50, one_ctg, one_scaf, n_slots)) %>%
+  tab_header(
+    title = md("**Scaffolding**"),
+    subtitle = "Chromosome contigs (Chr + ChrF) after reference-guided scaffolding"
+  ) %>%
+  tab_source_note(md(paste(
+    sapply(scaf_states, function(s) {
+      sprintf('<span style="white-space:nowrap;"><span style="display:inline-block;width:12px;height:12px;background:%s;margin-right:3px;vertical-align:middle;"></span>%s</span>',
+              scaf_state_colors[[s]], scaf_state_labels[[s]])
+    }),
+    collapse = " &nbsp; "
+  ))) %>%
+  tab_source_note(md(paste0(
+    "**Joined**: share of Chr + ChrF Mb inside multi-contig scaffolds. ",
+    "**ChrF placed / alone**: fragment Mb joined into a scaffold or left on its own. ",
+    "**Joins**: contig-to-contig joins. ",
+    "**Chromosomes in one piece**: reference chromosome × copy-set slots whose ",
+    "Chr contigs (or ChrF contigs, if the slot has no Chr contig) form one contig, ",
+    "and one scaffold, out of all slots with chromosome contigs."
+  ))) %>%
+  { if (length(missing_agp) > 0) tab_source_note(., md(sprintf(
+      "No scaffolds: %s", paste(missing_agp, collapse = ", ")))) else . } %>%
   tab_style(
     style = css(vertical_align = "middle"),
     locations = cells_body()

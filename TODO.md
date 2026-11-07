@@ -43,3 +43,20 @@ Add a dedicated contaminant-detection phase that:
 - Emits its own classification category (`contaminant`) and output FASTA/TSV,
   kept distinct from the `cobiont` category introduced when the centrifuger
   screen was renamed.
+
+## Scaffolding results in the reports
+
+With `--scaffold`, the comparison report's Scaffolding tab summarizes joins per
+assembly, and both reports draw scaffold brackets or pills in their synteny
+plots. Most other report sections still describe contigs:
+
+- Nx curves, the contiguity heatmap and chromosome completeness use contig
+  lengths. Scaffold-level versions (or a contig/scaffold toggle) would show
+  what scaffolding changed.
+- The per-assembly report has no scaffolding summary: joins per scaffold,
+  RagTag location/orientation confidence, and the fragments left on their own
+  with the reason (no reference placement, rDNA, sister-placed, no anchor).
+- `comparison_summary.tsv` has no scaffolding columns (joined Mb, joins,
+  scaffold N50, chromosomes in one scaffold).
+- Joins between copy sets or against sister-assembly evidence are not flagged
+  in either report.
