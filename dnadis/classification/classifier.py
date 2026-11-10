@@ -1293,6 +1293,8 @@ def generate_contig_names(
     has the highest identity.
 
     Non-chromosome contigs are named contig_1, contig_2, … by descending length.
+    Ties at every level are broken by original contig name, so names do not
+    depend on input order.
 
     Args:
         classifications: List of ContigClassification with is_full_length and query_subgenome set
@@ -1336,18 +1338,17 @@ def generate_contig_names(
         full_length = [c for c in contigs if c.is_full_length]
         fragments = [c for c in contigs if not c.is_full_length]
 
-        # Sort by identity descending (primary key) then length descending
-        # (tiebreaker).  Identity-based ordering keeps _c1/_c2 consistent
-        # with subgenome set ordering (_s1, _s2), so the highest-identity
-        # copy is always _c1 / _s1.
-        full_length.sort(
-            key=lambda c: (c.seq_identity_vs_ref or 0.0, c.contig_len),
-            reverse=True,
-        )
-        fragments.sort(
-            key=lambda c: (c.seq_identity_vs_ref or 0.0, c.contig_len),
-            reverse=True,
-        )
+        # Sort by identity descending (primary key), then length descending,
+        # then original name.  Identity-based ordering keeps _c1/_c2
+        # consistent with subgenome set ordering (_s1, _s2), so the
+        # highest-identity copy is always _c1 / _s1.  The name tiebreak makes
+        # the numbering independent of input order, which can come from set
+        # iteration and so vary between runs.
+        def _copy_order(c: ContigClassification) -> Tuple[float, int, str]:
+            return (-(c.seq_identity_vs_ref or 0.0), -c.contig_len, c.original_name)
+
+        full_length.sort(key=_copy_order)
+        fragments.sort(key=_copy_order)
 
         # Name full-length contigs
         if len(full_length) == 1:
@@ -1361,9 +1362,9 @@ def generate_contig_names(
         for i, clf in enumerate(fragments, start=1):
             name_mapping[clf.original_name] = f"{base_name}_f{i}"
 
-    # Name non-chromosome contigs
-    # Sort by length descending
-    non_chrom_contigs.sort(key=lambda c: query_lengths.get(c, 0), reverse=True)
+    # Name non-chromosome contigs by descending length; equal lengths are
+    # ordered by original name so reruns give the same names.
+    non_chrom_contigs.sort(key=lambda c: (-query_lengths.get(c, 0), c))
     for i, contig in enumerate(non_chrom_contigs, start=1):
         name_mapping[contig] = f"contig_{i}"
 

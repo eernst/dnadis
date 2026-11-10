@@ -830,6 +830,55 @@ def test_generate_contig_names_multiple_full_length_copies():
     assert name_mapping["contig_002"] == "chr1A_c2"
 
 
+def test_generate_contig_names_ties_independent_of_input_order():
+    """Equal-length/equal-identity contigs get the same names in any input order."""
+    from itertools import permutations
+
+    from dnadis.classification.classifier import generate_contig_names
+    from dnadis.models import ContigClassification
+
+    def clf(name, classification, length, ref=None, full=False):
+        return ContigClassification(
+            original_name=name,
+            new_name="",
+            classification=classification,
+            reversed=False,
+            cobiont_taxid=None,
+            cobiont_sci=None,
+            assigned_ref_id=ref,
+            ref_gene_proportion=None,
+            contig_len=length,
+            is_full_length=full,
+            query_subgenome=None,
+            seq_identity_vs_ref=0.99 if ref else None,
+        )
+
+    clfs = [
+        # Non-chromosome contigs: two of equal length, one longer
+        clf("ctg_b", "organelle_debris", 50000),
+        clf("ctg_a", "organelle_debris", 50000),
+        clf("ctg_c", "debris", 60000),
+        # Chromosome copies and fragments tied on identity and length
+        clf("ctg_e", "chrom_assigned", 1000000, ref="chr1", full=True),
+        clf("ctg_d", "chrom_assigned", 1000000, ref="chr1", full=True),
+        clf("ctg_g", "chrom_fragment", 200000, ref="chr1"),
+        clf("ctg_f", "chrom_fragment", 200000, ref="chr1"),
+    ]
+    query_lengths = {c.original_name: c.contig_len for c in clfs}
+
+    expected = {
+        "ctg_c": "contig_1",
+        "ctg_a": "contig_2",
+        "ctg_b": "contig_3",
+        "ctg_d": "chr1_c1",
+        "ctg_e": "chr1_c2",
+        "ctg_f": "chr1_f1",
+        "ctg_g": "chr1_f2",
+    }
+    for order in permutations(clfs):
+        assert generate_contig_names(list(order), query_lengths, None) == expected
+
+
 # ----------------------------
 # Rearrangement hypothesis detection tests (cluster-based)
 # ----------------------------
