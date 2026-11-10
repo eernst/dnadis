@@ -82,6 +82,12 @@ APPLIED_DECISIONS = frozenset({"assigned", "reassigned"})
 _MAJOR_FRAC = 0.10
 _MAJOR_MIN_BP = 100_000
 
+# Haplotig identity floor for no_call_redundant.  A candidate's own reference
+# assignment is weak or absent, so the copy cannot be tied to its own
+# chromosome; a higher floor keeps half-depth single-copy loci of other
+# chromosomes (gametologs, paralogs) from blocking a sister call.
+_SISTER_HAPLOTIG_MIN_IDENTITY = 0.98
+
 
 @dataclass
 class SisterVote:
@@ -144,6 +150,7 @@ def redundant_with_own_chromosome(row: dict) -> bool:
         _float_or_none(row.get("redundancy_identity")),
         _float_or_none(row.get("depth_ratio")),
         _float_or_none(row.get("target_depth_ratio")),
+        haplotig_min_identity=_SISTER_HAPLOTIG_MIN_IDENTITY,
     )
 
 
