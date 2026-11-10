@@ -42,7 +42,7 @@ source("__COMMON_R__")
 # ---------------------------------------------------------------------------
 # Subgenome detection and color setup
 # ---------------------------------------------------------------------------
-ref_lengths <- read_tsv(params$ref_lengths_tsv, show_col_types = FALSE,
+ref_lengths <- read_dnadis_tsv(params$ref_lengths_tsv,
                         col_types = cols(subgenome = col_character()))
 list2env(setup_subgenomes(ref_lengths), envir = environment())
 
@@ -79,32 +79,32 @@ version_sort_key <- function(x) {
 # ---------------------------------------------------------------------------
 # Load main data
 # ---------------------------------------------------------------------------
-summary_df <- read_tsv(params$summary_tsv, show_col_types = FALSE,
+summary_df <- read_dnadis_tsv(params$summary_tsv,
                        col_types = cols(assigned_subgenome = col_character()))
 
 has_evidence <- nchar(params$evidence_tsv) > 0 && file.exists(params$evidence_tsv)
-evidence_df <- if (has_evidence) read_tsv(params$evidence_tsv, show_col_types = FALSE) else NULL
+evidence_df <- if (has_evidence) read_dnadis_tsv(params$evidence_tsv) else NULL
 
 has_segments <- nchar(params$segments_tsv) > 0 && file.exists(params$segments_tsv)
 has_macro    <- nchar(params$macro_blocks_tsv) > 0 && file.exists(params$macro_blocks_tsv)
 
 has_rdna_ann <- nchar(params$rdna_annotations_tsv) > 0 && file.exists(params$rdna_annotations_tsv)
-rdna_ann_df  <- if (has_rdna_ann) read_tsv(params$rdna_annotations_tsv, show_col_types = FALSE) else NULL
+rdna_ann_df  <- if (has_rdna_ann) read_dnadis_tsv(params$rdna_annotations_tsv) else NULL
 
 has_rdna_arrays <- nchar(params$rdna_arrays_tsv) > 0 && file.exists(params$rdna_arrays_tsv)
-rdna_arrays_df  <- if (has_rdna_arrays) read_tsv(params$rdna_arrays_tsv, show_col_types = FALSE) else NULL
+rdna_arrays_df  <- if (has_rdna_arrays) read_dnadis_tsv(params$rdna_arrays_tsv) else NULL
 has_rdna_arrays <- !is.null(rdna_arrays_df) && nrow(rdna_arrays_df) > 0
 
 has_cobionts <- nchar(params$cobionts_tsv) > 0 && file.exists(params$cobionts_tsv)
 cobiont_df <- if (has_cobionts) {
-  tmp <- read_tsv(params$cobionts_tsv, show_col_types = FALSE)
+  tmp <- read_dnadis_tsv(params$cobionts_tsv)
   if (nrow(tmp) > 0) tmp else NULL
 } else NULL
 has_cobionts <- !is.null(cobiont_df)
 
 has_rearrangements <- nchar(params$rearrangements_tsv) > 0 && file.exists(params$rearrangements_tsv)
 rearr_df <- if (has_rearrangements) {
-  tmp <- read_tsv(params$rearrangements_tsv, show_col_types = FALSE)
+  tmp <- read_dnadis_tsv(params$rearrangements_tsv)
   if (nrow(tmp) > 0) tmp else NULL
 } else NULL
 has_rearrangements <- !is.null(rearr_df)
@@ -499,7 +499,7 @@ tibble(
 # and contiguity (how many query contigs reconstruct it).
 # ---------------------------------------------------------------------------
 macro_ct <- if (has_macro) {
-  readr::read_tsv(params$macro_blocks_tsv, show_col_types = FALSE,
+  read_dnadis_tsv(params$macro_blocks_tsv,
     col_types = cols(contig = col_character(), ref_id = col_character(),
       ref_start = col_double(), ref_end = col_double())) %>%
     select(contig, ref_id, ref_start, ref_end)
@@ -762,13 +762,13 @@ cat('<div class="note-box">No contigs were assigned to reference chromosomes. Th
 # ---------------------------------------------------------------------------
 
 # Load segment/macro/evidence data
-seg <- readr::read_tsv(params$segments_tsv, show_col_types = FALSE,
+seg <- read_dnadis_tsv(params$segments_tsv,
   col_types = cols(contig = col_character(), contig_len = col_double(),
     target_chrom_id = col_character(), target_subgenome = col_character(),
     strand = col_character(), chain_id = col_double(),
     qstart = col_double(), qend = col_double()))
 
-macro <- readr::read_tsv(params$macro_blocks_tsv, show_col_types = FALSE,
+macro <- read_dnadis_tsv(params$macro_blocks_tsv,
   col_types = cols(contig = col_character(), contig_len = col_double(),
     ref_id = col_character(), chrom_id = col_character(),
     subgenome = col_character(), strand = col_character(),
@@ -779,14 +779,14 @@ macro <- readr::read_tsv(params$macro_blocks_tsv, show_col_types = FALSE,
     n_segments = col_double(), gene_count_chain = col_double())) %>%
   mutate(target_chrom_id = chrom_id, target_subgenome = subgenome)
 
-ev <- readr::read_tsv(params$evidence_tsv, show_col_types = FALSE,
+ev <- read_dnadis_tsv(params$evidence_tsv,
   col_types = cols(contig = col_character(), ref_id = col_character(),
     chrom_id = col_character(), subgenome = col_character(),
     union_bp = col_double(), identity = col_double(), score_all = col_double()))
 
 # rDNA annotations (optional)
 rdna_annot <- if (nzchar(params$rdna_annotations_tsv) && file.exists(params$rdna_annotations_tsv)) {
-  readr::read_tsv(params$rdna_annotations_tsv, show_col_types = FALSE,
+  read_dnadis_tsv(params$rdna_annotations_tsv,
     col_types = cols(contig = col_character(), start = col_double(), end = col_double(),
       strand = col_character(), identity = col_double(),
       consensus_coverage = col_double(), copy_type = col_character(),
