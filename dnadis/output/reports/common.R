@@ -23,6 +23,37 @@ pacman::p_load(readr, dplyr, stringr, tidyr, tibble,
                showtext, sysfonts, knitr)
 
 # ---------------------------------------------------------------------------
+# TSV reading
+# ---------------------------------------------------------------------------
+# Columns that hold sequence, chromosome, subgenome or assembly names.
+# readr guesses a column of digit-only names (reference chromosomes "1".."10",
+# query contigs named after them) as numeric, so the same column comes back
+# numeric from one file and character from another (where "1_f1" or "chrC"
+# appears), and bind_rows() and joins across files fail.
+dnadis_name_cols <- c(
+  "assembly", "contig", "original_name", "contig_new", "orig_contig",
+  "seqid", "scaffold", "component", "array_id",
+  "ref_id", "orig_ref_id", "chrom_id", "subgenome",
+  "assigned_ref_id", "assigned_chrom_id", "assigned_subgenome",
+  "query_subgenome", "second_ref_id", "sister_ref_id", "partner_ref_id",
+  "redundancy_target", "target_chrom_id", "target_subgenome"
+)
+
+# read_tsv() for dnadis outputs: name columns (dnadis_name_cols) present in
+# the file are read as character unless `col_types` already sets them; the
+# remaining columns follow `col_types` (default: guessed).
+read_dnadis_tsv <- function(path, col_types = NULL, ...) {
+  header <- names(readr::read_tsv(path, n_max = 0, show_col_types = FALSE,
+                                  col_types = readr::cols(.default = readr::col_character()),
+                                  ...))
+  spec <- if (is.null(col_types)) readr::cols(.default = readr::col_guess()) else col_types
+  for (nm in intersect(header, dnadis_name_cols)) {
+    if (is.null(spec$cols[[nm]])) spec$cols[[nm]] <- readr::col_character()
+  }
+  readr::read_tsv(path, col_types = spec, show_col_types = FALSE, ...)
+}
+
+# ---------------------------------------------------------------------------
 # Font setup
 # ---------------------------------------------------------------------------
 .resolve_font <- function(family) {

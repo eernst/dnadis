@@ -50,6 +50,7 @@ from statistics import median
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 from dnadis.alignment.external_tools import get_minimap2_exe
+from dnadis.detection.redundancy import is_own_assembly_copy
 from dnadis.utils.io_utils import (
     merge_intervals,
     open_maybe_gzip,
@@ -81,16 +82,11 @@ APPLIED_DECISIONS = frozenset({"assigned", "reassigned"})
 _MAJOR_FRAC = 0.10
 _MAJOR_MIN_BP = 100_000
 
-# Own-assembly redundancy (first-pass redundancy_* and depth columns).  A
-# candidate covered at least _REDUNDANT_MIN_COV by one window of a chromosome
-# contig is redundant when the copies are near-identical (reads cannot tell
-# them apart), or when both it and the matched region sit at about half the
-# chromosomal depth (two haplotypes of one locus).  A homeologous region of a
-# polyploid aligns at similar identity but at full depth, so it is kept.
-_REDUNDANT_MIN_COV = 0.50
-_DUPLICATE_MIN_IDENTITY = 0.999
-_HAPLOTIG_MIN_IDENTITY = 0.98
-_HAPLOTIG_MAX_DEPTH_RATIO = 0.75
+# Haplotig identity floor for no_call_redundant.  A candidate's own reference
+# assignment is weak or absent, so the copy cannot be tied to its own
+# chromosome; a higher floor keeps half-depth single-copy loci of other
+# chromosomes (gametologs, paralogs) from blocking a sister call.
+_SISTER_HAPLOTIG_MIN_IDENTITY = 0.98
 
 
 @dataclass
@@ -147,19 +143,14 @@ def _float_or_none(value: Optional[str]) -> Optional[float]:
 
 def redundant_with_own_chromosome(row: dict) -> bool:
     """True when the first-pass evidence in contig-summary *row* shows the
-    contig is a second copy of sequence in its assembly's chromosome set."""
-    cov = _float_or_none(row.get("redundancy_cov"))
-    ident = _float_or_none(row.get("redundancy_identity"))
-    if cov is None or ident is None or cov < _REDUNDANT_MIN_COV:
-        return False
-    if ident >= _DUPLICATE_MIN_IDENTITY:
-        return True
-    depth = _float_or_none(row.get("depth_ratio"))
-    target_depth = _float_or_none(row.get("target_depth_ratio"))
-    return (
-        ident >= _HAPLOTIG_MIN_IDENTITY
-        and depth is not None and depth <= _HAPLOTIG_MAX_DEPTH_RATIO
-        and target_depth is not None and target_depth <= _HAPLOTIG_MAX_DEPTH_RATIO
+    contig is a second copy of sequence in its assembly's chromosome set
+    (``detection.redundancy.is_own_assembly_copy``)."""
+    return is_own_assembly_copy(
+        _float_or_none(row.get("redundancy_cov")),
+        _float_or_none(row.get("redundancy_identity")),
+        _float_or_none(row.get("depth_ratio")),
+        _float_or_none(row.get("target_depth_ratio")),
+        haplotig_min_identity=_SISTER_HAPLOTIG_MIN_IDENTITY,
     )
 
 

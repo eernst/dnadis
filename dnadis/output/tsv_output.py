@@ -171,6 +171,7 @@ def write_contig_summary_tsv(
         "scaffold_grouping_confidence",
         "scaffold_location_confidence",
         "scaffold_orientation_confidence",
+        "scaffold_exclusion",
     ]
 
     def fetch_metrics(q: str, ref_id: str):
@@ -397,6 +398,7 @@ def write_contig_summary_tsv(
                         ) if sc else ("", "", ""))(
                             scaffold_confidences.get(q) if scaffold_confidences else None
                         ),
+                        (clf.scaffold_exclusion or "") if clf else "",
                     ]
                 )
                 + "\n"
