@@ -306,8 +306,8 @@ def _copy_frag(name, ref, target, **kw):
 
 def test_own_assembly_copy_rules():
     """Haplotig copies count only against a contig on the fragment's own
-    reference chromosome; near-identical copies count against any; a match
-    reaching a telomere-less end with >= 10 kb outside it stays joinable."""
+    reference chromosome; near-identical copies count against any; a copy
+    overlapping a chromosome end and extending past it is excluded too."""
     from dnadis.output.scaffolding import _own_assembly_copies
 
     def chrom(name, ref, tel5=True, tel3=True):
@@ -329,18 +329,13 @@ def test_own_assembly_copy_rules():
         _copy_frag("dup", "chr1A", "chr2A", redundancy_identity=0.9995),
         # half-depth fragment, full-depth region: joinable
         _copy_frag("homeo", "chr1A", "chr1A", target_depth_ratio=1.0),
-        # reaches the telomere-less 3' end of chr3A with 20 kb outside: joinable
+        # overlaps the telomere-less 3' end of chr3A, 20 kb past it: excluded
         _copy_frag("ext", "chr3A", "chr3A", redundancy_region="4920001-5000000"),
-        # same geometry at a telomeric end: excluded
-        _copy_frag("telo", "chr2A", "chr2A", redundancy_region="4920001-5000000"),
-        # less than 10 kb outside the match: excluded
-        _copy_frag("short", "chr3A", "chr3A", redundancy_region="4905001-5000000",
-                   redundancy_cov=0.95),
         # fragment with no reference assignment uses best_ref
         _copy_frag("bestref", None, "chr1A"),
     ]
     out = _own_assembly_copies(clfs, best_ref={"bestref": "chr1A"})
-    assert set(out) == {"own", "dup", "telo", "short", "bestref"}
+    assert set(out) == {"own", "dup", "ext", "bestref"}
     assert out["own"].startswith("chr1A:1001-101000 (coverage=0.80, identity=0.9600")
 
 

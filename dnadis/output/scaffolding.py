@@ -184,28 +184,6 @@ def _compute_group_mean_idents(
     return result
 
 
-# A fragment matching a chromosome contig at a telomere-less end, with at
-# least this much of its own sequence outside the match, may continue that
-# chromosome past the end; it stays joinable.
-_EXTENSION_MIN_BP = 10_000
-
-
-def _extends_past_end(clf: ContigClassification, target: ContigClassification) -> bool:
-    """True when *clf*'s unaligned remainder could lie beyond a telomere-less
-    end of *target*: the matched region reaches within that many bp of it."""
-    unaligned = (1.0 - (clf.redundancy_cov or 0.0)) * clf.contig_len
-    if unaligned < _EXTENSION_MIN_BP or target.contig_len <= 0 or not clf.redundancy_region:
-        return False
-    try:
-        start, end = (int(x) for x in clf.redundancy_region.split("-"))
-    except ValueError:
-        return False
-    return (
-        (start - 1 <= unaligned and not target.has_5p_telomere)
-        or (target.contig_len - end <= unaligned and not target.has_3p_telomere)
-    )
-
-
 def _own_assembly_copies(
     classifications: List[ContigClassification],
     best_ref: Dict[str, str],
@@ -220,8 +198,9 @@ def _own_assembly_copies(
     (haplotig) copies count only against a contig assigned to the fragment's
     own reference chromosome: elsewhere, half-depth single-copy loci that
     align (gametologs, paralogs of a set assembled apart from a collapsed one)
-    are not haplotypes of each other.  A fragment that may continue its match
-    past a telomere-less chromosome end stays joinable.
+    are not haplotypes of each other.  A fragment that overlaps a chromosome
+    end and extends past it is excluded too: RagTag joins contigs end to end
+    without merging an overlap, so the overlapping copy would be duplicated.
     """
     from dnadis.detection.redundancy import DUPLICATE_MIN_IDENTITY, is_own_assembly_copy
 
@@ -233,7 +212,6 @@ def _own_assembly_copies(
             clf.depth_ratio, clf.target_depth_ratio,
         ):
             continue
-        name = clf.new_name or clf.original_name
         target = by_name.get(clf.redundancy_target or "")
         ref_id = clf.assigned_ref_id or best_ref.get(clf.original_name, "")
         if (
@@ -241,20 +219,13 @@ def _own_assembly_copies(
             and not (target and ref_id and target.assigned_ref_id == ref_id)
         ):
             continue
-        evidence = (
+        out[clf.original_name] = (
             f"{clf.redundancy_target}:{clf.redundancy_region} "
             f"(coverage={clf.redundancy_cov:.2f}, "
             f"identity={clf.redundancy_identity:.4f}, "
             f"depth ratio={_fmt_ratio(clf.depth_ratio)}, "
             f"target depth ratio={_fmt_ratio(clf.target_depth_ratio)})"
         )
-        if target and _extends_past_end(clf, target):
-            logger.info(
-                f"{name}: matches {evidence} but may extend it past a "
-                f"telomere-less end; left joinable"
-            )
-            continue
-        out[clf.original_name] = evidence
     return out
 
 
