@@ -18,7 +18,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
-from dnadis.detection.redundancy import is_own_assembly_copy
 from dnadis.models import ContigClassification
 from dnadis.utils.io_utils import have_exe
 from dnadis.utils.logging_config import get_logger
@@ -185,18 +184,78 @@ def _compute_group_mean_idents(
     return result
 
 
-def _is_redundant_fragment(clf: ContigClassification) -> bool:
-    """A chrom_fragment whose sequence is already in a chromosome-length
-    contig of the same assembly (own-assembly redundancy evidence).
+# A fragment matching a chromosome contig at a telomere-less end, with at
+# least this much of its own sequence outside the match, may continue that
+# chromosome past the end; it stays joinable.
+_EXTENSION_MIN_BP = 10_000
+
+
+def _extends_past_end(clf: ContigClassification, target: ContigClassification) -> bool:
+    """True when *clf*'s unaligned remainder could lie beyond a telomere-less
+    end of *target*: the matched region reaches within that many bp of it."""
+    unaligned = (1.0 - (clf.redundancy_cov or 0.0)) * clf.contig_len
+    if unaligned < _EXTENSION_MIN_BP or target.contig_len <= 0 or not clf.redundancy_region:
+        return False
+    try:
+        start, end = (int(x) for x in clf.redundancy_region.split("-"))
+    except ValueError:
+        return False
+    return (
+        (start - 1 <= unaligned and not target.has_5p_telomere)
+        or (target.contig_len - end <= unaligned and not target.has_3p_telomere)
+    )
+
+
+def _own_assembly_copies(
+    classifications: List[ContigClassification],
+    best_ref: Dict[str, str],
+) -> Dict[str, str]:
+    """chrom_fragment contigs whose sequence is already in a chromosome-length
+    contig of the same assembly, as original name -> evidence for the log.
 
     The reference-footprint check that demotes fragments to chrom_debris
     misses such copies when the reference is divergent, and RagTag then
     places them at a chromosome end with near-zero location confidence.
+    Near-identical copies count against any chromosome contig.  Half-depth
+    (haplotig) copies count only against a contig assigned to the fragment's
+    own reference chromosome: elsewhere, half-depth single-copy loci that
+    align (gametologs, paralogs of a set assembled apart from a collapsed one)
+    are not haplotypes of each other.  A fragment that may continue its match
+    past a telomere-less chromosome end stays joinable.
     """
-    return clf.classification == "chrom_fragment" and is_own_assembly_copy(
-        clf.redundancy_cov, clf.redundancy_identity,
-        clf.depth_ratio, clf.target_depth_ratio,
-    )
+    from dnadis.detection.redundancy import DUPLICATE_MIN_IDENTITY, is_own_assembly_copy
+
+    by_name = {c.new_name or c.original_name: c for c in classifications}
+    out: Dict[str, str] = {}
+    for clf in classifications:
+        if clf.classification != "chrom_fragment" or not is_own_assembly_copy(
+            clf.redundancy_cov, clf.redundancy_identity,
+            clf.depth_ratio, clf.target_depth_ratio,
+        ):
+            continue
+        name = clf.new_name or clf.original_name
+        target = by_name.get(clf.redundancy_target or "")
+        ref_id = clf.assigned_ref_id or best_ref.get(clf.original_name, "")
+        if (
+            clf.redundancy_identity < DUPLICATE_MIN_IDENTITY
+            and not (target and ref_id and target.assigned_ref_id == ref_id)
+        ):
+            continue
+        evidence = (
+            f"{clf.redundancy_target}:{clf.redundancy_region} "
+            f"(coverage={clf.redundancy_cov:.2f}, "
+            f"identity={clf.redundancy_identity:.4f}, "
+            f"depth ratio={_fmt_ratio(clf.depth_ratio)}, "
+            f"target depth ratio={_fmt_ratio(clf.target_depth_ratio)})"
+        )
+        if target and _extends_past_end(clf, target):
+            logger.info(
+                f"{name}: matches {evidence} but may extend it past a "
+                f"telomere-less end; left joinable"
+            )
+            continue
+        out[clf.original_name] = evidence
+    return out
 
 
 def _fmt_ratio(value: Optional[float]) -> str:
@@ -215,10 +274,8 @@ def _group_contigs_by_haplotype(
     Pass 1: Chromosome-assigned contigs grouped by (assigned_ref_id, grp).
     Pass 2: chrom_fragment contigs join the group of their query subgenome
     set, or the nearest haplotype group by identity when they have none
-    (unique arms too short to be full chromosomes; chrom_debris, extra
-    copies of a region every set already spans, and fragments that are copies
-    of sequence in a chromosome-length contig of the same assembly are
-    excluded as redundant). With
+    (unique arms too short to be full chromosomes; chrom_debris and extra
+    copies of a region every set already spans are excluded as redundant). With
     ``include_rdna``, rDNA contigs that carry an assigned_ref_id (they passed
     the synteny gate before being moved to rDNA) are candidates too; their
     placement rests on rDNA similarity shared between NORs.
@@ -266,16 +323,6 @@ def _group_contigs_by_haplotype(
         if clf.classification != "chrom_fragment" and not is_rdna_candidate:
             continue
         if clf.subgenome_basis == "extra_copy":
-            continue
-        if _is_redundant_fragment(clf):
-            logger.info(
-                f"{clf.new_name or clf.original_name}: not joined; copy of "
-                f"{clf.redundancy_target}:{clf.redundancy_region} "
-                f"(coverage={clf.redundancy_cov:.2f}, "
-                f"identity={clf.redundancy_identity:.4f}, "
-                f"depth ratio={_fmt_ratio(clf.depth_ratio)}, "
-                f"target depth ratio={_fmt_ratio(clf.target_depth_ratio)})"
-            )
             continue
 
         ref_id = clf.assigned_ref_id or best_ref.get(clf.original_name, "")
@@ -794,7 +841,9 @@ def scaffold_chromosomes(
             (``--scaffold-rdna-contigs``).
         no_join: Contigs never joined to others; each is emitted as its own
             scaffold.  Used for sister-placed contigs, whose assignment says
-            which chromosome they belong to but not where on it.
+            which chromosome they belong to but not where on it.  Fragments
+            that copy own-chromosome sequence (``_own_assembly_copies``) are
+            emitted on their own too, with ``scaffold_exclusion`` set.
 
     Returns:
         Tuple of (scaffolded_sequences, agp_lines, scaffold_confidences) where:
@@ -811,9 +860,22 @@ def scaffold_chromosomes(
         include_rdna=include_rdna,
     )
     no_join = no_join or set()
-    if no_join:
+    own_copies = _own_assembly_copies(classifications, best_ref)
+    for clf in classifications:
+        if clf.original_name in own_copies:
+            clf.scaffold_exclusion = "own_assembly_copy"
+    if any(
+        c.classification == "chrom_fragment" and c.redundancy_cov is not None
+        for c in classifications
+    ) and not any(c.depth_ratio is not None for c in classifications):
+        logger.info(
+            "No read depth: only near-identical copies of chromosome sequence "
+            "are kept out of scaffold joins (haplotigs need --reads)"
+        )
+    excluded = no_join | set(own_copies)
+    if excluded:
         groups = {
-            key: [c for c in members if c not in no_join]
+            key: [c for c in members if c not in excluded]
             for key, members in groups.items()
         }
     all_confidences: Dict[str, Tuple[float, float, float]] = {}
@@ -1040,8 +1102,8 @@ def scaffold_chromosomes(
             all_scaffolded, all_agp,
             log_label=(
                 "sister-placed, not joined" if clf.original_name in no_join
-                else "copy of own chromosome sequence, not joined"
-                if _is_redundant_fragment(clf)
+                else f"copy of {own_copies[clf.original_name]}, not joined:"
+                if clf.original_name in own_copies
                 else "unplaced"
             ),
         )

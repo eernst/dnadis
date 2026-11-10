@@ -66,7 +66,7 @@ These columns describe whether a contig represents a complete chromosome based o
 | `redundancy_region` | string | That region on `redundancy_target`, `start-end` (1-based): the window of about 1.5× this contig's length holding the most of its aligned sequence. Dispersed repeat hits scatter across a chromosome and do not fill one window, so they give low coverage. |
 | `redundancy_cov` | float | Fraction of this contig aligned within `redundancy_region`. Near 1 when the contig's sequence is already in an assembled chromosome (allelic copy, duplicated copy, assembly duplicate); low for unique sequence. |
 | `redundancy_identity` | float | Gap-compressed identity (1 − minimap2 `de`) over those alignments, weighted by alignment length. |
-| `target_depth_ratio` | float | Median read depth over `redundancy_region` ÷ the chromosomal baseline (as for `depth_ratio`). Requires `--reads`. With `depth_ratio`: both ≈0.5 for an allelic copy of a heterozygous region (reads split by allele) or for near-identical copies reads cannot tell apart; this contig ≈1 or more for a copy present in the genome in addition to the chromosome's. |
+| `target_depth_ratio` | float | Median read depth over `redundancy_region` ÷ the chromosomal baseline (as for `depth_ratio`). Requires `--reads`. With `depth_ratio`: both ≈0.5 for an allelic copy of a heterozygous region (reads split by allele) or for near-identical copies reads cannot tell apart; this contig ≈1 or more for a copy present in the genome in addition to the chromosome's. With `--scaffold`, these columns keep `chrom_fragment` copies out of joins (`scaffold_exclusion`); with `--sister-anchoring`, they block sister promotion (`no_call_redundant`). |
 | `rearrangement_candidates` | string | Comma-separated list of off-target reference chromosomes with significant synteny span (fraction ≥ `--rearrangement-threshold`), indicating potential rearrangements such as homeologous exchanges |
 
 ### Sister-Assembly Anchoring Columns
@@ -91,6 +91,7 @@ These columns are populated when `--scaffold` is used and RagTag produces confid
 | `scaffold_grouping_confidence` | float | RagTag confidence that this contig belongs to the correct chromosome group (0.0-1.0) |
 | `scaffold_location_confidence` | float | RagTag confidence in the contig's position within the scaffold (0.0-1.0) |
 | `scaffold_orientation_confidence` | float | RagTag confidence in the contig's orientation within the scaffold (0.0-1.0) |
+| `scaffold_exclusion` | string | Why scaffolding kept this contig out of joins: `own_assembly_copy` for a `chrom_fragment` whose sequence is already in a chromosome-length contig of the same assembly, by the `redundancy_*` and depth columns (see `--scaffold` in the README). The contig is written on its own in `chrs.scaffolds`. Empty otherwise |
 
 ### Evidence Strength Columns
 

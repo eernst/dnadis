@@ -5,7 +5,12 @@ import gzip
 
 import pytest
 
-from dnadis.detection.redundancy import best_hit, parse_redundancy_paf, region_depth_median
+from dnadis.detection.redundancy import (
+    best_hit,
+    is_own_assembly_copy,
+    parse_redundancy_paf,
+    region_depth_median,
+)
 
 
 def _paf(q, qlen, qs, qe, t, ts, te, blen, de, tp="P"):
@@ -50,3 +55,27 @@ def test_region_depth_median(tmp_path):
         fh.write("chrB\t0\t1000\t99\n")
     med = region_depth_median(bed, {"chrA": [(1000, 4000)]})
     assert med == {("chrA", 1000, 4000): 30}
+
+
+def test_is_own_assembly_copy_thresholds():
+    copy = is_own_assembly_copy
+    # Coverage: at least half the contig
+    assert copy(0.50, 0.9995, None, None)
+    assert not copy(0.4999, 0.9995, None, None)
+    # Near-identical copies need no depth
+    assert copy(0.9, 0.999, None, None)
+    assert not copy(0.9, 0.9989, None, None)
+    # Haplotig arm: identity floor and both depth ratios at or below 0.75
+    assert copy(1.0, 0.90, 0.75, 0.75)
+    assert not copy(1.0, 0.8999, 0.5, 0.5)
+    assert not copy(1.0, 0.95, 0.7501, 0.5)
+    assert not copy(1.0, 0.95, 0.5, 0.7501)
+    # Half-depth contig against a full-depth region, or depth missing: kept
+    assert not copy(1.0, 0.95, 0.5, 1.0)
+    assert not copy(1.0, 0.95, 0.5, None)
+    # Callers can raise the haplotig floor
+    assert not copy(1.0, 0.95, 0.5, 0.5, haplotig_min_identity=0.98)
+    assert copy(1.0, 0.98, 0.5, 0.5, haplotig_min_identity=0.98)
+    # Missing evidence
+    assert not copy(None, 0.9995, 0.5, 0.5)
+    assert not copy(1.0, None, 0.5, 0.5)
