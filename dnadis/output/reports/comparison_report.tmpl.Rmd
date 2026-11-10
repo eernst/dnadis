@@ -79,17 +79,21 @@ asm_pal <- c(oi[5], oi[1], oi[3], oi[6], oi[7], oi[4], oi[2], oi[8], oi[9])
 # ---------------------------------------------------------------------------
 # Subgenome detection and color setup
 # ---------------------------------------------------------------------------
-ref_lengths <- read_tsv(params$ref_lengths_tsv, show_col_types = FALSE,
+ref_lengths <- read_dnadis_tsv(params$ref_lengths_tsv,
                         col_types = cols(subgenome = col_character()))
 list2env(setup_subgenomes(ref_lengths), envir = environment())
 
 # ---------------------------------------------------------------------------
 # Load data
 # ---------------------------------------------------------------------------
-comp_df <- read_tsv(params$comparison_tsv, show_col_types = FALSE)
-compl_df <- read_tsv(params$completeness_tsv, show_col_types = FALSE)
+comp_df <- read_dnadis_tsv(params$comparison_tsv)
+compl_df <- read_dnadis_tsv(params$completeness_tsv)
 
 n_asm <- nrow(comp_df)
+# Height of the per-assembly ridgeline plots.  Set here rather than in the
+# chunk before them: knitr evaluates fig.height even for a chunk whose eval
+# is FALSE, and the depth ridgeline is drawn without chromosome assignments.
+ridge_h <- max(3, n_asm * 0.3 + 1.5)
 asm_names <- comp_df$assembly
 asm_colors <- setNames(rep_len(asm_pal, n_asm), asm_names)
 
@@ -114,7 +118,7 @@ per_asm_summaries <- list()
 for (i in seq_along(asm_tsv_paths)) {
   p <- asm_tsv_paths[i]
   if (nzchar(p) && file.exists(p)) {
-    df <- read_tsv(p, show_col_types = FALSE,
+    df <- read_dnadis_tsv(p,
                    col_types = cols(assigned_subgenome = col_character()))
     df$assembly <- asm_name_list[i]
     per_asm_summaries[[i]] <- df
@@ -201,7 +205,7 @@ per_asm_macro_list <- list()
 for (i in seq_along(per_asm_macro_paths)) {
   p <- per_asm_macro_paths[i]
   if (nzchar(p) && file.exists(p)) {
-    df <- read_tsv(p, show_col_types = FALSE,
+    df <- read_dnadis_tsv(p,
                    col_types = cols(subgenome = col_character()))
     if (nrow(df) > 0) {
       df$assembly <- asm_name_list[i]
@@ -216,7 +220,7 @@ pairwise_macro_list <- list()
 for (i in seq_along(pairwise_macro_paths)) {
   p <- pairwise_macro_paths[i]
   if (nzchar(p) && file.exists(p)) {
-    df <- read_tsv(p, show_col_types = FALSE,
+    df <- read_dnadis_tsv(p,
                    col_types = cols(subgenome = col_character()))
     if (nrow(df) > 0 && i <= length(pairwise_pair_names)) {
       df$pair_name <- pairwise_pair_names[i]
@@ -246,7 +250,7 @@ rdna_arrays_list <- list()
 for (i in seq_along(rdna_arrays_paths)) {
   p <- rdna_arrays_paths[i]
   if (nzchar(p) && file.exists(p)) {
-    df <- read_tsv(p, show_col_types = FALSE)
+    df <- read_dnadis_tsv(p)
     if (nrow(df) > 0) {
       df$assembly <- asm_name_list[i]
       rdna_arrays_list[[i]] <- df
@@ -265,7 +269,7 @@ rearr_list <- list()
 for (i in seq_along(rearr_paths)) {
   p <- rearr_paths[i]
   if (nzchar(p) && file.exists(p)) {
-    df <- read_tsv(p, show_col_types = FALSE)
+    df <- read_dnadis_tsv(p)
     if (nrow(df) > 0) {
       df$assembly <- asm_name_list[i]
       rearr_list[[i]] <- df
@@ -282,7 +286,7 @@ cobiont_detail_list <- list()
 for (i in seq_along(cobiont_tsv_paths)) {
   p <- cobiont_tsv_paths[i]
   if (nzchar(p) && file.exists(p)) {
-    df <- read_tsv(p, show_col_types = FALSE)
+    df <- read_dnadis_tsv(p)
     if (nrow(df) > 0) {
       df$assembly <- asm_name_list[i]
       cobiont_detail_list[[i]] <- df
@@ -2971,7 +2975,6 @@ asm_order_by <- function(df, metric_expr, descending = TRUE) {
 }
 
 n_sg_facets <- length(unique(chrom_df$sg))
-ridge_h <- max(3, n_asm * 0.3 + 1.5)
 ```
 
 ```{r quality_weighted_identity, eval=(has_any_chrom && has_per_asm && exists("has_weighted_ident") && has_weighted_ident), results='asis'}
