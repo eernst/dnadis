@@ -1552,10 +1552,21 @@ rearr_show <- rearr_df %>%
     conf_html = sapply(confidence, conf_badge)
   )
 
+# Fusion verdict / evidence codes (columns absent in older TSVs)
+if (!"fusion_call" %in% names(rearr_show)) rearr_show$fusion_call <- NA_character_
+if (!"evidence_codes" %in% names(rearr_show)) rearr_show$evidence_codes <- NA_character_
+rearr_show <- rearr_show %>%
+  mutate(
+    fusion_label = ifelse(is.na(fusion_call) | fusion_call == "", NA_character_,
+                          str_replace_all(fusion_call, "_", " ")),
+    evidence = ifelse(!is.na(evidence_codes) & evidence_codes != "",
+                      paste0(evidence, " [", evidence_codes, "]"), evidence)
+  )
+
 # Build gt table with id for JS filtering
 tbl <- rearr_show %>%
   select(type_label, contig, assigned_ref_id, partner_ref_id,
-         span_mb, evidence, conf_html) %>%
+         span_mb, fusion_label, evidence, conf_html) %>%
   gt() %>%
   cols_label(
     type_label = "Type*",
@@ -1563,6 +1574,7 @@ tbl <- rearr_show %>%
     assigned_ref_id = "Assigned",
     partner_ref_id = "Partner",
     span_mb = "Span (Mb)",
+    fusion_label = "Fusion verdict",
     evidence = "Evidence",
     conf_html = "Confidence"
   ) %>%

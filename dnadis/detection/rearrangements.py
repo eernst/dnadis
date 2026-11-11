@@ -99,7 +99,7 @@ def _union_query_span(blocks: List[dict]) -> int:
 # Helper: unpack a macro_block row tuple
 # ---------------------------------------------------------------------------
 
-def _unpack_row(row: Tuple) -> dict:
+def unpack_macro_block_row(row: Tuple) -> dict:
     """Unpack a macro_block_rows tuple into a labelled dict.
 
     Supports both 17-field (legacy) and 19-field (with ref_start/ref_end)
@@ -539,7 +539,7 @@ def detect_rearrangements(
         lambda: defaultdict(list)
     )
     for row in macro_block_rows:
-        b = _unpack_row(row)
+        b = unpack_macro_block_row(row)
         contig_ref_blocks[b["contig"]][b["ref_id"]].append(b)
 
     # ---- Build reciprocal partner index ----
