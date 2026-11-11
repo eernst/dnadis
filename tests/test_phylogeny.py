@@ -770,7 +770,7 @@ def test_write_per_gene_fastas_rewrites_only_changed_genes(tmp_path):
     assert ">asm_A_s1" in fasta.read_text()
 
 
-def test_run_iqtree_reuses_tree_only_for_same_supermatrix_and_command(tmp_path, monkeypatch):
+def test_run_iqtree_reuses_tree_only_for_same_supermatrix_and_settings(tmp_path, monkeypatch):
     import os
     import stat
     from dnadis.alignment import external_tools
@@ -797,6 +797,15 @@ def test_run_iqtree_reuses_tree_only_for_same_supermatrix_and_command(tmp_path, 
     assert external_tools.run_iqtree(sm, prefix, outgroup="a")
     assert n_runs() == 1
     assert external_tools.run_iqtree(sm, prefix, outgroup="a")      # reused
+    assert n_runs() == 1
+    # A copied run directory and other compute resources reuse the tree.
+    import shutil
+    moved = tmp_path / "copy"
+    moved.mkdir()
+    for f in (sm, Path(f"{prefix}.treefile"), Path(f"{prefix}.cmd")):
+        shutil.copy2(f, moved / f.name)
+    assert external_tools.run_iqtree(
+        moved / sm.name, moved / prefix.name, threads=8, max_mem_gb=16, outgroup="a")
     assert n_runs() == 1
     assert external_tools.run_iqtree(sm, prefix, outgroup="b")      # new outgroup
     assert n_runs() == 2
