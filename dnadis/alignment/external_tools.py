@@ -516,6 +516,26 @@ def get_iqtree_exe() -> Optional[str]:
     return None
 
 
+# IQ-TREE options whose values do not change the tree: input/output paths
+# (a moved or copied run directory) and compute resources.
+_IQTREE_NON_RESULT_OPTS = frozenset({"-s", "--prefix", "-T", "--mem"})
+
+
+def _iqtree_reuse_key(cmd_text: str) -> List[str]:
+    """The command tokens that determine the tree, i.e. without the options
+    in ``_IQTREE_NON_RESULT_OPTS`` and their values."""
+    tokens = cmd_text.split()
+    key: List[str] = []
+    i = 0
+    while i < len(tokens):
+        if tokens[i] in _IQTREE_NON_RESULT_OPTS:
+            i += 2
+            continue
+        key.append(tokens[i])
+        i += 1
+    return key
+
+
 def run_iqtree(
     supermatrix: Path,
     prefix: Path,
@@ -574,11 +594,11 @@ def run_iqtree(
         cmd.extend(["-o", outgroup])
 
     # Reuse a tree only if it is newer than the supermatrix and was built
-    # with the same command (model set, replicates, outgroup, ...).
+    # with the same settings (model set, replicates, outgroup, ...).
     cmd_record = Path(f"{prefix}.cmd")
     cmd_text = " ".join(cmd) + "\n"
     if output_is_current(treefile, supermatrix) and file_exists_and_valid(cmd_record):
-        if cmd_record.read_text() == cmd_text:
+        if _iqtree_reuse_key(cmd_record.read_text()) == _iqtree_reuse_key(cmd_text):
             logger.info(f"IQ-TREE output exists, reusing: {treefile}")
             return True
 
