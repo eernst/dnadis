@@ -36,16 +36,17 @@ def output_schema(rmd_text: str) -> int:
     m = OUTPUT_SCHEMA_RE.search(rmd_text)
     return int(m.group(1)) if m else 0
 
-# Which TSV file suffix provides the value for each placeholder
-# (relative to the output prefix)
-PLACEHOLDER_TSV = {
+# Which file suffix provides the value for each placeholder (relative to the
+# output prefix).  A tuple lists the current name first, then names written by
+# earlier dnadis versions, which can still sit beside the current file.
+PLACEHOLDER_TSV: dict[str, str | tuple[str, ...]] = {
     "__SUMMARY__": ".contig_summary.tsv",
     "__REF__": ".ref_lengths.tsv",
     "__SEGMENTS__": ".segments.tsv",
     "__EVIDENCE__": ".evidence_summary.tsv",
     "__MACRO__": ".macro_blocks.tsv",
     "__RDNA_ANNOTATIONS__": ".rdna_annotations.tsv",
-    "__AGP__": ".scaffolded.agp",
+    "__AGP__": (".chrs.scaffolds.agp", ".scaffolded.agp"),
     "__COBIONTS_TSV__": ".cobionts.tsv",
 }
 
@@ -179,14 +180,18 @@ def build_placeholder_values(
     # {output_dir}/reference/reference{suffix}, (3) previously generated
     # script, (4) empty string (optional file).
     ref_prefix = prefix.parent.parent / "reference" / "reference"
-    for placeholder, tsv_suffix in PLACEHOLDER_TSV.items():
+    for placeholder, tsv_suffixes in PLACEHOLDER_TSV.items():
         if placeholder in template_text:
-            tsv_path = Path(str(prefix) + tsv_suffix)
-            ref_path = Path(str(ref_prefix) + tsv_suffix)
-            if tsv_path.exists():
-                values[placeholder] = esc(tsv_path)
-            elif ref_path.exists():
-                values[placeholder] = esc(ref_path)
+            if isinstance(tsv_suffixes, str):
+                tsv_suffixes = (tsv_suffixes,)
+            found = next(
+                (p for sfx in tsv_suffixes
+                 for p in (Path(str(prefix) + sfx), Path(str(ref_prefix) + sfx))
+                 if p.exists()),
+                None,
+            )
+            if found is not None:
+                values[placeholder] = esc(found)
             elif placeholder in prev_values and prev_values[placeholder] and not prev_values[placeholder].startswith("__"):
                 values[placeholder] = prev_values[placeholder]
             else:

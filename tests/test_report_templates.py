@@ -225,3 +225,22 @@ def test_refresh_skips_reports_with_older_outputs(tmp_path, capsys):
     old.write_text(old_text.replace("output_schema: 1", "output_schema: 2"))
     assert refresh_reports.refresh_script(
         "assembly_report", old, template_dir, run_dir / "asm") is not None
+
+
+def test_refresh_prefers_current_agp_name(tmp_path):
+    """With both AGP names in the folder, refresh uses the current one."""
+    import refresh_reports
+
+    prefix = tmp_path / "asm" / "asm"
+    prefix.parent.mkdir()
+    for sfx in (".chrs.scaffolds.agp", ".scaffolded.agp"):
+        Path(str(prefix) + sfx).write_text("")
+    template = 'params:\n  agp_tsv: "__AGP__"\n'
+    values = refresh_reports.build_placeholder_values(
+        "assembly_report", prefix, template, template)
+    assert values["__AGP__"].endswith("asm.chrs.scaffolds.agp")
+
+    Path(str(prefix) + ".chrs.scaffolds.agp").unlink()
+    values = refresh_reports.build_placeholder_values(
+        "assembly_report", prefix, template, template)
+    assert values["__AGP__"].endswith("asm.scaffolded.agp")
