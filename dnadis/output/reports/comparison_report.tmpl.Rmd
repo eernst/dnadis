@@ -21,6 +21,10 @@ params:
   out_prefix: "__OUTPREFIX__"
   assembly_sort_order: "__ASM_SORT_ORDER__"
   dnadis_version: "__DNADIS_VERSION__"
+  # Version of the TSV columns and values this template reads.  Bump it when
+  # the template starts to need columns or values that older dnadis runs did
+  # not write; refresh_reports.py then refuses to re-render older outputs.
+  output_schema: 1
 output:
   html_document:
     self_contained: __SELF_CONTAINED__
@@ -93,6 +97,11 @@ list2env(setup_subgenomes(ref_lengths), envir = environment())
 # ---------------------------------------------------------------------------
 comp_df <- read_dnadis_tsv(params$comparison_tsv)
 compl_df <- read_dnadis_tsv(params$completeness_tsv)
+require_columns(comp_df, c("n_chr_t2t", "n_chr_split", "n_chr_multi_copy",
+                           "n_chromosome_scale"), "comparison_summary.tsv")
+require_columns(compl_df, c("n_contigs", "is_chromosome_scale", "has_both_telomeres",
+                            "n_fragment", "n_copies", "state"),
+                "chromosome_completeness.tsv")
 
 n_asm <- nrow(comp_df)
 # Height of the per-assembly ridgeline plots.  Set here rather than in the
@@ -1357,10 +1366,10 @@ has_scatter_cov   <- "ref_coverage" %in% names(scatter_df) &&
                      !all(is.na(scatter_df$ref_coverage))
 ```
 
-`r if (has_any_chrom && all(c("state","n_anchor","n_fragment") %in% names(compl_df))) "## Contiguity" else ""`
+`r if (has_any_chrom) "## Contiguity" else ""`
 
 ```{r contiguity_cmp_build, include=FALSE}
-ct_has <- has_any_chrom && all(c("state", "n_anchor", "n_fragment") %in% names(compl_df))
+ct_has <- has_any_chrom
 ```
 
 ```{r contiguity_cmp_intro, eval=ct_has, results='asis'}
@@ -1370,9 +1379,6 @@ cat('<p class="section-intro">Per-reference-chromosome <b>assembly state</b> acr
 ```{r contiguity_cmp_heatmap, eval=ct_has, fig.width=10, fig.height=max(3, n_asm * 0.34 + 2.4)}
 organelle_ids <- ref_lengths %>%
   filter(grepl("^chr[CM]$|^chrPt$|^chrMt$", ref_id)) %>% pull(ref_id)
-
-# Older completeness TSVs lack n_copies: count each assigned chromosome once.
-if (!"n_copies" %in% names(compl_df)) compl_df$n_copies <- pmin(compl_df$n_anchor, 1L)
 
 ctdf <- compl_df %>%
   filter(!ref_id %in% organelle_ids) %>%
@@ -1385,7 +1391,7 @@ ctdf <- compl_df %>%
     state = factor(state, levels = chrom_state_levels),
     tooltip = paste0(ref_id, " — ", assembly,
                      "\nState: ", chrom_state_labels[as.character(state)],
-                     "\nAssigned contigs: ", n_anchor,
+                     "\nAssigned contigs: ", n_contigs,
                      "\nCopies: ", n_copies,
                      "\nFragment contigs: ", n_fragment),
     badge = trimws(paste0(ifelse(n_copies > 1, paste0("\u00d7", n_copies), ""),

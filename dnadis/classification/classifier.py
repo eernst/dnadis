@@ -765,13 +765,23 @@ def _overlapping_copies(
         for j in range(i + 1, len(ref_clfs)):
             if not fps[i] or not fps[j]:
                 continue
-            frac = max(
-                _containment_fraction(fps[i], fps[j]),
-                _containment_fraction(fps[j], fps[i]),
-            )
-            if frac >= min_overlap:
+            if _footprint_overlap(fps[i], fps[j]) >= min_overlap:
                 keep[i] = keep[j] = True
     return [c for c, k in zip(ref_clfs, keep) if k]
+
+
+def _footprint_overlap(a: List[Tuple[int, int]], b: List[Tuple[int, int]]) -> float:
+    """Shared reference span of two footprints, as a fraction of the smaller."""
+    return max(_containment_fraction(a, b), _containment_fraction(b, a))
+
+
+def _footprint_bp(
+    clf: 'ContigClassification',
+    ref_footprints: Optional[Dict[Tuple[str, str], List[Tuple[int, int]]]],
+) -> int:
+    """Reference span of a contig's footprint on its assigned reference."""
+    fp = (ref_footprints or {}).get((clf.original_name, clf.assigned_ref_id)) or []
+    return sum(e - s for s, e in fp)
 
 
 def assign_ref_copies(
@@ -785,32 +795,33 @@ def assign_ref_copies(
     chromosome; contigs that tile it are pieces of one copy.  Contigs are
     taken largest footprint first.  Each joins a copy none of whose members
     it overlaps (the rule of :func:`_overlapping_copies`), choosing the copy
-    it shares the least reference with, else starts a new copy.  A contig
-    with no footprint on its reference joins the first copy.  Sets
+    it shares the least reference with, else starts a new copy.  Sets
     ``ref_copy`` (1 = the copy holding the largest footprint) on
-    chrom_assigned contigs and clears it on all others.
+    chrom_assigned contigs and clears it on all others.  A contig with no
+    footprint on its reference (e.g. placed there by sister anchoring) cannot
+    be placed in a copy and keeps ``ref_copy`` None.
     """
     by_ref: Dict[str, List[ContigClassification]] = defaultdict(list)
     for clf in classifications:
         clf.ref_copy = None
-        if clf.classification == "chrom_assigned" and clf.assigned_ref_id:
+        if (
+            clf.classification == "chrom_assigned"
+            and clf.assigned_ref_id
+            and ref_footprints.get((clf.original_name, clf.assigned_ref_id))
+        ):
             by_ref[clf.assigned_ref_id].append(clf)
 
     for ref_id, clfs in by_ref.items():
-        fps = {c.original_name: ref_footprints.get((c.original_name, ref_id)) or [] for c in clfs}
+        fps = {c.original_name: ref_footprints[(c.original_name, ref_id)] for c in clfs}
         clfs.sort(key=lambda c: (
-            -sum(e - s for s, e in fps[c.original_name]), -c.contig_len, c.original_name,
+            -_footprint_bp(c, ref_footprints), -c.contig_len, c.original_name,
         ))
         copies: List[List[ContigClassification]] = []
         for clf in clfs:
             fp = fps[clf.original_name]
             best = None  # (overlap with the copy, copy index)
             for i, members in enumerate(copies):
-                overlap = max(
-                    max(_containment_fraction(fp, fps[m.original_name]),
-                        _containment_fraction(fps[m.original_name], fp))
-                    for m in members
-                )
+                overlap = max(_footprint_overlap(fp, fps[m.original_name]) for m in members)
                 if overlap < min_overlap and (best is None or overlap < best[0]):
                     best = (overlap, i)
             if best is None:
@@ -823,15 +834,18 @@ def assign_ref_copies(
 
 def demote_split_copies(
     classifications: List['ContigClassification'],
+    ref_footprints: Optional[Dict[Tuple[str, str], List[Tuple[int, int]]]] = None,
 ) -> int:
     """Withdraw chromosome-scale status from pieces of a split copy.
 
     Contigs that share a ``ref_copy`` (see :func:`assign_ref_copies`) tile
     one copy of the chromosome, so none of them is the whole copy, however
-    long.  Each such piece without telomeres at both ends is marked
-    not chromosome-scale and is named as a fragment.  A piece with telomeres
-    at both ends is a complete chromosome beside sequence placed on the same
-    reference (e.g. a translocated segment) and keeps its status.
+    long, and each is named as a fragment.  The exception is a piece with
+    telomeres at both ends: a complete chromosome beside sequence placed on
+    the same reference (e.g. a translocated segment).  A copy keeps at most
+    one such piece, the one with the largest reference footprint, so that
+    pieces of one copy are never named as separate copies.  Demoted pieces
+    keep their ``chromosome_scale_basis``, the rule they passed on their own.
 
     Returns the number of contigs demoted.
     """
@@ -844,11 +858,13 @@ def demote_split_copies(
     for (ref_id, _), pieces in copies.items():
         if len(pieces) < 2:
             continue
+        t2t = [c for c in pieces if c.has_5p_telomere and c.has_3p_telomere]
+        keep = max(t2t, key=lambda c: (_footprint_bp(c, ref_footprints), c.contig_len),
+                   default=None)
         for clf in pieces:
-            if not clf.is_chromosome_scale or (clf.has_5p_telomere and clf.has_3p_telomere):
+            if clf is keep or not clf.is_chromosome_scale:
                 continue
             clf.is_chromosome_scale = False
-            clf.chromosome_scale_basis = None
             n_demoted += 1
             others = ", ".join(c.original_name for c in pieces if c is not clf)
             logger.info(
@@ -856,6 +872,30 @@ def demote_split_copies(
                 f"(tiles {others}), not chromosome-scale"
             )
     return n_demoted
+
+
+def _subgenome_copies(
+    ref_clfs: List['ContigClassification'],
+    ref_footprints: Optional[Dict[Tuple[str, str], List[Tuple[int, int]]]] = None,
+) -> List['ContigClassification']:
+    """Contigs that stand for the copies of one reference chromosome.
+
+    Chromosome-scale contigs are copies.  A copy split into pieces, none of
+    them chromosome-scale (see :func:`demote_split_copies`), is represented
+    by its largest piece that passed the chromosome-scale rules on its own,
+    so a split copy still counts as a homeolog.  ``is_chromosome_scale`` is
+    None only when it was never computed (e.g. unit tests); such contigs are
+    copies, as under the original ``len(ref_clfs)`` rule.
+    """
+    copies = [c for c in ref_clfs if c.is_chromosome_scale is not False]
+    represented = {c.ref_copy for c in copies if c.ref_copy is not None}
+    split: Dict[int, List[ContigClassification]] = defaultdict(list)
+    for c in ref_clfs:
+        if c.ref_copy is not None and c.ref_copy not in represented and c.chromosome_scale_basis:
+            split[c.ref_copy].append(c)
+    for pieces in split.values():
+        copies.append(max(pieces, key=lambda c: (_footprint_bp(c, ref_footprints), c.contig_len)))
+    return copies
 
 
 # A copy "covers" a fragment's reference region when at least this fraction of
@@ -1210,14 +1250,13 @@ def infer_query_subgenomes(
                 key=lambda j: abs(score - sorted_means[j]),
             )
 
-        # The number of distinct homeologs at a locus is set by its
-        # chromosome-scale copies; fragments are partial pieces of one of those
-        # copies, not independent homeologs.  Counting them would inflate the
-        # copy count and defeat the rescue below.  is_chromosome_scale is None only
-        # when chromosome-scale status was never computed (e.g. unit tests) — treat
-        # that as a copy so behaviour matches the original len(ref_clfs) rule.
-        copies = [c for c in ref_clfs if c.is_chromosome_scale is not False]
-        fragments = [c for c in ref_clfs if c.is_chromosome_scale is False]
+        # The number of distinct homeologs at a locus is set by its copies
+        # (see _subgenome_copies); fragments are partial pieces of one of
+        # those copies, not independent homeologs.  Counting them would
+        # inflate the copy count and defeat the rescue below.
+        copies = _subgenome_copies(ref_clfs, ref_footprints)
+        copy_ids = {id(c) for c in copies}
+        fragments = [c for c in ref_clfs if id(c) not in copy_ids]
 
         # Sort copies by cluster score descending so the highest-identity copy
         # maps to set s1.
@@ -2192,7 +2231,7 @@ def classify_all_contigs(
             )
 
     assign_ref_copies(classifications, ref_footprints)
-    demote_split_copies(classifications)
+    demote_split_copies(classifications, ref_footprints)
 
     # Infer query subgenomes when multiple contigs map to same reference.
     if ev.qr_best_chain_ident:

@@ -223,6 +223,24 @@ gt_theme <- function(gt_obj) {
 fmt_mb <- function(x) sprintf("%.1f", x / 1e6)
 
 # ---------------------------------------------------------------------------
+# Input checks
+# ---------------------------------------------------------------------------
+
+# Stop with a clear message when a TSV lacks columns this report needs, i.e.
+# it was written by a different dnadis version than the report template.
+require_columns <- function(df, cols, what) {
+  missing <- setdiff(cols, names(df))
+  if (length(missing) > 0) {
+    stop(sprintf(paste0(
+      "%s lacks column(s) %s: it was written by a different dnadis version than ",
+      "this report. Rerun dnadis on the output directory to regenerate it ",
+      "(cached alignments and depth are reused)."),
+      what, paste(missing, collapse = ", ")), call. = FALSE)
+  }
+  invisible(df)
+}
+
+# ---------------------------------------------------------------------------
 # Per-chromosome contiguity / under-assembly accounting
 # ---------------------------------------------------------------------------
 
@@ -266,10 +284,17 @@ merge_intervals_bp <- function(starts, ends) {
 # overlap on the reference are separate copies, anchors that tile it are
 # pieces of one copy.  A copy is T2T (one contig, telomeres at both ends),
 # single (one contig) or split (two or more contigs); the chromosome takes its
-# least contiguous copy's state.  Mirrors comparison.py:_chrom_contiguity_state.
+# least contiguous copy's state.  Anchors without a ref_copy (no alignment to
+# the reference) are left out unless no anchor has one; then they are taken as
+# one copy.  both_telo: at least one anchor has telomeres at both ends.
+# Mirrors comparison.py:_chrom_contiguity_state; tests/test_report_templates.py
+# checks that the two agree.
 compute_chrom_contiguity <- function(summary_df, ref_lengths, macro_df = NULL,
                                      chr_like_minlen = 0) {
   yn <- function(x) !is.na(x) & x == "yes"
+  require_columns(summary_df, c("classification", "assigned_ref_id", "length",
+                                "ref_copy", "has_5p_telomere", "has_3p_telomere"),
+                  "contig_summary.tsv")
 
   chrom_contigs <- summary_df %>%
     filter(classification %in% c("chrom_assigned", "chrom_fragment"),
@@ -294,31 +319,26 @@ compute_chrom_contiguity <- function(summary_df, ref_lengths, macro_df = NULL,
       n_contigs    = n(),
       n_anchor     = sum(classification == "chrom_assigned"),
       assembled_bp = sum(length, na.rm = TRUE),
+      both_telo    = any(classification == "chrom_assigned" &
+                         yn(has_5p_telomere) & yn(has_3p_telomere)),
       .groups = "drop"
     ) %>%
     mutate(n_frag = n_contigs - n_anchor)
 
-  # Per-copy contiguity of the anchors.  An anchor without ref_copy (older
-  # contig summaries) counts as a copy of its own.
-  anchors <- chrom_contigs %>% filter(classification == "chrom_assigned")
-  copy_id <- if ("ref_copy" %in% names(anchors)) as.character(anchors$ref_copy) else
-    rep(NA_character_, nrow(anchors))
-  per_copy <- anchors %>%
-    mutate(copy = dplyr::coalesce(copy_id, paste0("contig:", original_name))) %>%
-    group_by(ref_id = assigned_ref_id, copy) %>%
+  # Per-copy contiguity of the anchors (placed ones, or all when none is).
+  per_copy <- chrom_contigs %>%
+    filter(classification == "chrom_assigned") %>%
+    group_by(ref_id = assigned_ref_id) %>%
+    filter(!is.na(ref_copy) | all(is.na(ref_copy))) %>%
+    group_by(ref_id, ref_copy) %>%
     summarise(
-      n_pieces  = n(),
-      both_telo = n() == 1 & yn(has_5p_telomere[1]) & yn(has_3p_telomere[1]),
-      .groups = "drop"
+      n_pieces = n(),
+      t2t      = n() == 1 & yn(has_5p_telomere[1]) & yn(has_3p_telomere[1]),
+      .groups  = "drop"
     ) %>%
-    mutate(copy_rank = dplyr::case_when(n_pieces > 1 ~ 3L, both_telo ~ 1L, TRUE ~ 2L)) %>%
+    mutate(copy_rank = dplyr::case_when(n_pieces > 1 ~ 3L, t2t ~ 1L, TRUE ~ 2L)) %>%
     group_by(ref_id) %>%
-    summarise(
-      n_copies  = n(),
-      copy_rank = max(copy_rank),
-      both_telo = all(both_telo),
-      .groups = "drop"
-    )
+    summarise(n_copies = n(), copy_rank = max(copy_rank), .groups = "drop")
 
   # Reference chromosomes to display: any with an assigned contig, plus
   # chromosome-scale references with none (absent), excluding small scaffolds.

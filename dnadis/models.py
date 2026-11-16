@@ -577,7 +577,7 @@ class ChromRefSummary:
 
     ``n_contigs`` and the quality fields count chrom_assigned contigs only
     (the Overview pill heatmap uses these as a copy-number / identity signal).
-    ``n_anchor`` / ``n_fragment``, ``n_copies`` and ``state`` describe how the
+    ``n_fragment``, ``n_copies`` and ``state`` describe how the
     chromosome is assembled, for the contiguity view.
     """
     ref_id: str
@@ -589,7 +589,6 @@ class ChromRefSummary:
     has_both_telomeres: bool
     mean_identity: Optional[float]
     # Contiguity accounting (chrom_assigned + chrom_fragment)
-    n_anchor: int = 0      # chrom_assigned contigs
     n_fragment: int = 0    # chrom_fragment contigs
     n_copies: int = 0      # copies among the chrom_assigned contigs (ref_copy values)
     state: str = "absent"  # see comparison.CHROM_STATE_LEVELS

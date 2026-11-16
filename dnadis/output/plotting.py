@@ -76,6 +76,16 @@ def _render_rmd(report_rmd: Path, report_html: Path, kind: str) -> bool:
 # --- Module-level constants ---
 _REPORTS_DIR = Path(__file__).resolve().parent / "reports"
 _COMMON_R = _REPORTS_DIR / "common.R"
+
+
+def inline_common_r(rmd_text: str, common_r: Path = _COMMON_R) -> str:
+    """Replace the template's ``source("__COMMON_R__")`` with the helpers.
+
+    The generated .Rmd then carries the helper code of the dnadis version
+    that wrote its input TSVs, so re-rendering it later (e.g. after a dnadis
+    upgrade) runs the same code against the same inputs.
+    """
+    return rmd_text.replace('source("__COMMON_R__")', _read_text(common_r))
 _COMMON_CSS = _REPORTS_DIR / "common.css"
 
 
@@ -181,7 +191,7 @@ def run_assembly_report(
     report_rmd = Path(str(outprefix) + ".assembly_report.Rmd").resolve()
     report_html = Path(str(outprefix) + ".assembly_report.html").resolve()
 
-    tmpl = _read_text(tmpl_path)
+    tmpl = inline_common_r(_read_text(tmpl_path))
 
     # Optional TSV paths (absolute, empty string if missing)
     rdna_str = _abs_esc(rdna_annotations_tsv) if rdna_annotations_tsv and rdna_annotations_tsv.exists() else ""
@@ -212,7 +222,6 @@ def run_assembly_report(
         .replace("__SUFFIX__", str(plot_title_suffix).replace('"', '\\"'))
         .replace("__OUTPREFIX__", _abs_esc(outprefix))
         .replace("__TOP_N__", str(int(top_n_cobionts)))
-        .replace("__COMMON_R__", _esc(_COMMON_R))
         .replace("__COMMON_CSS__", _esc(_COMMON_CSS))
         .replace("__SELF_CONTAINED__", "true" if self_contained else "false")
         .replace("__DNADIS_VERSION__", _DNADIS_VERSION)
@@ -280,7 +289,7 @@ def run_comparison_report(
     report_rmd = Path(str(outprefix) + ".comparison_report.Rmd").resolve()
     report_html = Path(str(outprefix) + ".comparison_report.html").resolve()
 
-    tmpl = _read_text(tmpl_path)
+    tmpl = inline_common_r(_read_text(tmpl_path))
 
     # Build semicolon-separated lists of per-assembly TSV paths and names
     per_asm_tsvs = ";".join(
@@ -346,7 +355,6 @@ def run_comparison_report(
         .replace("__SYNTENY_MODE__", str(synteny_mode))
         .replace("__CHRLIKE__", str(int(chr_like_minlen)))
         .replace("__OUTPREFIX__", _abs_esc(outprefix))
-        .replace("__COMMON_R__", _esc(_COMMON_R))
         .replace("__COMMON_CSS__", _esc(_COMMON_CSS))
         .replace("__SELF_CONTAINED__", "true" if self_contained else "false")
         .replace("__ASM_SORT_ORDER__", str(assembly_sort_order))
