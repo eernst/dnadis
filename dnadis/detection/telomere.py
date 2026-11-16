@@ -4,7 +4,7 @@ Telomere detection module for dnadis.
 
 Detects telomeric repeats at contig ends to identify assembly-complete chromosomes.
 Telomere presence indicates the contig has actual chromosome ends, which takes
-precedence over reference coverage for full-length classification.
+precedence over reference coverage for chromosome-scale classification.
 
 Telomere motifs:
 - Plants (default): TTTAGGG / CCCTAAA

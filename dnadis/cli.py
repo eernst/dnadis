@@ -1160,10 +1160,10 @@ def run_assembly(
         rdna_hits=rdna_hits,
         chrom_debris_hits=chrom_debris_hits,
         other_debris_hits=other_debris_hits,
-        # Full-length and subgenome inference parameters
+        # Chromosome-scale and subgenome inference parameters
         ref_lengths=ref_lengths,
         telomere_results=telomere_results,
-        full_length_threshold=args.full_length_ref_coverage,
+        chr_scale_threshold=args.chr_scale_ref_coverage,
         subgenome_k=args.subgenome_k,
         rearrangement_threshold=args.rearrangement_threshold,
         rearrangement_density_frac=args.rearrangement_density_frac,
@@ -1246,14 +1246,14 @@ def run_assembly(
                 clf.depth_breadth_10x = ds.breadth_10x
 
         # Relative depth (copy-number signal): each contig's median depth over
-        # the chromosomal baseline (median depth of full-length chrom_assigned
+        # the chromosomal baseline (median depth of chromosome-scale chrom_assigned
         # contigs; falls back to all chrom_assigned).  A ratio >> 1 flags
         # amplification (e.g. an amplified circular element), orthogonally to
         # the classification itself.
         baseline_depths = [
             c.depth_median for c in classifications
             if c.classification == "chrom_assigned"
-            and c.is_full_length and c.depth_median
+            and c.is_chromosome_scale and c.depth_median
         ]
         if not baseline_depths:
             baseline_depths = [
@@ -2294,12 +2294,18 @@ def main():
     mm2_tune.add_argument("-w", "--window", type=int, default=None, help="minimap2 minimizer window size")
 
     # =========================================================================
-    # Full-length detection and subgenome inference
+    # Chromosome-scale detection and subgenome inference
     # =========================================================================
-    fl_grp = p.add_argument_group("Full-length detection and subgenome inference")
+    fl_grp = p.add_argument_group("Chromosome-scale detection and subgenome inference")
     fl_grp.add_argument(
-        "--full-length-ref-coverage", type=float, default=0.70,
-        help="Reference span coverage threshold for full-length classification [0.70]",
+        "--chr-scale-ref-coverage", type=float, default=0.70,
+        help="Reference span coverage at which a chrom_assigned contig without "
+             "telomeres at both ends counts as chromosome-scale (named without "
+             "an _f suffix) [0.70]",
+    )
+    fl_grp.add_argument(  # earlier name
+        "--full-length-ref-coverage", dest="chr_scale_ref_coverage", type=float,
+        default=argparse.SUPPRESS, help=argparse.SUPPRESS,
     )
     fl_grp.add_argument(
         "--skip-telomeres", action="store_true",

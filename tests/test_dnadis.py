@@ -559,77 +559,34 @@ def test_telomere_detection_ignores_short_runs():
 
 
 # ----------------------------
-# Full-length classification tests
+# Chromosome-scale classification tests
 # ----------------------------
-def test_classify_full_length_both_telomeres():
-    """Test that both telomeres = high confidence full-length."""
-    from dnadis.classification.classifier import classify_full_length
+@pytest.mark.parametrize(
+    "ref_coverage, t5, t3, length_ratio, expected",
+    [
+        # Telomeres at both ends decide regardless of coverage or length.
+        (0.50, True, True, 0.3, (True, "telomeres")),
+        # Length rule: divergent reference, low alignment coverage.
+        (0.20, True, False, 0.85, (True, "length_ratio")),
+        (0.20, False, False, 0.85, (True, "length_ratio")),
+        # Coverage rule, with or without one telomere.
+        (0.80, True, False, None, (True, "ref_span")),
+        (0.85, False, False, 0.5, (True, "ref_span")),
+        # Neither: a fragment, whatever its telomeres.
+        (0.50, True, False, 0.5, (False, None)),
+        (0.40, False, False, None, (False, None)),
+    ],
+)
+def test_classify_chromosome_scale(ref_coverage, t5, t3, length_ratio, expected):
+    from dnadis.classification.classifier import classify_chromosome_scale
 
-    # Both telomeres - should be full-length with high confidence regardless of coverage
-    is_full, confidence = classify_full_length(
-        ref_coverage=0.50,  # Low coverage
-        has_5p_telomere=True,
-        has_3p_telomere=True,
-        full_length_threshold=0.70,
-    )
-    assert is_full is True
-    assert confidence == "high"
-
-
-def test_classify_full_length_one_telomere_high_coverage():
-    """Test that one telomere + high coverage = medium confidence full-length."""
-    from dnadis.classification.classifier import classify_full_length
-
-    is_full, confidence = classify_full_length(
-        ref_coverage=0.80,  # Above threshold
-        has_5p_telomere=True,
-        has_3p_telomere=False,
-        full_length_threshold=0.70,
-    )
-    assert is_full is True
-    assert confidence == "medium"
-
-
-def test_classify_full_length_one_telomere_low_coverage():
-    """Test that one telomere + low coverage = medium confidence fragment."""
-    from dnadis.classification.classifier import classify_full_length
-
-    is_full, confidence = classify_full_length(
-        ref_coverage=0.50,  # Below threshold
-        has_5p_telomere=True,
-        has_3p_telomere=False,
-        full_length_threshold=0.70,
-    )
-    assert is_full is False
-    assert confidence == "medium"
-
-
-def test_classify_full_length_no_telomeres_high_coverage():
-    """Test that no telomeres + high coverage = low confidence full-length."""
-    from dnadis.classification.classifier import classify_full_length
-
-    is_full, confidence = classify_full_length(
-        ref_coverage=0.85,  # Above threshold
-        has_5p_telomere=False,
-        has_3p_telomere=False,
-        full_length_threshold=0.70,
-    )
-    assert is_full is True
-    assert confidence == "low"
-
-
-def test_classify_full_length_no_telomeres_low_coverage():
-    """Test that no telomeres + low coverage = low confidence fragment."""
-    from dnadis.classification.classifier import classify_full_length
-
-    is_full, confidence = classify_full_length(
-        ref_coverage=0.40,  # Below threshold
-        has_5p_telomere=False,
-        has_3p_telomere=False,
-        full_length_threshold=0.70,
-    )
-    assert is_full is False
-    assert confidence == "low"
+    assert classify_chromosome_scale(
+        ref_coverage=ref_coverage,
+        has_5p_telomere=t5,
+        has_3p_telomere=t3,
+        chr_scale_threshold=0.70,
+        length_ratio=length_ratio,
+    ) == expected
 
 
 # ----------------------------
@@ -650,7 +607,7 @@ def test_generate_contig_names_full_length_single():
         assigned_ref_id="chr1A",
         ref_gene_proportion=0.5,
         contig_len=1000000,
-        is_full_length=True,
+        is_chromosome_scale=True,
         query_subgenome=None,
     )
 
@@ -679,7 +636,7 @@ def test_generate_contig_names_fragment():
             assigned_ref_id="chr1A",
             ref_gene_proportion=0.3,
             contig_len=500000,
-            is_full_length=False,  # Fragment
+            is_chromosome_scale=False,  # Fragment
             query_subgenome=None,
         ),
         ContigClassification(
@@ -692,7 +649,7 @@ def test_generate_contig_names_fragment():
             assigned_ref_id="chr1A",
             ref_gene_proportion=0.2,
             contig_len=300000,
-            is_full_length=False,  # Fragment
+            is_chromosome_scale=False,  # Fragment
             query_subgenome=None,
         ),
     ]
@@ -724,7 +681,7 @@ def test_assign_contig_names_after_reroute():
             assigned_ref_id=ref,
             ref_gene_proportion=0.0,
             contig_len=length,
-            is_full_length=False,
+            is_chromosome_scale=False,
             seq_identity_vs_ref=ident,
         )
 
@@ -765,7 +722,7 @@ def test_generate_contig_names_query_subgenome():
             assigned_ref_id="chr1A",
             ref_gene_proportion=0.5,
             contig_len=1000000,
-            is_full_length=True,
+            is_chromosome_scale=True,
             query_subgenome="s1",
         ),
         ContigClassification(
@@ -778,7 +735,7 @@ def test_generate_contig_names_query_subgenome():
             assigned_ref_id="chr1A",
             ref_gene_proportion=0.4,
             contig_len=900000,
-            is_full_length=True,
+            is_chromosome_scale=True,
             query_subgenome="s2",
         ),
     ]
@@ -809,7 +766,7 @@ def test_generate_contig_names_multiple_full_length_copies():
             assigned_ref_id="chr1A",
             ref_gene_proportion=0.5,
             contig_len=1000000,
-            is_full_length=True,
+            is_chromosome_scale=True,
             query_subgenome=None,
         ),
         ContigClassification(
@@ -822,7 +779,7 @@ def test_generate_contig_names_multiple_full_length_copies():
             assigned_ref_id="chr1A",
             ref_gene_proportion=0.5,
             contig_len=900000,
-            is_full_length=True,  # Also full-length!
+            is_chromosome_scale=True,  # Also full-length!
             query_subgenome=None,
         ),
     ]
@@ -856,7 +813,7 @@ def test_generate_contig_names_ties_independent_of_input_order():
             assigned_ref_id=ref,
             ref_gene_proportion=None,
             contig_len=length,
-            is_full_length=full,
+            is_chromosome_scale=full,
             query_subgenome=None,
             seq_identity_vs_ref=0.99 if ref else None,
         )
@@ -1237,7 +1194,7 @@ def test_scaffold_skip_full_length():
         assigned_ref_id="chr1A",
         ref_gene_proportion=0.9,
         contig_len=30000000,
-        is_full_length=True,
+        is_chromosome_scale=True,
         has_5p_telomere=True,
         has_3p_telomere=True,
         query_subgenome_grp=1,
@@ -1379,20 +1336,20 @@ def test_scaffold_fragment_only_reference():
             original_name="frag1", new_name="chr3A_f1", classification="chrom_fragment",
             reversed=False, cobiont_taxid=None, cobiont_sci=None,
             assigned_ref_id="chr3A", ref_gene_proportion=None, contig_len=800000,
-            query_subgenome_grp=1, seq_identity_vs_ref=0.93, is_full_length=False,
+            query_subgenome_grp=1, seq_identity_vs_ref=0.93, is_chromosome_scale=False,
         ),
         ContigClassification(
             original_name="frag2", new_name="chr3A_f2", classification="chrom_fragment",
             reversed=False, cobiont_taxid=None, cobiont_sci=None,
             assigned_ref_id="chr3A", ref_gene_proportion=None, contig_len=600000,
-            query_subgenome_grp=1, seq_identity_vs_ref=0.91, is_full_length=False,
+            query_subgenome_grp=1, seq_identity_vs_ref=0.91, is_chromosome_scale=False,
         ),
         # A second fragment-only ref whose fragment is inferred to group 2
         ContigClassification(
             original_name="frag3", new_name="chr4A_B_f1", classification="chrom_fragment",
             reversed=False, cobiont_taxid=None, cobiont_sci=None,
             assigned_ref_id="chr4A", ref_gene_proportion=None, contig_len=500000,
-            query_subgenome_grp=2, seq_identity_vs_ref=0.88, is_full_length=False,
+            query_subgenome_grp=2, seq_identity_vs_ref=0.88, is_chromosome_scale=False,
         ),
     ]
 
@@ -1974,7 +1931,7 @@ def test_infer_query_subgenomes_outlier_left_out_of_fit():
             original_name=name, new_name="", classification="chrom_assigned",
             reversed=False, cobiont_taxid=None, cobiont_sci=None,
             assigned_ref_id=ref, ref_gene_proportion=0.5, contig_len=length)
-        c.is_full_length = True
+        c.is_chromosome_scale = True
         return c
 
     clfs, scores = [], {}
@@ -1984,7 +1941,7 @@ def test_infer_query_subgenomes_outlier_left_out_of_fit():
         scores[(f"near_{i}", ref)] = 0.935 + (i % 3) * 0.002
         scores[(f"far_{i}", ref)] = 0.890 + (i % 3) * 0.002
     junk = clf("repeat_array", "chr1A", 250_000)
-    junk.is_full_length = False
+    junk.is_chromosome_scale = False
     clfs.append(junk)
     scores[("repeat_array", "chr1A")] = 0.754
     fit = {k for k in scores if k[0] != "repeat_array"}
@@ -2191,7 +2148,7 @@ def test_infer_query_subgenomes_fragment_does_not_block_split():
                 assigned_ref_id=ref_id, ref_gene_proportion=0.5,
                 contig_len=10_000_000,
             )
-            c.is_full_length = full
+            c.is_chromosome_scale = full
             clfs.append(c)
             idents[(f"ctg_{i}_{label}", ref_id)] = ident
 
@@ -2203,19 +2160,19 @@ def test_infer_query_subgenomes_fragment_does_not_block_split():
         reversed=False, cobiont_taxid=None, cobiont_sci=None,
         assigned_ref_id=ref_id, ref_gene_proportion=0.5, contig_len=10_000_000,
     )
-    c1.is_full_length = True
+    c1.is_chromosome_scale = True
     c2 = ContigClassification(
         original_name="c2", new_name="", classification="chrom_assigned",
         reversed=False, cobiont_taxid=None, cobiont_sci=None,
         assigned_ref_id=ref_id, ref_gene_proportion=0.5, contig_len=10_000_000,
     )
-    c2.is_full_length = True
+    c2.is_chromosome_scale = True
     f1 = ContigClassification(
         original_name="f1", new_name="", classification="chrom_assigned",
         reversed=False, cobiont_taxid=None, cobiont_sci=None,
         assigned_ref_id=ref_id, ref_gene_proportion=0.5, contig_len=2_000_000,
     )
-    f1.is_full_length = False
+    f1.is_chromosome_scale = False
     clfs.extend([c1, c2, f1])
     # All three sit near (or below) the secondary cluster mean.
     idents[("c1", ref_id)] = 0.605
@@ -2262,7 +2219,7 @@ def _chromosome_plus_fragment_locus(n_refs, frag_ref_start):
                 assigned_ref_id=ref_id, ref_gene_proportion=0.5,
                 contig_len=20_000_000 if full else 200_000,
             )
-            c.is_full_length = full
+            c.is_chromosome_scale = full
             clfs.append(c)
             scores[(name, ref_id)] = score
             footprints[(name, ref_id)] = fp
@@ -2298,7 +2255,7 @@ def test_infer_query_subgenomes_overlapping_fragments_still_split():
     assert by_name["chr_1"].query_subgenome == "s2"
 
 
-def _full_length_clf(name, ref_id, ref_coverage, contig_len):
+def _scale_clf(name, ref_id, ref_coverage, contig_len):
     from dnadis.models import ContigClassification
 
     c = ContigClassification(
@@ -2306,38 +2263,71 @@ def _full_length_clf(name, ref_id, ref_coverage, contig_len):
         reversed=False, cobiont_taxid=None, cobiont_sci=None,
         assigned_ref_id=ref_id, ref_gene_proportion=0.5, contig_len=contig_len,
     )
-    c.is_full_length = True
+    c.is_chromosome_scale = True
     c.ref_coverage = ref_coverage
     return c
 
 
-def test_demote_tiling_full_length_pieces_of_one_copy():
-    """A full-length contig tiling beside another copy's piece is a fragment.
+def _split_copies(clfs, footprints):
+    from dnadis.classification.classifier import assign_ref_copies, demote_split_copies
+
+    assign_ref_copies(clfs, footprints)
+    return demote_split_copies(clfs)
+
+
+def test_demote_split_copies_pieces_of_one_copy():
+    """Every piece of a split copy is a fragment, however long.
 
     Set s1 spans the whole reference; s2 is split into an arm (0-3 Mb) and
-    the rest (4-16 Mb), each full-length on its own.
+    the rest (4-16 Mb), each chromosome-scale on its own.
     """
-    from dnadis.classification.classifier import demote_tiling_full_length
-
-    s1 = _full_length_clf("s1", "chr16A", 0.48, 18_400_000)
-    arm = _full_length_clf("arm", "chr16A", 0.10, 4_000_000)
-    rest = _full_length_clf("rest", "chr16A", 0.25, 14_200_000)
+    s1 = _scale_clf("s1", "chr16A", 0.48, 18_400_000)
+    arm = _scale_clf("arm", "chr16A", 0.10, 4_000_000)
+    rest = _scale_clf("rest", "chr16A", 0.25, 14_200_000)
     footprints = {
         ("s1", "chr16A"): [(0, 16_000_000)],
         ("arm", "chr16A"): [(100_000, 3_000_000)],
         ("rest", "chr16A"): [(4_100_000, 15_800_000)],
     }
-    assert demote_tiling_full_length([s1, arm, rest], footprints) == 1
-    assert s1.is_full_length and rest.is_full_length
-    assert arm.is_full_length is False
+    assert _split_copies([s1, arm, rest], footprints) == 2
+    assert s1.is_chromosome_scale
+    assert arm.is_chromosome_scale is False and rest.is_chromosome_scale is False
+    assert rest.chromosome_scale_basis is None
 
 
-def test_demote_tiling_full_length_keeps_overlapping_copies():
-    """Full-length copies over the same reference region are all kept."""
-    from dnadis.classification.classifier import demote_tiling_full_length
+def test_demote_split_copies_long_arm():
+    """A long arm (length rule) beside the other arm of the same copy."""
+    long_arm = _scale_clf("long", "chr16A", 0.22, 13_000_000)
+    long_arm.chromosome_scale_basis = "length_ratio"
+    long_arm.has_5p_telomere = True
+    short_arm = _scale_clf("short", "chr16A", 0.13, 5_000_000)
+    short_arm.is_chromosome_scale = False
+    short_arm.has_3p_telomere = True
+    footprints = {
+        ("long", "chr16A"): [(0, 11_000_000)],
+        ("short", "chr16A"): [(11_500_000, 16_000_000)],
+    }
+    assert _split_copies([long_arm, short_arm], footprints) == 1
+    assert long_arm.is_chromosome_scale is False
 
+
+def test_demote_split_copies_keeps_t2t_piece():
+    """A piece with telomeres at both ends stays chromosome-scale."""
+    t2t = _scale_clf("t2t", "chr15P", 0.2, 29_000_000)
+    t2t.has_5p_telomere = t2t.has_3p_telomere = True
+    other = _scale_clf("other", "chr15P", 0.17, 13_000_000)
+    footprints = {
+        ("t2t", "chr15P"): [(0, 8_000_000)],
+        ("other", "chr15P"): [(9_000_000, 16_000_000)],
+    }
+    assert _split_copies([t2t, other], footprints) == 1
+    assert t2t.is_chromosome_scale and other.is_chromosome_scale is False
+
+
+def test_demote_split_copies_keeps_overlapping_copies():
+    """Chromosome-scale copies over the same reference region are all kept."""
     clfs = [
-        _full_length_clf(f"c{i}", "chr1A", 0.5 - 0.1 * i, 20_000_000)
+        _scale_clf(f"c{i}", "chr1A", 0.5 - 0.1 * i, 20_000_000)
         for i in range(3)
     ]
     footprints = {
@@ -2345,8 +2335,57 @@ def test_demote_tiling_full_length_keeps_overlapping_copies():
         ("c1", "chr1A"): [(500_000, 19_000_000)],
         ("c2", "chr1A"): [(2_000_000, 12_000_000)],
     }
-    assert demote_tiling_full_length(clfs, footprints) == 0
-    assert all(c.is_full_length for c in clfs)
+    assert _split_copies(clfs, footprints) == 0
+    assert all(c.is_chromosome_scale for c in clfs)
+    assert [c.ref_copy for c in clfs] == [1, 2, 3]
+
+
+def test_assign_ref_copies_groups_tiling_pieces():
+    """Overlapping contigs are separate copies; tiling contigs share a copy.
+
+    s1 spans the reference; s2 is an arm (0-3 Mb) plus the rest (4-16 Mb).
+    """
+    from dnadis.classification.classifier import assign_ref_copies
+
+    s1 = _scale_clf("s1", "chr16A", 0.48, 18_400_000)
+    arm = _scale_clf("arm", "chr16A", 0.10, 4_000_000)
+    rest = _scale_clf("rest", "chr16A", 0.25, 14_200_000)
+    other = _scale_clf("other", "chr2A", 0.9, 20_000_000)
+    footprints = {
+        ("s1", "chr16A"): [(0, 16_000_000)],
+        ("arm", "chr16A"): [(100_000, 3_000_000)],
+        ("rest", "chr16A"): [(4_100_000, 15_800_000)],
+        ("other", "chr2A"): [(0, 20_000_000)],
+    }
+    assign_ref_copies([arm, s1, rest, other], footprints)
+    assert (s1.ref_copy, rest.ref_copy, arm.ref_copy) == (1, 2, 2)
+    assert other.ref_copy == 1
+
+
+def test_assign_ref_copies_piece_joins_least_overlapping_copy():
+    """A piece that tiles two copies joins the one it shares less with."""
+    from dnadis.classification.classifier import assign_ref_copies
+
+    a = _scale_clf("a", "chr1A", 0.8, 16_000_000)       # 0-80%
+    b1 = _scale_clf("b1", "chr1A", 0.5, 10_000_000)     # 0-50%
+    b2 = _scale_clf("b2", "chr1A", 0.25, 5_000_000)     # 75-100%
+    footprints = {
+        ("a", "chr1A"): [(0, 16_000_000)],
+        ("b1", "chr1A"): [(0, 10_000_000)],
+        ("b2", "chr1A"): [(15_000_000, 20_000_000)],
+    }
+    assign_ref_copies([a, b1, b2], footprints)
+    assert (a.ref_copy, b1.ref_copy, b2.ref_copy) == (1, 2, 2)
+
+
+def test_assign_ref_copies_only_chrom_assigned():
+    from dnadis.classification.classifier import assign_ref_copies
+
+    frag = _scale_clf("frag", "chr1A", 0.1, 1_000_000)
+    frag.classification = "chrom_fragment"
+    frag.ref_copy = 3
+    assign_ref_copies([frag], {("frag", "chr1A"): [(0, 1_000_000)]})
+    assert frag.ref_copy is None
 
 
 def _two_copy_loci_with_fragment(frag_fp):
@@ -2368,7 +2407,7 @@ def _two_copy_loci_with_fragment(frag_fp):
             assigned_ref_id=ref_id, ref_gene_proportion=0.5,
             contig_len=length,
         )
-        c.is_full_length = full
+        c.is_chromosome_scale = full
         clfs.append(c)
         scores[(name, ref_id)] = score
         footprints[(name, ref_id)] = fp
@@ -2442,7 +2481,7 @@ def test_infer_query_subgenomes_fragment_inside_single_copy_takes_other_set():
         reversed=False, cobiont_taxid=None, cobiont_sci=None,
         assigned_ref_id="chr9A", ref_gene_proportion=0.5, contig_len=1_000_000,
     )
-    frag.is_full_length = False
+    frag.is_chromosome_scale = False
     clfs.append(frag)
     scores[("frag9", "chr9A")] = 0.70
     footprints[("frag9", "chr9A")] = [(2_000_000, 3_000_000)]
@@ -2466,7 +2505,7 @@ def test_scaffold_fragment_follows_query_subgenome_set():
             reversed=False, cobiont_taxid=None, cobiont_sci=None,
             assigned_ref_id="chr1A", ref_gene_proportion=0.5,
             contig_len=20_000_000 if full else 1_000_000,
-            is_full_length=full,
+            is_chromosome_scale=full,
             query_subgenome=f"s{grp}" if grp else None,
             query_subgenome_grp=grp, subgenome_basis=basis,
         )
@@ -3028,7 +3067,7 @@ def test_scaffold_names_carry_query_set_suffix(tmp_path):
             original_name=name, new_name="", classification="chrom_assigned",
             reversed=False, cobiont_taxid=None, cobiont_sci=None,
             assigned_ref_id=ref, ref_gene_proportion=None,
-            contig_len=len(seqs[name]), is_full_length=True,
+            contig_len=len(seqs[name]), is_chromosome_scale=True,
             query_subgenome=sg, query_subgenome_grp=grp, seq_identity_vs_ref=0.95,
         )
 
@@ -3088,3 +3127,17 @@ def test_ragtag_agp_keeps_unplaced_contigs_out_of_the_scaffold(tmp_path):
     assert seq == "AAAA" + "N" * 10 + "CGG"
     assert [l.split("\t")[5] for l in agp_lines] == ["ctgA", "10", "up_RagTag"]
     assert unplaced == ["ctgB", "prev_RagTag"]
+
+
+def test_load_config_reads_legacy_full_length_section(tmp_path):
+    """Config files written before the chromosome-scale rename still load."""
+    from dnadis.utils.config import load_config
+
+    cfg = tmp_path / "old.toml"
+    cfg.write_text(
+        "[full_length_detection]\nfull_length_ref_coverage = 0.6\ntelomere_min_bp = 150\n"
+    )
+    flat = load_config(cfg)
+    assert flat["chr_scale_ref_coverage"] == 0.6
+    assert flat["telomere_min_bp"] == 150
+

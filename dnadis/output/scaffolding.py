@@ -265,8 +265,8 @@ def _group_contigs_by_haplotype(
     clf_lookup = {clf.original_name: clf for clf in classifications}
 
     # Pass 1: chromosome-assigned contigs.  An extra copy of a region already
-    # spanned by every set (a sub-full-length chrom_assigned contig can be
-    # one) would duplicate sequence in the pseudomolecule.
+    # spanned by every set (a chrom_assigned contig shorter than the
+    # chromosome can be one) would duplicate sequence in the pseudomolecule.
     assigned_contigs: Set[str] = set()
     for clf in classifications:
         if clf.subgenome_basis == "extra_copy":
@@ -302,7 +302,7 @@ def _group_contigs_by_haplotype(
 
         available_grps = ref_groups.get(ref_id)
         if not available_grps:
-            # No full-length anchor for this reference — the chromosome survives
+            # No chrom_assigned contig for this reference — the chromosome survives
             # only as fragments.  Seed a scaffold group from the fragment's own
             # inferred subgenome group so reference-guided scaffolding can still
             # order these fragments along the reference (fragments of the same
@@ -918,7 +918,7 @@ def scaffold_chromosomes(
         ]
         t2t_contigs = [
             c for c in chrom_assigned_in_group
-            if clf_lookup[c].is_full_length
+            if clf_lookup[c].is_chromosome_scale
             and clf_lookup[c].has_5p_telomere
             and clf_lookup[c].has_3p_telomere
         ]

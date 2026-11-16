@@ -843,7 +843,7 @@ tbl <- comp_df %>%
     `Asgn / Unasgn / Chim` = paste(n_chrom_assigned, "/",
                                      n_chrom_unassigned, "/",
                                      n_chimeric),
-    `Full-length` = n_full_length,
+    `Chr-scale` = n_chromosome_scale,
     `Both telo` = n_both_telomeres,
     `Mean ref cov` = ifelse(is.na(mean_ref_coverage), "\u2014",
                             sprintf("%.1f%%", mean_ref_coverage * 100)),
@@ -862,7 +862,7 @@ gt_obj <- tbl %>%
   tab_header(title = "Assembly Comparison Summary") %>%
   cols_align(align = "right", columns = where(is.numeric)) %>%
   tab_spanner(label = "Contiguity", columns = c(Contigs, `Size (Mb)`, N50, L50, `Largest (Mb)`)) %>%
-  tab_spanner(label = "Chromosomes", columns = c(`Asgn / Unasgn / Chim`, `Full-length`, `Both telo`, `Mean ref cov`, `Mean identity`))
+  tab_spanner(label = "Chromosomes", columns = c(`Asgn / Unasgn / Chim`, `Chr-scale`, `Both telo`, `Mean ref cov`, `Mean identity`))
 
 # Conditionally include chrC in "Other" spanner
 if (show_chrC) {
@@ -1016,11 +1016,11 @@ if (has_any_chrom) {
     mutate(
       shape_status = case_when(
         n_contigs == 0              ~ "unassigned",
-        is_full_length != "yes"     ~ "incomplete",
+        is_chromosome_scale != "yes" ~ "incomplete",
         any_5p & any_3p             ~ "telo_both",
         any_5p & !any_3p            ~ "telo_5p",
         !any_5p & any_3p            ~ "telo_3p",
-        TRUE                        ~ "full_length"
+        TRUE                        ~ "chr_scale"
       ),
       multi_label = ifelse(n_contigs > 1, as.character(n_contigs), "")
     )
@@ -1037,7 +1037,7 @@ if (has_any_chrom) {
         "Assigned bp: ", scales::comma(total_assigned_bp), "\n",
         "Best ref coverage: ", fmt_pct(best_ref_coverage), "\n",
         "Mean identity: ", fmt_pct(mean_identity), "\n",
-        "Full-length: ", is_full_length, "\n",
+        "Chromosome-scale: ", is_chromosome_scale, "\n",
         "Telomeres: ", case_when(
           shape_status == "telo_both" ~ "both",
           shape_status == "telo_5p"   ~ "5\u2032 only",
@@ -1172,7 +1172,7 @@ if (has_any_chrom) {
       telo_both   = make_pill(xc, yc, pill_hw, rect_hh, cap_r_val, TRUE, TRUE),
       telo_5p     = make_pill(xc, yc, pill_hw, rect_hh, cap_r_val, TRUE, FALSE),
       telo_3p     = make_pill(xc, yc, pill_hw, rect_hh, cap_r_val, FALSE, TRUE),
-      full_length = make_pill(xc, yc, pill_hw, rect_hh, 0, FALSE, FALSE),
+      chr_scale   = make_pill(xc, yc, pill_hw, rect_hh, 0, FALSE, FALSE),
       incomplete  = make_pill_jagged(xc, yc, pill_hw, jagged_hh,
                                      n_teeth_val, tooth_d_val),
       unassigned  = make_pill(xc, yc, pill_hw, rect_hh, 0, FALSE, FALSE)
@@ -1288,7 +1288,7 @@ if (has_any_chrom) {
     scale_y_reverse() +
     coord_cartesian(clip = "off") +
     labs(caption = paste0(
-      "Pill = telomeres, rect = full-length, zigzag = incomplete, ",
+      "Pill = telomeres, rect = chromosome-scale, zigzag = shorter, ",
       "grey = unassigned. Fill intensity = mean identity."
     )) +
     theme_void(base_size = base_font_pt, base_family = base_family) +
@@ -1330,8 +1330,8 @@ if (has_any_chrom) {
 <span style="white-space:nowrap;"><svg width="14" height="24" style="vertical-align:middle"><rect x="1" y="1" width="12" height="22" rx="6" fill="#8cc5e3" stroke="#2a6496" stroke-width="0.8"/></svg>&ensp;T2T (both telomeres)</span>&emsp;
 <span style="white-space:nowrap;"><svg width="14" height="24" style="vertical-align:middle"><path d="M1,7 C1,1 13,1 13,7 L13,23 L1,23 Z" fill="#8cc5e3" stroke="#2a6496" stroke-width="0.8"/></svg>&ensp;5&#x2032; telomere only</span>&emsp;
 <span style="white-space:nowrap;"><svg width="14" height="24" style="vertical-align:middle"><path d="M1,1 L13,1 L13,17 C13,23 1,23 1,17 Z" fill="#8cc5e3" stroke="#2a6496" stroke-width="0.8"/></svg>&ensp;3&#x2032; telomere only</span>&emsp;
-<span style="white-space:nowrap;"><svg width="14" height="20" style="vertical-align:middle"><rect x="1" y="1" width="12" height="18" fill="#8cc5e3" stroke="#2a6496" stroke-width="0.8"/></svg>&ensp;Full-length, no telomeres</span>&emsp;
-<span style="white-space:nowrap;"><svg width="14" height="20" style="vertical-align:middle"><path d="M1,4 L4,1 L7,4 L10,1 L13,4 L13,16 L10,19 L7,16 L4,19 L1,16 Z" fill="#8cc5e3" stroke="#2a6496" stroke-width="0.8"/></svg>&ensp;Incomplete</span>&emsp;
+<span style="white-space:nowrap;"><svg width="14" height="20" style="vertical-align:middle"><rect x="1" y="1" width="12" height="18" fill="#8cc5e3" stroke="#2a6496" stroke-width="0.8"/></svg>&ensp;Chromosome-scale, no telomeres</span>&emsp;
+<span style="white-space:nowrap;"><svg width="14" height="20" style="vertical-align:middle"><path d="M1,4 L4,1 L7,4 L10,1 L13,4 L13,16 L10,19 L7,16 L4,19 L1,16 Z" fill="#8cc5e3" stroke="#2a6496" stroke-width="0.8"/></svg>&ensp;Shorter than chromosome-scale</span>&emsp;
 <span style="white-space:nowrap;"><svg width="14" height="20" style="vertical-align:middle"><rect x="1" y="1" width="12" height="18" fill="#f0f0f0" stroke="none"/></svg>&ensp;Unassigned</span><br>
 Fill intensity = mean sequence identity vs reference (white&thinsp;=&thinsp;0%, dark&thinsp;=&thinsp;100%; each subgenome has its own color).
 Number inside cell = multiple contigs assigned to the same reference chromosome.
@@ -1364,12 +1364,15 @@ ct_has <- has_any_chrom && all(c("state", "n_anchor", "n_fragment") %in% names(c
 ```
 
 ```{r contiguity_cmp_intro, eval=ct_has, results='asis'}
-cat('<p class="section-intro">Per-reference-chromosome <b>assembly state</b> across assemblies — a companion to <b>Overview</b> (which encodes copy number and identity). Cell colour reflects how the chromosome is reconstructed from its full-length <b>anchor(s)</b>: a single contig, multiple full-length copies, fragments-only (chromosomal fragments with no full-length anchor), or absent. A <b>+N badge</b> marks chromosomes that also carry N extra fragment contigs (often divergent duplicates or eccDNA rather than a broken chromosome); the badge does not downgrade the state colour.</p>')
+cat('<p class="section-intro">Per-reference-chromosome <b>assembly state</b> across assemblies — a companion to <b>Overview</b> (which encodes copy number and identity). Cell colour reflects how the chromosome is reconstructed from its assigned contigs. Assigned contigs that overlap on the reference are separate copies; contigs that tile it are pieces of one copy. <b>T2T</b>: every copy is one contig with telomeres at both ends; <b>single contig</b>: every copy is one contig; <b>split</b>: at least one copy is in two or more pieces; <b>fragments only</b>: only chromosome fragments (below the chromosome-length cutoff) are assigned; <b>absent</b>: nothing is assigned. A <b>&times;N badge</b> marks chromosomes assembled in N copies. A <b>+N badge</b> marks chromosomes that also carry N fragment contigs (often divergent duplicates or eccDNA rather than a broken chromosome); it does not change the state colour.</p>')
 ```
 
 ```{r contiguity_cmp_heatmap, eval=ct_has, fig.width=10, fig.height=max(3, n_asm * 0.34 + 2.4)}
 organelle_ids <- ref_lengths %>%
   filter(grepl("^chr[CM]$|^chrPt$|^chrMt$", ref_id)) %>% pull(ref_id)
+
+# Older completeness TSVs lack n_copies: count each assigned chromosome once.
+if (!"n_copies" %in% names(compl_df)) compl_df$n_copies <- pmin(compl_df$n_anchor, 1L)
 
 ctdf <- compl_df %>%
   filter(!ref_id %in% organelle_ids) %>%
@@ -1383,7 +1386,10 @@ ctdf <- compl_df %>%
     tooltip = paste0(ref_id, " — ", assembly,
                      "\nState: ", chrom_state_labels[as.character(state)],
                      "\nAssigned contigs: ", n_anchor,
-                     "\nFragment contigs: ", n_fragment)
+                     "\nCopies: ", n_copies,
+                     "\nFragment contigs: ", n_fragment),
+    badge = trimws(paste0(ifelse(n_copies > 1, paste0("\u00d7", n_copies), ""),
+                          ifelse(n_fragment > 0, paste0(" +", n_fragment), "")))
   )
 
 p_ct_hm <- ggplot(ctdf, aes(x = chrom_num, y = assembly, fill = state)) +
@@ -1393,11 +1399,11 @@ p_ct_hm <- ggplot(ctdf, aes(x = chrom_num, y = assembly, fill = state)) +
     # ggplot2 >= 3.5 draws no key for a state absent from the data unless
     # the layer asks for one, leaving a label without a swatch.
     show.legend = TRUE) +
-  # +N fragment-load badge: chromosomes carrying extra fragment contigs on top
-  # of their anchor(s).  A small white chip keeps it legible over any fill.
+  # ×N copy badge and +N fragment-load badge (fragment contigs on top of the
+  # assigned ones).  A small white chip keeps it legible over any fill.
   ggiraph::geom_label_interactive(
-    data = ctdf %>% filter(n_fragment > 0),
-    aes(label = paste0("+", n_fragment), tooltip = tooltip,
+    data = ctdf %>% filter(nzchar(badge)),
+    aes(label = badge, tooltip = tooltip,
         data_id = paste(assembly, ref_id)),
     fill = "white", alpha = 0.72, color = "grey10", fontface = "bold",
     size = (base_font_pt - 3) / .pt, label.size = 0,
@@ -1441,7 +1447,7 @@ girafe_styled(ggobj = p_ct_bar, width_svg = 10, height_svg = max(3, n_asm * 0.3 
 ```{r chrom_summary_setup, eval=has_any_chrom, include=FALSE}
 # =========================================================================
 # Chromosome Summary: one row per reference chromosome, aggregated across
-# all assemblies.  Shows assigned-length boxplot, full-length and telomere
+# all assemblies.  Shows assigned-length boxplot, chromosome-scale and telomere
 # counts as "n/N [bar]", rDNA array presence, and rearrangement counts.
 # Boxplot/bar colors follow the subgenome palette.
 # =========================================================================
@@ -1478,7 +1484,7 @@ chrom_agg <- compl_df %>%
   summarise(
     ref_length     = first(ref_length),
     length_dist    = list(total_assigned_bp[total_assigned_bp > 0] / 1e6),
-    n_full_length  = sum(is_full_length == "yes", na.rm = TRUE),
+    n_chromosome_scale  = sum(is_chromosome_scale == "yes", na.rm = TRUE),
     n_both_telo    = sum(has_both_telomeres == "yes", na.rm = TRUE),
     .groups = "drop"
   ) %>%
@@ -1544,14 +1550,14 @@ chrom_agg <- chrom_agg %>%
 chrom_sg_levels <- if (has_subgenomes) sort(unique(chrom_agg$sg)) else "G"
 
 # --- gt table builder -----------------------------------------------------
-# sg_color drives the boxplot line/fill and the inline bars for full-length
+# sg_color drives the boxplot line/fill and the inline bars for chromosome-scale
 # and both-telomere counts.  For haploid references the default (oi[5], the
 # "G" entry in sg_cols_dark) is used.
 make_chrom_summary_gt <- function(df, title, sg_color = oi[5]) {
   sg_color_light <- lighten(sg_color, amount = 0.5)
   df2 <- df %>%
     mutate(
-      full_cell = vapply(n_full_length,
+      full_cell = vapply(n_chromosome_scale,
                          function(v) gt_inline_value_bar(v, n_asm, color = sg_color),
                          character(1)),
       telo_cell = vapply(n_both_telo,
@@ -1569,7 +1575,7 @@ make_chrom_summary_gt <- function(df, title, sg_color = oi[5]) {
       `Ref (Mb)`  = "Ref (Mb)",
       length_text = "Assigned Mb (min / med / max)",
       length_dist = "",
-      full_cell   = "Full-length",
+      full_cell   = "Chr-scale",
       telo_cell   = "Both telo",
       rDNA        = "rDNA",
       Rearr       = "Rearr"
@@ -1577,7 +1583,7 @@ make_chrom_summary_gt <- function(df, title, sg_color = oi[5]) {
     gt_plt_dist(length_dist, type = "boxplot",
                 line_color = sg_color, fill_color = sg_color_light) %>%
     # Place the boxplot to the right of the "min / med / max" text, matching
-    # the value + bar pattern used for the Full-length and Both telo columns.
+    # the value + bar pattern used for the Chr-scale and Both telo columns.
     cols_move(columns = length_dist, after = length_text) %>%
     fmt(columns = c(full_cell, telo_cell), fns = function(x) x) %>%
     cols_align(align = "right",  columns = `Ref (Mb)`) %>%
@@ -1602,8 +1608,9 @@ chrom_summary_legend <- paste0(
   '<div class="legend-box">',
   '<b>Assigned Mb</b>: boxplot of per-assembly assigned length for this ',
   'chromosome (zero-length assemblies omitted); text shows min / median / max.&emsp;',
-  '<b>Full-length</b> / <b>Both telo</b>: count of assemblies with a contig ',
-  'spanning the full reference / carrying both telomeres (<em>n</em> = ',
+  '<b>Chr-scale</b> / <b>Both telo</b>: count of assemblies with a chromosome-scale contig ',
+  '(telomeres at both ends, or length or reference span coverage close to the whole chromosome, ',
+  'and not one of several pieces of a copy) / a contig with telomeres at both ends (<em>n</em> = ',
   n_asm, ' assemblies); bar length is the fraction.&emsp;',
   '<b>rDNA</b>: ● = all assemblies have an rDNA array on a chromosomal contig ',
   '(chromosome or chromosome fragment) of this chromosome, ',
@@ -1727,7 +1734,7 @@ if (has_any_chrom) {
                              sprintf("%.1f", best_ref_coverage * 100)),
       `Identity (%)` = ifelse(is.na(mean_identity), "\u2014",
                               sprintf("%.2f", mean_identity * 100)),
-      `Full-length` = ifelse(is_full_length == "yes", "\u2713", ""),
+      `Chr-scale` = ifelse(is_chromosome_scale == "yes", "\u2713", ""),
       `Both telo` = ifelse(has_both_telomeres == "yes", "\u2713", "")
     ) %>%
     arrange(sg, chrom_num) %>%
@@ -1738,7 +1745,7 @@ if (has_any_chrom) {
   make_compl_gt <- function(df, title) {
     df %>%
       select(ref_id, assembly, n_contigs, `Assigned (Mb)`, `Ref cov (%)`,
-             `Identity (%)`, `Full-length`, `Both telo`) %>%
+             `Identity (%)`, `Chr-scale`, `Both telo`) %>%
       gt(groupname_col = "ref_id") %>%
       fmt(columns = assembly, fns = function(x) lapply(asm_report_link(x), html)) %>%
       gt_theme() %>%
@@ -1748,12 +1755,12 @@ if (has_any_chrom) {
         `Assigned (Mb)` = "Assigned (Mb)",
         `Ref cov (%)` = "Ref cov (%)",
         `Identity (%)` = "Identity (%)",
-        `Full-length` = "Full-length",
+        `Chr-scale` = "Chr-scale",
         `Both telo` = "Both telo"
       ) %>%
       cols_align(align = "right", columns = c(n_contigs, `Assigned (Mb)`,
                                                `Ref cov (%)`, `Identity (%)`)) %>%
-      cols_align(align = "center", columns = c(`Full-length`, `Both telo`))
+      cols_align(align = "center", columns = c(`Chr-scale`, `Both telo`))
   }
 }
 ```

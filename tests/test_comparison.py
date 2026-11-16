@@ -26,35 +26,50 @@ from dnadis.output.comparison import (
 
 
 # ---------------------------------------------------------------------------
-# Contiguity state (anchor-only; fragments do not downgrade the state)
+# Contiguity state (anchors grouped into copies; fragments do not downgrade it)
 # ---------------------------------------------------------------------------
+def _anchor(name, ref_copy, t5=False, t3=False):
+    c = _make_classification(name, has_5p_telomere=t5, has_3p_telomere=t3)
+    c.ref_copy = ref_copy
+    return c
+
+
 class TestChromContiguityState:
     def test_empty_is_absent(self):
-        assert _chrom_contiguity_state(0, 0, False, False) == "absent"
+        assert _chrom_contiguity_state([], 0) == ("absent", 0)
 
     def test_fragments_only(self):
-        assert _chrom_contiguity_state(0, 3, False, False) == "fragments_only"
+        assert _chrom_contiguity_state([], 3) == ("fragments_only", 0)
 
     def test_single_anchor_capped_is_t2t(self):
-        assert _chrom_contiguity_state(1, 0, True, True) == "T2T"
+        assert _chrom_contiguity_state([_anchor("a", 1, True, True)], 0) == ("T2T", 1)
 
     def test_single_anchor_uncapped_is_single(self):
-        assert _chrom_contiguity_state(1, 0, False, True) == "single"
+        assert _chrom_contiguity_state([_anchor("a", 1, True, False)], 0) == ("single", 1)
 
-    def test_multiple_anchors(self):
-        assert _chrom_contiguity_state(2, 0, True, True) == "multiple"
+    def test_tiling_anchors_are_split(self):
+        # Two arms of one copy, each carrying one telomere.
+        anchors = [_anchor("p", 1, True, False), _anchor("q", 1, False, True)]
+        assert _chrom_contiguity_state(anchors, 0) == ("split", 1)
+
+    def test_overlapping_t2t_copies_stay_t2t(self):
+        anchors = [_anchor("h1", 1, True, True), _anchor("h2", 2, True, True)]
+        assert _chrom_contiguity_state(anchors, 0) == ("T2T", 2)
+
+    def test_copies_take_least_contiguous_state(self):
+        anchors = [_anchor("h1", 1, True, True), _anchor("h2", 2)]
+        assert _chrom_contiguity_state(anchors, 0) == ("single", 2)
+        anchors.append(_anchor("h2_arm", 2))
+        assert _chrom_contiguity_state(anchors, 0) == ("split", 2)
+
+    def test_anchor_without_copy_counts_as_own_copy(self):
+        anchors = [_anchor("a", None), _anchor("b", None)]
+        assert _chrom_contiguity_state(anchors, 0) == ("single", 2)
 
     def test_complete_anchor_plus_fragments_stays_t2t(self):
-        # The reported case: one T2T anchor + stray fragment(s) must NOT be
-        # downgraded (previously returned "fragmented").
-        assert _chrom_contiguity_state(1, 1, True, True) == "T2T"
-        assert _chrom_contiguity_state(1, 5, False, True) == "single"
-
-    def test_fragments_never_produce_fragmented(self):
-        for n_anchor in range(0, 4):
-            for n_frag in range(0, 4):
-                state = _chrom_contiguity_state(n_anchor, n_frag, False, True)
-                assert state != "fragmented"
+        # One T2T anchor + stray fragment(s) is not downgraded.
+        assert _chrom_contiguity_state([_anchor("a", 1, True, True)], 1)[0] == "T2T"
+        assert _chrom_contiguity_state([_anchor("a", 1)], 5)[0] == "single"
 
 
 # ---------------------------------------------------------------------------
@@ -66,7 +81,7 @@ def _make_classification(
     contig_len: int = 1_000_000,
     assigned_ref_id: str = "chr1",
     ref_coverage: float = 0.95,
-    is_full_length: bool = True,
+    is_chromosome_scale: bool = True,
     has_5p_telomere: bool = False,
     has_3p_telomere: bool = False,
     seq_identity: float = 0.98,
@@ -86,7 +101,7 @@ def _make_classification(
         ref_gene_proportion=0.8 if classification == "chrom_assigned" else None,
         contig_len=contig_len,
         ref_coverage=ref_coverage if classification == "chrom_assigned" else None,
-        is_full_length=is_full_length if classification == "chrom_assigned" else None,
+        is_chromosome_scale=is_chromosome_scale if classification == "chrom_assigned" else None,
         has_5p_telomere=has_5p_telomere if classification == "chrom_assigned" else None,
         has_3p_telomere=has_3p_telomere if classification == "chrom_assigned" else None,
         seq_identity_vs_ref=seq_identity if classification == "chrom_assigned" else None,
@@ -242,7 +257,7 @@ class TestBuildAssemblyResult:
     def test_chromosome_completeness(self, tmp_path):
         r = _make_assembly_result(tmp_path=tmp_path)
         assert r.n_chrom_assigned == 2
-        assert r.n_full_length == 2  # both are full-length by default
+        assert r.n_chromosome_scale == 2  # both are full-length by default
 
     def test_quality_metrics(self, tmp_path):
         r = _make_assembly_result(tmp_path=tmp_path)
@@ -331,7 +346,7 @@ class TestBuildAssemblyResult:
         assert "chr2" in r.chrom_ref_coverage
         crs1 = r.chrom_ref_coverage["chr1"]
         assert crs1.n_contigs == 1
-        assert crs1.is_full_length is True
+        assert crs1.is_chromosome_scale is True
 
     def test_missing_ref_chromosome(self, tmp_path):
         """Ref chromosomes with no assigned contigs appear with n_contigs=0."""
@@ -500,7 +515,32 @@ class TestWriteChromosomeCompletenessTsv:
         chr2_rows = [d for d in data_rows if d["ref_id"] == "chr2"]
         assert len(chr2_rows) == 1
         assert chr2_rows[0]["n_contigs"] == "0"
-        assert chr2_rows[0]["is_full_length"] == "no"
+        assert chr2_rows[0]["is_chromosome_scale"] == "no"
+
+    def test_split_and_multi_copy_states(self, tmp_path):
+        """Tiling anchors make a split chromosome; overlapping ones add copies."""
+        ref_lengths = {"chr1": 30_000_000, "chr2": 25_000_000}
+        clfs = [
+            _anchor("p", 1, True, False), _anchor("q", 1, False, True),
+            _anchor("h1", 1, True, True), _anchor("h2", 2, True, True),
+        ]
+        for c in clfs[2:]:
+            c.assigned_ref_id = "chr2"
+        r = _make_assembly_result("asm1", clfs, ref_lengths_norm=ref_lengths, tmp_path=tmp_path)
+
+        out = tmp_path / "completeness.tsv"
+        write_chromosome_completeness_tsv(out, [r], ref_lengths)
+        lines = out.read_text().strip().split("\n")
+        header = lines[0].split("\t")
+        rows = {d["ref_id"]: d for d in (dict(zip(header, l.split("\t"))) for l in lines[1:])}
+        assert (rows["chr1"]["state"], rows["chr1"]["n_copies"]) == ("split", "1")
+        assert (rows["chr2"]["state"], rows["chr2"]["n_copies"]) == ("T2T", "2")
+
+        summary = tmp_path / "summary.tsv"
+        write_comparison_summary_tsv(summary, [r])
+        s_lines = summary.read_text().strip().split("\n")
+        data = dict(zip(s_lines[0].split("\t"), s_lines[1].split("\t")))
+        assert (data["n_chr_t2t"], data["n_chr_split"], data["n_chr_multi_copy"]) == ("1", "1", "1")
 
     def test_single_assembly(self, tmp_path):
         ref_lengths = {"chr1": 30_000_000}
