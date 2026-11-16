@@ -53,11 +53,11 @@ These columns describe how much of a chromosome a contig represents, from refere
 | Column | Type | Description |
 |--------|------|-------------|
 | `ref_coverage` | float | Fraction of the assigned reference chromosome spanned by syntenic blocks (0.0-1.0) |
-| `is_chromosome_scale` | yes/no | Whether the contig is chromosome-scale: telomeres at both ends, length ≥80% of the reference chromosome, or `ref_coverage ≥ --chr-scale-ref-coverage`. A `chrom_assigned` contig that shares its `ref_copy` with another (a piece of a split copy) is `no` unless it has telomeres at both ends. Chromosome-scale contigs are named without an `_f` suffix |
-| `chromosome_scale_basis` | string | Evidence for `is_chromosome_scale`, first that applies: `telomeres` (both ends), `length_ratio` (length ≥80% of the reference chromosome), `ref_span` (`ref_coverage` threshold). Empty when `is_chromosome_scale` is `no` |
+| `is_chromosome_scale` | yes/no | Whether the contig is chromosome-scale: telomeres at both ends, length ≥80% of the reference chromosome, or `ref_coverage ≥ --chr-scale-ref-coverage`. A `chrom_assigned` contig that shares its `ref_copy` with another (a piece of a split copy) is `no`, unless it has telomeres at both ends and the largest reference footprint among such pieces of its copy. Chromosome-scale contigs are named without an `_f` suffix |
+| `chromosome_scale_basis` | string | Evidence for `is_chromosome_scale`, first that applies: `telomeres` (both ends), `length_ratio` (length ≥80% of the reference chromosome), `ref_span` (`ref_coverage` threshold). Kept on a piece of a split copy (`is_chromosome_scale` `no`): the rule the piece passed on its own. Empty when no rule applies |
 | `query_subgenome` | string | Inferred query subgenome set (`s1`, `s2`, …; `s1` = highest identity to the reference) from identity-scaled clustering, or empty when the chromosome was not split |
 | `subgenome_basis` | string | How `query_subgenome` was decided on a split chromosome: `copy` (chromosome-scale copy, by clustering), `footprint` (the only set whose chromosome-scale copies do not already cover the fragment's reference region), `score` (fragment joined the nearest cluster), `extra_copy` (every set's copies already cover the fragment's reference region; no set, excluded from scaffolding and phylogeny set leaves). Empty when the chromosome was not split |
-| `ref_copy` | integer | For `chrom_assigned` contigs: the copy of the assigned reference chromosome the contig belongs to. Contigs whose reference footprints overlap (by at least half of the smaller footprint) are separate copies; contigs that tile the reference are pieces of one copy and share a value. Copy 1 holds the largest footprint. Empty for all other classes |
+| `ref_copy` | integer | For `chrom_assigned` contigs: the copy of the assigned reference chromosome the contig belongs to. Contigs whose reference footprints overlap (by at least half of the smaller footprint) are separate copies; contigs that tile the reference are pieces of one copy and share a value. Copy 1 holds the largest footprint. Empty for all other classes, and for a `chrom_assigned` contig with no alignment to its reference (e.g. placed there by sister anchoring), whose position cannot be compared |
 | `seq_identity_vs_ref` | float | Best-chain alignment identity to the assigned reference chromosome (0.0-1.0) |
 | `has_5p_telomere` | yes/no | Telomere detected at the **start** (first `--telomere-window`, 10 kb) of the **raw input** contig: telomere repeat runs total ≥ `--telomere-min-bp` (200 bp). Set for `chrom_assigned` and `chrom_fragment` contigs |
 | `has_3p_telomere` | yes/no | Telomere detected at the **end** (last `--telomere-window`, 10 kb) of the **raw input** contig, by the same rule |
@@ -374,9 +374,8 @@ Multi-assembly runs only: one row per reference chromosome and assembly (`{prefi
 | `is_chromosome_scale` | yes/no | At least one of them is chromosome-scale |
 | `has_both_telomeres` | yes/no | At least one of them has telomeres at both ends |
 | `mean_identity` | float | Mean `seq_identity_vs_ref` |
-| `n_anchor` | integer | `chrom_assigned` contigs (same as `n_contigs`) |
 | `n_fragment` | integer | `chrom_fragment` contigs assigned to the chromosome |
-| `n_copies` | integer | Copies of the chromosome among the `chrom_assigned` contigs (distinct `ref_copy` values) |
+| `n_copies` | integer | Copies of the chromosome among the `chrom_assigned` contigs (distinct `ref_copy` values; contigs without one are left out unless none has one, when they count as one copy) |
 | `state` | string | How the chromosome is assembled, from its `chrom_assigned` contigs: `T2T` (every copy is one contig with telomeres at both ends), `single` (every copy is one contig), `split` (at least one copy is in two or more contigs), `fragments_only` (only `chrom_fragment` contigs), `absent` (none). `chrom_fragment` contigs do not change the state |
 
 `comparison_summary.tsv` counts each assembly's chromosomes by state (`n_chr_t2t`, `n_chr_single`, `n_chr_split`, `n_chr_fragments_only`, `n_chr_absent`), plus chromosomes in more than one copy (`n_chr_multi_copy`) and chromosomes with `chrom_fragment` contigs (`n_chr_with_fragments`).
@@ -685,7 +684,8 @@ If `rmarkdown` or `pandoc` is not available, report generation is skipped with a
 - The HTML file is fully self-contained (`self_contained: true`) — all CSS, JavaScript, and widget assets are embedded
 - Summary tables use the `gt` package with consistent styling (dark headers, row striping, inline gradient bars)
 - The report can be opened in any web browser and shared as a single file
-- Refreshable via `refresh_reports.py` alongside other plot scripts
+- The generated `.Rmd` includes the shared R helpers (`common.R`) of the dnadis version that wrote it, so re-rendering it later runs the same code against the same TSVs
+- Refreshable via `refresh_reports.py` alongside other plot scripts. Each template records the version of the TSV columns it reads (`output_schema` in its params); `refresh_reports.py` skips a report whose TSVs are older than the current template reads and asks for a dnadis rerun, which regenerates them (cached alignments and depth are reused)
 
 ---
 

@@ -30,7 +30,9 @@ from dnadis.models import (
 # tiling anchors are pieces of one copy).  Each copy is T2T (one contig with
 # telomeres at both ends), single (one contig) or split (two or more contigs);
 # the chromosome takes its least contiguous copy's state, and the number of
-# copies is reported separately.  Fragment contigs (chrom_fragment) do not
+# copies is reported separately.  Anchors without a ref_copy (no alignment to
+# the reference, e.g. placed by sister anchoring) cannot be placed in a copy
+# and are left out, unless no anchor has one: then they are taken as one copy.  Fragment contigs (chrom_fragment) do not
 # change the state: they are surfaced as a separate count / badge, since they
 # are frequently divergent duplicates or eccDNA rather than evidence that the
 # chromosome itself is broken.
@@ -44,15 +46,15 @@ def _chrom_contiguity_state(
 ) -> tuple[str, int]:
     """Return one reference chromosome's (state, number of copies).
 
-    ``anchors`` are its chrom_assigned contigs, with ``ref_copy`` set; a
-    contig without one counts as a copy of its own.  ``n_fragment`` counts
-    its chrom_fragment contigs.
+    ``anchors`` are its chrom_assigned contigs; ``n_fragment`` counts its
+    chrom_fragment contigs.
     """
     if not anchors:
         return ("fragments_only" if n_fragment > 0 else "absent"), 0
-    copies: Dict[object, List[ContigClassification]] = defaultdict(list)
-    for c in anchors:
-        copies[c.ref_copy if c.ref_copy is not None else id(c)].append(c)
+    copies: Dict[Optional[int], List[ContigClassification]] = defaultdict(list)
+    placed = [c for c in anchors if c.ref_copy is not None]
+    for c in placed or anchors:
+        copies[c.ref_copy].append(c)
     order = {s: i for i, s in enumerate(CHROM_STATE_LEVELS)}
     state = "T2T"
     for members in copies.values():
@@ -295,7 +297,6 @@ def build_assembly_result(
                 ident_vals.append(c.seq_identity_vs_ref)
 
         # Contiguity state from anchors (chrom_assigned) vs fragments.
-        n_anchor = n_contigs_ref
         n_fragment = len(frag_groups.get(ref_id, []))
         state, n_copies = _chrom_contiguity_state(contigs_for_ref, n_fragment)
 
@@ -308,7 +309,6 @@ def build_assembly_result(
             is_chromosome_scale=any_chromosome_scale,
             has_both_telomeres=any_both_telo,
             mean_identity=sum(ident_vals) / len(ident_vals) if ident_vals else None,
-            n_anchor=n_anchor,
             n_fragment=n_fragment,
             n_copies=n_copies,
             state=state,
@@ -537,7 +537,6 @@ def write_chromosome_completeness_tsv(
         "is_chromosome_scale",
         "has_both_telomeres",
         "mean_identity",
-        "n_anchor",
         "n_fragment",
         "n_copies",
         "state",
@@ -568,7 +567,6 @@ def write_chromosome_completeness_tsv(
                         "yes" if crs.is_chromosome_scale else "no",
                         "yes" if crs.has_both_telomeres else "no",
                         _fmt(crs.mean_identity),
-                        str(crs.n_anchor),
                         str(crs.n_fragment),
                         str(crs.n_copies),
                         crs.state,
@@ -584,7 +582,6 @@ def write_chromosome_completeness_tsv(
                         "no",
                         "no",
                         "",
-                        "0",
                         "0",
                         "0",
                         "absent",

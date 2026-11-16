@@ -27,6 +27,15 @@ SCRIPT_TO_TEMPLATE = {
 # Regex to find all __PLACEHOLDER__ tokens in a template
 PLACEHOLDER_RE = re.compile(r"__([A-Z_]+)__")
 
+# Version of the TSV inputs a template reads (``output_schema`` in its params).
+# A generated report without one predates versioning: schema 0.
+OUTPUT_SCHEMA_RE = re.compile(r"^\s*output_schema:\s*(\d+)\s*$", re.MULTILINE)
+
+
+def output_schema(rmd_text: str) -> int:
+    m = OUTPUT_SCHEMA_RE.search(rmd_text)
+    return int(m.group(1)) if m else 0
+
 # Which TSV file suffix provides the value for each placeholder
 # (relative to the output prefix)
 PLACEHOLDER_TSV = {
@@ -194,9 +203,8 @@ def build_placeholder_values(
     if "__OUTPREFIX__" in template_text:
         values["__OUTPREFIX__"] = esc(prefix)
 
-    # Shared R and CSS files (resolved relative to template directory)
-    if "__COMMON_R__" in template_text and template_dir:
-        values["__COMMON_R__"] = esc(template_dir / "common.R")
+    # Shared CSS file (resolved relative to template directory); the shared R
+    # helpers are inlined by refresh_script().
     if "__COMMON_CSS__" in template_text and template_dir:
         values["__COMMON_CSS__"] = esc(template_dir / "common.css")
 
@@ -290,10 +298,12 @@ def refresh_script(
     prefix: Path,
     dry_run: bool = False,
     overrides: dict[str, str] | None = None,
-) -> bool:
+) -> bool | None:
     """Re-render a single generated R script from the current template.
 
-    Returns True if the script was updated (or would be updated in dry-run mode).
+    Returns True if the script was updated (or would be updated in dry-run
+    mode), False if unchanged, and None if its inputs are older than the
+    template reads (the script is left as it is).
     """
     template_name = SCRIPT_TO_TEMPLATE[suffix]
     template_path = template_dir / template_name
@@ -304,6 +314,25 @@ def refresh_script(
 
     template_text = template_path.read_text(encoding="utf-8")
     generated_text = generated_path.read_text(encoding="utf-8")
+
+    # The TSVs next to the script were written by the run that generated it.
+    # A template that reads a newer output schema cannot render them.
+    have, need = output_schema(generated_text), output_schema(template_text)
+    if have < need:
+        print(
+            f"  SKIP {suffix}: outputs were written by an older dnadis (output "
+            f"schema {have}, template reads {need}). Rerun dnadis on this folder "
+            "to regenerate them; cached alignments and depth are reused.",
+            file=sys.stderr,
+        )
+        return None
+
+    # Inline the shared R helpers so the script keeps working after later
+    # changes to common.R.
+    common_r = template_dir / "common.R"
+    if common_r.exists():
+        template_text = template_text.replace(
+            'source("__COMMON_R__")', common_r.read_text(encoding="utf-8"))
 
     # Build placeholder values from TSVs in run_dir + generated script
     values = build_placeholder_values(suffix, prefix, template_text, generated_text,
@@ -498,14 +527,17 @@ def main():
         print(f"\n[{rel}] Prefix: {prefix.name} — {len(scripts)} script(s)")
 
         updated = []
+        stale = set()
         for suffix, script_path in scripts:
             changed = refresh_script(suffix, script_path, template_dir, prefix,
                                      dry_run=args.dry_run, overrides=overrides or None)
-            if changed:
+            if changed is None:
+                stale.add(script_path)
+            elif changed:
                 updated.append((suffix, script_path))
 
         if args.force:
-            all_to_run.extend(scripts)
+            all_to_run.extend(s for s in scripts if s[1] not in stale)
         else:
             all_to_run.extend(updated)
 

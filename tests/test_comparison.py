@@ -62,9 +62,14 @@ class TestChromContiguityState:
         anchors.append(_anchor("h2_arm", 2))
         assert _chrom_contiguity_state(anchors, 0) == ("split", 2)
 
-    def test_anchor_without_copy_counts_as_own_copy(self):
-        anchors = [_anchor("a", None), _anchor("b", None)]
-        assert _chrom_contiguity_state(anchors, 0) == ("single", 2)
+    def test_unplaced_anchor_does_not_change_state(self):
+        # An anchor without ref_copy (no alignment to the reference) is left out.
+        anchors = [_anchor("a", 1, True, True), _anchor("placed", None)]
+        assert _chrom_contiguity_state(anchors, 0) == ("T2T", 1)
+
+    def test_only_unplaced_anchors_form_one_copy(self):
+        assert _chrom_contiguity_state([_anchor("a", None)], 0) == ("single", 1)
+        assert _chrom_contiguity_state([_anchor("a", None), _anchor("b", None)], 0) == ("split", 1)
 
     def test_complete_anchor_plus_fragments_stays_t2t(self):
         # One T2T anchor + stray fragment(s) is not downgraded.

@@ -2284,6 +2284,7 @@ def test_demote_split_copies_pieces_of_one_copy():
     s1 = _scale_clf("s1", "chr16A", 0.48, 18_400_000)
     arm = _scale_clf("arm", "chr16A", 0.10, 4_000_000)
     rest = _scale_clf("rest", "chr16A", 0.25, 14_200_000)
+    rest.chromosome_scale_basis = "length_ratio"
     footprints = {
         ("s1", "chr16A"): [(0, 16_000_000)],
         ("arm", "chr16A"): [(100_000, 3_000_000)],
@@ -2292,7 +2293,8 @@ def test_demote_split_copies_pieces_of_one_copy():
     assert _split_copies([s1, arm, rest], footprints) == 2
     assert s1.is_chromosome_scale
     assert arm.is_chromosome_scale is False and rest.is_chromosome_scale is False
-    assert rest.chromosome_scale_basis is None
+    # The rule the piece passed on its own stays on record.
+    assert rest.chromosome_scale_basis == "length_ratio"
 
 
 def test_demote_split_copies_long_arm():
@@ -2322,6 +2324,54 @@ def test_demote_split_copies_keeps_t2t_piece():
     }
     assert _split_copies([t2t, other], footprints) == 1
     assert t2t.is_chromosome_scale and other.is_chromosome_scale is False
+
+
+def test_demote_split_copies_keeps_one_t2t_piece_per_copy():
+    """Two T2T pieces of one copy are not named as two copies."""
+    big = _scale_clf("big", "chr15P", 0.6, 29_000_000)
+    small = _scale_clf("small", "chr15P", 0.3, 9_000_000)
+    for c in (big, small):
+        c.has_5p_telomere = c.has_3p_telomere = True
+    footprints = {
+        ("big", "chr15P"): [(0, 10_000_000)],
+        ("small", "chr15P"): [(10_500_000, 16_000_000)],
+    }
+    assert _split_copies([small, big], footprints) == 1
+    assert big.is_chromosome_scale and small.is_chromosome_scale is False
+
+
+def test_contig_without_footprint_does_not_split_a_copy():
+    """A contig placed without reference alignment (sister anchoring) gets no
+    ref_copy and leaves the chromosome-scale contig of its reference alone."""
+    chrom = _scale_clf("chrom", "chr5A", 0.75, 18_000_000)
+    chrom.has_5p_telomere = True
+    placed = _scale_clf("placed", "chr5A", 0.0, 3_000_000)
+    placed.is_chromosome_scale = False
+    footprints = {("chrom", "chr5A"): [(0, 19_000_000)]}
+    assert _split_copies([chrom, placed], footprints) == 0
+    assert chrom.ref_copy == 1 and placed.ref_copy is None
+    assert chrom.is_chromosome_scale
+
+
+def test_subgenome_copies_represent_split_copy_by_largest_piece():
+    """A copy in pieces still counts as a homeolog, through its largest piece
+    that passed the chromosome-scale rules on its own."""
+    from dnadis.classification.classifier import _subgenome_copies
+
+    s1 = _scale_clf("s1", "chr16A", 0.48, 18_400_000)
+    long_arm = _scale_clf("long", "chr16A", 0.25, 14_200_000)
+    long_arm.chromosome_scale_basis = "length_ratio"
+    short_arm = _scale_clf("short", "chr16A", 0.10, 4_000_000)
+    short_arm.is_chromosome_scale = False
+    footprints = {
+        ("s1", "chr16A"): [(0, 16_000_000)],
+        ("short", "chr16A"): [(100_000, 3_000_000)],
+        ("long", "chr16A"): [(4_100_000, 15_800_000)],
+    }
+    clfs = [s1, long_arm, short_arm]
+    _split_copies(clfs, footprints)
+    assert long_arm.is_chromosome_scale is False
+    assert _subgenome_copies(clfs, footprints) == [s1, long_arm]
 
 
 def test_demote_split_copies_keeps_overlapping_copies():

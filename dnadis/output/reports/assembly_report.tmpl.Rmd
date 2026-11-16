@@ -22,6 +22,10 @@ params:
   out_prefix: "__OUTPREFIX__"
   top_n_cobionts: "__TOP_N__"
   dnadis_version: "__DNADIS_VERSION__"
+  # Version of the TSV columns and values this template reads.  Bump it when
+  # the template starts to need columns or values that older dnadis runs did
+  # not write; refresh_reports.py then refuses to re-render older outputs.
+  output_schema: 1
 output:
   html_document:
     self_contained: __SELF_CONTAINED__
