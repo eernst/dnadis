@@ -347,70 +347,51 @@ def classify_debris_and_unclassified(
 
 
 # ----------------------------
-# Full-length vs fragment classification
+# Chromosome-scale vs fragment classification
 # ----------------------------
-def classify_full_length(
+def classify_chromosome_scale(
     ref_coverage: float,
     has_5p_telomere: bool,
     has_3p_telomere: bool,
-    full_length_threshold: float = 0.70,
+    chr_scale_threshold: float = 0.70,
     length_ratio: Optional[float] = None,
     length_ratio_threshold: float = 0.80,
-) -> Tuple[bool, str]:
-    """Classify a contig as full-length or fragment based on telomeres, coverage,
-    and contig-to-reference length ratio.
+) -> Tuple[bool, Optional[str]]:
+    """Decide whether a contig is chromosome-scale, and on what evidence.
 
-    Classification logic (in priority order):
-    1. Both telomeres present -> full_length (high confidence)
-    2. Length ratio >= threshold + one telomere -> full_length (medium confidence)
-    3. Length ratio >= threshold + no telomeres -> full_length (low confidence)
-    4. One telomere + coverage >= threshold -> full_length (medium confidence)
-    5. One telomere + coverage < threshold -> fragment (medium confidence)
-    6. No telomeres + coverage >= threshold -> full_length (low confidence)
-    7. No telomeres + coverage < threshold -> fragment (low confidence)
+    A contig is chromosome-scale when (in priority order):
 
-    The length ratio check (steps 2-3) catches contigs that are clearly
-    chromosome-scale but have low alignment-based ref_coverage due to
-    cross-species divergence reducing alignment coverage.
+    1. it has telomeres at both ends (basis ``telomeres``);
+    2. its length is at least ``length_ratio_threshold`` of the reference
+       chromosome (basis ``length_ratio``).  This catches contigs whose
+       alignment-based ``ref_coverage`` is low because the reference is
+       divergent;
+    3. its reference span coverage is at least ``chr_scale_threshold``
+       (basis ``ref_span``).
+
+    Only the first is evidence that the contig is the whole chromosome; the
+    others allow for a missing arm or end, and :func:`demote_split_copies`
+    later withdraws them from pieces of a chromosome assembled in parts.
 
     Args:
         ref_coverage: Fraction of reference chromosome spanned (0.0-1.0)
         has_5p_telomere: Telomere detected at 5' end
         has_3p_telomere: Telomere detected at 3' end
-        full_length_threshold: Reference coverage threshold for full-length (default 0.70)
+        chr_scale_threshold: Reference span coverage threshold (default 0.70)
         length_ratio: Contig length / reference chromosome length (optional)
-        length_ratio_threshold: Length ratio above which the contig is considered
-            chromosome-scale regardless of alignment coverage (default 0.80)
+        length_ratio_threshold: Length ratio threshold (default 0.80)
 
     Returns:
-        Tuple of (is_full_length, confidence)
+        Tuple of (is_chromosome_scale, basis); basis is None when the contig
+        is not chromosome-scale.
     """
-    n_telomeres = int(has_5p_telomere) + int(has_3p_telomere)
-
-    if n_telomeres == 2:
-        # Both telomeres = assembly-complete, high confidence
-        return True, "high"
-
-    # Length ratio rescue: contig is chromosome-scale even if alignment
-    # coverage is low (e.g. cross-species with ~60% nucleotide identity)
+    if has_5p_telomere and has_3p_telomere:
+        return True, "telomeres"
     if length_ratio is not None and length_ratio >= length_ratio_threshold:
-        if n_telomeres == 1:
-            return True, "medium"
-        else:
-            return True, "low"
-
-    if n_telomeres == 1:
-        # One telomere - coverage determines classification
-        if ref_coverage >= full_length_threshold:
-            return True, "medium"
-        else:
-            return False, "medium"
-    else:
-        # No telomeres - coverage-based with low confidence
-        if ref_coverage >= full_length_threshold:
-            return True, "low"
-        else:
-            return False, "low"
+        return True, "length_ratio"
+    if ref_coverage >= chr_scale_threshold:
+        return True, "ref_span"
+    return False, None
 
 
 # ----------------------------
@@ -793,55 +774,86 @@ def _overlapping_copies(
     return [c for c, k in zip(ref_clfs, keep) if k]
 
 
-def demote_tiling_full_length(
+def assign_ref_copies(
     classifications: List['ContigClassification'],
     ref_footprints: Dict[Tuple[str, str], List[Tuple[int, int]]],
     min_overlap: float = _COPY_MIN_REF_OVERLAP,
-) -> int:
-    """Mark full-length contigs that tile another one's reference as fragments.
+) -> None:
+    """Group each reference's chrom_assigned contigs into copies.
 
-    Two full-length copies of a chromosome align to the same reference
-    region.  A full-length contig whose footprint does not overlap that of a
-    stronger full-length contig on the same reference (higher ref_coverage,
-    then length) is a piece of a chromosome copy, not a separate copy.
-    Overlap uses the same rule as :func:`_overlapping_copies`.
-
-    Returns the number of contigs demoted.
+    Contigs whose reference footprints overlap are separate copies of the
+    chromosome; contigs that tile it are pieces of one copy.  Contigs are
+    taken largest footprint first.  Each joins a copy none of whose members
+    it overlaps (the rule of :func:`_overlapping_copies`), choosing the copy
+    it shares the least reference with, else starts a new copy.  A contig
+    with no footprint on its reference joins the first copy.  Sets
+    ``ref_copy`` (1 = the copy holding the largest footprint) on
+    chrom_assigned contigs and clears it on all others.
     """
     by_ref: Dict[str, List[ContigClassification]] = defaultdict(list)
     for clf in classifications:
-        if (
-            clf.classification == "chrom_assigned"
-            and clf.is_full_length
-            and clf.assigned_ref_id
-            and ref_footprints.get((clf.original_name, clf.assigned_ref_id))
-        ):
+        clf.ref_copy = None
+        if clf.classification == "chrom_assigned" and clf.assigned_ref_id:
             by_ref[clf.assigned_ref_id].append(clf)
 
-    n_demoted = 0
     for ref_id, clfs in by_ref.items():
-        if len(clfs) < 2:
-            continue
-        clfs.sort(key=lambda c: (c.ref_coverage or 0.0, c.contig_len), reverse=True)
-        kept: List[ContigClassification] = []
+        fps = {c.original_name: ref_footprints.get((c.original_name, ref_id)) or [] for c in clfs}
+        clfs.sort(key=lambda c: (
+            -sum(e - s for s, e in fps[c.original_name]), -c.contig_len, c.original_name,
+        ))
+        copies: List[List[ContigClassification]] = []
         for clf in clfs:
-            fp = ref_footprints[(clf.original_name, ref_id)]
-            tiles = None
-            for other in kept:
-                ofp = ref_footprints[(other.original_name, ref_id)]
-                frac = max(_containment_fraction(fp, ofp), _containment_fraction(ofp, fp))
-                if frac < min_overlap:
-                    tiles = other
-                    break
-            if tiles is None:
-                kept.append(clf)
+            fp = fps[clf.original_name]
+            best = None  # (overlap with the copy, copy index)
+            for i, members in enumerate(copies):
+                overlap = max(
+                    max(_containment_fraction(fp, fps[m.original_name]),
+                        _containment_fraction(fps[m.original_name], fp))
+                    for m in members
+                )
+                if overlap < min_overlap and (best is None or overlap < best[0]):
+                    best = (overlap, i)
+            if best is None:
+                copies.append([clf])
+                clf.ref_copy = len(copies)
+            else:
+                copies[best[1]].append(clf)
+                clf.ref_copy = best[1] + 1
+
+
+def demote_split_copies(
+    classifications: List['ContigClassification'],
+) -> int:
+    """Withdraw chromosome-scale status from pieces of a split copy.
+
+    Contigs that share a ``ref_copy`` (see :func:`assign_ref_copies`) tile
+    one copy of the chromosome, so none of them is the whole copy, however
+    long.  Each such piece without telomeres at both ends is marked
+    not chromosome-scale and is named as a fragment.  A piece with telomeres
+    at both ends is a complete chromosome beside sequence placed on the same
+    reference (e.g. a translocated segment) and keeps its status.
+
+    Returns the number of contigs demoted.
+    """
+    copies: Dict[Tuple[str, int], List[ContigClassification]] = defaultdict(list)
+    for clf in classifications:
+        if clf.ref_copy is not None:
+            copies[(clf.assigned_ref_id, clf.ref_copy)].append(clf)
+
+    n_demoted = 0
+    for (ref_id, _), pieces in copies.items():
+        if len(pieces) < 2:
+            continue
+        for clf in pieces:
+            if not clf.is_chromosome_scale or (clf.has_5p_telomere and clf.has_3p_telomere):
                 continue
-            clf.is_full_length = False
-            clf.full_length_confidence = "medium"
+            clf.is_chromosome_scale = False
+            clf.chromosome_scale_basis = None
             n_demoted += 1
+            others = ", ".join(c.original_name for c in pieces if c is not clf)
             logger.info(
-                f"{clf.original_name}: fragment of {ref_id}, reference footprint "
-                f"does not overlap {tiles.original_name}"
+                f"{clf.original_name}: piece of a split {ref_id} copy "
+                f"(tiles {others}), not chromosome-scale"
             )
     return n_demoted
 
@@ -859,7 +871,7 @@ def _copies_covering_fragment(
     ref_id: str,
     ref_footprints: Dict[Tuple[str, str], List[Tuple[int, int]]],
 ) -> Optional[List[int]]:
-    """Indices of the full-length copies that cover a fragment's reference region.
+    """Indices of the chromosome-scale copies that cover a fragment's reference region.
 
     A copy covers the region when it contains at least ``_GAP_FILL_COVERED``
     of the fragment's footprint and lacks it below ``_GAP_FILL_LACKING``.
@@ -930,7 +942,7 @@ def _select_subgenome_k(
         For each multi-copy chromosome, assign all contigs to their nearest
         cluster and check whether at least k distinct clusters are
         represented.  This handles fragmented assemblies where a chromosome
-        may have more than k contigs (e.g., one full-length + several
+        may have more than k contigs (e.g., one chromosome-scale + several
         fragments) — the key question is whether the contigs span k
         different identity clusters, not whether there are exactly k copies.
         With ``ref_footprints``, only contigs that overlap another contig on
@@ -1019,7 +1031,7 @@ def subgenome_cluster_scores(
 
     Gap-compressed identity over all of the contig's alignments to that
     reference, when the PAF has ``de`` tags.  It does not depend on contig size
-    or repeat content, so pieces of a fragmented copy score like its full-length
+    or repeat content, so pieces of a fragmented copy score like its chromosome-scale
     contigs.  Without ``de`` tags (protein mode), best-chain identity ×
     (union_bp / contig_len), which spreads near-tied copies by coverage.
 
@@ -1086,9 +1098,9 @@ def infer_query_subgenomes(
             already covers gets no set (see :func:`_copies_covering_fragment`).
     """
     # Collect identities for all reference-anchored contigs.  chrom_fragment
-    # contigs (sub-chromosome-length, is_full_length=False) participate exactly
+    # contigs (sub-chromosome-length, is_chromosome_scale=False) participate exactly
     # like chrom_assigned fragments: they inform the cluster fit and are
-    # assigned to the nearest cluster, but are excluded from the full-length
+    # assigned to the nearest cluster, but are excluded from the chromosome-scale
     # copy count that sets k (see the copies/fragments split below).  This lets
     # an assembly whose chromosomes survive only as large fragments still drive
     # subgenome inference, and gives every fragment a query_subgenome so its
@@ -1199,13 +1211,13 @@ def infer_query_subgenomes(
             )
 
         # The number of distinct homeologs at a locus is set by its
-        # full-length copies; fragments are partial pieces of one of those
+        # chromosome-scale copies; fragments are partial pieces of one of those
         # copies, not independent homeologs.  Counting them would inflate the
-        # copy count and defeat the rescue below.  is_full_length is None only
-        # when full-length status was never computed (e.g. unit tests) — treat
+        # copy count and defeat the rescue below.  is_chromosome_scale is None only
+        # when chromosome-scale status was never computed (e.g. unit tests) — treat
         # that as a copy so behaviour matches the original len(ref_clfs) rule.
-        copies = [c for c in ref_clfs if c.is_full_length is not False]
-        fragments = [c for c in ref_clfs if c.is_full_length is False]
+        copies = [c for c in ref_clfs if c.is_chromosome_scale is not False]
+        fragments = [c for c in ref_clfs if c.is_chromosome_scale is False]
 
         # Sort copies by cluster score descending so the highest-identity copy
         # maps to set s1.
@@ -1217,7 +1229,7 @@ def infer_query_subgenomes(
         # Assign each copy to the nearest GMM cluster (by mean)
         copy_assign = [nearest_cluster(c) for c in copies]
 
-        # Rescue: if this chromosome has exactly k full-length copies but they
+        # Rescue: if this chromosome has exactly k chromosome-scale copies but they
         # all landed in the same cluster, rank-assign instead (highest
         # identity → s1, next → s2, etc.).  This is safe because the global
         # split is already validated across chromosomes; these are borderline
@@ -1277,14 +1289,14 @@ def generate_contig_names(
     add_subgenome_suffix: Optional[str],
     ref_norm_to_orig: Optional[Dict[str, str]] = None,
 ) -> Dict[str, str]:
-    """Generate new contig names with full-length/fragment distinction.
+    """Generate new contig names with chromosome-scale/fragment distinction.
 
     Naming scheme: chr<ref>(_s<set>)?(_c<copy>|_f<frag>)?
 
     Suffixes compose left-to-right; subgenome comes before copy/fragment:
-    - chr1A:           Full-length chr1A, single copy, no resolved subgenome
-    - chr1A_s1/s2:     Full-length chr1A, query subgenome sets 1 and 2
-    - chr1A_c1/c2:     Multiple full-length copies, ordered by descending identity
+    - chr1A:           Chromosome-scale chr1A, single copy, no resolved subgenome
+    - chr1A_s1/s2:     Chromosome-scale chr1A, query subgenome sets 1 and 2
+    - chr1A_c1/c2:     Multiple chromosome-scale copies, ordered by descending identity
     - chr1A_f1/f2:     Chromosome fragments, ordered by descending identity
     - chr1A_s2_f1:     Highest-identity fragment of chr1A from query set 2
 
@@ -1297,7 +1309,7 @@ def generate_contig_names(
     depend on input order.
 
     Args:
-        classifications: List of ContigClassification with is_full_length and query_subgenome set
+        classifications: List of ContigClassification with is_chromosome_scale and query_subgenome set
         query_lengths: Dict of contig name -> length
         add_subgenome_suffix: Optional suffix to add if ref lacks subgenome
         ref_norm_to_orig: Optional mapping of normalized -> original ref IDs
@@ -1334,9 +1346,9 @@ def generate_contig_names(
         if query_sub:
             base_name = f"{base_name}_{query_sub}"
 
-        # Separate full-length and fragments
-        full_length = [c for c in contigs if c.is_full_length]
-        fragments = [c for c in contigs if not c.is_full_length]
+        # Separate chromosome-scale and fragments
+        scale_contigs = [c for c in contigs if c.is_chromosome_scale]
+        fragments = [c for c in contigs if not c.is_chromosome_scale]
 
         # Sort by identity descending (primary key), then length descending,
         # then original name.  Identity-based ordering keeps _c1/_c2
@@ -1347,15 +1359,15 @@ def generate_contig_names(
         def _copy_order(c: ContigClassification) -> Tuple[float, int, str]:
             return (-(c.seq_identity_vs_ref or 0.0), -c.contig_len, c.original_name)
 
-        full_length.sort(key=_copy_order)
+        scale_contigs.sort(key=_copy_order)
         fragments.sort(key=_copy_order)
 
-        # Name full-length contigs
-        if len(full_length) == 1:
-            name_mapping[full_length[0].original_name] = base_name
-        elif len(full_length) > 1:
-            # Multiple full-length copies - use _c1, _c2
-            for i, clf in enumerate(full_length, start=1):
+        # Name chromosome-scale contigs
+        if len(scale_contigs) == 1:
+            name_mapping[scale_contigs[0].original_name] = base_name
+        elif len(scale_contigs) > 1:
+            # Multiple chromosome-scale copies - use _c1, _c2
+            for i, clf in enumerate(scale_contigs, start=1):
                 name_mapping[clf.original_name] = f"{base_name}_c{i}"
 
         # Name fragments - use _f1, _f2
@@ -1486,10 +1498,10 @@ def classify_all_contigs(
     rdna_hits: Optional[Dict[str, RdnaHit]] = None,
     chrom_debris_hits: Optional[Dict[str, DebrisHit]] = None,
     other_debris_hits: Optional[Dict[str, DebrisHit]] = None,
-    # New parameters for full-length/fragment and subgenome inference
+    # New parameters for chromosome-scale/fragment and subgenome inference
     ref_lengths: Optional[Dict[str, int]] = None,
     telomere_results: Optional[Dict[str, 'TelomereResult']] = None,
-    full_length_threshold: float = 0.70,
+    chr_scale_threshold: float = 0.70,
     subgenome_k: float = 1.0,
     rearrangement_threshold: float = 0.10,
     rearrangement_density_frac: float = 0.10,
@@ -1649,24 +1661,24 @@ def classify_all_contigs(
             has_5p = telo.has_5p_telomere
             has_3p = telo.has_3p_telomere
 
-        # Classify as full-length or fragment
-        is_full = False
-        fl_confidence = "low"
+        # Chromosome-scale or fragment
+        is_scale = False
+        scale_basis = None
         if ref_cov is not None:
             # Compute length ratio for cross-species divergence rescue
             _ref_len = ref_lengths.get(ref_id, 0) if ref_lengths else 0
             _length_ratio = (contig_len / _ref_len) if _ref_len > 0 else None
-            is_full, fl_confidence = classify_full_length(
+            is_scale, scale_basis = classify_chromosome_scale(
                 ref_coverage=ref_cov,
                 has_5p_telomere=has_5p,
                 has_3p_telomere=has_3p,
-                full_length_threshold=full_length_threshold,
+                chr_scale_threshold=chr_scale_threshold,
                 length_ratio=_length_ratio,
             )
         else:
-            # No ref_lengths available - default to fragment with low confidence
-            is_full = False
-            fl_confidence = "low"
+            # No ref_lengths available - default to fragment
+            is_scale = False
+            scale_basis = None
 
         # Compute confidence (mode-dependent criteria)
         if synteny_mode == "nucleotide":
@@ -1739,10 +1751,10 @@ def classify_all_contigs(
             gc_deviation=gc_dev,
             synteny_score=synteny_score,
             classification_confidence=confidence,
-            # Full-length vs fragment fields
+            # Chromosome-scale vs fragment fields
             ref_coverage=ref_cov,
-            is_full_length=is_full,
-            full_length_confidence=fl_confidence,
+            is_chromosome_scale=is_scale,
+            chromosome_scale_basis=scale_basis,
             has_5p_telomere=has_5p,
             has_3p_telomere=has_3p,
             # Collinearity score
@@ -2077,8 +2089,7 @@ def classify_all_contigs(
                 gc_deviation=gc_dev,
                 synteny_score=min(1.0, ref_cov) if ref_cov else 0.0,
                 ref_coverage=ref_cov,
-                is_full_length=False,
-                full_length_confidence="low",
+                is_chromosome_scale=False,
                 has_5p_telomere=telo.has_5p_telomere if telo else False,
                 has_3p_telomere=telo.has_3p_telomere if telo else False,
                 seq_identity_vs_ref=ident if ident > 0 else None,
@@ -2180,7 +2191,8 @@ def classify_all_contigs(
                 "circular_element (circular, not organelle/rDNA/cobiont/chromosome)"
             )
 
-    demote_tiling_full_length(classifications, ref_footprints)
+    assign_ref_copies(classifications, ref_footprints)
+    demote_split_copies(classifications)
 
     # Infer query subgenomes when multiple contigs map to same reference.
     if ev.qr_best_chain_ident:

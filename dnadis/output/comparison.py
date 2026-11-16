@@ -25,31 +25,45 @@ from dnadis.models import (
 # Per-reference-chromosome assembly states (best → missing).  Mirrors the R
 # helper compute_chrom_contiguity() in reports/common.R; keep the two in sync.
 #
-# State is derived from *anchors* (chrom_assigned) only.  Fragment contigs
-# (chrom_fragment) do not change the state: a chromosome that is complete in a
-# single anchor stays "T2T"/"single" even when extra fragment contigs are also
-# assigned to it (those are surfaced separately as a fragment count / badge,
-# since they are frequently divergent duplicates or eccDNA rather than evidence
-# that the chromosome itself is broken).
+# State is derived from *anchors* (chrom_assigned) only, grouped into copies of
+# the chromosome by ``ref_copy`` (overlapping anchors are separate copies,
+# tiling anchors are pieces of one copy).  Each copy is T2T (one contig with
+# telomeres at both ends), single (one contig) or split (two or more contigs);
+# the chromosome takes its least contiguous copy's state, and the number of
+# copies is reported separately.  Fragment contigs (chrom_fragment) do not
+# change the state: they are surfaced as a separate count / badge, since they
+# are frequently divergent duplicates or eccDNA rather than evidence that the
+# chromosome itself is broken.
 CHROM_STATE_LEVELS = [
-    "T2T", "single", "multiple", "fragments_only", "absent",
+    "T2T", "single", "split", "fragments_only", "absent",
 ]
 
 
 def _chrom_contiguity_state(
-    n_anchor: int, n_fragment: int, both_telo: bool, any_full_length: bool
-) -> str:
-    """Classify one reference chromosome's assembly state from its anchors.
+    anchors: List[ContigClassification], n_fragment: int
+) -> tuple[str, int]:
+    """Return one reference chromosome's (state, number of copies).
 
-    n_anchor counts chrom_assigned contigs (substantial, gate-passing pieces);
-    n_fragment counts chrom_fragment contigs (sub-chr_like_minlen arms) and is
-    reported alongside the state rather than folded into it.
+    ``anchors`` are its chrom_assigned contigs, with ``ref_copy`` set; a
+    contig without one counts as a copy of its own.  ``n_fragment`` counts
+    its chrom_fragment contigs.
     """
-    if n_anchor == 0:
-        return "fragments_only" if n_fragment > 0 else "absent"
-    if n_anchor == 1:
-        return "T2T" if (both_telo and any_full_length) else "single"
-    return "multiple"
+    if not anchors:
+        return ("fragments_only" if n_fragment > 0 else "absent"), 0
+    copies: Dict[object, List[ContigClassification]] = defaultdict(list)
+    for c in anchors:
+        copies[c.ref_copy if c.ref_copy is not None else id(c)].append(c)
+    order = {s: i for i, s in enumerate(CHROM_STATE_LEVELS)}
+    state = "T2T"
+    for members in copies.values():
+        if len(members) > 1:
+            copy_state = "split"
+        elif members[0].has_5p_telomere and members[0].has_3p_telomere:
+            copy_state = "T2T"
+        else:
+            copy_state = "single"
+        state = max(state, copy_state, key=order.__getitem__)
+    return state, len(copies)
 
 
 def _compute_n50_l50(lengths: List[int]) -> tuple[int, int]:
@@ -148,7 +162,7 @@ def build_assembly_result(
     chrom_assigned = [c for c in classifications if c.classification == "chrom_assigned"]
     chrom_unassigned = [c for c in classifications if c.classification == "chrom_unassigned"]
 
-    n_full_length = sum(1 for c in chrom_assigned if c.is_full_length)
+    n_chromosome_scale = sum(1 for c in chrom_assigned if c.is_chromosome_scale)
     n_with_both_telomeres = sum(
         1 for c in chrom_assigned
         if c.has_5p_telomere and c.has_3p_telomere
@@ -265,7 +279,7 @@ def build_assembly_result(
         total_assigned_bp_ref = sum(c.contig_len for c in contigs_for_ref)
 
         best_cov = None
-        any_full_length = False
+        any_chromosome_scale = False
         any_both_telo = False
         ident_vals = []
 
@@ -273,8 +287,8 @@ def build_assembly_result(
             if c.ref_coverage is not None:
                 if best_cov is None or c.ref_coverage > best_cov:
                     best_cov = c.ref_coverage
-            if c.is_full_length:
-                any_full_length = True
+            if c.is_chromosome_scale:
+                any_chromosome_scale = True
             if c.has_5p_telomere and c.has_3p_telomere:
                 any_both_telo = True
             if c.seq_identity_vs_ref is not None:
@@ -283,7 +297,7 @@ def build_assembly_result(
         # Contiguity state from anchors (chrom_assigned) vs fragments.
         n_anchor = n_contigs_ref
         n_fragment = len(frag_groups.get(ref_id, []))
-        state = _chrom_contiguity_state(n_anchor, n_fragment, any_both_telo, any_full_length)
+        state, n_copies = _chrom_contiguity_state(contigs_for_ref, n_fragment)
 
         chrom_ref_coverage[ref_id] = ChromRefSummary(
             ref_id=ref_id,
@@ -291,11 +305,12 @@ def build_assembly_result(
             n_contigs=n_contigs_ref,
             total_assigned_bp=total_assigned_bp_ref,
             best_ref_coverage=best_cov,
-            is_full_length=any_full_length,
+            is_chromosome_scale=any_chromosome_scale,
             has_both_telomeres=any_both_telo,
             mean_identity=sum(ident_vals) / len(ident_vals) if ident_vals else None,
             n_anchor=n_anchor,
             n_fragment=n_fragment,
+            n_copies=n_copies,
             state=state,
         )
 
@@ -312,7 +327,7 @@ def build_assembly_result(
         classification_bp=dict(classification_bp),
         n_chrom_assigned=len(chrom_assigned),
         n_chrom_unassigned=len(chrom_unassigned),
-        n_full_length=n_full_length,
+        n_chromosome_scale=n_chromosome_scale,
         n_with_both_telomeres=n_with_both_telomeres,
         n_with_any_telomere=n_with_any_telomere,
         mean_ref_coverage=mean_ref_coverage,
@@ -376,11 +391,12 @@ def write_comparison_summary_tsv(
         "circular_element_bp",
         "n_chr_t2t",
         "n_chr_single",
-        "n_chr_multiple",
+        "n_chr_split",
+        "n_chr_multi_copy",
         "n_chr_with_fragments",
         "n_chr_fragments_only",
         "n_chr_absent",
-        "n_full_length",
+        "n_chromosome_scale",
         "n_both_telomeres",
         "n_any_telomere",
         "mean_ref_coverage",
@@ -433,10 +449,13 @@ def write_comparison_summary_tsv(
             # already handled upstream; here we count every reference chromosome).
             state_counts = defaultdict(int)
             n_chr_with_fragments = 0
+            n_chr_multi_copy = 0
             for crs in r.chrom_ref_coverage.values():
                 state_counts[crs.state] += 1
                 if crs.n_fragment > 0:
                     n_chr_with_fragments += 1
+                if crs.n_copies > 1:
+                    n_chr_multi_copy += 1
 
             row = [
                 r.assembly_name,
@@ -454,11 +473,12 @@ def write_comparison_summary_tsv(
                 str(r.classification_bp.get("circular_element", 0)),
                 str(state_counts.get("T2T", 0)),
                 str(state_counts.get("single", 0)),
-                str(state_counts.get("multiple", 0)),
+                str(state_counts.get("split", 0)),
+                str(n_chr_multi_copy),
                 str(n_chr_with_fragments),
                 str(state_counts.get("fragments_only", 0)),
                 str(state_counts.get("absent", 0)),
-                str(r.n_full_length),
+                str(r.n_chromosome_scale),
                 str(r.n_with_both_telomeres),
                 str(r.n_with_any_telomere),
                 _fmt(r.mean_ref_coverage),
@@ -514,11 +534,12 @@ def write_chromosome_completeness_tsv(
         "n_contigs",
         "total_assigned_bp",
         "best_ref_coverage",
-        "is_full_length",
+        "is_chromosome_scale",
         "has_both_telomeres",
         "mean_identity",
         "n_anchor",
         "n_fragment",
+        "n_copies",
         "state",
     ]
 
@@ -544,11 +565,12 @@ def write_chromosome_completeness_tsv(
                         str(crs.n_contigs),
                         str(crs.total_assigned_bp),
                         _fmt(crs.best_ref_coverage),
-                        "yes" if crs.is_full_length else "no",
+                        "yes" if crs.is_chromosome_scale else "no",
                         "yes" if crs.has_both_telomeres else "no",
                         _fmt(crs.mean_identity),
                         str(crs.n_anchor),
                         str(crs.n_fragment),
+                        str(crs.n_copies),
                         crs.state,
                     ]
                 else:
@@ -562,6 +584,7 @@ def write_chromosome_completeness_tsv(
                         "no",
                         "no",
                         "",
+                        "0",
                         "0",
                         "0",
                         "absent",

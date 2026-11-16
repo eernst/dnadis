@@ -184,21 +184,28 @@ class ContigClassification:
     depth_std: Optional[float] = None
     depth_breadth_1x: Optional[float] = None
     depth_breadth_10x: Optional[float] = None
-    # Full-length vs fragment classification
+    # Chromosome-scale vs fragment classification
     ref_coverage: Optional[float] = None  # Fraction of reference chromosome spanned (0.0-1.0)
-    is_full_length: Optional[bool] = None  # True if full-length, False if fragment
-    full_length_confidence: Optional[str] = None  # "high"/"medium"/"low"
+    is_chromosome_scale: Optional[bool] = None  # True if chromosome-scale, False if fragment
+    # Evidence for is_chromosome_scale: "telomeres" (both ends), "length_ratio"
+    # or "ref_span"; None when not chromosome-scale.
+    chromosome_scale_basis: Optional[str] = None
     has_5p_telomere: Optional[bool] = None  # Telomere at 5' end
     has_3p_telomere: Optional[bool] = None  # Telomere at 3' end
     # Query subgenome inference (when multiple contigs map to same ref)
     query_subgenome: Optional[str] = None  # "s1", "s2", etc. or None if not split
     query_subgenome_grp: Optional[int] = None  # Numeric cluster ID (1, 2, 3...)
-    # How the set was decided on a split reference: "copy" (full-length copy),
+    # How the set was decided on a split reference: "copy" (chromosome-scale copy),
     # "footprint" (the only set whose copies do not already cover the
     # fragment's reference region), "score" (nearest cluster score),
     # "extra_copy" (every set already covers the fragment's region; left
     # without a set).  None when the reference is not split.
     subgenome_basis: Optional[str] = None
+    # Copy of the assigned reference chromosome this chrom_assigned contig
+    # belongs to (classifier.assign_ref_copies): contigs with the same value
+    # tile the reference as pieces of one copy, contigs with different values
+    # overlap on it.  None for all other classes.
+    ref_copy: Optional[int] = None
     seq_identity_vs_ref: Optional[float] = None  # Sequence identity (0.0-1.0)
     # Collinearity score for assigned reference (fraction of aligned bp in reference order)
     collinearity_score: Optional[float] = None  # 0.0-1.0, None if no chains
@@ -570,21 +577,22 @@ class ChromRefSummary:
 
     ``n_contigs`` and the quality fields count chrom_assigned contigs only
     (the Overview pill heatmap uses these as a copy-number / identity signal).
-    ``n_anchor`` / ``n_fragment`` and ``state`` additionally account for
-    chrom_fragment contigs for the contiguity / under-assembly view.
+    ``n_anchor`` / ``n_fragment``, ``n_copies`` and ``state`` describe how the
+    chromosome is assembled, for the contiguity view.
     """
     ref_id: str
     ref_length: int
     n_contigs: int
     total_assigned_bp: int
     best_ref_coverage: Optional[float]
-    is_full_length: bool
+    is_chromosome_scale: bool
     has_both_telomeres: bool
     mean_identity: Optional[float]
     # Contiguity accounting (chrom_assigned + chrom_fragment)
     n_anchor: int = 0      # chrom_assigned contigs
     n_fragment: int = 0    # chrom_fragment contigs
-    state: str = "absent"  # T2T/single/multiple/fragmented/fragments_only/absent
+    n_copies: int = 0      # copies among the chrom_assigned contigs (ref_copy values)
+    state: str = "absent"  # see comparison.CHROM_STATE_LEVELS
 
 
 @dataclass
@@ -609,7 +617,7 @@ class AssemblyResult:
     # Chromosome completeness
     n_chrom_assigned: int
     n_chrom_unassigned: int
-    n_full_length: int
+    n_chromosome_scale: int
     n_with_both_telomeres: int
     n_with_any_telomere: int
     mean_ref_coverage: Optional[float]

@@ -113,12 +113,13 @@ def write_contig_summary_tsv(
         "assigned_chrom_id",
         "status",
         "length",
-        # Full-length vs fragment fields
+        # Chromosome-scale vs fragment fields
         "ref_coverage",
-        "is_full_length",
-        "full_length_confidence",
+        "is_chromosome_scale",
+        "chromosome_scale_basis",
         "query_subgenome",
         "subgenome_basis",
+        "ref_copy",
         "seq_identity_vs_ref",
         "has_5p_telomere",
         "has_3p_telomere",
@@ -278,12 +279,13 @@ def write_contig_summary_tsv(
             cobiont_sci = clf.cobiont_sci if clf and clf.cobiont_sci else ""
             ref_gene_proportion = clf.ref_gene_proportion if clf and clf.ref_gene_proportion is not None else ""
 
-            # Full-length vs fragment columns
+            # Chromosome-scale vs fragment columns
             ref_cov_str = f"{clf.ref_coverage:.4f}" if clf and clf.ref_coverage is not None else ""
-            is_full_length = "yes" if clf and clf.is_full_length else ("no" if clf and clf.is_full_length is not None else "")
-            fl_confidence = clf.full_length_confidence if clf and clf.full_length_confidence else ""
+            is_chromosome_scale = "yes" if clf and clf.is_chromosome_scale else ("no" if clf and clf.is_chromosome_scale is not None else "")
+            scale_basis = clf.chromosome_scale_basis if clf and clf.chromosome_scale_basis else ""
             query_subgenome = clf.query_subgenome if clf and clf.query_subgenome else ""
             subgenome_basis = clf.subgenome_basis if clf and clf.subgenome_basis else ""
+            ref_copy = str(clf.ref_copy) if clf and clf.ref_copy is not None else ""
             seq_identity = f"{clf.seq_identity_vs_ref:.6f}" if clf and clf.seq_identity_vs_ref is not None else ""
             has_5p_telo = "yes" if clf and clf.has_5p_telomere else ("no" if clf and clf.has_5p_telomere is not None else "")
             has_3p_telo = "yes" if clf and clf.has_3p_telomere else ("no" if clf and clf.has_3p_telomere is not None else "")
@@ -337,12 +339,13 @@ def write_contig_summary_tsv(
                         str(assigned_chrom_id),
                         str(status),
                         str(int(contig_len)),  # length
-                        # Full-length vs fragment fields
+                        # Chromosome-scale vs fragment fields
                         ref_cov_str,
-                        is_full_length,
-                        fl_confidence,
+                        is_chromosome_scale,
+                        scale_basis,
                         query_subgenome,
                         subgenome_basis,
+                        ref_copy,
                         seq_identity,
                         has_5p_telo,
                         has_3p_telo,

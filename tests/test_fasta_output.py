@@ -168,7 +168,7 @@ def test_scaffolds_keep_fragments_beside_t2t(tmp_path):
     rfa = tmp_path / "r.fa"
     rfa.write_text(">chr1A\n" + "A" * 3000 + "\n")
     clfs = [
-        _clf("t2t", "chr1A", "chrom_assigned", "chr1A", is_full_length=True,
+        _clf("t2t", "chr1A", "chrom_assigned", "chr1A", is_chromosome_scale=True,
              has_5p_telomere=True, has_3p_telomere=True,
              query_subgenome_grp=1, seq_identity_vs_ref=0.95),
         _clf("frag", "chr1A_f1", "chrom_fragment", "chr1A",
@@ -200,7 +200,7 @@ def test_no_join_contigs_are_scaffolded_alone(tmp_path, monkeypatch):
     rfa = tmp_path / "r.fa"
     rfa.write_text(">chr1A\n" + "A" * 3000 + "\n")
     clfs = [
-        _clf("anchor", "chr1A", "chrom_assigned", "chr1A", is_full_length=True,
+        _clf("anchor", "chr1A", "chrom_assigned", "chr1A", is_chromosome_scale=True,
              query_subgenome_grp=1, seq_identity_vs_ref=0.95),
         _clf("frag", "chr1A_f1", "chrom_fragment", "chr1A",
              query_subgenome_grp=1, seq_identity_vs_ref=0.95),
@@ -256,7 +256,7 @@ def test_fragments_copying_own_chromosome_are_not_joined(tmp_path, monkeypatch, 
     frag = dict(query_subgenome_grp=1, seq_identity_vs_ref=0.95,
                 redundancy_target="chr1A", redundancy_region="1-500")
     clfs = [
-        _clf("anchor", "chr1A", "chrom_assigned", "chr1A", is_full_length=True,
+        _clf("anchor", "chr1A", "chrom_assigned", "chr1A", is_chromosome_scale=True,
              has_5p_telomere=True, query_subgenome_grp=1, seq_identity_vs_ref=0.95),
         _clf("hap", "chr1A_f1", "chrom_fragment", "chr1A", redundancy_cov=0.71,
              redundancy_identity=0.963, depth_ratio=0.46, target_depth_ratio=0.44, **frag),
@@ -354,7 +354,7 @@ def test_own_assembly_copies_in_t2t_and_fragment_only_groups(tmp_path, monkeypat
     hap = dict(redundancy_cov=0.9, redundancy_identity=0.96, depth_ratio=0.5,
                target_depth_ratio=0.5, redundancy_region="1-400", query_subgenome_grp=1)
     clfs = [
-        _clf("t2t", "chr1A", "chrom_assigned", "chr1A", is_full_length=True,
+        _clf("t2t", "chr1A", "chrom_assigned", "chr1A", is_chromosome_scale=True,
              has_5p_telomere=True, has_3p_telomere=True, query_subgenome_grp=1),
         _clf("hapT", "chr1A_f1", "chrom_fragment", "chr1A", redundancy_target="chr1A", **hap),
         # chr2A survives only as fragments; hapF copies chr1A at near identity

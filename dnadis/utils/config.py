@@ -135,8 +135,8 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
         "kmer": "kmer",
         "window": "window",
     },
-    "full_length_detection": {
-        "full_length_ref_coverage": "full_length_ref_coverage",
+    "chromosome_scale_detection": {
+        "chr_scale_ref_coverage": "chr_scale_ref_coverage",
         "skip_telomeres": "skip_telomeres",
         "telomere_motif": "telomere_motif",
         "telomere_window": "telomere_window",
@@ -216,6 +216,15 @@ def load_config(path: Path) -> Dict[str, Any]:
 
     with open(path, "rb") as f:
         raw_config = tomllib.load(f)
+
+    # Section and key names used by older config files.
+    legacy = raw_config.pop("full_length_detection", None)
+    if legacy is not None:
+        if "full_length_ref_coverage" in legacy:
+            legacy["chr_scale_ref_coverage"] = legacy.pop("full_length_ref_coverage")
+        raw_config["chromosome_scale_detection"] = {
+            **legacy, **raw_config.get("chromosome_scale_detection", {}),
+        }
 
     # Flatten TOML structure to argparse dest names
     flat_config: Dict[str, Any] = {}

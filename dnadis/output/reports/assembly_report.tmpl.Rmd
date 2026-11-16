@@ -457,7 +457,7 @@ chr_df_stats <- summary_df %>% filter(classification == "chrom_assigned")
 n_assigned <- nrow(chr_df_stats)
 n_unassigned <- sum(summary_df$classification == "chrom_unassigned")
 n_chimeric <- sum(chr_df_stats$chimeric == "yes", na.rm = TRUE)
-n_full_length <- sum(chr_df_stats$is_full_length == "yes", na.rm = TRUE)
+n_chromosome_scale <- sum(chr_df_stats$is_chromosome_scale == "yes", na.rm = TRUE)
 n_both_telo <- sum(chr_df_stats$has_5p_telomere == "yes" & chr_df_stats$has_3p_telomere == "yes", na.rm = TRUE)
 
 mean_ref_cov <- if ("ref_coverage" %in% names(chr_df_stats) && any(!is.na(chr_df_stats$ref_coverage)))
@@ -477,7 +477,7 @@ tibble(
   L50 = as.integer(l50),
   `Largest (Mb)` = round(max(lengths_sorted) / 1e6, 1),
   `Asgn / Unasgn / Chim` = paste(n_assigned, "/", n_unassigned, "/", n_chimeric),
-  `Full-length` = as.integer(n_full_length),
+  `Chr-scale` = as.integer(n_chromosome_scale),
   `Both telo` = as.integer(n_both_telo),
   `Mean ref cov` = if (is.na(mean_ref_cov)) "\u2014" else sprintf("%.1f%%", mean_ref_cov * 100),
   `Mean identity` = if (is.na(mean_ident)) "\u2014" else sprintf("%.2f%%", mean_ident * 100),
@@ -491,7 +491,7 @@ tibble(
   tab_header(title = "Assembly Summary") %>%
   cols_align(align = "right", columns = where(is.numeric)) %>%
   tab_spanner(label = "Contiguity", columns = c(Contigs, `Size (Mb)`, N50, L50, `Largest (Mb)`)) %>%
-  tab_spanner(label = "Chromosomes", columns = c(`Asgn / Unasgn / Chim`, `Full-length`, `Both telo`, `Mean ref cov`, `Mean identity`)) %>%
+  tab_spanner(label = "Chromosomes", columns = c(`Asgn / Unasgn / Chim`, `Chr-scale`, `Both telo`, `Mean ref cov`, `Mean identity`)) %>%
   tab_spanner(label = "Other", columns = c(Cobionts, rDNA, chrC, chrM))
 ```
 
@@ -537,16 +537,20 @@ cat('<div class="note-box">No contigs were assigned to reference chromosomes, so
 
 ```{r contiguity_summary, eval=has_contiguity, results='asis'}
 n_with_frag <- sum(ct$n_frag > 0, na.rm = TRUE)
+n_multi_copy <- sum(ct$n_copies > 1, na.rm = TRUE)
 cat(sprintf(
   paste0('<p class="section-intro">Across <b>%d</b> reference chromosomes: ',
-         '<b>%d</b> T2T &middot; <b>%d</b> single-contig &middot; <b>%d</b> multiple full-length &middot; ',
+         '<b>%d</b> T2T &middot; <b>%d</b> single-contig &middot; <b>%d</b> split &middot; ',
          '<b>%d</b> fragments-only &middot; <b>%d</b> absent. ',
-         '<b>%d</b> chromosome(s) carry additional fragment contigs (+N badge). ',
+         'Assigned contigs that overlap on the reference are separate copies; contigs that tile it are pieces of one copy, ',
+         'and a chromosome is <b>split</b> when any copy is in two or more pieces. ',
+         '<b>%d</b> chromosome(s) are assembled in more than one copy (&times;N). ',
+         '<b>%d</b> chromosome(s) carry additional fragment contigs (+Nf). ',
          'Chromosome fragment sequence: <b>%.1f Mb</b> (%.1f%% of chromosomal bp).</p>'),
   n_ref_total,
-  state_counts[["T2T"]], state_counts[["single"]], state_counts[["multiple"]],
+  state_counts[["T2T"]], state_counts[["single"]], state_counts[["split"]],
   state_counts[["fragments_only"]], state_counts[["absent"]],
-  n_with_frag, frag_bp_mb, frag_pct))
+  n_multi_copy, n_with_frag, frag_bp_mb, frag_pct))
 ```
 
 ```{r contiguity_scatter, eval=has_contiguity, fig.width=10, fig.height=5.5}
@@ -559,6 +563,7 @@ sc_tt <- sc %>% mutate(tooltip = paste0(
   "\nRef length: ", fmt_mb(ref_len), " Mb",
   "\nUnion coverage: ", sprintf("%.1f%%", coverage * 100),
   "\nContigs: ", n_contigs, "  (", n_anchor, " assigned / ", n_frag, " fragment)",
+  ifelse(n_copies > 1, paste0("\nCopies: ", n_copies), ""),
   ifelse(both_telo, "\nBoth telomeres", "")))
 
 sg_pal <- if (has_subgenomes) col_dark else c("G" = oi[5], "NA" = oi[5])
@@ -600,8 +605,9 @@ bar_df <- ct %>%
          ref_mb = ref_len / 1e6,
          lab = dplyr::case_when(
            n_contigs == 0 ~ "",
-           n_frag > 0     ~ paste0(n_contigs, " (+", n_frag, "f)"),
-           TRUE           ~ as.character(n_contigs)))
+           TRUE ~ paste0(n_anchor,
+                         ifelse(n_copies > 1, paste0(" (\u00d7", n_copies, ")"), ""),
+                         ifelse(n_frag > 0, paste0(" +", n_frag, "f"), ""))))
 
 facet_var <- if (has_subgenomes) "subgenome_lab" else NULL
 
@@ -622,7 +628,7 @@ p_ct_bar <- ggplot(bar_df, aes(y = chrom_y)) +
         panel.grid.major.x = element_line(color = "grey92", linewidth = 0.3),
         legend.position = "bottom") +
   labs(title = paste0("Per-chromosome assembly state (", params$plot_suffix, ")"),
-       subtitle = "Bar = reference length; fill = union coverage; number = query contig count (+Nf = extra fragment contigs)",
+       subtitle = "Bar = reference length; fill = union coverage; number = assigned contigs (\u00d7N = copies, +Nf = fragment contigs)",
        x = "Length (Mb)", y = NULL)
 
 girafe_styled(p_ct_bar, width_svg = 10, height_svg = 7)
@@ -637,6 +643,7 @@ tbl_df <- ct %>%
     Contigs = n_contigs,
     `Assigned` = n_anchor,
     `Fragment` = n_frag,
+    Copies = n_copies,
     Coverage = coverage,
     Telomeres = ifelse(both_telo, "both", ""),
     State = as.character(state)
@@ -656,7 +663,7 @@ tbl_df %>%
     locations = cells_body(columns = State),
     fn = function(x) chrom_state_labels[x]
   ) %>%
-  cols_align(align = "right", columns = c(`Ref (Mb)`, Contigs, Assigned, Fragment, Coverage)) %>%
+  cols_align(align = "right", columns = c(`Ref (Mb)`, Contigs, Assigned, Fragment, Copies, Coverage)) %>%
   tab_spanner(label = "Query contigs", columns = c(Contigs, Assigned, Fragment))
 ```
 
@@ -756,7 +763,7 @@ chr_df <- summary_df %>%
   arrange(version_sort_key(assigned_ref_id), assigned_ref_id)
 
 has_telomeres  <- "has_5p_telomere" %in% names(chr_df)
-has_full_length <- "is_full_length" %in% names(chr_df)
+has_chromosome_scale <- "is_chromosome_scale" %in% names(chr_df)
 ```
 
 ```{r chrom_assign_stub, eval=!has_chrom_assigned, results='asis'}
@@ -1392,7 +1399,7 @@ chr_tbl <- chr_df %>%
     collinearity = if (has_collinearity) collinearity_score else NA_real_,
     tel_5p = if (has_telomeres) has_5p_telomere else NA_character_,
     tel_3p = if (has_telomeres) has_3p_telomere else NA_character_,
-    full_len = if (has_full_length) is_full_length else NA_character_,
+    full_len = if (has_chromosome_scale) is_chromosome_scale else NA_character_,
     subgenome_col = if (has_subgenomes) assigned_subgenome else NA_character_
   )
 
@@ -1401,7 +1408,7 @@ col_labels <- list(contig = "Contig", original_name = "Original Name", assigned_
 
 if (has_subgenomes) { sel_cols <- c(sel_cols, "subgenome_col"); col_labels$subgenome_col <- "Subgenome" }
 sel_cols <- c(sel_cols, "ref_cov_pct"); col_labels$ref_cov_pct <- "Ref Cov %"
-if (has_full_length) { sel_cols <- c(sel_cols, "full_len"); col_labels$full_len <- "Full-length" }
+if (has_chromosome_scale) { sel_cols <- c(sel_cols, "full_len"); col_labels$full_len <- "Chr-scale" }
 if (has_telomeres) {
   sel_cols <- c(sel_cols, "tel_5p", "tel_3p")
   col_labels$tel_5p <- "Tel 5'"; col_labels$tel_3p <- "Tel 3'"
@@ -1831,7 +1838,7 @@ depth_by_cat %>% select(all_of(sel)) %>% gt() %>% cols_label(.list = labels) %>%
 
 ```{r amplification_heading, eval=has_amp, results='asis'}
 cat('\n## Copy number / amplification\n')
-cat('<p class="section-intro"><b>Relative depth</b> is each contig\'s median read depth over the chromosomal baseline (median depth of full-length assigned chromosomes). ~1&times; is single-copy; values well above 1&times; indicate extra physical copies not represented in the assembly &mdash; amplification. This is the signal that separates an <b>amplified circular element</b> (an active eccDNA candidate) from an inert single-copy circle, and it flags collapsed tandem duplications. Contigs at &ge;1.5&times;, plus every circular element, are shown below.</p>')
+cat('<p class="section-intro"><b>Relative depth</b> is each contig\'s median read depth over the chromosomal baseline (median depth of chromosome-scale assigned chromosomes). ~1&times; is single-copy; values well above 1&times; indicate extra physical copies not represented in the assembly &mdash; amplification. This is the signal that separates an <b>amplified circular element</b> (an active eccDNA candidate) from an inert single-copy circle, and it flags collapsed tandem duplications. Contigs at &ge;1.5&times;, plus every circular element, are shown below.</p>')
 ```
 
 ```{r amplification_plot, eval=has_amp, fig.width=10, fig.height=5}

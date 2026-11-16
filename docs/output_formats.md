@@ -38,7 +38,7 @@ The main output file containing classification results and quality metrics for e
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `contig` | string | New contig name following the scheme `chr<ref>(_s<set>)?(_c<copy>|_f<frag>)?` for chromosome-assigned contigs, or `contig_<N>` (by descending length) for all others. Examples: `chr5A` (full-length, single copy), `chr5A_s2` (full-length, query subgenome set 2), `chr5A_f1` (highest-identity fragment of chr5A), `chr5A_c1` (highest-identity of multiple full-length copies), `contig_1` (non-chromosome). Copy and fragment suffixes are ordered by descending alignment identity to the reference. See [Contig Naming Scheme](../README.md#contig-naming-scheme) for full suffix semantics. |
+| `contig` | string | New contig name following the scheme `chr<ref>(_s<set>)?(_c<copy>|_f<frag>)?` for chromosome-assigned contigs, or `contig_<N>` (by descending length) for all others. Examples: `chr5A` (chromosome-scale, single copy), `chr5A_s2` (chromosome-scale, query subgenome set 2), `chr5A_f1` (highest-identity fragment of chr5A), `chr5A_c1` (highest-identity of multiple chromosome-scale copies), `contig_1` (non-chromosome). Copy and fragment suffixes are ordered by descending alignment identity to the reference. See [Contig Naming Scheme](../README.md#contig-naming-scheme) for full suffix semantics. |
 | `original_name` | string | Original contig name from input FASTA |
 | `classification` | string | Classification category (see [Categories](#classification-categories)) |
 | `classification_confidence` | string | Confidence level: `high`, `medium`, or `low` (see [Confidence](#classification-confidence)) |
@@ -46,22 +46,23 @@ The main output file containing classification results and quality metrics for e
 | `cobiont_taxid` | integer | NCBI taxonomy ID (only for `cobiont` classification) |
 | `cobiont_sci` | string | Scientific name of cobiont organism |
 
-### Full-Length and Telomere Columns
+### Chromosome-Scale and Telomere Columns
 
-These columns describe whether a contig represents a complete chromosome based on reference coverage and telomere detection.
+These columns describe how much of a chromosome a contig represents, from reference coverage, length and telomere detection. Only telomeres at both ends show that a contig is the whole chromosome.
 
 | Column | Type | Description |
 |--------|------|-------------|
 | `ref_coverage` | float | Fraction of the assigned reference chromosome spanned by syntenic blocks (0.0-1.0) |
-| `is_full_length` | yes/no | Whether the contig is classified as full-length (based on telomeres and `ref_coverage ≥ --full-length-ref-coverage`). A contig whose reference footprint does not overlap that of a stronger full-length contig on the same reference is a piece of a copy and is `no` |
-| `full_length_confidence` | string | Confidence of full-length call: `high` (both telomeres), `medium` (one telomere + high coverage), `low` (coverage-only) |
+| `is_chromosome_scale` | yes/no | Whether the contig is chromosome-scale: telomeres at both ends, length ≥80% of the reference chromosome, or `ref_coverage ≥ --chr-scale-ref-coverage`. A `chrom_assigned` contig that shares its `ref_copy` with another (a piece of a split copy) is `no` unless it has telomeres at both ends. Chromosome-scale contigs are named without an `_f` suffix |
+| `chromosome_scale_basis` | string | Evidence for `is_chromosome_scale`, first that applies: `telomeres` (both ends), `length_ratio` (length ≥80% of the reference chromosome), `ref_span` (`ref_coverage` threshold). Empty when `is_chromosome_scale` is `no` |
 | `query_subgenome` | string | Inferred query subgenome set (`s1`, `s2`, …; `s1` = highest identity to the reference) from identity-scaled clustering, or empty when the chromosome was not split |
-| `subgenome_basis` | string | How `query_subgenome` was decided on a split chromosome: `copy` (full-length copy, by clustering), `footprint` (the only set whose full-length copies do not already cover the fragment's reference region), `score` (fragment joined the nearest cluster), `extra_copy` (every set's copies already cover the fragment's reference region; no set, excluded from scaffolding and phylogeny set leaves). Empty when the chromosome was not split |
+| `subgenome_basis` | string | How `query_subgenome` was decided on a split chromosome: `copy` (chromosome-scale copy, by clustering), `footprint` (the only set whose chromosome-scale copies do not already cover the fragment's reference region), `score` (fragment joined the nearest cluster), `extra_copy` (every set's copies already cover the fragment's reference region; no set, excluded from scaffolding and phylogeny set leaves). Empty when the chromosome was not split |
+| `ref_copy` | integer | For `chrom_assigned` contigs: the copy of the assigned reference chromosome the contig belongs to. Contigs whose reference footprints overlap (by at least half of the smaller footprint) are separate copies; contigs that tile the reference are pieces of one copy and share a value. Copy 1 holds the largest footprint. Empty for all other classes |
 | `seq_identity_vs_ref` | float | Best-chain alignment identity to the assigned reference chromosome (0.0-1.0) |
 | `has_5p_telomere` | yes/no | Telomere detected at the **start** (first `--telomere-window`, 10 kb) of the **raw input** contig: telomere repeat runs total ≥ `--telomere-min-bp` (200 bp). Set for `chrom_assigned` and `chrom_fragment` contigs |
 | `has_3p_telomere` | yes/no | Telomere detected at the **end** (last `--telomere-window`, 10 kb) of the **raw input** contig, by the same rule |
 | `is_circular` | yes/no | Contig is circular per assembler evidence (`--circular-fasta`/`--circular-list`, an auto-detected `*.circ.fasta*` sibling, or the hifiasm `ptg*c` name suffix). Blank when circularity could not be determined from any source. Drives the `circular_element` classification. |
-| `depth_ratio` | float | `depth_median` ÷ the chromosomal baseline (median `depth_median` of full-length `chrom_assigned` contigs). A copy-number signal: ≈1 for single-copy sequence, ≫1 for amplified sequence (e.g. an amplified circular element). Requires `--reads`. |
+| `depth_ratio` | float | `depth_median` ÷ the chromosomal baseline (median `depth_median` of chromosome-scale `chrom_assigned` contigs). A copy-number signal: ≈1 for single-copy sequence, ≫1 for amplified sequence (e.g. an amplified circular element). Requires `--reads`. |
 | `redundancy_target` | string | Chromosome-length contig (new name) holding the region that best explains this contig, from an `asm20` alignment of every non-chromosome-length contig (organelle and rDNA contigs excluded) to the chromosome-length contigs. Empty for chromosome-length contigs and for contigs with no alignment. |
 | `redundancy_region` | string | That region on `redundancy_target`, `start-end` (1-based): the window of about 1.5× this contig's length holding the most of its aligned sequence. Dispersed repeat hits scatter across a chromosome and do not fill one window, so they give low coverage. |
 | `redundancy_cov` | float | Fraction of this contig aligned within `redundancy_region`. Near 1 when the contig's sequence is already in an assembled chromosome (allelic copy, duplicated copy, assembly duplicate); low for unique sequence. |
@@ -358,6 +359,28 @@ Reports drop `other` sequences from the per-chromosome plots, and the per-chromo
 
 ---
 
+## chromosome_completeness.tsv
+
+Multi-assembly runs only: one row per reference chromosome and assembly (`{prefix}_chromosome_completeness.tsv`).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `ref_id` | string | Reference chromosome |
+| `ref_length` | integer | Reference chromosome length (bp) |
+| `assembly` | string | Assembly name |
+| `n_contigs` | integer | `chrom_assigned` contigs assigned to the chromosome |
+| `total_assigned_bp` | integer | Their total length (bp) |
+| `best_ref_coverage` | float | Highest `ref_coverage` among them |
+| `is_chromosome_scale` | yes/no | At least one of them is chromosome-scale |
+| `has_both_telomeres` | yes/no | At least one of them has telomeres at both ends |
+| `mean_identity` | float | Mean `seq_identity_vs_ref` |
+| `n_anchor` | integer | `chrom_assigned` contigs (same as `n_contigs`) |
+| `n_fragment` | integer | `chrom_fragment` contigs assigned to the chromosome |
+| `n_copies` | integer | Copies of the chromosome among the `chrom_assigned` contigs (distinct `ref_copy` values) |
+| `state` | string | How the chromosome is assembled, from its `chrom_assigned` contigs: `T2T` (every copy is one contig with telomeres at both ends), `single` (every copy is one contig), `split` (at least one copy is in two or more contigs), `fragments_only` (only `chrom_fragment` contigs), `absent` (none). `chrom_fragment` contigs do not change the state |
+
+`comparison_summary.tsv` counts each assembly's chromosomes by state (`n_chr_t2t`, `n_chr_single`, `n_chr_split`, `n_chr_fragments_only`, `n_chr_absent`), plus chromosomes in more than one copy (`n_chr_multi_copy`) and chromosomes with `chrom_fragment` contigs (`n_chr_with_fragments`).
+
 ## cobionts.tsv
 
 Detailed cobiont summary with full taxonomic lineage. Generated only when cobionts are detected. Used for the cobiont summary table visualization.
@@ -636,7 +659,7 @@ A comprehensive, self-contained HTML report that aggregates all analysis results
 | Section | Contents |
 |---------|----------|
 | **Assembly Overview** | Classification breakdown table (category, contigs, total Mb, % assembly) with inline bars; interactive classification summary bar |
-| **Chromosome Assignments** | Per-chromosome summary (contig, ref chromosome, length, ref coverage, full-length, telomeres, gene %, identity, collinearity, confidence); reference coverage summary |
+| **Chromosome Assignments** | Per-chromosome summary (contig, ref chromosome, length, ref coverage, chromosome-scale, telomeres, gene %, identity, collinearity, confidence); reference coverage summary |
 | **Synteny Overview** | Interactive chromosome overview plot; subgenome composition table for polyploids |
 | **Evidence Quality** | Per-contig evidence summary sorted by confidence (low first); assembly contiguity statistics (N50, L50, etc.) |
 | **Read Depth Analysis** | Interactive depth overview (if `--reads` provided); depth summary by category (mean, median, CV, breadth) |
