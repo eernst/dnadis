@@ -164,6 +164,62 @@ class TestComputePairwiseSynteny:
         assert not macro_tsv.exists()
 
 
+    def _stub_minimap2(self, monkeypatch, ref_name="Chr01_f1", qry_name="Chr01_f1"):
+        """Replace minimap2 with a writer of one 20 kb primary alignment."""
+        import gzip
+        import dnadis.alignment.pairwise as pw
+
+        calls = []
+
+        def fake_minimap2(*, paf_gz_out, **kwargs):
+            calls.append(paf_gz_out)
+            row = [qry_name, "30000", "0", "20000", "+", ref_name, "30000",
+                   "0", "20000", "20000", "20000", "60", "tp:A:P"]
+            with gzip.open(paf_gz_out, "wt") as fh:
+                fh.write("\t".join(row) + "\n")
+
+        monkeypatch.setattr(pw, "run_minimap2_synteny", fake_minimap2)
+        return calls
+
+    def _write_pair(self, tmp_path, name="Chr01_f1"):
+        left_fasta = tmp_path / "left.chrs.fasta"
+        right_fasta = tmp_path / "right.chrs.fasta"
+        left_fasta.write_text(f">{name}\n{'A' * 30000}\n")
+        right_fasta.write_text(f">{name}\n{'A' * 30000}\n")
+        pair_prefix = tmp_path / "pairwise" / "left_vs_right"
+        pair_prefix.parent.mkdir(parents=True)
+        return left_fasta, right_fasta, pair_prefix
+
+    def test_left_contig_names_kept_verbatim(self, tmp_path, monkeypatch):
+        """A "Chr" prefix on left contig names is not rewritten to "chr"."""
+        self._stub_minimap2(monkeypatch)
+        left_fasta, right_fasta, pair_prefix = self._write_pair(tmp_path)
+
+        result = compute_pairwise_synteny(
+            left_fasta=left_fasta, right_fasta=right_fasta,
+            left_name="left", right_name="right",
+            outprefix=pair_prefix, threads=1, **_CHAIN_KWARGS,
+        )
+        lines = result.read_text().splitlines()
+        col = lines[0].split("\t").index("ref_id")
+        ref_ids = {line.split("\t")[col] for line in lines[1:]}
+        assert ref_ids == {"Chr01_f1"}
+
+    def test_recomputes_cache_with_unknown_left_names(self, tmp_path, monkeypatch):
+        """A cached TSV whose ref_ids are not left contig names is discarded."""
+        calls = self._stub_minimap2(monkeypatch)
+        left_fasta, right_fasta, pair_prefix = self._write_pair(tmp_path)
+        macro_tsv = Path(str(pair_prefix) + ".macro_blocks.tsv")
+        macro_tsv.write_text("contig\tcontig_len\tref_id\nChr01_f1\t30000\tchr01_f1\n")
+
+        result = compute_pairwise_synteny(
+            left_fasta=left_fasta, right_fasta=right_fasta,
+            left_name="left", right_name="right",
+            outprefix=pair_prefix, threads=1, **_CHAIN_KWARGS,
+        )
+        assert calls, "stale cache should have been recomputed"
+        assert "chr01_f1" not in result.read_text()
+
     def test_creates_output_directory(self, tmp_path):
         """Should create the pairwise output directory if it doesn't exist."""
         left_fasta = tmp_path / "left" / "left.chrs.fasta"

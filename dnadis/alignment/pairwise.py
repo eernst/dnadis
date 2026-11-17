@@ -30,6 +30,25 @@ from dnadis.utils.sequence_utils import fasta_has_records, read_fasta_lengths
 logger = get_logger("pairwise")
 
 
+def _cached_ref_ids_match(macro_blocks_tsv: Path, left_fasta: Path) -> bool:
+    """True if every ``ref_id`` in a cached pairwise TSV is a left contig name.
+
+    Earlier versions normalized left contig names ("Chr1" -> "chr1"),
+    so TSVs cached by them name contigs that do not exist in the left FASTA.
+    """
+    left_names = set(read_fasta_lengths(left_fasta))
+    with open_maybe_gzip(macro_blocks_tsv, "rt") as fh:
+        header = fh.readline().rstrip("\n").split("\t")
+        if "ref_id" not in header:
+            return True
+        col = header.index("ref_id")
+        for line in fh:
+            fields = line.rstrip("\n").split("\t")
+            if len(fields) > col and fields[col] not in left_names:
+                return False
+    return True
+
+
 def compute_pairwise_synteny(
     left_fasta: Path,
     right_fasta: Path,
@@ -120,6 +139,14 @@ def compute_pairwise_synteny(
         logger.info(
             f"Pairwise {left_name} vs {right_name}: input FASTA changed since "
             f"{macro_blocks_tsv}; recomputing"
+        )
+        macro_blocks_tsv.unlink()
+    if file_exists_and_valid(macro_blocks_tsv) and not _cached_ref_ids_match(
+        macro_blocks_tsv, left_fasta,
+    ):
+        logger.info(
+            f"Pairwise {left_name} vs {right_name}: cached macro_blocks names "
+            f"contigs absent from {left_fasta}; recomputing"
         )
         macro_blocks_tsv.unlink()
     if file_exists_and_valid(macro_blocks_tsv):
@@ -257,8 +284,11 @@ def _compute_pairwise_synteny_nucleotide(
         )
         return None
 
-    # ref_id_map=None: left assembly contig names are already the renamed
-    # (post-classification) names from chrs.fasta.
+    # Left contig names are already the renamed (post-classification) names
+    # from chrs.fasta.  An identity map keeps them verbatim: without one the
+    # parser applies normalize_ref_id(), which rewrites a "Chr" prefix to
+    # "chr" and the names no longer match the left assembly's contigs.
+    left_ids = {name: name for name in read_fasta_lengths(left_fasta)}
     ev = parse_paf_chain_evidence_and_segments(
         paf_gz_path=paf_gz,
         contig_lengths=right_lengths,
@@ -273,7 +303,7 @@ def _compute_pairwise_synteny_nucleotide(
         assign_chain_score=assign_chain_score,
         assign_chain_min_bp=assign_chain_min_bp,
         assign_ref_score=assign_ref_score,
-        ref_id_map=None,
+        ref_id_map=left_ids,
     )
 
     write_macro_blocks_tsv(macro_blocks_tsv, ev.macro_block_rows, ref_norm_to_orig=None)
