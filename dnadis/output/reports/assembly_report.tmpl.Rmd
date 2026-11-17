@@ -44,6 +44,11 @@ source("__COMMON_R__")
 # ---------------------------------------------------------------------------
 ref_lengths <- read_dnadis_tsv(params$ref_lengths_tsv,
                         col_types = cols(subgenome = col_character()))
+# Plot nuclear chromosomes (and organelles) only: drop unplaced scaffolds and other
+# non-chromosomal reference sequences. Older ref_lengths.tsv files lack `kind`.
+if ("kind" %in% names(ref_lengths)) {
+  ref_lengths <- ref_lengths %>% filter(kind != "other")
+}
 list2env(setup_subgenomes(ref_lengths), envir = environment())
 
 # For depth overview

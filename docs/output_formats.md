@@ -344,14 +344,17 @@ Aggregated synteny chains (macro-blocks). Each row represents one collinear chai
 
 ## ref_lengths.tsv
 
-Reference chromosome lengths and metadata.
+Lengths of every sequence in the reference FASTA, with its chromosome ID, subgenome and kind.
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `ref_id` | string | Reference chromosome ID |
-| `length` | integer | Chromosome length in base pairs |
+| `ref_id` | string | Reference sequence ID, as spelled in the reference FASTA |
 | `chrom_id` | string | Chromosome number without subgenome |
 | `subgenome` | string | Subgenome identifier or `NA` |
+| `ref_len` | integer | Sequence length in base pairs |
+| `kind` | string | `nuclear` (matches a nuclear-chromosome pattern: the built-in presets or `--ref-id-pattern`), `organelle` (a chrC/chrM alias), or `other` (unplaced scaffolds, unlocalized contigs and any other sequence) |
+
+Reports drop `other` sequences from the per-chromosome plots, and the per-chromosome states and `chromosome_completeness.tsv` cover `nuclear` sequences only. Alignments still run against the whole reference, so blocks on `other` sequences stay in `segments.tsv`, `macro_blocks.tsv` and the off-target blocks of the Chromosome Assignments plot. A `ref_lengths.tsv` written before this column existed is reused as is (the reports then skip the `kind` filter); delete it to regenerate.
 
 ---
 

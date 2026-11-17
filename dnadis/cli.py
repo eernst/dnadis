@@ -3094,7 +3094,8 @@ def main():
         comparison_tsv = output_dir / f"{cmp_name}_summary.tsv"
         completeness_tsv = output_dir / f"{cmp_name}_chromosome_completeness.tsv"
         write_comparison_summary_tsv(comparison_tsv, results)
-        write_chromosome_completeness_tsv(completeness_tsv, results, ref_ctx.ref_lengths_norm)
+        write_chromosome_completeness_tsv(completeness_tsv, results, ref_ctx.ref_lengths_norm,
+                                          ref_ctx.ref_norm_to_orig)
         logger.done(f"Comparison summary: {comparison_tsv}")
         logger.done(f"Chromosome completeness: {completeness_tsv}")
 

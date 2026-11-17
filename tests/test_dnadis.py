@@ -144,9 +144,17 @@ def test_read_fasta_lengths_and_ref_lengths_tsv(tmp_path):
     tsv_path = tmp_path / "ref_lengths.tsv"
     dnadis.write_ref_lengths_tsv(tsv_path, fasta_path)
     tsv = tsv_path.read_text().splitlines()
-    assert tsv[0].split("\t") == ["ref_id", "chrom_id", "subgenome", "ref_len"]
-    assert "chr1\tchr1\tNA\t10" in tsv
-    assert "chrC\tchrC\tNA\t4" in tsv
+    assert tsv[0].split("\t") == ["ref_id", "chrom_id", "subgenome", "ref_len", "kind"]
+    assert "chr1\tchr1\tNA\t10\tnuclear" in tsv
+    assert "chrC\tchrC\tNA\t4\torganelle" in tsv
+
+
+def test_ref_seq_kind():
+    assert dnadis.utils.reference_utils.ref_seq_kind("chr1") == "nuclear"
+    assert dnadis.utils.reference_utils.ref_seq_kind("Chr01") == "nuclear"
+    assert dnadis.utils.reference_utils.ref_seq_kind("chrM") == "organelle"
+    assert dnadis.utils.reference_utils.ref_seq_kind("scaffold_15") == "other"
+    assert dnadis.utils.reference_utils.ref_seq_kind("scaf_334") == "other"
 
 
 def test_parse_gff3_transcript_coords_araport11(tmp_path):
