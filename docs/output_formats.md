@@ -372,7 +372,7 @@ One row per rearrangement call (translocation, inversion, fusion, fission). The 
 
 ## fusion_junctions.tsv
 
-Written when at least one fusion junction is scored. One row per junction with arm references and spans, per-zone median depths (`depth_left_median`, `depth_junction_median`, `depth_right_median`), ratios and CVs, `depth_verdict` (`uniform`, `drop`, `spike`, `discontinuous`, `asymmetric`, `insufficient_depth`), `aln_gap_bp` and `aln_verdict` (`abutting`, `gapped`, `overlapping`), `clip_spanning`/`clip_clipped` read counts (empty without `--fusion-split-reads`, for overlapping arms, and for junction intervals over 5 kb), and the final `fusion_call`, `fusion_confidence`, `evidence_codes`.
+Written when at least one fusion junction is scored. One row per junction with arm references and spans, per-zone median depths (`depth_left_median`, `depth_junction_median`, `depth_right_median`), ratios and CVs, `depth_verdict` (`uniform`, `drop`, `spike`, `discontinuous`, `asymmetric`, `insufficient_depth`), `aln_gap_bp` and `aln_verdict` (`abutting`, `gapped`, `overlapping`), `clip_spanning`/`clip_clipped` counts of reads with MAPQ ≥ 20 (empty without `--fusion-split-reads`, for overlapping arms, and for junction intervals over 5 kb), and the final `fusion_call`, `fusion_confidence`, `evidence_codes`.
 
 ## ref_lengths.tsv
 
@@ -743,7 +743,7 @@ If `rmarkdown` or `pandoc` is not available, report generation is skipped with a
 - Summary tables use the `gt` package with consistent styling (dark headers, row striping, inline gradient bars)
 - The report can be opened in any web browser and shared as a single file
 - The generated `.Rmd` includes the shared R helpers (`common.R`) of the dnadis version that wrote it, so re-rendering it later runs the same code against the same TSVs
-- Refreshable via `refresh_reports.py` alongside other plot scripts. Each template records the version of the TSV columns it reads (`output_schema` in its params); `refresh_reports.py` skips a report whose TSVs are older than the current template reads and asks for a dnadis rerun, which regenerates them (cached alignments and depth are reused)
+- Refreshable via `refresh_reports.py` alongside other plot scripts. Each template records the version of the TSV columns it reads (`output_schema` in its params); `refresh_reports.py` skips a report whose TSVs are older than the current template reads (unless the TSV a newer version changed has no rows in that folder) and asks for a dnadis rerun, which regenerates them (cached alignments and depth are reused)
 
 ---
 

@@ -283,8 +283,10 @@ class RearrangementCall:
         fusion_call: Fusion only: 'biological_fusion', 'assembly_artifact',
             or 'inconclusive'.
         fusion_confidence: Fusion only: confidence of ``fusion_call``.
-        evidence_codes: Fusion only: comma-separated evidence lines that were
-            available and supportive (subset of Aln, Depth, Split).
+        evidence_codes: Fusion only: comma-separated evidence lines behind
+            ``fusion_call`` (subset of Aln, Depth, Split): the lines that support
+            a fusion for 'biological_fusion', the lines that point to a misjoin
+            for 'assembly_artifact', empty for 'inconclusive'.
     """
     contig: str
     original_name: str
@@ -318,8 +320,10 @@ class FusionJunction:
         contig: Query contig name (original).
         left_ref: Reference whose alignments lie on the lower-coordinate side.
         right_ref: Reference whose alignments lie on the higher-coordinate side.
-        junction_start: Start of the query interval separating the two arms.
-        junction_end: End of that interval (equal to start when arms abut or overlap).
+        junction_start: Start of the query interval between the two arms: the
+            left arm's end, or the right arm's start when the arms overlap.
+        junction_end: End of that interval: the right arm's start, or the left
+            arm's end when the arms overlap (equal to start when they abut).
         junction_point: Representative breakpoint coordinate on the contig.
         contig_len: Contig length.
         left_span: Merged query bases aligned to ``left_ref``.
@@ -331,12 +335,12 @@ class FusionJunction:
         depth_junction_cv: Coefficient of variation of junction-zone windows.
         depth_flank_cv: Coefficient of variation of flank windows.
         depth_windows: Number of informative windows used.
-        depth_verdict: 'uniform', 'drop', 'spike', 'asymmetric', or
-            'insufficient_depth'.
+        depth_verdict: 'uniform', 'drop', 'spike', 'discontinuous',
+            'asymmetric', or 'insufficient_depth'.
         aln_gap_bp: Unaligned contig bases between the two arms (negative = overlap).
         aln_verdict: 'abutting', 'gapped', or 'overlapping'.
-        clip_spanning / clip_clipped: Reads spanning vs clipped/split at the
-            breakpoint (None when no BAM was available).
+        clip_spanning / clip_clipped: Reads (MAPQ >= 20) spanning vs
+            clipped/split at the breakpoint (None when they were not counted).
         fusion_call / fusion_confidence / evidence_codes: Final verdict.
     """
     contig: str

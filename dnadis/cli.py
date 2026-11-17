@@ -1240,6 +1240,8 @@ def run_assembly(
     depth_stats: Dict[str, 'DepthStats'] = {}
     depth_baseline: Optional[float] = None
     depth_work_dir = work_dir / "read_depth"
+    depth_target_coverage = (args.depth_target_coverage
+                             if args.depth_target_coverage > 0 else None)
     if reads and not args.skip_depth:
         logger.phase("Phase 12: Read depth analysis")
         from dnadis.analysis.read_depth import calculate_depth_metrics
@@ -1260,8 +1262,10 @@ def run_assembly(
             threads=_job_threads(depth_spec),
             reads_type=args.reads_type,
             window_size=args.depth_window_size,
-            target_coverage=args.depth_target_coverage if args.depth_target_coverage > 0 else None,
-            keep_bam=args.keep_depth_bam or args.fusion_split_reads,
+            target_coverage=depth_target_coverage,
+            # Split-read evidence reads this alignment after depth is computed.
+            keep_bam=args.keep_depth_bam or (args.fusion_split_reads
+                                             and not args.skip_fusion_evidence),
             resource_spec=depth_spec if use_cluster else None,
         )
         depth_stats = depth_future.result()
@@ -1340,28 +1344,22 @@ def run_assembly(
     fusion_junctions: list = []
     fusion_junctions_tsv: Optional[Path] = None
     if rearrangement_calls and not args.skip_fusion_evidence:
-        from dnadis.analysis.junction_evidence import (
-            FusionThresholds, annotate_fusion_evidence,
-        )
-        depth_regions = (depth_work_dir / "depth.regions.bed.gz"
-                         if reads and not args.skip_depth else None)
+        from dnadis.analysis.junction_evidence import FusionThresholds, run_fusion_evidence
+        # Only depth this run computed or validated: depth_stats is empty when
+        # depth was skipped or failed, and the files on disk may then be stale.
+        depth_regions = depth_work_dir / "depth.regions.bed.gz" if depth_stats else None
         fusion_bam: Optional[Path] = None
         if args.fusion_split_reads and reads:
-            from dnadis.analysis.read_depth import ReadFormat, detect_read_format
-            cand = depth_work_dir / "aligned_reads.sorted.bam"
-            try:
-                reads_aligned = detect_read_format(Path(str(reads))) == ReadFormat.ALIGNED_BAM
-            except ValueError:
-                reads_aligned = False
-            if cand.exists():
-                fusion_bam = cand
-            elif reads_aligned:
-                fusion_bam = Path(str(reads))
-            else:
-                logger.warning("--fusion-split-reads: no BAM available; "
-                               "skipping split-read evidence")
-        fusion_junctions = annotate_fusion_evidence(
+            from dnadis.analysis.read_depth import current_depth_alignment
+            fusion_bam = current_depth_alignment(
+                depth_work_dir, Path(str(reads)), qry, args.reads_type,
+                depth_target_coverage)
+            if fusion_bam is None:
+                logger.warning("--fusion-split-reads: no read alignment matching this "
+                               "assembly and reads; skipping split-read evidence")
+        fusion_junctions, fusion_junctions_tsv = run_fusion_evidence(
             rearrangement_calls,
+            classifications=classifications,
             macro_block_rows=ev.macro_block_rows,
             query_lengths=qry_lengths,
             depth_regions_path=depth_regions,
@@ -1374,38 +1372,9 @@ def run_assembly(
                 min_evidence_depth=args.fusion_min_evidence_depth,
                 max_junction_gap_bp=args.fusion_max_junction_gap,
             ),
+            outprefix=outprefix,
+            reference=qry,
         )
-        if depth_regions is None:
-            logger.info("Fusion evidence: no read depth; alignment continuity is reported "
-                        "but verdicts stay inconclusive")
-        for j in fusion_junctions:
-            logger.info(f"Fusion junction {j.contig} {j.left_ref}|{j.right_ref} "
-                        f"@{j.junction_point:,}: {j.fusion_call} "
-                        f"({j.fusion_confidence}; {j.evidence_codes or 'no evidence'})")
-        # Fragments of a fused arm's reference that sit in a different subgenome
-        # group than the fusion contig cannot co-scaffold with it.
-        # Fragments whose own group has a chromosome contig for that reference
-        # scaffold with it and are not reported.
-        clf_by_orig = {c.original_name: c for c in classifications}
-        anchored = {(c.assigned_ref_id, c.query_subgenome_grp) for c in classifications
-                    if c.classification == "chrom_assigned"}
-        for j in fusion_junctions:
-            fc = clf_by_orig.get(j.contig)
-            if j.fusion_call != "biological_fusion" or fc is None:
-                continue
-            for frag in classifications:
-                if (frag.classification == "chrom_fragment"
-                        and frag.assigned_ref_id in (j.left_ref, j.right_ref)
-                        and frag.query_subgenome_grp != fc.query_subgenome_grp
-                        and (frag.assigned_ref_id, frag.query_subgenome_grp) not in anchored):
-                    logger.info(f"Fragment {frag.new_name} ({frag.assigned_ref_id}) is in a "
-                                f"different subgenome group than fusion contig "
-                                f"{fc.new_name}; it will not co-scaffold with it")
-        if fusion_junctions:
-            from dnadis.output.tsv_output import write_fusion_junctions_tsv
-            fusion_junctions_tsv = Path(str(outprefix) + ".fusion_junctions.tsv")
-            write_fusion_junctions_tsv(fusion_junctions_tsv, fusion_junctions)
-            logger.done(f"Fusion junctions: {fusion_junctions_tsv}")
     rearrangements_tsv: Optional[Path] = None
     if rearrangement_calls:
         rearrangements_tsv = Path(str(outprefix) + ".rearrangements.tsv")

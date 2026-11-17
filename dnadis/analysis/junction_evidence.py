@@ -23,8 +23,9 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from dnadis.analysis.read_depth import clipping_pileup, read_depth_windows_for_contigs
+from dnadis.output.tsv_output import write_fusion_junctions_tsv
 from dnadis.detection.rearrangements import unpack_macro_block_row
-from dnadis.models import FusionJunction, RearrangementCall
+from dnadis.models import ContigClassification, FusionJunction, RearrangementCall
 from dnadis.utils.io_utils import merge_intervals
 from dnadis.utils.logging_config import get_logger
 
@@ -41,6 +42,8 @@ _MIN_FLANK_WINDOWS = 2
 _MIN_CV_WINDOWS = 3
 # Split reads are only counted when reads can span the junction interval.
 _MAX_SPLIT_INTERVAL_BP = 5000
+# Reads placed with lower mapping quality are not counted at a junction.
+_MIN_SPLIT_MAPQ = 20
 # Aligned stretches of one reference closer than this form one cluster; an
 # arm's extent covers the clusters holding at least _MIN_ARM_CLUSTER_FRAC of
 # its aligned bases, so a small stray block inside another arm is ignored.
@@ -293,6 +296,7 @@ def annotate_fusion_evidence(
     bam_path: Optional[Path],
     thr: FusionThresholds,
     breakpoint_tolerance: int = 50,
+    reference: Optional[Path] = None,
 ) -> List[FusionJunction]:
     """Score every fusion junction and write results onto the fusion calls.
 
@@ -305,9 +309,10 @@ def annotate_fusion_evidence(
         macro_block_rows: Macro-block tuples used to locate junctions.
         query_lengths: Query contig lengths (original names).
         depth_regions_path: mosdepth regions.bed.gz, or None without ``--reads``.
-        bam_path: Sorted BAM for split-read evidence, or None.
+        bam_path: Sorted, indexed BAM/CRAM for split-read evidence, or None.
         thr: Thresholds.
         breakpoint_tolerance: Slack (bp) for the clipping pileup.
+        reference: Assembly FASTA, needed to read a CRAM.
 
     Returns:
         Scored junctions, one per matched fusion call.
@@ -374,7 +379,8 @@ def annotate_fusion_evidence(
         # long unaligned gap, so the breakpoint inside it is unknown.
         if (bam_path is not None and j.aln_verdict != "overlapping"
                 and hi - lo <= _MAX_SPLIT_INTERVAL_BP):
-            res = clipping_pileup(bam_path, j.contig, lo, hi, breakpoint_tolerance)
+            res = clipping_pileup(bam_path, j.contig, lo, hi, breakpoint_tolerance,
+                                  min_mapq=_MIN_SPLIT_MAPQ, reference=reference)
             if res is not None:
                 j.clip_spanning, j.clip_clipped = res
         classify_fusion_evidence(j)
@@ -393,3 +399,71 @@ def annotate_fusion_evidence(
         elif pick.fusion_call == "assembly_artifact":
             call.confidence = _shift_confidence(call.confidence, -1)
     return junctions
+
+
+def run_fusion_evidence(
+    calls: List[RearrangementCall],
+    classifications: List[ContigClassification],
+    macro_block_rows: Sequence[Tuple],
+    query_lengths: Dict[str, int],
+    depth_regions_path: Optional[Path],
+    bam_path: Optional[Path],
+    thr: FusionThresholds,
+    outprefix: Path,
+    reference: Optional[Path] = None,
+) -> Tuple[List[FusionJunction], Optional[Path]]:
+    """Score fusion junctions, log the verdicts and write ``*.fusion_junctions.tsv``.
+
+    Args:
+        calls: Rearrangement calls; fusion calls are annotated in place.
+        classifications: Contig classifications (for fragment notes).
+        macro_block_rows: Macro-block tuples used to locate junctions.
+        query_lengths: Query contig lengths (original names).
+        depth_regions_path: Current mosdepth regions.bed.gz, or None.
+        bam_path: Current read alignment for split-read evidence, or None.
+        thr: Thresholds.
+        outprefix: Output prefix for the junction TSV.
+        reference: Assembly FASTA, needed to read a CRAM.
+
+    Returns:
+        (scored junctions, junction TSV path or None when nothing was scored).
+    """
+    junctions = annotate_fusion_evidence(
+        calls, macro_block_rows=macro_block_rows, query_lengths=query_lengths,
+        depth_regions_path=depth_regions_path, bam_path=bam_path, thr=thr,
+        reference=reference,
+    )
+    if depth_regions_path is None:
+        logger.info("Fusion evidence: no read depth; alignment continuity is reported "
+                    "but verdicts stay inconclusive")
+    for j in junctions:
+        logger.info(f"Fusion junction {j.contig} {j.left_ref}|{j.right_ref} "
+                    f"@{j.junction_point:,}: {j.fusion_call} "
+                    f"({j.fusion_confidence}; {j.evidence_codes or 'no evidence'})")
+
+    # Fragments of a fused arm's reference that sit in a different subgenome
+    # group than the fusion contig cannot co-scaffold with it.  Fragments whose
+    # own group has a chromosome contig for that reference scaffold with it and
+    # are not reported.
+    clf_by_orig = {c.original_name: c for c in classifications}
+    anchored = {(c.assigned_ref_id, c.query_subgenome_grp) for c in classifications
+                if c.classification == "chrom_assigned"}
+    for j in junctions:
+        fc = clf_by_orig.get(j.contig)
+        if j.fusion_call != "biological_fusion" or fc is None:
+            continue
+        for frag in classifications:
+            if (frag.classification == "chrom_fragment"
+                    and frag.assigned_ref_id in (j.left_ref, j.right_ref)
+                    and frag.query_subgenome_grp != fc.query_subgenome_grp
+                    and (frag.assigned_ref_id, frag.query_subgenome_grp) not in anchored):
+                logger.info(f"Fragment {frag.new_name} ({frag.assigned_ref_id}) is in a "
+                            f"different subgenome group than fusion contig "
+                            f"{fc.new_name}; it will not co-scaffold with it")
+
+    if not junctions:
+        return junctions, None
+    tsv = Path(str(outprefix) + ".fusion_junctions.tsv")
+    write_fusion_junctions_tsv(tsv, junctions)
+    logger.done(f"Fusion junctions: {tsv}")
+    return junctions, tsv

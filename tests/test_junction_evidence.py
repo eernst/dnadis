@@ -263,3 +263,52 @@ def test_non_adjacent_fusion_pair_is_not_scored():
                              FusionThresholds())
     assert ab.junction_start == 6 * MB
     assert ac.junction_start is None and ac.fusion_call == ""
+
+
+def test_low_mapq_reads_are_not_counted():
+    def rec(mapq, pos, cigar):
+        return f"r\t0\tctg\t{pos}\t{mapq}\t{cigar}\t*\t0\t0\tA\tA"
+    lines = [rec(60, 1000, "5000M"), rec(0, 1000, "5000M"), rec(3, 1000, "2000M3000S")]
+    assert parse_clipping_sam(lines, 3000, 3000) == (1, 0)
+    assert parse_clipping_sam(lines, 3000, 3000, min_mapq=0) == (2, 1)
+
+
+def test_current_depth_alignment_requires_matching_metadata(tmp_path):
+    from dnadis.analysis.read_depth import current_depth_alignment, write_alignment_metadata
+
+    reads = tmp_path / "reads.fastq"
+    reads.write_text("@r\nACGT\n+\nIIII\n")
+    asm = tmp_path / "asm.fa"
+    asm.write_text(">ctg\nACGT\n")
+    other = tmp_path / "other.fa"
+    other.write_text(">ctg\nACGT\n")
+    work = tmp_path / "read_depth"
+    work.mkdir()
+    assert current_depth_alignment(work, reads, asm, "lrhq", 20.0) is None
+
+    bam = work / "aligned_reads.sorted.bam"
+    bam.write_bytes(b"x" * 200)
+    (work / "aligned_reads.sorted.bam.bai").write_bytes(b"x")
+    assert current_depth_alignment(work, reads, asm, "lrhq", 20.0) is None  # no metadata
+
+    write_alignment_metadata(work / "alignment_metadata.json", reads, asm, "lrhq",
+                             20.0, downsampled=False)
+    assert current_depth_alignment(work, reads, asm, "lrhq", 20.0) == bam
+    # An alignment made for another assembly or coverage is not used.
+    assert current_depth_alignment(work, reads, other, "lrhq", 20.0) is None
+    assert current_depth_alignment(work, reads, asm, "lrhq", None) is None
+
+
+def test_run_fusion_evidence_writes_junction_tsv(tmp_path):
+    from dnadis.analysis.junction_evidence import run_fusion_evidence
+
+    call = RearrangementCall("ctg", "ctg", "chr1", "fusion", "chr2", 0, 1, 0, 0,
+                             1, "+", "medium", "e")
+    js, tsv = run_fusion_evidence([call], [], _rows(), {"ctg": 18 * MB}, None, None,
+                                  FusionThresholds(), tmp_path / "asm")
+    assert len(js) == 1 and tsv == tmp_path / "asm.fusion_junctions.tsv" and tsv.exists()
+    assert call.fusion_call == "inconclusive"
+
+    js, tsv = run_fusion_evidence([], [], _rows(), {"ctg": 18 * MB}, None, None,
+                                  FusionThresholds(), tmp_path / "none")
+    assert js == [] and tsv is None

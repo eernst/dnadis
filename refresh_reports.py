@@ -36,6 +36,39 @@ def output_schema(rmd_text: str) -> int:
     m = OUTPUT_SCHEMA_RE.search(rmd_text)
     return int(m.group(1)) if m else 0
 
+
+# The input each output_schema version of a template changed: the placeholder
+# of that TSV, or None when the change concerns inputs every report reads.
+# A folder without rows in the changed TSV renders with the newer template.
+SCHEMA_INPUTS: dict[str, dict[int, str | None]] = {
+    "assembly_report.tmpl.Rmd": {1: None, 2: None, 3: None, 4: None,
+                                 5: "__REARRANGEMENTS__"},
+    "comparison_report.tmpl.Rmd": {1: None, 2: None, 3: None, 4: None},
+}
+
+
+def _has_rows(path: str) -> bool:
+    """True when *path* names a TSV with at least one row below its header."""
+    if not path:
+        return False
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.readline() != "" and fh.readline() != ""
+    except OSError:
+        return False
+
+
+def schema_gaps(template_name: str, have: int, need: int,
+                values: dict[str, str]) -> list[int]:
+    """Schema versions between *have* and *need* whose changed input is present."""
+    changes = SCHEMA_INPUTS.get(template_name, {})
+    gaps = []
+    for version in range(have + 1, need + 1):
+        placeholder = changes.get(version)
+        if placeholder is None or _has_rows(values.get(placeholder, "")):
+            gaps.append(version)
+    return gaps
+
 # Which file suffix provides the value for each placeholder (relative to the
 # output prefix).  A tuple lists the current name first, then names written by
 # earlier dnadis versions, which can still sit beside the current file.
@@ -49,6 +82,8 @@ PLACEHOLDER_TSV: dict[str, str | tuple[str, ...]] = {
     "__AGP__": (".chrs.scaffolds.agp", ".scaffolded.agp"),
     "__COBIONTS_TSV__": ".cobionts.tsv",
     "__GAPS__": ".gaps.bed",
+    "__RDNA_ARRAYS__": ".rdna_arrays.tsv",
+    "__REARRANGEMENTS__": ".rearrangements.tsv",
 }
 
 # Output file suffixes per script type
@@ -321,18 +356,6 @@ def refresh_script(
     template_text = template_path.read_text(encoding="utf-8")
     generated_text = generated_path.read_text(encoding="utf-8")
 
-    # The TSVs next to the script were written by the run that generated it.
-    # A template that reads a newer output schema cannot render them.
-    have, need = output_schema(generated_text), output_schema(template_text)
-    if have < need:
-        print(
-            f"  SKIP {suffix}: outputs were written by an older dnadis (output "
-            f"schema {have}, template reads {need}). Rerun dnadis on this folder "
-            "to regenerate them; cached alignments and depth are reused.",
-            file=sys.stderr,
-        )
-        return None
-
     # Inline the shared R helpers so the script keeps working after later
     # changes to common.R.
     common_r = template_dir / "common.R"
@@ -343,6 +366,19 @@ def refresh_script(
     # Build placeholder values from TSVs in run_dir + generated script
     values = build_placeholder_values(suffix, prefix, template_text, generated_text,
                                        template_dir=template_dir)
+
+    # The TSVs next to the script were written by the run that generated it.
+    # A template that reads a newer output schema cannot render them, unless
+    # the inputs those schema versions changed are absent here.
+    have, need = output_schema(generated_text), output_schema(template_text)
+    if have < need and schema_gaps(template_name, have, need, values):
+        print(
+            f"  SKIP {suffix}: outputs were written by an older dnadis (output "
+            f"schema {have}, template reads {need}). Rerun dnadis on this folder "
+            "to regenerate them; cached alignments and depth are reused.",
+            file=sys.stderr,
+        )
+        return None
 
     # Check we found all placeholders
     all_placeholders = {f"__{p}__" for p in PLACEHOLDER_RE.findall(template_text)}

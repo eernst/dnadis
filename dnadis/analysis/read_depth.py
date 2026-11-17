@@ -97,16 +97,6 @@ def detect_read_format(reads_path: Path) -> ReadFormat:
     raise ValueError(f"Cannot determine format of reads file: {reads_path}")
 
 
-def _aligned_bam_missing(work_dir: Path, reads: Path) -> bool:
-    """True when *reads* need aligning and ``aligned_reads.sorted.bam`` is gone."""
-    try:
-        if detect_read_format(reads) in (ReadFormat.ALIGNED_BAM, ReadFormat.ALIGNED_CRAM):
-            return False
-    except ValueError:
-        return False
-    return not file_exists_and_valid(work_dir / "aligned_reads.sorted.bam", min_size=100)
-
-
 def is_aligned_bam(bam_path: Path) -> bool:
     """Check if a BAM/CRAM file contains aligned reads.
 
@@ -574,6 +564,38 @@ def check_alignment_cache(
     return True
 
 
+def current_depth_alignment(
+    work_dir: Path,
+    reads: Path,
+    assembly: Path,
+    reads_type: str,
+    target_coverage: Optional[float],
+) -> Optional[Path]:
+    """The read alignment behind the depth track, when it matches these inputs.
+
+    Pre-aligned BAM/CRAM reads are their own alignment.  Otherwise
+    ``aligned_reads.sorted.bam`` in *work_dir* is returned only if its
+    alignment metadata matches the reads, assembly, read type and target
+    coverage (the same check that lets the depth step reuse it).
+
+    Returns:
+        Path to the BAM/CRAM, or None when no current alignment exists.
+    """
+    try:
+        read_format = detect_read_format(reads)
+    except ValueError:
+        return None
+    if read_format in (ReadFormat.ALIGNED_BAM, ReadFormat.ALIGNED_CRAM):
+        return reads
+    bam = work_dir / "aligned_reads.sorted.bam"
+    if not file_exists_and_valid(bam, min_size=100):
+        return None
+    if check_alignment_cache(bam, work_dir / "alignment_metadata.json", reads,
+                             assembly, reads_type, target_coverage):
+        return bam
+    return None
+
+
 def check_depth_cache(
     regions_bed_gz: Path,
     metadata_path: Path,
@@ -907,6 +929,7 @@ def parse_clipping_sam(
     breakpoint_start: int,
     breakpoint_end: int,
     tolerance: int = 50,
+    min_mapq: int = 20,
 ) -> Tuple[int, int]:
     """Count reads spanning vs clipped/split at a breakpoint from SAM text.
 
@@ -914,13 +937,16 @@ def parse_clipping_sam(
     interval (extended by ``tolerance``) with no soft/hard clip inside the
     tolerance of either breakpoint edge.  A read is *clipped* when it carries
     an ``SA`` tag or a clip of at least 20 bp whose clipped end lies within
-    ``tolerance`` of the interval.
+    ``tolerance`` of the interval.  Reads with mapping quality below
+    ``min_mapq`` are ignored: in repeats shared with other loci their
+    placement, and so their clipping, is arbitrary.
 
     Args:
         sam_lines: Iterable of SAM record lines (header lines are skipped).
         breakpoint_start: Breakpoint interval start (0-based).
         breakpoint_end: Breakpoint interval end.
         tolerance: Slack in bp around the interval.
+        min_mapq: Minimum mapping quality of a counted read.
 
     Returns:
         (spanning, clipped) read counts.
@@ -940,10 +966,13 @@ def parse_clipping_sam(
         try:
             flag = int(f[1])
             pos0 = int(f[3]) - 1
+            mapq = int(f[4])
         except ValueError:
             continue
         if flag & 0x904:
             continue  # unmapped, secondary or supplementary (counted via SA)
+        if mapq < min_mapq:
+            continue
         ops = [(int(n), op) for n, op in cigar_re.findall(f[5])]
         if not ops:
             continue
@@ -970,10 +999,14 @@ def clipping_pileup(
     breakpoint_start: int,
     breakpoint_end: int,
     tolerance: int = 50,
+    min_mapq: int = 20,
+    reference: Optional[Path] = None,
 ) -> Optional[Tuple[int, int]]:
     """Count spanning vs clipped/split reads at a breakpoint using samtools.
 
-    Returns None when samtools or the BAM is unavailable, or the query fails.
+    *reference* (the assembly the reads were aligned to) is passed to
+    samtools for CRAM input.  Returns None when samtools or the BAM is
+    unavailable, or the query fails.
     """
     if bam_path is None or not file_exists_and_valid(Path(bam_path), min_size=1):
         return None
@@ -981,10 +1014,13 @@ def clipping_pileup(
         return None
     lo = max(0, breakpoint_start - tolerance)
     hi = breakpoint_end + tolerance
-    region = f"{contig}:{lo + 1}-{hi}"
+    region = f"{{{contig}}}:{lo + 1}-{hi}"  # braces allow ':' in contig names
+    cmd = ["samtools", "view"]
+    if reference is not None and str(bam_path).endswith(".cram"):
+        cmd += ["--reference", str(reference)]
     try:
         proc = subprocess.run(
-            ["samtools", "view", str(bam_path), region],
+            cmd + [str(bam_path), region],
             capture_output=True, text=True, check=False,
         )
     except OSError:
@@ -992,7 +1028,7 @@ def clipping_pileup(
     if proc.returncode != 0:
         return None
     return parse_clipping_sam(proc.stdout.splitlines(), breakpoint_start,
-                              breakpoint_end, tolerance)
+                              breakpoint_end, tolerance, min_mapq)
 
 
 def parse_mosdepth_regions(
@@ -1164,7 +1200,8 @@ def calculate_depth_metrics(
 
     if check_depth_cache(regions_file, metadata_path, reads, assembly,
                          reads_type, target_coverage, window_size):
-        if keep_bam and _aligned_bam_missing(work_dir, reads):
+        if keep_bam and current_depth_alignment(work_dir, reads, assembly, reads_type,
+                                                target_coverage) is None:
             logger.info("Depth output is cached but the BAM to keep is not; realigning")
         else:
             logger.info(f"Reusing cached depth output: {regions_file}")

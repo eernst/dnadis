@@ -152,6 +152,8 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
         "telomere_min_repeats": "telomere_min_repeats",
         "telomere_min_bp": "telomere_min_bp",
         "subgenome_k": "subgenome_k",
+    },
+    "rearrangements": {
         "rearrangement_threshold": "rearrangement_threshold",
         "rearrangement_density_frac": "rearrangement_density_frac",
     },
