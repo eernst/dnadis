@@ -2807,7 +2807,10 @@ def main():
         # shared-protein-anchor philosophy of the per-assembly phase.
         # Runs inside executor context because it submits SLURM jobs.
         if n_total > 1 and results and len(results) >= 2:
-            from dnadis.alignment.pairwise import compute_pairwise_synteny
+            from dnadis.alignment.pairwise import (
+                compute_pairwise_synteny,
+                pairwise_cache_is_current,
+            )
             from dnadis.utils.resource_estimation import estimate_pairwise_resources
 
             # Build chain-parsing kwargs once (all plain types, serializable)
@@ -2880,7 +2883,7 @@ def main():
                         left_fasta = left.per_subgenome_chrs[sg]
                         right_fasta = right.per_subgenome_chrs[sg]
                         macro_tsv = Path(str(pair_prefix) + ".macro_blocks.tsv")
-                        if output_is_current(macro_tsv, left_fasta, right_fasta):
+                        if pairwise_cache_is_current(macro_tsv, left_fasta, right_fasta):
                             logger.info(f"Reusing cached pairwise: {macro_tsv}")
                             pairwise_pairs.append((pair_name, macro_tsv))
                         else:
@@ -2914,7 +2917,7 @@ def main():
                     left_fasta = left.chrs_fasta
                     right_fasta = right.chrs_fasta
                     macro_tsv = Path(str(pair_prefix) + ".macro_blocks.tsv")
-                    if output_is_current(macro_tsv, left_fasta, right_fasta):
+                    if pairwise_cache_is_current(macro_tsv, left_fasta, right_fasta):
                         logger.info(f"Reusing cached pairwise: {macro_tsv}")
                         pairwise_pairs.append((pair_name, macro_tsv))
                     else:
@@ -2979,7 +2982,7 @@ def main():
                     pair_prefix = nonadj_dir / pair_name
                     left_fasta, right_fasta = get_fasta(left), get_fasta(right)
                     macro_tsv = Path(str(pair_prefix) + ".macro_blocks.tsv")
-                    if output_is_current(macro_tsv, left_fasta, right_fasta):
+                    if pairwise_cache_is_current(macro_tsv, left_fasta, right_fasta):
                         logger.info(f"Reusing cached pairwise: {macro_tsv}")
                         pairwise_pairs.append((pair_name, macro_tsv))
                     else:
