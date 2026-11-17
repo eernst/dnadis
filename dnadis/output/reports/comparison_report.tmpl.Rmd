@@ -1384,7 +1384,10 @@ ctdf <- compl_df %>%
 p_ct_hm <- ggplot(ctdf, aes(x = chrom_num, y = assembly, fill = state)) +
   ggiraph::geom_tile_interactive(
     aes(tooltip = tooltip, data_id = paste(assembly, ref_id)),
-    color = "white", linewidth = 0.3, width = 0.95, height = 0.95) +
+    color = "white", linewidth = 0.3, width = 0.95, height = 0.95,
+    # ggplot2 >= 3.5 draws no key for a state absent from the data unless
+    # the layer asks for one, leaving a label without a swatch.
+    show.legend = TRUE) +
   # +N fragment-load badge: chromosomes carrying extra fragment contigs on top
   # of their anchor(s).  A small white chip keeps it legible over any fill.
   ggiraph::geom_label_interactive(
@@ -1416,7 +1419,7 @@ bar_df <- ctdf %>% count(assembly, state, name = "n")
 p_ct_bar <- ggplot(bar_df, aes(y = assembly, x = n, fill = state)) +
   ggiraph::geom_col_interactive(
     aes(tooltip = paste0(assembly, "\n", chrom_state_labels[as.character(state)], ": ", n)),
-    width = 0.72) +
+    width = 0.72, show.legend = TRUE) +
   scale_fill_manual(values = chrom_state_colors, labels = chrom_state_labels,
                     drop = FALSE, name = "State") +
   theme_minimal(base_size = base_font_pt, base_family = base_family) +
