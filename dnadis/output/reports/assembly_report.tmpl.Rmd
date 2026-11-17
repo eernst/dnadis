@@ -602,7 +602,9 @@ facet_var <- if (has_subgenomes) "subgenome_lab" else NULL
 
 p_ct_bar <- ggplot(bar_df, aes(y = chrom_y)) +
   geom_col(aes(x = ref_mb), fill = "grey88", width = 0.72) +
-  geom_col(aes(x = covered_mb, fill = state), width = 0.72) +
+  # show.legend = TRUE: ggplot2 >= 3.5 draws no key for a state absent from
+  # the data unless the layer asks for one, leaving a label without a swatch.
+  geom_col(aes(x = covered_mb, fill = state), width = 0.72, show.legend = TRUE) +
   geom_text(aes(x = ref_mb, label = lab), hjust = -0.25,
             size = (base_font_pt - 2) / .pt, color = "grey30") +
   scale_fill_manual(values = chrom_state_colors, labels = chrom_state_labels,
