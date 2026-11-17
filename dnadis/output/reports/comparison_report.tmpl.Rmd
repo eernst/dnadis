@@ -1879,14 +1879,45 @@ ref_pos_blocks <- if (!is.null(per_asm_macro_df) && nrow(per_asm_macro_df) > 0) 
   split(rp[, c("mid", "w")], rp$key)
 } else list()
 
-# Weighted median reference midpoint over the blocks of one or more contigs
-# (several for a scaffold) on reference `rid`; NA when none align there.
+# Reference footprint of one or more contigs (several for a scaffold) on
+# reference `rid`: the union_bp-weighted 10th, 50th and 90th percentiles of
+# their block midpoints, as c(lo, mid, hi).  The 10-90% range keeps stray
+# hits from stretching the span.  All NA when none align there.
 ref_position <- function(asm, original_names, rid) {
   b <- bind_rows(ref_pos_blocks[paste(asm, original_names, rid, sep = "\x01")])
-  if (nrow(b) == 0) return(NA_real_)
+  if (nrow(b) == 0) return(c(lo = NA_real_, mid = NA_real_, hi = NA_real_))
   b <- b[order(b$mid), , drop = FALSE]
-  cw <- cumsum(b$w)
-  b$mid[which(cw >= cw[length(cw)] / 2)[1]]
+  cw <- cumsum(b$w) / sum(b$w)
+  q <- function(p) b$mid[which(cw >= p)[1]]
+  c(lo = q(0.1), mid = q(0.5), hi = q(0.9))
+}
+
+# Left-to-right order for the pills of one assembly in one reference column.
+# Pills whose footprints overlap by at least half of the shorter one are the
+# same stretch of the chromosome (e.g. whole-chromosome copies _s1 and _s2):
+# they form one group and keep name order, so copies line up the same way in
+# every row.  Groups follow the reference by their leftmost median; pills
+# without blocks go last.
+order_pills_by_reference <- function(names, pos) {
+  n <- length(names)
+  nm_rank <- integer(n)
+  nm_rank[str_order(names, numeric = TRUE)] <- seq_len(n)
+  mid <- pos[, "mid"]
+  placed <- which(!is.na(mid))
+  placed <- placed[order(mid[placed], nm_rank[placed])]
+  group <- rep(NA_integer_, n)
+  g <- 0L; g_lo <- NA_real_; g_hi <- NA_real_
+  for (i in placed) {
+    lo <- pos[i, "lo"]; hi <- pos[i, "hi"]
+    shorter <- min(hi - lo, g_hi - g_lo)
+    ov <- min(hi, g_hi) - max(lo, g_lo)
+    same <- g > 0 && is.finite(ov) && ov >= 0 &&
+      (shorter <= 0 || ov >= 0.5 * shorter)
+    if (!same) { g <- g + 1L; g_lo <- lo; g_hi <- hi }
+    else { g_lo <- min(g_lo, lo); g_hi <- max(g_hi, hi) }
+    group[i] <- g
+  }
+  order(is.na(group), group, nm_rank)
 }
 
 # --- Build contig_new → scaffold name mapping ---
@@ -2159,16 +2190,13 @@ build_synteny_plot <- function(sg) {
       }
     }
 
-    # Lay out scaffolds and fragments together in reference order (weighted
-    # median midpoint of their blocks on this chromosome), so ribbons to the
-    # reference do not cross.  Pills without blocks here go last; name order
-    # (natural-numeric) breaks ties.
+    # Lay out scaffolds and fragments together in reference order, so ribbons
+    # to the reference do not cross; copies of the same stretch keep name
+    # order (see order_pills_by_reference()).
     if (length(specs) > 1) {
-      nm_rank <- integer(length(specs))
-      nm_rank[str_order(vapply(specs, function(s) s$name, character(1)),
-                        numeric = TRUE)] <- seq_along(specs)
-      pos <- vapply(specs, function(s) s$ref_pos, numeric(1))
-      specs <- specs[order(is.na(pos), pos, nm_rank)]
+      pos <- do.call(rbind, lapply(specs, function(s) s$ref_pos))
+      specs <- specs[order_pills_by_reference(
+        vapply(specs, function(s) s$name, character(1)), pos)]
     }
     specs
   }
