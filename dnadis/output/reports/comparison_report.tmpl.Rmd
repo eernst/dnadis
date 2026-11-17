@@ -1858,6 +1858,29 @@ if (!is.null(per_asm_macro_df) && nrow(asm_lookup_df) > 0) {
   per_asm_macro_df <- per_asm_macro_df %>% mutate(contig_new = contig)
 }
 
+# --- Reference position of each assembly contig, for pill ordering ---
+# Blocks of one contig on one reference chromosome, keyed by
+# assembly<US>original contig name<US>ref_id.  Pills sharing a reference
+# column are laid out by the union_bp-weighted median midpoint of these
+# blocks, so their left-to-right order follows the reference.
+ref_pos_blocks <- if (!is.null(per_asm_macro_df) && nrow(per_asm_macro_df) > 0) {
+  rp <- per_asm_macro_df %>%
+    transmute(key = paste(assembly, contig, ref_id, sep = "\x01"),
+              mid = (ref_start + ref_end) / 2, w = union_bp) %>%
+    filter(!is.na(mid), !is.na(w), w > 0)
+  split(rp[, c("mid", "w")], rp$key)
+} else list()
+
+# Weighted median reference midpoint over the blocks of one or more contigs
+# (several for a scaffold) on reference `rid`; NA when none align there.
+ref_position <- function(asm, original_names, rid) {
+  b <- bind_rows(ref_pos_blocks[paste(asm, original_names, rid, sep = "\x01")])
+  if (nrow(b) == 0) return(NA_real_)
+  b <- b[order(b$mid), , drop = FALSE]
+  cw <- cumsum(b$w)
+  b$mid[which(cw >= cw[length(cw)] / 2)[1]]
+}
+
 # --- Build contig_new → scaffold name mapping ---
 # Maps (assembly, renamed_contig_name) → scaffold_name for contigs that are
 # components of multi-component scaffolds.  Used for ribbon pill matching.
@@ -2107,7 +2130,8 @@ build_synteny_plot <- function(sg) {
       scaffolded_components <- c(scaffolded_components, comp_rows$component)
       specs[[length(specs) + 1]] <- list(
         kind = "scaffold", name = sn, length = max(sa$end),
-        sa = sa, components = comp_rows$component
+        sa = sa, components = comp_rows$component,
+        ref_pos = ref_position(asm, comp_rows$component, rid)
       )
     }
 
@@ -2121,18 +2145,22 @@ build_synteny_plot <- function(sg) {
         specs[[length(specs) + 1]] <- list(
           kind = "fragment", name = as.character(r$contig),
           length = r$length, original_name = r$original_name,
-          reversed = r$reversed
+          reversed = r$reversed,
+          ref_pos = ref_position(asm, r$original_name, rid)
         )
       }
     }
 
-    # Sort all specs (scaffolds + fragments together) by their displayed
-    # name using natural-numeric sort, so layout order matches the order
-    # users see in contig names rather than scaffolds-first-fragments-last.
+    # Lay out scaffolds and fragments together in reference order (weighted
+    # median midpoint of their blocks on this chromosome), so ribbons to the
+    # reference do not cross.  Pills without blocks here go last; name order
+    # (natural-numeric) breaks ties.
     if (length(specs) > 1) {
-      ord <- str_order(vapply(specs, function(s) s$name, character(1)),
-                       numeric = TRUE)
-      specs <- specs[ord]
+      nm_rank <- integer(length(specs))
+      nm_rank[str_order(vapply(specs, function(s) s$name, character(1)),
+                        numeric = TRUE)] <- seq_along(specs)
+      pos <- vapply(specs, function(s) s$ref_pos, numeric(1))
+      specs <- specs[order(is.na(pos), pos, nm_rank)]
     }
     specs
   }
