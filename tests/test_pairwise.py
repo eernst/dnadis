@@ -207,11 +207,18 @@ class TestComputePairwiseSynteny:
 
     def test_recomputes_cache_with_unknown_left_names(self, tmp_path, monkeypatch):
         """A cached TSV whose ref_ids are not left contig names is discarded."""
+        import gzip
+        from dnadis.alignment.pairwise import pairwise_cache_is_current
+
         calls = self._stub_minimap2(monkeypatch)
         left_fasta, right_fasta, pair_prefix = self._write_pair(tmp_path)
+        paf_gz = Path(str(pair_prefix) + ".paf.gz")
+        with gzip.open(paf_gz, "wt") as fh:
+            fh.write("Chr01_f1\t30000\t0\t20000\t+\tChr01_f1\t30000\t0\t20000\n")
         macro_tsv = Path(str(pair_prefix) + ".macro_blocks.tsv")
         macro_tsv.write_text("contig\tcontig_len\tref_id\nChr01_f1\t30000\tchr01_f1\n")
 
+        assert not pairwise_cache_is_current(macro_tsv, left_fasta, right_fasta)
         result = compute_pairwise_synteny(
             left_fasta=left_fasta, right_fasta=right_fasta,
             left_name="left", right_name="right",
@@ -219,6 +226,7 @@ class TestComputePairwiseSynteny:
         )
         assert calls, "stale cache should have been recomputed"
         assert "chr01_f1" not in result.read_text()
+        assert pairwise_cache_is_current(result, left_fasta, right_fasta)
 
     def test_creates_output_directory(self, tmp_path):
         """Should create the pairwise output directory if it doesn't exist."""

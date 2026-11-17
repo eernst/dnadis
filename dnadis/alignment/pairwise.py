@@ -30,13 +30,27 @@ from dnadis.utils.sequence_utils import fasta_has_records, read_fasta_lengths
 logger = get_logger("pairwise")
 
 
-def _cached_ref_ids_match(macro_blocks_tsv: Path, left_fasta: Path) -> bool:
+def _cached_ref_ids_match(macro_blocks_tsv: Path) -> bool:
     """True if every ``ref_id`` in a cached pairwise TSV is a left contig name.
 
     Earlier versions normalized left contig names ("Chr1" -> "chr1"),
-    so TSVs cached by them name contigs that do not exist in the left FASTA.
+    so TSVs cached by them name contigs that do not exist in the left
+    assembly.  The left names are read from the target column of the
+    nucleotide PAF beside the TSV (kilobytes, unlike the left FASTA); without
+    that PAF (protein mode, which never normalized) the TSV is accepted.
     """
-    left_names = set(read_fasta_lengths(left_fasta))
+    paf_gz = Path(str(macro_blocks_tsv).removesuffix(".macro_blocks.tsv") + ".paf.gz")
+    if not file_exists_and_valid(paf_gz):
+        return True
+    left_names: set[str] = set()
+    try:
+        with open_maybe_gzip(paf_gz, "rt") as fh:
+            for line in fh:
+                fields = line.split("\t", 6)
+                if len(fields) > 5:
+                    left_names.add(fields[5])
+    except (OSError, EOFError):
+        return False
     with open_maybe_gzip(macro_blocks_tsv, "rt") as fh:
         header = fh.readline().rstrip("\n").split("\t")
         if "ref_id" not in header:
@@ -47,6 +61,15 @@ def _cached_ref_ids_match(macro_blocks_tsv: Path, left_fasta: Path) -> bool:
             if len(fields) > col and fields[col] not in left_names:
                 return False
     return True
+
+
+def pairwise_cache_is_current(
+    macro_blocks_tsv: Path, left_fasta: Path, right_fasta: Path,
+) -> bool:
+    """True if a cached pairwise macro_blocks TSV can be reused as is."""
+    return output_is_current(
+        macro_blocks_tsv, left_fasta, right_fasta,
+    ) and _cached_ref_ids_match(macro_blocks_tsv)
 
 
 def compute_pairwise_synteny(
@@ -142,7 +165,7 @@ def compute_pairwise_synteny(
         )
         macro_blocks_tsv.unlink()
     if file_exists_and_valid(macro_blocks_tsv) and not _cached_ref_ids_match(
-        macro_blocks_tsv, left_fasta,
+        macro_blocks_tsv,
     ):
         logger.info(
             f"Pairwise {left_name} vs {right_name}: cached macro_blocks names "
