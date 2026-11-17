@@ -269,13 +269,24 @@ def filter_gff3_by_ref(
     return output_path
 
 
+def ref_seq_kind(ref_id: str) -> str:
+    """Classify a reference sequence as 'nuclear', 'organelle' or 'other'.
+
+    'other' covers unplaced scaffolds, unlocalized contigs and anything else that
+    does not match a nuclear-chromosome pattern (presets or --ref-id-pattern).
+    """
+    if normalize_organelle_id(ref_id) is not None:
+        return "organelle"
+    return "nuclear" if is_nuclear_chromosome(ref_id) else "other"
+
+
 def write_ref_lengths_tsv(ref_lengths_path: Path, ref_fasta: Path) -> None:
     lengths = read_fasta_lengths(ref_fasta)
     with ref_lengths_path.open("w") as out:
-        out.write("ref_id\tchrom_id\tsubgenome\tref_len\n")
+        out.write("ref_id\tchrom_id\tsubgenome\tref_len\tkind\n")
         for ref_id, L in sorted(lengths.items()):
             chrom_id, sub = split_chrom_subgenome(ref_id)
-            out.write(f"{ref_id}\t{chrom_id}\t{sub}\t{L}\n")
+            out.write(f"{ref_id}\t{chrom_id}\t{sub}\t{L}\t{ref_seq_kind(ref_id)}\n")
 
 
 def parse_gff3_transcript_coords(

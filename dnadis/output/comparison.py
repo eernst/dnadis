@@ -10,6 +10,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from dnadis.utils.reference_utils import is_nuclear_chromosome
 from dnadis.models import (
     AssemblyResult,
     ChromRefSummary,
@@ -255,6 +256,10 @@ def build_assembly_result(
             frag_groups[c.assigned_ref_id].append(c)
 
     for ref_id, ref_len in ref_lengths_norm.items():
+        # Per-chromosome states (and the n_chr_* counts) cover nuclear chromosomes
+        # only; unplaced scaffolds and organelles are not chromosomes to complete.
+        if not is_nuclear_chromosome(ref_id):
+            continue
         contigs_for_ref = ref_groups.get(ref_id, [])
         n_contigs_ref = len(contigs_for_ref)
         total_assigned_bp_ref = sum(c.contig_len for c in contigs_for_ref)
@@ -486,6 +491,7 @@ def write_chromosome_completeness_tsv(
     path: Path,
     results: List[AssemblyResult],
     ref_lengths_norm: Dict[str, int],
+    ref_norm_to_orig: Optional[Dict[str, str]] = None,
 ) -> None:
     """Write chromosome completeness matrix in long format.
 
@@ -496,7 +502,11 @@ def write_chromosome_completeness_tsv(
         path: Output TSV path.
         results: List of AssemblyResult objects.
         ref_lengths_norm: Normalized reference chromosome lengths.
+        ref_norm_to_orig: Map from normalized to original reference IDs. When
+            given, ``ref_id`` is written with the reference's own spelling (e.g.
+            ``Chr01``), matching ref_lengths.tsv and the contig summaries.
     """
+    norm_to_orig = ref_norm_to_orig or {}
     columns = [
         "ref_id",
         "ref_length",
@@ -521,12 +531,14 @@ def write_chromosome_completeness_tsv(
         fh.write("\t".join(columns) + "\n")
 
         for ref_id in sorted(ref_lengths_norm.keys()):
+            if not is_nuclear_chromosome(ref_id):
+                continue  # skip unplaced scaffolds / organelles
             ref_len = ref_lengths_norm[ref_id]
             for r in results:
                 crs = r.chrom_ref_coverage.get(ref_id)
                 if crs:
                     row = [
-                        ref_id,
+                        norm_to_orig.get(ref_id, ref_id),
                         str(ref_len),
                         r.assembly_name,
                         str(crs.n_contigs),
@@ -541,7 +553,7 @@ def write_chromosome_completeness_tsv(
                     ]
                 else:
                     row = [
-                        ref_id,
+                        norm_to_orig.get(ref_id, ref_id),
                         str(ref_len),
                         r.assembly_name,
                         "0",

@@ -518,6 +518,23 @@ class TestWriteChromosomeCompletenessTsv:
         assert data["assembly"] == "asm1"
         assert int(data["n_contigs"]) == 1
 
+    def test_nuclear_only_and_original_ids(self, tmp_path):
+        """Scaffolds/organelles are dropped; ref_id uses the reference's spelling."""
+        ref_lengths = {"chr01": 30_000_000, "scaffold_15": 400_000, "chrM": 500_000}
+        clfs = [_make_classification("ctg1", "chrom_assigned", 30_000_000, "chr01")]
+        r = _make_assembly_result("asm1", clfs, ref_lengths_norm=ref_lengths, tmp_path=tmp_path)
+
+        out = tmp_path / "completeness.tsv"
+        write_chromosome_completeness_tsv(
+            out, [r], ref_lengths,
+            {"chr01": "Chr01", "scaffold_15": "scaffold_15", "chrM": "chrM"},
+        )
+
+        lines = out.read_text().strip().split("\n")
+        header = lines[0].split("\t")
+        rows = [dict(zip(header, l.split("\t"))) for l in lines[1:]]
+        assert [d["ref_id"] for d in rows] == ["Chr01"]
+
 
 # ---------------------------------------------------------------------------
 # parse_compleasm_summary

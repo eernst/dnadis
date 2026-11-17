@@ -81,6 +81,11 @@ asm_pal <- c(oi[5], oi[1], oi[3], oi[6], oi[7], oi[4], oi[2], oi[8], oi[9])
 # ---------------------------------------------------------------------------
 ref_lengths <- read_dnadis_tsv(params$ref_lengths_tsv,
                         col_types = cols(subgenome = col_character()))
+# Plot nuclear chromosomes (and organelles) only: drop unplaced scaffolds and other
+# non-chromosomal reference sequences. Older ref_lengths.tsv files lack `kind`.
+if ("kind" %in% names(ref_lengths)) {
+  ref_lengths <- ref_lengths %>% filter(kind != "other")
+}
 list2env(setup_subgenomes(ref_lengths), envir = environment())
 
 # ---------------------------------------------------------------------------
