@@ -115,6 +115,43 @@ def test_split_chrom_subgenome_strips_query_set_suffixes():
     assert dnadis.split_chrom_subgenome("chr6A_B_f1") == ("chr6", "A")
 
 
+def test_scan_fasta_gaps(tmp_path):
+    """N runs of at least min_run bp are gaps, joined across line breaks and
+    reported as 0-based half-open intervals; shorter runs are not."""
+    from dnadis.utils.sequence_utils import scan_fasta_gaps
+
+    fasta = tmp_path / "scaffolds.fa"
+    fasta.write_text(
+        ">wrapped description\n"
+        "ACGTACNNNN\n"     # run starts at 6 and continues on the next lines
+        "NNNNNNNNNN\n"
+        "NNACGTACGT\n"     # ... and ends at 22
+        "ACnnnnnnnnnnnnAC\n"  # lowercase run 32-44
+        ">ends\n"
+        "NNNNNNNNNNNNACGTNNNNNNNNNNNN\n"  # runs at both ends
+        ">ambiguity\n"
+        "ACGTNACGTNNNNNACGT\n"  # 1- and 5-bp runs: not gaps
+        ">clean\n"
+        "ACGTACGT\n"
+    )
+    gaps = scan_fasta_gaps(fasta)
+    assert gaps == {
+        "wrapped": [(6, 22), (32, 44)],
+        "ends": [(0, 12), (16, 28)],
+    }
+    assert scan_fasta_gaps(fasta, min_run=5) ["ambiguity"] == [(9, 14)]
+    assert scan_fasta_gaps(fasta, min_run=1)["ambiguity"] == [(4, 5), (9, 14)]
+
+
+def test_scan_fasta_gaps_run_ending_at_line_end(tmp_path):
+    """A run that ends exactly at a line break is closed by the next line."""
+    from dnadis.utils.sequence_utils import scan_fasta_gaps
+
+    fasta = tmp_path / "a.fa"
+    fasta.write_text(">a\nACGTNNNNNNNNNN\nACGT\n>b\nNNNNNNNNNN\n")
+    assert scan_fasta_gaps(fasta) == {"a": [(4, 14)], "b": [(0, 10)]}
+
+
 def test_read_fasta_lengths_and_ref_lengths_tsv(tmp_path):
     fasta_path = tmp_path / "arabidopsis_mock.fa"
     fasta_path.write_text(

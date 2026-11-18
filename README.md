@@ -44,6 +44,8 @@ Suffixes compose left-to-right: set first, then copy/fragment. For example, `chr
 
 A contig is **chromosome-scale** when it has telomeres at both ends, when its length is at least 80% of the reference chromosome's, or when its syntenic coverage of the reference chromosome meets `--chr-scale-ref-coverage` (default: 0.70); `chromosome_scale_basis` in `contig_summary.tsv` records which. Only telomeres at both ends show that a contig is the whole chromosome: the length and coverage rules allow for a missing arm or end, and accommodate divergent references, where alignment coverage stays low. A telomere is called when runs of the telomere motif (`--telomere-min-repeats` consecutive copies, default 3) total at least `--telomere-min-bp` (default 200 bp) within `--telomere-window` (default 10 kb) of the contig end. `chrom_assigned` contigs on one reference chromosome are separate copies when their reference footprints overlap (at least half of the smaller footprint) and pieces of one copy when they tile it (`ref_copy`). The pieces of a split copy are named as fragments, except one piece with telomeres at both ends (the one with the largest reference footprint) if the copy has any; subgenome inference still counts the split copy as a copy. The `_f` suffix therefore flags assembly fragmentation rather than short contigs of arbitrary origin.
 
+**Scaffolded input.** A run of at least 10 N inside an input sequence is read as a scaffold gap. dnadis lists them in `*.gaps.bed` and counts them per contig (`n_gaps`, `gap_bp`). Chromosome-scale calls do not change: a scaffold with telomeres at both ends still spans the whole chromosome. In the per-chromosome contiguity states, though, **T2T** means one gap-free contig with telomeres at both ends, and a telomere-to-telomere sequence with gaps is **gapped** (shown as "T2T with gaps"). Contig N50 is over the pieces between gaps; N50 is over the input sequences.
+
 Set labels (`_s1`, `_s2`, …) are inferred by clustering query contigs that all map to the same reference chromosome by sequence-identity similarity. Sets are numbered by descending cluster identity, so `_s1` is the set closest to the reference. The reference's own subgenome letter stays part of `<ref>`: `chr1A_s2` is the second query set matching reference chromosome 1A. A chromosome with a single contig keeps the bare reference name even when other chromosomes are split; its set membership is still recorded in `query_subgenome_grp`. Names from earlier dnadis versions used letters (`_B`, `_C`) for the second and later sets and left the first set unsuffixed.
 
 The authoritative implementation is `dnadis/classification/classifier.py:generate_contig_names()`. See [Output Formats](docs/output_formats.md#contig_summarytsv) for the corresponding `contig` TSV column.
@@ -343,7 +345,7 @@ A **phylogeny-only outgroup** is a distant taxon useful only for rooting (it div
 | `--scaffold-gap-size` | Number of Ns between contigs in scaffolded output | 100 |
 | `--scaffold-rdna-contigs` | Also scaffold rDNA contigs that passed the synteny gate for a reference chromosome (see note below) | off |
 
-When `--scaffold` is enabled, chromosome-assigned contigs are grouped by reference chromosome and ordered into pseudomolecules. The scaffolder handles haplotype-aware grouping for polyploid assemblies (e.g., contigs assigned to chr1A are scaffolded separately from chr1B). Single T2T contigs that span a full chromosome produce trivial (single-component) AGP entries. Multi-contig chromosomes are ordered by reference position, either via RagTag (if installed) or the built-in scaffolder. A chromosome fragment that is a second copy of sequence in one of the assembly's chromosome contigs is not joined, and is written on its own in `chrs.scaffolds` (`scaffold_exclusion` = `own_assembly_copy`). It aligns over at least half its length to that contig (the `redundancy_*` columns) at ≥ 99.9% identity, or at ≥ 90% with the fragment and the matched region both at ≤ 0.75 of the chromosomal read depth (a haplotig; needs `--reads`) when that contig is assigned to the fragment's own reference chromosome. The reference-footprint check that demotes such fragments to `chrom_debris` misses them when the reference is divergent from both haplotypes, and RagTag would place them at a chromosome end with near-zero location confidence. Full-depth fragments matching at similar identity (homeologous regions of a polyploid) are still joined. A copy that overlaps a chromosome end and extends past it is not joined either: RagTag joins contigs end to end without merging the overlap, so joining it would duplicate the overlapping sequence. Half-depth single-copy loci that align to each other without being haplotypes, such as X/Y gametologs in the heterogametic sex when the reference has only one of them, also meet the haplotig rule; check `scaffold_exclusion` fragments on sex chromosomes.
+When `--scaffold` is enabled, chromosome-assigned contigs are grouped by reference chromosome and ordered into pseudomolecules. The scaffolder handles haplotype-aware grouping for polyploid assemblies (e.g., contigs assigned to chr1A are scaffolded separately from chr1B). Single T2T contigs that span a full chromosome produce trivial (single-component) AGP entries. Fragments of that chromosome are written on their own, also when the telomere-to-telomere sequence is an input scaffold with gaps (fragments are not placed into gaps). Multi-contig chromosomes are ordered by reference position, either via RagTag (if installed) or the built-in scaffolder. A chromosome fragment that is a second copy of sequence in one of the assembly's chromosome contigs is not joined, and is written on its own in `chrs.scaffolds` (`scaffold_exclusion` = `own_assembly_copy`). It aligns over at least half its length to that contig (the `redundancy_*` columns) at ≥ 99.9% identity, or at ≥ 90% with the fragment and the matched region both at ≤ 0.75 of the chromosomal read depth (a haplotig; needs `--reads`) when that contig is assigned to the fragment's own reference chromosome. The reference-footprint check that demotes such fragments to `chrom_debris` misses them when the reference is divergent from both haplotypes, and RagTag would place them at a chromosome end with near-zero location confidence. Full-depth fragments matching at similar identity (homeologous regions of a polyploid) are still joined. A copy that overlaps a chromosome end and extends past it is not joined either: RagTag joins contigs end to end without merging the overlap, so joining it would duplicate the overlapping sequence. Half-depth single-copy loci that align to each other without being haplotypes, such as X/Y gametologs in the heterogametic sex when the reference has only one of them, also meet the haplotig rule; check `scaffold_exclusion` fragments on sex chromosomes.
 
 Contigs that consist mostly of 45S rDNA are not scaffolded by default, even when they pass the synteny gate for a reference chromosome: they are classified as `rDNA` (their reference association stays in `assigned_ref_id`). Their placement would rest on similarity to the reference's own rDNA, which is shared between NORs, so with several NORs, or a NOR that differs in position from the reference's, an rDNA contig can be placed on the wrong chromosome or chromosome end. `--scaffold-rdna-contigs` includes them as scaffolding candidates anyway; treat their placement as unverified.
 
@@ -402,6 +404,7 @@ Read-alignment BAMs (present when the run used `--keep-depth-bam`) are removed u
 | File | Description |
 |------|-------------|
 | `*.contig_summary.tsv` | Per-contig classification with metrics |
+| `*.gaps.bed` | Scaffold gaps (runs of ≥10 N) in the input sequences, 0-based half-open (written only when the input has gaps) |
 | `*.evidence_summary.tsv` | Synteny evidence per contig × reference |
 | `*.segments.tsv` | Individual synteny segments |
 | `*.macro_blocks.tsv` | Aggregated synteny macro-blocks |
@@ -422,9 +425,9 @@ Produced in the top-level output directory when ≥2 assemblies complete. File n
 
 | File | Description |
 |------|-------------|
-| `{prefix}_summary.tsv` | Per-assembly classification counts and BUSCO completeness scores (S/D/F/I/M) for chromosome and non-chromosome contig sets |
-| `{prefix}_chromosome_completeness.tsv` | Per-reference-chromosome coverage and completeness across all assemblies (nuclear chromosomes only; `ref_id` as spelled in the reference FASTA) |
-| `{prefix}.comparison_report.html` | Interactive HTML comparison report with gt tables summarizing classification, scaffolding (with `--scaffold`) and BUSCO results across assemblies |
+| `{prefix}_summary.tsv` | Per-assembly classification counts, contiguity (N50, contig N50 between scaffold gaps, `n_gaps`), per-chromosome state tallies (`n_chr_t2t`, `n_chr_gapped`, …) and BUSCO completeness scores (S/D/F/I/M) for chromosome and non-chromosome contig sets |
+| `{prefix}_chromosome_completeness.tsv` | Per-reference-chromosome coverage, contiguity state (T2T, gapped, single, split, fragments only, absent) and scaffold gaps across all assemblies (nuclear chromosomes only; `ref_id` as spelled in the reference FASTA) |
+| `{prefix}.comparison_report.html` | Interactive HTML comparison report with gt tables summarizing classification, scaffolding (with `--scaffold`) and BUSCO results across assemblies; with scaffolded inputs, it adds contig N50 and gap counts |
 | `sister_anchoring/sister_anchoring.tsv` | Per-contig decisions of the sister-assembly anchoring pass (`--sister-anchoring`); see [docs/output_formats.md](docs/output_formats.md#sister_anchoringtsv) |
 
 ### Key columns in `contig_summary.tsv`
@@ -439,6 +442,7 @@ Produced in the top-level output directory when ≥2 assemblies complete. File n
 | `cobiont_taxid` | NCBI taxonomy ID (for cobionts) |
 | `cobiont_sci` | Scientific name (for cobionts) |
 | `assigned_ref_id` | Best-matching reference chromosome |
+| `n_gaps`, `gap_bp` | Scaffold gaps (runs of ≥10 N) in the input sequence, and their total bp |
 | `ref_gene_proportion` | Fraction of reference chromosome genes aligned to this contig (0.0-1.0) |
 | `genes_per_Mbp` | Gene density (aligned reference genes per Mbp of query sequence) |
 | `depth_mean` | Mean read depth (if `--reads` provided) |
@@ -455,7 +459,7 @@ Enabled by default; skip with `--skip-plot` (requires R with ggplot2 and related
 
 | File | Description |
 |------|-------------|
-| `*.assembly_report.html` | HTML report per assembly with all plots (chromosome overview, classification bar, read depth overview, cobiont table). Self-contained by default (all resources embedded). Use `--no-self-contained-html` to produce HTML + companion `*_files/` directory for faster rendering. |
+| `*.assembly_report.html` | HTML report per assembly with all plots (chromosome overview, classification bar, read depth overview, cobiont table); with scaffolded input, the summary adds contig N50 and gap counts and the contiguity view shows gapped chromosomes. Self-contained by default (all resources embedded). Use `--no-self-contained-html` to produce HTML + companion `*_files/` directory for faster rendering. |
 | `*.chromosome_overview.pdf` | Multi-panel plot showing contig composition, subgenome support, and alignment identity (exported from the assembly report) |
 | `*.depth_overview.pdf` | Read depth visualization by classification and chromosome (if `--reads` provided; exported from the assembly report) |
 
@@ -465,7 +469,7 @@ Reference preparation runs first: read reference genome, compute GC statistics, 
 
 | Phase | Description |
 |-------|-------------|
-| 1 | **Read query assembly** — parse FASTA, compute contig lengths and GC |
+| 1 | **Read query assembly** — parse FASTA, compute contig lengths and GC, and record scaffold gaps (N runs) in `*.gaps.bed` |
 | 2 | **Synteny analysis** — protein mode (miniprot) or nucleotide mode (minimap2); chain alignments into synteny blocks and identify chromosome candidates |
 | 3 | **Organelle detection** — BLAST against chrC/chrM references (skip with `--skip-organelles`) |
 | 4 | **rDNA detection** — BLAST against rDNA reference (skip with `--skip-rdna`) |

@@ -48,6 +48,7 @@ PLACEHOLDER_TSV: dict[str, str | tuple[str, ...]] = {
     "__RDNA_ANNOTATIONS__": ".rdna_annotations.tsv",
     "__AGP__": (".chrs.scaffolds.agp", ".scaffolded.agp"),
     "__COBIONTS_TSV__": ".cobionts.tsv",
+    "__GAPS__": ".gaps.bed",
 }
 
 # Output file suffixes per script type

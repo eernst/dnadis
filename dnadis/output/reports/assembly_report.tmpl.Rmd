@@ -11,6 +11,7 @@ params:
   rdna_arrays_tsv: "__RDNA_ARRAYS__"
   cobionts_tsv: "__COBIONTS_TSV__"
   agp_tsv: "__AGP__"
+  gaps_bed: "__GAPS__"
   compleasm_chrs_summary: "__COMPLEASM_CHRS__"
   compleasm_non_chrs_summary: "__COMPLEASM_NONCHRS__"
   rearrangements_tsv: "__REARRANGEMENTS__"
@@ -25,7 +26,7 @@ params:
   # Version of the TSV columns and values this template reads.  Bump it when
   # the template starts to need columns or values that older dnadis runs did
   # not write; refresh_reports.py then refuses to re-render older outputs.
-  output_schema: 1
+  output_schema: 2
 output:
   html_document:
     self_contained: __SELF_CONTAINED__
@@ -457,6 +458,26 @@ cumsum_bp <- cumsum(lengths_sorted)
 n50_idx <- which(cumsum_bp >= total_bp / 2)[1]
 n50 <- lengths_sorted[n50_idx]; l50 <- n50_idx
 
+# Scaffold gaps (N runs) in the input sequences, and N50 of the gap-free pieces.
+require_columns(summary_df, c("n_gaps", "gap_bp"), "contig_summary.tsv")
+n_gaps_total <- sum(summary_df$n_gaps, na.rm = TRUE)
+has_gaps <- n_gaps_total > 0
+contig_n50 <- n50
+if (has_gaps && nzchar(params$gaps_bed) && file.exists(params$gaps_bed)) {
+  gaps_df <- readr::read_tsv(params$gaps_bed, col_names = c("original_name", "start", "end"),
+                             col_types = "cdd", progress = FALSE)
+  gapped_pieces <- gaps_df %>%
+    inner_join(summary_df %>% select(original_name, length), by = "original_name") %>%
+    arrange(original_name, start) %>%
+    group_by(original_name) %>%
+    summarise(piece = list(diff(c(0, as.vector(rbind(start, end)), first(length)))[c(TRUE, FALSE)]),
+              .groups = "drop")
+  pieces <- c(summary_df$length[!summary_df$original_name %in% gapped_pieces$original_name],
+              unlist(gapped_pieces$piece))
+  pieces <- sort(pieces[pieces > 0], decreasing = TRUE)
+  contig_n50 <- pieces[which(cumsum(pieces) >= sum(pieces) / 2)[1]]
+}
+
 chr_df_stats <- summary_df %>% filter(classification == "chrom_assigned")
 n_assigned <- nrow(chr_df_stats)
 n_unassigned <- sum(summary_df$classification == "chrom_unassigned")
@@ -479,6 +500,8 @@ tibble(
   `Size (Mb)` = round(total_bp / 1e6, 1),
   N50 = round(n50 / 1e6, 2),
   L50 = as.integer(l50),
+  `Contig N50` = round(contig_n50 / 1e6, 2),
+  Gaps = as.integer(n_gaps_total),
   `Largest (Mb)` = round(max(lengths_sorted) / 1e6, 1),
   `Asgn / Unasgn / Chim` = paste(n_assigned, "/", n_unassigned, "/", n_chimeric),
   `Chr-scale` = as.integer(n_chromosome_scale),
@@ -494,7 +517,10 @@ tibble(
   gt_theme() %>%
   tab_header(title = "Assembly Summary") %>%
   cols_align(align = "right", columns = where(is.numeric)) %>%
-  tab_spanner(label = "Contiguity", columns = c(Contigs, `Size (Mb)`, N50, L50, `Largest (Mb)`)) %>%
+  { if (has_gaps) . else cols_hide(., c(`Contig N50`, Gaps)) } %>%
+  { if (has_gaps) tab_source_note(., md(
+      "Input sequences contain scaffold gaps (N runs). **N50** is over the input sequences; **Contig N50** is over the pieces between gaps.")) else . } %>%
+  tab_spanner(label = "Contiguity", columns = c(Contigs, `Size (Mb)`, N50, L50, `Contig N50`, Gaps, `Largest (Mb)`)) %>%
   tab_spanner(label = "Chromosomes", columns = c(`Asgn / Unasgn / Chim`, `Chr-scale`, `Both telo`, `Mean ref cov`, `Mean identity`)) %>%
   tab_spanner(label = "Other", columns = c(Cobionts, rDNA, chrC, chrM))
 ```
@@ -544,7 +570,7 @@ n_with_frag <- sum(ct$n_frag > 0, na.rm = TRUE)
 n_multi_copy <- sum(ct$n_copies > 1, na.rm = TRUE)
 cat(sprintf(
   paste0('<p class="section-intro">Across <b>%d</b> reference chromosomes: ',
-         '<b>%d</b> T2T &middot; <b>%d</b> single-contig &middot; <b>%d</b> split &middot; ',
+         '<b>%d</b> T2T &middot; %s<b>%d</b> single-contig &middot; <b>%d</b> split &middot; ',
          '<b>%d</b> fragments-only &middot; <b>%d</b> absent. ',
          'Assigned contigs that overlap on the reference are separate copies; contigs that tile it are pieces of one copy, ',
          'and a chromosome is <b>split</b> when any copy is in two or more pieces. ',
@@ -552,7 +578,10 @@ cat(sprintf(
          '<b>%d</b> chromosome(s) carry additional fragment contigs (+Nf). ',
          'Chromosome fragment sequence: <b>%.1f Mb</b> (%.1f%% of chromosomal bp).</p>'),
   n_ref_total,
-  state_counts[["T2T"]], state_counts[["single"]], state_counts[["split"]],
+  state_counts[["T2T"]],
+  if (state_counts[["gapped"]] > 0)
+    sprintf('<b>%d</b> T2T with scaffold gaps &middot; ', state_counts[["gapped"]]) else "",
+  state_counts[["single"]], state_counts[["split"]],
   state_counts[["fragments_only"]], state_counts[["absent"]],
   n_multi_copy, n_with_frag, frag_bp_mb, frag_pct))
 ```
@@ -650,6 +679,7 @@ tbl_df <- ct %>%
     Copies = n_copies,
     Coverage = coverage,
     Telomeres = ifelse(both_telo, "both", ""),
+    Gaps = n_gaps,
     State = as.character(state)
   )
 
@@ -667,7 +697,8 @@ tbl_df %>%
     locations = cells_body(columns = State),
     fn = function(x) chrom_state_labels[x]
   ) %>%
-  cols_align(align = "right", columns = c(`Ref (Mb)`, Contigs, Assigned, Fragment, Copies, Coverage)) %>%
+  cols_align(align = "right", columns = c(`Ref (Mb)`, Contigs, Assigned, Fragment, Copies, Coverage, Gaps)) %>%
+  { if (any(tbl_df$Gaps > 0)) . else cols_hide(., Gaps) } %>%
   tab_spanner(label = "Query contigs", columns = c(Contigs, Assigned, Fragment))
 ```
 
@@ -1404,6 +1435,7 @@ chr_tbl <- chr_df %>%
     tel_5p = if (has_telomeres) has_5p_telomere else NA_character_,
     tel_3p = if (has_telomeres) has_3p_telomere else NA_character_,
     full_len = if (has_chromosome_scale) is_chromosome_scale else NA_character_,
+    gaps = n_gaps,
     subgenome_col = if (has_subgenomes) assigned_subgenome else NA_character_
   )
 
@@ -1417,6 +1449,7 @@ if (has_telomeres) {
   sel_cols <- c(sel_cols, "tel_5p", "tel_3p")
   col_labels$tel_5p <- "Tel 5'"; col_labels$tel_3p <- "Tel 3'"
 }
+if (any(chr_tbl$gaps > 0, na.rm = TRUE)) { sel_cols <- c(sel_cols, "gaps"); col_labels$gaps <- "Gaps" }
 sel_cols <- c(sel_cols, "gene_count"); col_labels$gene_count <- "Gene %"
 sel_cols <- c(sel_cols, "identity_pct"); col_labels$identity_pct <- "Identity %"
 if (has_collinearity) { sel_cols <- c(sel_cols, "collinearity"); col_labels$collinearity <- "Collinearity" }

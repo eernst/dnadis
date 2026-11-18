@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from dnadis.utils.reference_utils import is_nuclear_chromosome
 from dnadis.models import (
@@ -27,8 +27,10 @@ from dnadis.models import (
 #
 # State is derived from *anchors* (chrom_assigned) only, grouped into copies of
 # the chromosome by ``ref_copy`` (overlapping anchors are separate copies,
-# tiling anchors are pieces of one copy).  Each copy is T2T (one contig with
-# telomeres at both ends), single (one contig) or split (two or more contigs);
+# tiling anchors are pieces of one copy).  Each copy is T2T (one gap-free
+# contig with telomeres at both ends), gapped (one contig with telomeres at
+# both ends and scaffold gaps inside), single (one contig) or split (two or
+# more contigs);
 # the chromosome takes its least contiguous copy's state, and the number of
 # copies is reported separately.  Anchors without a ref_copy (no alignment to
 # the reference, e.g. placed by sister anchoring) cannot be placed in a copy
@@ -37,7 +39,7 @@ from dnadis.models import (
 # are frequently divergent duplicates or eccDNA rather than evidence that the
 # chromosome itself is broken.
 CHROM_STATE_LEVELS = [
-    "T2T", "single", "split", "fragments_only", "absent",
+    "T2T", "gapped", "single", "split", "fragments_only", "absent",
 ]
 
 
@@ -61,7 +63,7 @@ def _chrom_contiguity_state(
         if len(members) > 1:
             copy_state = "split"
         elif members[0].has_5p_telomere and members[0].has_3p_telomere:
-            copy_state = "T2T"
+            copy_state = "gapped" if members[0].n_gaps else "T2T"
         else:
             copy_state = "single"
         state = max(state, copy_state, key=order.__getitem__)
@@ -86,6 +88,22 @@ def _compute_n50_l50(lengths: List[int]) -> tuple[int, int]:
         if cumulative >= half:
             return length, i + 1
     return sorted_lens[-1], len(sorted_lens)
+
+
+def _gap_free_pieces(
+    lengths: Dict[str, int], gaps: Dict[str, List[Tuple[int, int]]]
+) -> List[int]:
+    """Lengths of the pieces left after cutting every sequence at its gaps."""
+    pieces: List[int] = []
+    for name, length in lengths.items():
+        pos = 0
+        for start, end in gaps.get(name, ()):
+            if start > pos:
+                pieces.append(start - pos)
+            pos = end
+        if length > pos:
+            pieces.append(length - pos)
+    return pieces
 
 
 def build_assembly_result(
@@ -117,6 +135,7 @@ def build_assembly_result(
     compleasm_chrs: Optional[CompleasmResult] = None,
     compleasm_non_chrs: Optional[CompleasmResult] = None,
     synteny_mode: str = "nucleotide",
+    qry_gaps: Optional[Dict[str, List[Tuple[int, int]]]] = None,
 ) -> AssemblyResult:
     """Build an AssemblyResult summarizing one assembly's analysis.
 
@@ -152,6 +171,11 @@ def build_assembly_result(
     total_bp = sum(all_lengths)
     n50, l50 = _compute_n50_l50(all_lengths)
     largest_contig = max(all_lengths) if all_lengths else 0
+    qry_gaps = qry_gaps or {}
+    n_gaps = sum(len(runs) for runs in qry_gaps.values())
+    gap_bp = sum(e - s for runs in qry_gaps.values() for s, e in runs)
+    contig_n50, contig_l50 = _compute_n50_l50(
+        _gap_free_pieces(qry_lengths, qry_gaps)) if qry_gaps else (n50, l50)
 
     # --- Classification counts/bp ---
     classification_counts: Dict[str, int] = defaultdict(int)
@@ -312,6 +336,7 @@ def build_assembly_result(
             n_fragment=n_fragment,
             n_copies=n_copies,
             state=state,
+            n_gaps=sum(c.n_gaps for c in contigs_for_ref),
         )
 
     return AssemblyResult(
@@ -360,6 +385,10 @@ def build_assembly_result(
         compleasm_full=compleasm_full,
         compleasm_chrs=compleasm_chrs,
         compleasm_non_chrs=compleasm_non_chrs,
+        n_gaps=n_gaps,
+        gap_bp=gap_bp,
+        contig_n50=contig_n50,
+        contig_l50=contig_l50,
     )
 
 
@@ -381,6 +410,10 @@ def write_comparison_summary_tsv(
         "total_bp",
         "n50",
         "l50",
+        "contig_n50",
+        "contig_l50",
+        "n_gaps",
+        "gap_bp",
         "largest_contig",
         "n_chrom_assigned",
         "n_chrom_unassigned",
@@ -390,6 +423,7 @@ def write_comparison_summary_tsv(
         "n_circular_element",
         "circular_element_bp",
         "n_chr_t2t",
+        "n_chr_gapped",
         "n_chr_single",
         "n_chr_split",
         "n_chr_multi_copy",
@@ -463,6 +497,10 @@ def write_comparison_summary_tsv(
                 str(r.total_bp),
                 str(r.n50),
                 str(r.l50),
+                str(r.contig_n50),
+                str(r.contig_l50),
+                str(r.n_gaps),
+                str(r.gap_bp),
                 str(r.largest_contig),
                 str(r.n_chrom_assigned),
                 str(r.n_chrom_unassigned),
@@ -472,6 +510,7 @@ def write_comparison_summary_tsv(
                 str(r.classification_counts.get("circular_element", 0)),
                 str(r.classification_bp.get("circular_element", 0)),
                 str(state_counts.get("T2T", 0)),
+                str(state_counts.get("gapped", 0)),
                 str(state_counts.get("single", 0)),
                 str(state_counts.get("split", 0)),
                 str(n_chr_multi_copy),
@@ -540,6 +579,7 @@ def write_chromosome_completeness_tsv(
         "n_fragment",
         "n_copies",
         "state",
+        "n_gaps",
     ]
 
     def _fmt(val, fmt_str=".4f"):
@@ -570,6 +610,7 @@ def write_chromosome_completeness_tsv(
                         str(crs.n_fragment),
                         str(crs.n_copies),
                         crs.state,
+                        str(crs.n_gaps),
                     ]
                 else:
                     row = [
@@ -585,5 +626,6 @@ def write_chromosome_completeness_tsv(
                         "0",
                         "0",
                         "absent",
+                        "0",
                     ]
                 fh.write("\t".join(row) + "\n")

@@ -173,6 +173,8 @@ class ContigClassification:
     contig_len: int
     # Evidence strength fields (for classification confidence)
     gc_content: Optional[float] = None  # GC content (0.0-1.0)
+    n_gaps: int = 0  # scaffold gaps (N runs >= sequence_utils.GAP_MIN_N) in the input sequence
+    gap_bp: int = 0  # bp in those gaps
     gc_deviation: Optional[float] = None  # Deviation from reference mean in std devs
     synteny_score: Optional[float] = None  # Synteny evidence strength (0.0-1.0)
     cobiont_score: Optional[float] = None  # Cobiont evidence strength (0.0-1.0)
@@ -592,6 +594,7 @@ class ChromRefSummary:
     n_fragment: int = 0    # chrom_fragment contigs
     n_copies: int = 0      # copies among the chrom_assigned contigs (ref_copy values)
     state: str = "absent"  # see comparison.CHROM_STATE_LEVELS
+    n_gaps: int = 0        # scaffold gaps in its chrom_assigned contigs
 
 
 @dataclass
@@ -685,3 +688,9 @@ class AssemblyResult:
     # Rearrangement calls
     rearrangements: List['RearrangementCall'] = field(default_factory=list)
     rearrangements_tsv: Optional[Path] = None
+    # Scaffold gaps (N runs) in the input sequences, and N50/L50 of the
+    # gap-free pieces (equal to n50/l50 when the input has no gaps).
+    n_gaps: int = 0
+    gap_bp: int = 0
+    contig_n50: int = 0
+    contig_l50: int = 0

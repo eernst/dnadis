@@ -907,9 +907,12 @@ def scaffold_chromosomes(
         else:
             scaffold_name = base_name
 
-        # T2T handling: emit each T2T contig as its own trivial scaffold.
-        # When T2T contigs exist, remaining non-anchor members (chromosome
-        # fragments) are not joined to them; they are emitted unplaced below.
+        # Telomere-to-telomere handling: emit each contig with telomeres at
+        # both ends as its own trivial scaffold, whether or not it holds
+        # scaffold gaps from the input.  The remaining non-anchor members
+        # (chromosome fragments) are not joined to it; they are emitted
+        # unplaced below.  RagTag would only append them at the ends, and
+        # fragments that belong in an input gap cannot be placed there yet.
         # Fragments redundant with the T2T contig were already demoted to
         # chrom_debris, so the ones left here carry sequence it lacks.
         chrom_assigned_in_group = [
@@ -928,9 +931,11 @@ def scaffold_chromosomes(
 
             for t2t_contig in t2t_contigs:
                 t2t_name = clf_lookup[t2t_contig].new_name or scaffold_name
+                n_gaps = clf_lookup[t2t_contig].n_gaps
                 _emit_trivial_scaffold(
                     t2t_name, t2t_contig, query_seqs, contig_orientations,
-                    all_scaffolded, all_agp, log_label="T2T",
+                    all_scaffolded, all_agp,
+                    log_label=f"T2T with {n_gaps} scaffold gap(s)" if n_gaps else "T2T",
                 )
 
             # Emit non-T2T chrom_assigned contigs as their own trivial
@@ -941,9 +946,12 @@ def scaffold_chromosomes(
             ]
             n_dropped = len(contig_names) - len(chrom_assigned_in_group)
             if n_dropped > 0:
+                gapped = any(clf_lookup[c].n_gaps for c in t2t_contigs)
+                reason = ("T2T copy with scaffold gaps exists; fragments are not "
+                          "placed into gaps" if gapped else "T2T copy exists")
                 logger.info(
                     f"{scaffold_name}: leaving {n_dropped} fragment contig(s) "
-                    f"unplaced (T2T copy exists)"
+                    f"unplaced ({reason})"
                 )
             for contig in non_t2t_chrom:
                 clf = clf_lookup.get(contig)

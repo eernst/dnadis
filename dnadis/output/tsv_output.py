@@ -87,6 +87,7 @@ def write_contig_summary_tsv(
     - cobiont_taxid (NCBI taxonomy ID for cobionts)
     - cobiont_sci (scientific name for cobionts)
     - length (after status)
+    - n_gaps, gap_bp: scaffold gaps (N runs) in the input sequence and their bp
     - ref_gene_proportion
     - genes_per_Mbp (for chromosome-assigned contigs)
 
@@ -113,6 +114,8 @@ def write_contig_summary_tsv(
         "assigned_chrom_id",
         "status",
         "length",
+        "n_gaps",
+        "gap_bp",
         # Chromosome-scale vs fragment fields
         "ref_coverage",
         "is_chromosome_scale",
@@ -280,6 +283,8 @@ def write_contig_summary_tsv(
             ref_gene_proportion = clf.ref_gene_proportion if clf and clf.ref_gene_proportion is not None else ""
 
             # Chromosome-scale vs fragment columns
+            n_gaps = str(clf.n_gaps) if clf else ""
+            gap_bp = str(clf.gap_bp) if clf else ""
             ref_cov_str = f"{clf.ref_coverage:.4f}" if clf and clf.ref_coverage is not None else ""
             is_chromosome_scale = "yes" if clf and clf.is_chromosome_scale else ("no" if clf and clf.is_chromosome_scale is not None else "")
             scale_basis = clf.chromosome_scale_basis if clf and clf.chromosome_scale_basis else ""
@@ -339,6 +344,8 @@ def write_contig_summary_tsv(
                         str(assigned_chrom_id),
                         str(status),
                         str(int(contig_len)),  # length
+                        n_gaps,
+                        gap_bp,
                         # Chromosome-scale vs fragment fields
                         ref_cov_str,
                         is_chromosome_scale,

@@ -105,15 +105,22 @@ cat("OK\\n")
 
 
 def _contiguity_cases():
-    """(ref_id, [(contig, ref_copy, has_5p, has_3p), ...]) for each state rule."""
+    """(ref_id, [(contig, ref_copy, has_5p, has_3p, n_gaps), ...]) for each state rule."""
     return [
-        ("chr1", [("t2t", 1, True, True)]),
-        ("chr2", [("one", 1, True, False)]),
-        ("chr3", [("p", 1, True, False), ("q", 1, False, True)]),
-        ("chr4", [("h1", 1, True, True), ("h2", 2, True, True)]),
-        ("chr5", [("h1b", 1, True, True), ("h2a", 2, False, False), ("h2b", 2, True, False)]),
-        ("chr6", [("t2t6", 1, True, True), ("unplaced", None, False, False)]),
-        ("chr7", [("u1", None, False, False), ("u2", None, True, True)]),
+        ("chr1", [("t2t", 1, True, True, 0)]),
+        ("chr2", [("one", 1, True, False, 0)]),
+        ("chr3", [("p", 1, True, False, 0), ("q", 1, False, True, 0)]),
+        ("chr4", [("h1", 1, True, True, 0), ("h2", 2, True, True, 0)]),
+        ("chr5", [("h1b", 1, True, True, 0), ("h2a", 2, False, False, 0), ("h2b", 2, True, False, 0)]),
+        ("chr6", [("t2t6", 1, True, True, 0), ("unplaced", None, False, False, 0)]),
+        ("chr7", [("u1", None, False, False, 0), ("u2", None, True, True, 0)]),
+        # Scaffold gaps: telomere-to-telomere with gaps is "gapped"; a gapped
+        # contig without both telomeres stays "single"; the least contiguous
+        # copy sets the state.
+        ("chr8", [("gapped", 1, True, True, 3)]),
+        ("chr9", [("gap_single", 1, True, False, 2)]),
+        ("chr10", [("t2t10", 1, True, True, 0), ("gapped10", 2, True, True, 1)]),
+        ("chr11", [("gapped11", 1, True, True, 1), ("one11", 2, False, False, 0)]),
     ]
 
 
@@ -125,11 +132,11 @@ def test_contiguity_state_python_and_r_agree(tmp_path):
     from dnadis.output.comparison import _chrom_contiguity_state
 
     rows = ["contig\toriginal_name\tclassification\tassigned_ref_id\tlength\t"
-            "ref_copy\thas_5p_telomere\thas_3p_telomere"]
+            "ref_copy\thas_5p_telomere\thas_3p_telomere\tn_gaps"]
     expected = {}
     for ref_id, contigs in _contiguity_cases():
         clfs = []
-        for name, copy, t5, t3 in contigs:
+        for name, copy, t5, t3, gaps in contigs:
             name = f"{ref_id}_{name}"
             c = ContigClassification(
                 original_name=name, new_name=name, classification="chrom_assigned",
@@ -137,10 +144,11 @@ def test_contiguity_state_python_and_r_agree(tmp_path):
                 assigned_ref_id=ref_id, ref_gene_proportion=None, contig_len=1_000_000,
             )
             c.ref_copy, c.has_5p_telomere, c.has_3p_telomere = copy, t5, t3
+            c.n_gaps = gaps
             clfs.append(c)
             yn = lambda v: "yes" if v else "no"
             rows.append(f"{name}\t{name}\tchrom_assigned\t{ref_id}\t1000000\t"
-                        f"{'' if copy is None else copy}\t{yn(t5)}\t{yn(t3)}")
+                        f"{'' if copy is None else copy}\t{yn(t5)}\t{yn(t3)}\t{gaps}")
         state, n_copies = _chrom_contiguity_state(clfs, 0)
         both = any(c.has_5p_telomere and c.has_3p_telomere for c in clfs)
         expected[ref_id] = f"{state}|{n_copies}|{'TRUE' if both else 'FALSE'}"
@@ -162,6 +170,8 @@ cat(paste0(ct$ref_id, "=", ct$state, "|", ct$n_copies, "|", ct$both_telo), sep =
     assert proc.returncode == 0, proc.stderr[-2000:]
     got = dict(line.split("=", 1) for line in proc.stdout.split())
     assert got == expected
+    assert expected["chr8"].startswith("gapped|") and expected["chr9"].startswith("single|")
+    assert expected["chr10"].startswith("gapped|") and expected["chr11"].startswith("single|")
 
 
 @pytest.mark.skipif(not _r_packages_available(), reason="Rscript with readr/dplyr not available")

@@ -24,7 +24,7 @@ params:
   # Version of the TSV columns and values this template reads.  Bump it when
   # the template starts to need columns or values that older dnadis runs did
   # not write; refresh_reports.py then refuses to re-render older outputs.
-  output_schema: 1
+  output_schema: 2
 output:
   html_document:
     self_contained: __SELF_CONTAINED__
@@ -97,11 +97,14 @@ list2env(setup_subgenomes(ref_lengths), envir = environment())
 # ---------------------------------------------------------------------------
 comp_df <- read_dnadis_tsv(params$comparison_tsv)
 compl_df <- read_dnadis_tsv(params$completeness_tsv)
-require_columns(comp_df, c("n_chr_t2t", "n_chr_split", "n_chr_multi_copy",
-                           "n_chromosome_scale"), "comparison_summary.tsv")
+require_columns(comp_df, c("n_chr_t2t", "n_chr_gapped", "n_chr_split", "n_chr_multi_copy",
+                           "n_chromosome_scale", "contig_n50", "n_gaps"),
+                "comparison_summary.tsv")
 require_columns(compl_df, c("n_contigs", "is_chromosome_scale", "has_both_telomeres",
-                            "n_fragment", "n_copies", "state"),
+                            "n_fragment", "n_copies", "state", "n_gaps"),
                 "chromosome_completeness.tsv")
+# Scaffold gaps (N runs) in the input sequences, for the contig-level N50s.
+any_gaps <- any(comp_df$n_gaps > 0, na.rm = TRUE)
 
 n_asm <- nrow(comp_df)
 # Height of the per-assembly ridgeline plots.  Set here rather than in the
@@ -140,6 +143,35 @@ for (i in seq_along(asm_tsv_paths)) {
 }
 all_summary_df <- if (length(per_asm_summaries) > 0) bind_rows(per_asm_summaries) else NULL
 has_per_asm <- !is.null(all_summary_df) && nrow(all_summary_df) > 0
+
+# Scaffold gaps of each assembly: <prefix>.gaps.bed beside its contig summary
+# (written only when the input has gaps).
+gaps_list <- list()
+for (i in seq_along(asm_tsv_paths)) {
+  gp <- sub("\\.contig_summary\\.tsv$", ".gaps.bed", asm_tsv_paths[i])
+  if (nzchar(gp) && gp != asm_tsv_paths[i] && file.exists(gp)) {
+    gdf <- readr::read_tsv(gp, col_names = c("original_name", "start", "end"),
+                           col_types = "cdd", progress = FALSE)
+    gdf$assembly <- asm_name_list[i]
+    gaps_list[[i]] <- gdf
+  }
+}
+all_gaps_df <- if (length(gaps_list) > 0) bind_rows(gaps_list) else NULL
+
+# Lengths of the gap-free pieces of contigs (assembly, original_name, length).
+gap_free_pieces <- function(ctg_df) {
+  if (is.null(all_gaps_df) || nrow(ctg_df) == 0) return(ctg_df$length)
+  g <- all_gaps_df %>%
+    inner_join(ctg_df %>% select(assembly, original_name, length),
+               by = c("assembly", "original_name")) %>%
+    arrange(assembly, original_name, start) %>%
+    group_by(assembly, original_name) %>%
+    summarise(piece = list(diff(c(0, as.vector(rbind(start, end)), first(length)))[c(TRUE, FALSE)]),
+              .groups = "drop")
+  ungapped <- ctg_df %>% anti_join(g, by = c("assembly", "original_name"))
+  p <- c(ungapped$length, unlist(g$piece))
+  p[p > 0]
+}
 
 # Re-sort assemblies by identity if requested.  Apply the resulting order
 # uniformly to comp_df rows and every per-assembly path vector so tables,
@@ -477,7 +509,7 @@ if (has_per_asm && !is.null(all_agp_df) && nrow(all_agp_df) > 0) {
     filter(classification %in% c("chrom_assigned", "chrom_fragment"),
            assembly %in% unique(agp_w$assembly)) %>%
     select(assembly, original_name, classification, length,
-           assigned_ref_id, query_subgenome) %>%
+           assigned_ref_id, query_subgenome, n_gaps) %>%
     left_join(memb, by = c("assembly", "original_name" = "component")) %>%
     mutate(
       n_comp = coalesce(as.integer(n_comp), 1L),
@@ -499,12 +531,21 @@ if (has_per_asm && !is.null(all_agp_df) && nrow(all_agp_df) > 0) {
     group_by(assembly, slot) %>%
     filter(if (any(classification == "chrom_assigned"))
              classification == "chrom_assigned" else TRUE) %>%
-    summarise(n_ctg = n(), n_unit = n_distinct(unit), .groups = "drop") %>%
+    summarise(n_ctg = n(), n_unit = n_distinct(unit),
+              gapless = all(coalesce(as.integer(n_gaps), 0L) == 0),
+              .groups = "drop") %>%
     group_by(assembly) %>%
     summarise(n_slots = n(),
-              one_ctg = sum(n_ctg == 1),
+              one_ctg = sum(n_ctg == 1 & gapless),
               one_scaf = sum(n_unit == 1),
               .groups = "drop")
+
+  # Contig N50 over the pieces between input scaffold gaps.
+  ctg_n50_tbl <- chr_ctg %>%
+    group_by(assembly) %>%
+    group_modify(~ tibble(ctg_n50 = n50_bp(gap_free_pieces(
+      mutate(.x, assembly = .y$assembly))) / 1e6)) %>%
+    ungroup()
 
   scaf_tbl <- chr_ctg %>%
     group_by(assembly) %>%
@@ -515,12 +556,13 @@ if (has_per_asm && !is.null(all_agp_df) && nrow(all_agp_df) > 0) {
       unplaced_mb = sum(length[state == "unplaced"]) / 1e6,
       frag_placed_mb = sum(length[classification == "chrom_fragment" &
                                     state == "joined"]) / 1e6,
-      ctg_n50 = n50_bp(length) / 1e6,
       scaf_n50 = n50_bp(unit_len[!duplicated(unit)]) / 1e6,
+      in_gaps = sum(coalesce(as.integer(n_gaps), 0L)),
       joins = sum(n_comp[!duplicated(unit)] - 1L),
       .groups = "drop"
     ) %>%
     left_join(slot_tbl, by = "assembly") %>%
+    left_join(ctg_n50_tbl, by = "assembly") %>%
     mutate(joined_pct = 100 * joined_mb / chr_mb,
            assembly = factor(assembly, levels = asm_names)) %>%
     arrange(assembly) %>%
@@ -666,7 +708,7 @@ scaf_gt_df <- scaf_tbl %>%
   ungroup() %>%
   transmute(
     Assembly = assembly, bar,
-    chr_mb, joined_pct, frag_placed_mb, unplaced_mb, joins,
+    chr_mb, joined_pct, frag_placed_mb, unplaced_mb, joins, in_gaps,
     ctg_n50, scaf_n50,
     one_ctg, one_scaf, n_slots
   )
@@ -680,11 +722,12 @@ scaf_gt_df %>%
   fmt_number(columns = c(chr_mb, frag_placed_mb, unplaced_mb), decimals = 1) %>%
   fmt_number(columns = joined_pct, decimals = 0, pattern = "{x}%") %>%
   fmt_number(columns = c(ctg_n50, scaf_n50), decimals = 1) %>%
-  fmt_integer(columns = c(joins, one_ctg, one_scaf, n_slots)) %>%
+  fmt_integer(columns = c(joins, in_gaps, one_ctg, one_scaf, n_slots)) %>%
+  { if (any(scaf_gt_df$in_gaps > 0, na.rm = TRUE)) . else cols_hide(., in_gaps) } %>%
   cols_label(
     bar = "", chr_mb = "Chr + ChrF", joined_pct = "Joined",
     frag_placed_mb = "ChrF placed", unplaced_mb = "ChrF alone",
-    joins = "Joins",
+    joins = "Joins", in_gaps = "Input gaps",
     ctg_n50 = "Contig", scaf_n50 = "Scaffold",
     one_ctg = "Contigs", one_scaf = "Scaffolds", n_slots = "Of"
   ) %>%
@@ -699,7 +742,7 @@ scaf_gt_df %>%
             locations = cells_column_spanners()) %>%
   cols_align(align = "right",
              columns = c(chr_mb, joined_pct, frag_placed_mb, unplaced_mb, joins,
-                         ctg_n50, scaf_n50, one_ctg, one_scaf, n_slots)) %>%
+                         in_gaps, ctg_n50, scaf_n50, one_ctg, one_scaf, n_slots)) %>%
   tab_header(
     title = md("**Scaffolding**"),
     subtitle = "Chromosome contigs (Chr + ChrF) after reference-guided scaffolding"
@@ -715,6 +758,8 @@ scaf_gt_df %>%
     "**Joined**: share of Chr + ChrF Mb inside multi-contig scaffolds. ",
     "**ChrF placed / alone**: fragment Mb joined into a scaffold or left on its own. ",
     "**Joins**: contig-to-contig joins. ",
+    if (any(scaf_gt_df$in_gaps > 0, na.rm = TRUE))
+      "**Input gaps**: scaffold gaps (N runs) already inside the input sequences; contig N50 is over the pieces between them, and a slot whose contig has gaps is not counted as one contig. " else "",
     "**Chromosomes in one piece**: reference chromosome × copy-set slots whose ",
     "Chr contigs (or ChrF contigs, if the slot has no Chr contig) form one contig, ",
     "and one scaffold, out of all slots with chromosome contigs."
@@ -848,6 +893,8 @@ tbl <- comp_df %>%
     `Size (Mb)` = round(total_bp / 1e6, 1),
     N50 = round(n50 / 1e6, 2),
     L50 = l50,
+    `Contig N50` = round(contig_n50 / 1e6, 2),
+    Gaps = n_gaps,
     `Largest (Mb)` = round(largest_contig / 1e6, 1),
     `Asgn / Unasgn / Chim` = paste(n_chrom_assigned, "/",
                                      n_chrom_unassigned, "/",
@@ -870,7 +917,10 @@ gt_obj <- tbl %>%
   gt_theme() %>%
   tab_header(title = "Assembly Comparison Summary") %>%
   cols_align(align = "right", columns = where(is.numeric)) %>%
-  tab_spanner(label = "Contiguity", columns = c(Contigs, `Size (Mb)`, N50, L50, `Largest (Mb)`)) %>%
+  { if (any_gaps) . else cols_hide(., c(`Contig N50`, Gaps)) } %>%
+  { if (any_gaps) tab_source_note(., md(
+      "Some input sequences contain scaffold gaps (N runs). **N50** is over the input sequences; **Contig N50** is over the pieces between gaps.")) else . } %>%
+  tab_spanner(label = "Contiguity", columns = c(Contigs, `Size (Mb)`, N50, L50, `Contig N50`, Gaps, `Largest (Mb)`)) %>%
   tab_spanner(label = "Chromosomes", columns = c(`Asgn / Unasgn / Chim`, `Chr-scale`, `Both telo`, `Mean ref cov`, `Mean identity`))
 
 # Conditionally include chrC in "Other" spanner
@@ -1052,7 +1102,8 @@ if (has_any_chrom) {
           shape_status == "telo_5p"   ~ "5\u2032 only",
           shape_status == "telo_3p"   ~ "3\u2032 only",
           TRUE ~ "none"
-        )
+        ),
+        ifelse(n_gaps > 0, paste0("\nScaffold gaps: ", n_gaps), "")
       )
     )
 
@@ -1373,7 +1424,7 @@ ct_has <- has_any_chrom
 ```
 
 ```{r contiguity_cmp_intro, eval=ct_has, results='asis'}
-cat('<p class="section-intro">Per-reference-chromosome <b>assembly state</b> across assemblies — a companion to <b>Overview</b> (which encodes copy number and identity). Cell colour reflects how the chromosome is reconstructed from its assigned contigs. Assigned contigs that overlap on the reference are separate copies; contigs that tile it are pieces of one copy. <b>T2T</b>: every copy is one contig with telomeres at both ends; <b>single contig</b>: every copy is one contig; <b>split</b>: at least one copy is in two or more pieces; <b>fragments only</b>: only chromosome fragments (below the chromosome-length cutoff) are assigned; <b>absent</b>: nothing is assigned. A <b>&times;N badge</b> marks chromosomes assembled in N copies. A <b>+N badge</b> marks chromosomes that also carry N fragment contigs (often divergent duplicates or eccDNA rather than a broken chromosome); it does not change the state colour.</p>')
+cat('<p class="section-intro">Per-reference-chromosome <b>assembly state</b> across assemblies — a companion to <b>Overview</b> (which encodes copy number and identity). Cell colour reflects how the chromosome is reconstructed from its assigned contigs. Assigned contigs that overlap on the reference are separate copies; contigs that tile it are pieces of one copy. <b>T2T</b>: every copy is one contig with telomeres at both ends and no scaffold gaps; <b>T2T with gaps</b>: as T2T, but at least one copy contains scaffold gaps (N runs) from the input; <b>single contig</b>: every copy is one contig; <b>split</b>: at least one copy is in two or more pieces; <b>fragments only</b>: only chromosome fragments (below the chromosome-length cutoff) are assigned; <b>absent</b>: nothing is assigned. A <b>&times;N badge</b> marks chromosomes assembled in N copies. A <b>+N badge</b> marks chromosomes that also carry N fragment contigs (often divergent duplicates or eccDNA rather than a broken chromosome); it does not change the state colour.</p>')
 ```
 
 ```{r contiguity_cmp_heatmap, eval=ct_has, fig.width=10, fig.height=max(3, n_asm * 0.34 + 2.4)}
@@ -1393,7 +1444,8 @@ ctdf <- compl_df %>%
                      "\nState: ", chrom_state_labels[as.character(state)],
                      "\nAssigned contigs: ", n_contigs,
                      "\nCopies: ", n_copies,
-                     "\nFragment contigs: ", n_fragment),
+                     "\nFragment contigs: ", n_fragment,
+                     ifelse(n_gaps > 0, paste0("\nScaffold gaps: ", n_gaps), "")),
     badge = trimws(paste0(ifelse(n_copies > 1, paste0("\u00d7", n_copies), ""),
                           ifelse(n_fragment > 0, paste0(" +", n_fragment), "")))
   )
