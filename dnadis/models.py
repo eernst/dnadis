@@ -316,6 +316,18 @@ class CobiontHitExtended:
     species: Optional[str] = None
 
 
+@dataclass(frozen=True)
+class OrganelleUnit:
+    """One unit cut from a tandem concatemer (0-based half-open on the
+    contig; ``reverse`` when the unit reads on the contig's minus strand)."""
+    start: int
+    end: int
+    reverse: bool
+    ref_coverage: float
+    query_coverage: float
+    identity: float
+
+
 @dataclass
 class OrganelleHit:
     """Organelle detection result for a contig.
@@ -328,11 +340,14 @@ class OrganelleHit:
     coverage: float  # Fraction of the contig covered by alignments (0.0-1.0)
     identity: float  # Alignment identity (0.0-1.0)
     length_ratio: float  # Contig length / reference length
-    is_complete: bool  # True if classified as complete organelle
     ref_coverage: float = 0.0  # Fraction of the reference covered by this contig
     status: str = "debris"
-    # One unit cut from a tandem concatemer (detection.organelle.OrganelleUnit)
-    unit: Optional[object] = None
+    # One unit cut from a tandem concatemer
+    unit: Optional[OrganelleUnit] = None
+
+    @property
+    def is_complete(self) -> bool:
+        return self.status == "complete"
 
 
 @dataclass

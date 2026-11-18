@@ -185,7 +185,15 @@ def build_assembly_result(
     classification_bp: Dict[str, int] = defaultdict(int)
     for clf in classifications:
         classification_counts[clf.classification] += 1
-        classification_bp[clf.classification] += clf.contig_len
+        if clf.organelle_unit is not None:
+            # One unit is written as the organelle and the whole concatemer to
+            # the debris FASTA; count the unit as organelle and the rest as
+            # debris so class totals still sum to the assembly size
+            start, end, _ = clf.organelle_unit
+            classification_bp[clf.classification] += end - start
+            classification_bp["debris"] += clf.contig_len - (end - start)
+        else:
+            classification_bp[clf.classification] += clf.contig_len
 
     # --- Chromosome completeness ---
     chrom_assigned = [c for c in classifications if c.classification == "chrom_assigned"]

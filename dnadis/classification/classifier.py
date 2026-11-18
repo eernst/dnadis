@@ -1886,9 +1886,7 @@ def classify_all_contigs(
     for organelle, contig in (("chrC", chrC_contig), ("chrM", chrM_contig)):
         if contig and contig not in classified_contigs:
             hit = organelle_hits.get(contig) if organelle_hits else None
-            ref_cov = (hit.unit.ref_coverage if hit is not None and hit.unit is not None
-                       else hit.ref_coverage if hit is not None else 1.0)
-            confidence = "high" if ref_cov >= 0.98 else "medium"
+            confidence = organelle_complete_confidence(hit)
             classifications.append(_organelle_clf(contig, "organelle_complete", organelle, confidence))
             classified_contigs.add(contig)
 
@@ -2249,6 +2247,41 @@ def classify_all_contigs(
     )
 
     return classifications
+
+
+def organelle_complete_confidence(hit: Optional[OrganelleHit]) -> str:
+    """High when the complete contig (or its cut unit) covers >= 98% of the
+    reference, medium otherwise."""
+    if hit is None:
+        return "high"
+    ref_cov = hit.unit.ref_coverage if hit.unit is not None else hit.ref_coverage
+    return "high" if ref_cov >= 0.98 else "medium"
+
+
+def apply_organelle_swaps(
+    classifications: List[ContigClassification],
+    swaps: Dict[str, Tuple[Optional[str], str]],
+    organelle_hits: Dict[str, OrganelleHit],
+) -> None:
+    """Apply organelle -> (old, new) complete-contig swaps from
+    ``detection.organelle.repick_by_read_depth()``.
+
+    The new contig becomes ``organelle_complete`` named after the organelle;
+    the old one becomes ``organelle_debris`` with no name.  Call
+    ``assign_contig_names(overwrite=True)`` afterwards.
+    """
+    by_name = {c.original_name: c for c in classifications}
+    for organelle, (old, new) in swaps.items():
+        clf = by_name.get(new)
+        if clf is not None:
+            clf.classification = "organelle_complete"
+            clf.new_name = organelle
+            clf.classification_confidence = organelle_complete_confidence(organelle_hits.get(new))
+        clf = by_name.get(old) if old is not None else None
+        if clf is not None:
+            clf.classification = "organelle_debris"
+            clf.new_name = ""
+            clf.classification_confidence = "medium"
 
 
 def assign_contig_names(

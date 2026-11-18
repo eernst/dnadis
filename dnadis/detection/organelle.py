@@ -13,8 +13,8 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from dnadis.detection.blast import run_makeblastdb, run_blastn_megablast
-from dnadis.models import OrganelleCalls, OrganelleHit
-from dnadis.utils.io_utils import file_exists_and_valid, merge_intervals
+from dnadis.models import OrganelleCalls, OrganelleHit, OrganelleUnit
+from dnadis.utils.io_utils import file_exists_and_valid, merge_intervals, replace_if_changed
 from dnadis.utils.logging_config import get_logger
 from dnadis.utils.reference_utils import normalize_organelle_id
 from dnadis.utils.sequence_utils import (
@@ -230,9 +230,10 @@ def call_organelles(
     A sample can hold the organelle genome of another species (a second
     plant in the culture, contamination), and its contigs can pass the
     complete tests.  With ``genome_groups``, candidates are grouped into
-    genomes by their identity to each other, and only the genome holding the
-    most organelle sequence in the assembly is ranked; the others are
-    reported in ``OrganelleCalls.other_genomes``.
+    genomes by their identity to each other.  A genome with at least twice the
+    assembled sequence of the next is ranked alone (the others are reported
+    in ``OrganelleCalls.other_genomes``); otherwise all candidates are ranked
+    and ``repick_by_read_depth()`` chooses by read depth after depth analysis.
     """
     circular = circular_contigs if circular_contigs is not None else {
         c for c, _ in pairs if is_hifiasm_circular(c)
@@ -250,7 +251,6 @@ def call_organelles(
             coverage=_covered_bp(ev.query_intervals) / qlen,
             identity=(ev.matches / ev.aln_len) if ev.aln_len else 0.0,
             length_ratio=qlen / ref_len,
-            is_complete=False,
             ref_coverage=_covered_bp(ev.ref_intervals) / ref_len,
         )
         key = (hit.coverage * hit.identity, hit.ref_coverage)
@@ -276,13 +276,13 @@ def call_organelles(
             -members[c][0].ref_coverage,
             c,
         ))
+        all_candidates = set(candidates)
+        assigned = sorted(c for c, (h, _) in members.items()
+                          if h.coverage >= thresholds.debris_min_query_cov
+                          or c in all_candidates)
 
         if genome_groups is not None and len(candidates) > 1:
-            group_of, group_bp = genome_groups(
-                organelle, candidates,
-                sorted(c for c, (h, _) in members.items()
-                       if h.coverage >= thresholds.debris_min_query_cov),
-            )
+            group_of, group_bp = genome_groups(organelle, candidates, assigned)
             groups = {group_of[c] for c in candidates}
             if len(groups) > 1:
                 calls.genome_groups[organelle] = dict(group_of)
@@ -314,7 +314,8 @@ def call_organelles(
         chosen: Optional[str] = candidates[0] if candidates else None
         if chosen is None and organelle in thresholds.cut_units:
             chosen = _cut_concatemer(
-                members, ref_len, lo, hi, thresholds, circular, query_lengths, organelle)
+                members, ref_len, lo, hi, thresholds, circular, query_lengths, organelle,
+                genome_groups, assigned)
         partial: List[str] = []
         if chosen is None:
             partial, set_cov = _greedy_organelle_set(
@@ -331,10 +332,11 @@ def call_organelles(
 
         for contig, (hit, _) in members.items():
             if contig == chosen:
-                hit.status, hit.is_complete = "complete", True
+                hit.status = "complete"
             elif contig in partial:
                 hit.status = "partial"
-            elif hit.coverage >= thresholds.debris_min_query_cov:
+            elif hit.coverage >= thresholds.debris_min_query_cov or contig in all_candidates:
+                # Candidates stay in hits for the read-depth re-pick
                 calls.debris.add(contig)
             else:
                 continue
@@ -369,18 +371,6 @@ def call_organelles(
     return calls
 
 
-@dataclass(frozen=True)
-class OrganelleUnit:
-    """One unit cut from a tandem concatemer (0-based half-open on the
-    contig; ``reverse`` when the unit reads on the contig's minus strand)."""
-    start: int
-    end: int
-    reverse: bool
-    ref_coverage: float
-    query_coverage: float
-    identity: float
-
-
 # Reference positions used to measure the repeat period of a concatemer.
 _PERIOD_ANCHORS = tuple(i / 50 for i in range(1, 50, 2))
 # Fraction of a unit window that must align on the contig's main strand: a
@@ -389,13 +379,18 @@ _PERIOD_ANCHORS = tuple(i / 50 for i in range(1, 50, 2))
 _UNIT_MIN_PLUS_COV = 0.80
 
 
-def _cut_concatemer(members, ref_len, lo, hi, thresholds, circular, query_lengths, organelle):
+def _cut_concatemer(members, ref_len, lo, hi, thresholds, circular, query_lengths, organelle,
+                    genome_groups=None, assigned=()):
     """Cut one unit from the best oversized contig, if any passes.
 
     Oversized contigs cover the reference and align along their length but
     exceed the max length ratio.  Ranked circular first, then shortest.
-    Returns the contig name with ``hit.unit`` set, or None.
+    With ``genome_groups``, a contig is cut only if its genome holds at least
+    half of the sequence assigned to the organelle (another species'
+    concatemer in the sample is not cut).  Returns the contig name with
+    ``hit.unit`` set, or None.
     """
+    assigned_bp = sum(query_lengths.get(c, 0) for c in assigned)
     oversized = [
         c for c, (h, _) in members.items()
         if h.ref_coverage >= thresholds.min_ref_cov
@@ -415,6 +410,14 @@ def _cut_concatemer(members, ref_len, lo, hi, thresholds, circular, query_length
                 f"no consistent repeat period or no window passes"
             )
             continue
+        if genome_groups is not None and assigned_bp:
+            _, group_bp = genome_groups(organelle, [contig], list(assigned))
+            if group_bp.get(0, 0) < 0.5 * assigned_bp:
+                logger.warning(
+                    f"{organelle}: not cutting {contig}: its genome holds "
+                    f"{group_bp.get(0, 0):,} of {assigned_bp:,} bp assigned to {organelle}"
+                )
+                continue
         hit.unit = unit
         logger.info(
             f"{organelle}: cut one unit from concatemer {contig} "
@@ -524,20 +527,35 @@ def _greedy_organelle_set(
     chosen: List[str] = []
     covered: List[Tuple[int, int]] = []
     covered_bp = 0
-    remaining = dict(eligible)
+    remaining = {c: merge_intervals(ev.ref_intervals)[0] for c, ev in eligible.items()}
     while remaining and covered_bp < min_ref_cov * ref_len:
-        gains = {
-            c: _covered_bp(covered + ev.ref_intervals) - covered_bp
-            for c, ev in remaining.items()
-        }
+        gains = {c: _new_bp(ivs, covered) for c, ivs in remaining.items()}
         pick = min(gains, key=lambda c: (-gains[c], c not in circular, query_lengths.get(c, 0), c))
         if gains[pick] < _SET_MIN_GAIN * ref_len:
             break
         chosen.append(pick)
-        covered = merge_intervals(covered + remaining.pop(pick).ref_intervals)[0]
+        covered = merge_intervals(covered + remaining.pop(pick))[0]
         covered_bp = _covered_bp(covered)
     frac = covered_bp / ref_len if ref_len else 0.0
     return (chosen, frac) if frac >= min_ref_cov else ([], frac)
+
+
+def _new_bp(intervals: List[Tuple[int, int]], covered: List[Tuple[int, int]]) -> int:
+    """Bp of sorted, merged *intervals* outside sorted, merged *covered*."""
+    total, j = 0, 0
+    for s, e in intervals:
+        while j < len(covered) and covered[j][1] <= s:
+            j += 1
+        pos, k = s, j
+        while k < len(covered) and covered[k][0] < e:
+            cs, ce = covered[k]
+            if cs > pos:
+                total += cs - pos
+            pos = max(pos, ce)
+            k += 1
+        if pos < e:
+            total += e - pos
+    return total
 
 
 def detect_organelles(
@@ -615,8 +633,10 @@ def blast_genome_grouper(
         gdir = work_dir / f"genome_groups_{organelle}"
         gdir.mkdir(parents=True, exist_ok=True)
         cand_fa, query_fa = gdir / "candidates.fa", gdir / "assigned.fa"
-        write_filtered_fasta(query_fasta, cand_fa, set(candidates))
-        write_filtered_fasta(query_fasta, query_fa, set(assigned) | set(candidates))
+        for path, names in ((cand_fa, set(candidates)), (query_fa, set(assigned) | set(candidates))):
+            tmp = path.with_suffix(".fa.tmp")
+            write_filtered_fasta(query_fasta, tmp, names)
+            replace_if_changed(tmp, path)
         db = gdir / "candidates"
         run_makeblastdb(cand_fa, db, err_path=gdir / "makeblastdb.err")
         out = gdir / "assigned_vs_candidates.txt"
@@ -738,10 +758,10 @@ def repick_by_read_depth(
             continue
         if current is not None:
             old_hit = calls.hits[current]
-            old_hit.status, old_hit.is_complete = "debris", False
+            old_hit.status = "debris"
             calls.debris.add(current)
         new_hit = calls.hits[new]
-        new_hit.status, new_hit.is_complete = "complete", True
+        new_hit.status = "complete"
         calls.debris.discard(new)
         setattr(calls, f"{organelle}_contig", new)
         calls.set_ref_coverage[organelle] = new_hit.ref_coverage
