@@ -144,8 +144,10 @@ class ContigClassification:
     Classification categories:
     - chrom_assigned: Chromosome with reference assignment via synteny
     - chrom_unassigned: Chromosome-length without reference assignment
-    - organelle_complete: Complete organelle genome (chrC or chrM)
-    - organelle_debris: Partial organelle sequence
+    - organelle_complete: Complete organelle genome (chrC or chrM) in one contig
+    - organelle_partial: One of the contigs that together cover an organelle
+      genome when no single contig does
+    - organelle_debris: Other organelle sequence
     - rDNA: Ribosomal DNA repeat unit
     - cobiont: Sequence from a co-occurring organism (symbiont, commensal, or other cobiont)
     - chrom_debris: High-coverage duplicate of assembled chromosome
@@ -164,7 +166,7 @@ class ContigClassification:
     """
     original_name: str
     new_name: str
-    classification: str  # chrom_assigned, chrom_unassigned, chrom_debris, organelle_complete, organelle_debris, rDNA, cobiont, circular_element, debris, unclassified
+    classification: str  # chrom_assigned, chrom_unassigned, chrom_debris, organelle_complete, organelle_partial, organelle_debris, rDNA, cobiont, circular_element, debris, unclassified
     reversed: bool
     cobiont_taxid: Optional[int]  # NCBI taxonomy ID for cobionts
     cobiont_sci: Optional[str]  # Scientific name for cobionts
@@ -179,6 +181,11 @@ class ContigClassification:
     synteny_score: Optional[float] = None  # Synteny evidence strength (0.0-1.0)
     cobiont_score: Optional[float] = None  # Cobiont evidence strength (0.0-1.0)
     cobiont_coverage: Optional[float] = None  # Cobiont alignment coverage (0.0-1.0)
+    # Organelle alignment evidence (contigs assigned to chrC/chrM)
+    organelle_ref_cov: Optional[float] = None  # Fraction of the organelle reference covered
+    organelle_query_cov: Optional[float] = None  # Fraction of the contig aligned
+    organelle_identity: Optional[float] = None
+    organelle_len_ratio: Optional[float] = None  # Contig length / reference length
     classification_confidence: Optional[str] = None  # high/medium/low
     # Read depth fields (optional, from --reads analysis)
     depth_mean: Optional[float] = None
@@ -307,12 +314,43 @@ class CobiontHitExtended:
 
 @dataclass
 class OrganelleHit:
-    """Organelle detection result for a contig."""
+    """Organelle detection result for a contig.
+
+    ``status`` is ``complete`` (one contig holds the organelle genome),
+    ``partial`` (member of the set of contigs that together cover it) or
+    ``debris``.
+    """
     organelle_type: str  # "chrC" or "chrM"
-    coverage: float  # Fraction of contig covered by alignments (0.0-1.0)
+    coverage: float  # Fraction of the contig covered by alignments (0.0-1.0)
     identity: float  # Alignment identity (0.0-1.0)
     length_ratio: float  # Contig length / reference length
     is_complete: bool  # True if classified as complete organelle
+    ref_coverage: float = 0.0  # Fraction of the reference covered by this contig
+    status: str = "debris"
+
+
+@dataclass
+class OrganelleCalls:
+    """Per-assembly organelle calls from ``detect_organelles()``.
+
+    ``partial`` maps an organelle to the contigs that together cover it when no
+    single contig passes (in selection order); ``set_ref_coverage`` holds their
+    combined reference coverage.  ``debris`` holds every other contig assigned
+    to an organelle.
+    """
+    chrC_contig: Optional[str] = None
+    chrM_contig: Optional[str] = None
+    partial: Dict[str, List[str]] = field(default_factory=dict)
+    set_ref_coverage: Dict[str, float] = field(default_factory=dict)
+    debris: Set[str] = field(default_factory=set)
+    hits: Dict[str, "OrganelleHit"] = field(default_factory=dict)
+
+    def organelle_contigs(self) -> Set[str]:
+        """Every contig with an organelle call (complete, partial or debris)."""
+        out = {c for c in (self.chrC_contig, self.chrM_contig) if c}
+        for members in self.partial.values():
+            out.update(members)
+        return out | self.debris
 
 
 @dataclass
@@ -646,9 +684,9 @@ class AssemblyResult:
     total_rdna_bp: int
     n_rdna_arrays: int
 
-    # Organelles
-    chrC_found: bool
-    chrM_found: bool
+    # Organelles: "yes" (one contig), "partial" (organelle_partial set) or "no"
+    chrC_found: str
+    chrM_found: str
 
     # Read depth (optional)
     mean_chrom_depth: Optional[float]
@@ -694,3 +732,10 @@ class AssemblyResult:
     gap_bp: int = 0
     contig_n50: int = 0
     contig_l50: int = 0
+
+    # Organelle contigs (1 when complete, the set size when partial) and the
+    # fraction of the organelle reference they cover
+    chrC_n_contigs: int = 0
+    chrM_n_contigs: int = 0
+    chrC_ref_cov: Optional[float] = None
+    chrM_ref_cov: Optional[float] = None

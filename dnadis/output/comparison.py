@@ -136,6 +136,7 @@ def build_assembly_result(
     compleasm_non_chrs: Optional[CompleasmResult] = None,
     synteny_mode: str = "nucleotide",
     qry_gaps: Optional[Dict[str, List[Tuple[int, int]]]] = None,
+    organelle_ref_cov: Optional[Dict[str, float]] = None,
 ) -> AssemblyResult:
     """Build an AssemblyResult summarizing one assembly's analysis.
 
@@ -150,6 +151,8 @@ def build_assembly_result(
         cobionts_filtered: Dict of filtered cobiont hits.
         chrC_contig: Name of chrC contig, or None.
         chrM_contig: Name of chrM contig, or None.
+        organelle_ref_cov: Organelle -> reference coverage of its complete
+            contig or partial set (OrganelleCalls.set_ref_coverage).
         rdna_arrays: List of detected rDNA arrays.
         depth_stats: Dict mapping contig name -> DepthStats.
         chimera_primary_frac: Primary fraction threshold for chimera detection.
@@ -266,8 +269,20 @@ def build_assembly_result(
     n_rdna_arrays_count = len(rdna_arrays) if rdna_arrays else 0
 
     # --- Organelles ---
-    chrC_found = chrC_contig is not None
-    chrM_found = chrM_contig is not None
+    organelle_found: Dict[str, str] = {}
+    organelle_n_contigs: Dict[str, int] = {}
+    for organelle, contig in (("chrC", chrC_contig), ("chrM", chrM_contig)):
+        n_partial = sum(
+            1 for c in classifications
+            if c.classification == "organelle_partial" and c.assigned_ref_id == organelle
+        )
+        if contig is not None:
+            organelle_found[organelle], organelle_n_contigs[organelle] = "yes", 1
+        elif n_partial:
+            organelle_found[organelle], organelle_n_contigs[organelle] = "partial", n_partial
+        else:
+            organelle_found[organelle], organelle_n_contigs[organelle] = "no", 0
+    organelle_ref_cov = organelle_ref_cov or {}
 
     # --- Read depth ---
     mean_chrom_depth: Optional[float] = None
@@ -367,8 +382,12 @@ def build_assembly_result(
         n_rdna_contigs=n_rdna_contigs,
         total_rdna_bp=total_rdna_bp,
         n_rdna_arrays=n_rdna_arrays_count,
-        chrC_found=chrC_found,
-        chrM_found=chrM_found,
+        chrC_found=organelle_found["chrC"],
+        chrM_found=organelle_found["chrM"],
+        chrC_n_contigs=organelle_n_contigs["chrC"],
+        chrM_n_contigs=organelle_n_contigs["chrM"],
+        chrC_ref_cov=organelle_ref_cov.get("chrC") if organelle_found["chrC"] != "no" else None,
+        chrM_ref_cov=organelle_ref_cov.get("chrM") if organelle_found["chrM"] != "no" else None,
         mean_chrom_depth=mean_chrom_depth,
         chrom_ref_coverage=chrom_ref_coverage,
         classifications=classifications,
@@ -447,6 +466,10 @@ def write_comparison_summary_tsv(
         "n_rdna_arrays",
         "chrC_found",
         "chrM_found",
+        "chrC_n_contigs",
+        "chrM_n_contigs",
+        "chrC_ref_cov",
+        "chrM_ref_cov",
         "organelle_bp",
         "debris_bp",
         "unclassified_bp",
@@ -475,7 +498,10 @@ def write_comparison_summary_tsv(
         fh.write("\t".join(columns) + "\n")
 
         for r in results:
-            organelle_bp = r.classification_bp.get("organelle_complete", 0) + r.classification_bp.get("organelle_debris", 0)
+            organelle_bp = sum(
+                r.classification_bp.get(c, 0)
+                for c in ("organelle_complete", "organelle_partial", "organelle_debris")
+            )
             debris_bp = r.classification_bp.get("debris", 0) + r.classification_bp.get("chrom_debris", 0)
             unclassified_bp = r.classification_bp.get("unclassified", 0)
 
@@ -532,8 +558,12 @@ def write_comparison_summary_tsv(
                 str(r.n_rdna_contigs),
                 str(r.total_rdna_bp),
                 str(r.n_rdna_arrays),
-                "yes" if r.chrC_found else "no",
-                "yes" if r.chrM_found else "no",
+                r.chrC_found,
+                r.chrM_found,
+                str(r.chrC_n_contigs),
+                str(r.chrM_n_contigs),
+                _fmt(r.chrC_ref_cov),
+                _fmt(r.chrM_ref_cov),
                 str(organelle_bp),
                 str(debris_bp),
                 str(unclassified_bp),

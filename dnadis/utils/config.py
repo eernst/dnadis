@@ -28,6 +28,10 @@ from typing import Any, Dict, Optional
 
 import tomllib
 
+from dnadis.utils.logging_config import get_logger
+
+logger = get_logger("config")
+
 
 # Schema mapping TOML sections/keys to argparse argument names
 # Format: {"section": {"toml_key": "argparse_dest"}}
@@ -109,9 +113,13 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
         "min_synteny_span": "min_synteny_span",
     },
     "thresholds_organelle": {
+        "organelle_min_ref_cov": "organelle_min_ref_cov",
         "organelle_min_cov": "organelle_min_cov",
-        "chrC_len_tolerance": "chrC_len_tolerance",
-        "chrM_len_tolerance": "chrM_len_tolerance",
+        "organelle_set_min_ref_cov": "organelle_set_min_ref_cov",
+        "chrC_min_len_ratio": "chrC_min_len_ratio",
+        "chrC_max_len_ratio": "chrC_max_len_ratio",
+        "chrM_min_len_ratio": "chrM_min_len_ratio",
+        "chrM_max_len_ratio": "chrM_max_len_ratio",
     },
     "thresholds_rdna": {
         "rdna_min_cov": "rdna_min_cov",
@@ -225,6 +233,14 @@ def load_config(path: Path) -> Dict[str, Any]:
         raw_config["chromosome_scale_detection"] = {
             **legacy, **raw_config.get("chromosome_scale_detection", {}),
         }
+
+    # Symmetric length windows were replaced by min/max length ratios.
+    for old_key in ("chrC_len_tolerance", "chrM_len_tolerance"):
+        if old_key in raw_config.get("thresholds_organelle", {}):
+            logger.warning(
+                f"Config key thresholds_organelle.{old_key} is no longer used; "
+                f"set {old_key[:4]}_min_len_ratio / {old_key[:4]}_max_len_ratio instead"
+            )
 
     # Flatten TOML structure to argparse dest names
     flat_config: Dict[str, Any] = {}

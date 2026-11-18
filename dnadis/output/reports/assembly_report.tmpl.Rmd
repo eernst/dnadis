@@ -492,8 +492,9 @@ mean_ident <- if ("seq_identity_vs_ref" %in% names(chr_df_stats) && any(!is.na(c
 
 n_cobionts <- sum(summary_df$classification == "cobiont")
 n_rdna <- sum(summary_df$classification == "rDNA")
-has_chrC <- any(grepl("chrC|Pt|chloro|plast", summary_df$assigned_ref_id[summary_df$classification == "organelle_complete"], ignore.case = TRUE))
-has_chrM <- any(grepl("chrM|Mt|mito", summary_df$assigned_ref_id[summary_df$classification == "organelle_complete"], ignore.case = TRUE))
+org_called <- summary_df$classification %in% c("organelle_complete", "organelle_partial")
+has_chrC <- any(grepl("chrC|Pt|chloro|plast", summary_df$assigned_ref_id[org_called], ignore.case = TRUE))
+has_chrM <- any(grepl("chrM|Mt|mito", summary_df$assigned_ref_id[org_called], ignore.case = TRUE))
 
 tibble(
   Contigs = as.integer(length(lengths_sorted)),
@@ -1682,7 +1683,7 @@ cat('<div class="note-box">Read depth data is not available. Provide sequencing 
 depth_classification_order <- c(
   "chrom_assigned", "chrom_fragment", "chrom_debris", "chrom_unassigned",
   "chrC", "chrC_debris", "chrM", "chrM_debris",
-  "organelle_complete", "organelle_debris",
+  "organelle_complete", "organelle_partial", "organelle_debris",
   "rDNA", "cobiont", "circular_element", "debris", "unclassified"
 )
 depth_classification_colors <- c(
@@ -1695,6 +1696,7 @@ depth_classification_colors <- c(
   "chrM"               = oi[6],
   "chrM_debris"        = lighten(oi[6], amount = 0.5),
   "organelle_complete" = oi[3],
+  "organelle_partial"  = lighten(oi[3], amount = 0.4),
   "organelle_debris"   = oi[4],
   "rDNA"               = oi[1],
   "cobiont"        = oi[7],
@@ -1930,7 +1932,8 @@ if (nrow(amp_df) == 0) {
 ```
 
 ```{r organelle_rdna_data}
-org_df <- summary_df %>% filter(classification %in% c("organelle_complete", "organelle_debris"))
+org_df <- summary_df %>%
+  filter(classification %in% c("organelle_complete", "organelle_partial", "organelle_debris"))
 rdna_df <- summary_df %>% filter(classification == "rDNA")
 has_organelles <- nrow(org_df) > 0
 has_rdna <- nrow(rdna_df) > 0
@@ -2090,36 +2093,54 @@ cat('<div class="note-box">No organelle contigs were detected in this assembly.<
 ```
 
 ```{r organelle_prep, include=FALSE, eval=has_organelles}
+require_columns(org_df, c("organelle_ref_cov", "organelle_query_cov", "organelle_len_ratio"),
+                "contig_summary.tsv organelle evidence")
 org_show <- org_df %>%
   mutate(
     length_kb = length / 1e3,
     type = case_when(str_detect(assigned_ref_id, "chrC|chloroplast|plastid") ~ "chrC",
                      str_detect(assigned_ref_id, "chrM|mito") ~ "chrM", TRUE ~ "organelle"),
-    cov_pct = if ("best_ref_union_frac" %in% names(.)) best_ref_union_frac * 100 else NA_real_,
+    ref_cov_pct = as.numeric(organelle_ref_cov) * 100,
+    query_cov_pct = as.numeric(organelle_query_cov) * 100,
+    len_ratio = as.numeric(organelle_len_ratio),
     depth_val = if (has_depth) depth_mean else NA_real_
   )
 
 org_complete <- org_show %>% filter(classification == "organelle_complete")
+org_partial  <- org_show %>% filter(classification == "organelle_partial") %>% arrange(type, contig)
 org_debris   <- org_show %>% filter(classification == "organelle_debris")
 if (has_depth) {
   org_debris <- org_debris %>% arrange(desc(depth_val))
 }
 has_org_complete <- nrow(org_complete) > 0
+has_org_partial <- nrow(org_partial) > 0
 has_org_debris <- nrow(org_debris) > 0
 
-.render_org_gt <- function(df, title) {
-  sel <- c("contig", "original_name", "type", "length_kb")
-  labels <- list(contig = "Contig", original_name = "Original Name", type = "Type", length_kb = "Length (kb)")
+.render_org_gt <- function(df, title, subtitle = NULL) {
+  sel <- c("contig", "original_name", "type", "length_kb", "len_ratio",
+           "ref_cov_pct", "query_cov_pct")
+  labels <- list(contig = "Contig", original_name = "Original Name", type = "Type",
+                 length_kb = "Length (kb)", len_ratio = "\u00d7 Ref length",
+                 ref_cov_pct = "Ref covered (%)", query_cov_pct = "Contig aligned (%)")
   if (has_depth) { sel <- c(sel, "depth_val"); labels$depth_val <- "Depth" }
   df %>% select(all_of(sel)) %>% gt() %>% cols_label(.list = labels) %>%
     fmt_number(columns = length_kb, decimals = 1) %>%
+    fmt_number(columns = len_ratio, decimals = 2) %>%
+    fmt_number(columns = c(ref_cov_pct, query_cov_pct), decimals = 1) %>%
     fmt_number(columns = any_of("depth_val"), decimals = 1) %>%
-    tab_header(title = md(paste0("**", title, "**"))) %>% gt_theme()
+    tab_header(title = md(paste0("**", title, "**")),
+               subtitle = if (is.null(subtitle)) NULL else md(subtitle)) %>%
+    gt_theme()
 }
 ```
 
 ```{r organelle_table, eval=has_organelles && has_org_complete}
 .render_org_gt(org_complete, "Complete Organelles")
+```
+
+```{r organelle_partial_table, eval=has_organelles && has_org_partial}
+.render_org_gt(org_partial, "Partial Organelles",
+  "No single contig covers the organelle reference; these contigs together do. Ref covered is per contig.")
 ```
 
 ```{r organelle_debris_table, eval=has_organelles && has_org_debris}

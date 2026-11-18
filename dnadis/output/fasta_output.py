@@ -42,6 +42,7 @@ _CATEGORY_BY_CLASS = {
     "chrom_fragment": "chrs",
     "chrom_unassigned": "unclassified",
     "organelle_complete": "organelles",
+    "organelle_partial": "organelles",
     "rDNA": "rdna",
     "cobiont": "cobionts",
     "circular_element": "circles",

@@ -378,7 +378,7 @@ FASTA outputs are bgzip-compressed (`*.fasta.gz`; index with `samtools faidx` fo
 |------|-------------|
 | `*.chrs.fasta.gz` | Chromosome contigs (`chrom_assigned` + `chrom_fragment`), renamed and reoriented; always contig-level, with or without `--scaffold` |
 | `*.chrs.<sg>.fasta.gz` | Per-subgenome split of `chrs` (e.g. `chrs.A`, `chrs.B`). When all chromosome contigs belong to one subgenome, this is a symlink to `*.chrs.fasta.gz` |
-| `*.organelles.fasta.gz` | Organelle contigs (chrC, chrM) |
+| `*.organelles.fasta.gz` | Organelle contigs (`organelle_complete` chrC/chrM and `organelle_partial` chrC_1…/chrM_1…) |
 | `*.rdna.fasta.gz` | rDNA-containing contigs |
 | `*.cobionts.fasta.gz` | Cobiont contigs |
 | `*.circles.fasta.gz` | Circular elements (`circular_element`) |
@@ -438,7 +438,7 @@ Produced in the top-level output directory when ≥2 assemblies complete. File n
 |--------|-------------|
 | `contig` | New contig name (with chromosome assignment) |
 | `original_name` | Original contig name from input FASTA |
-| `classification` | Category: chrom_assigned, chrom_fragment, chrom_unassigned, organelle_complete, organelle_debris, rDNA, cobiont, chrom_debris, debris, unclassified |
+| `classification` | Category: chrom_assigned, chrom_fragment, chrom_unassigned, organelle_complete, organelle_partial, organelle_debris, rDNA, cobiont, chrom_debris, debris, unclassified |
 | `classification_confidence` | Confidence level: high, medium, or low |
 | `reversed` | Whether contig was reverse-complemented |
 | `cobiont_taxid` | NCBI taxonomy ID (for cobionts) |
@@ -528,8 +528,9 @@ Uses Infernal covariance models from Rfam 15.0 for structure-based rRNA boundary
 | `chrom_assigned` | Chromosome-length contig assigned to a reference chromosome via synteny |
 | `chrom_fragment` | Sub-chromosome-length contig with a passing reference assignment — unique chromosomal sequence too short to be a full chromosome. Grouped with chromosomes in `chrs.fasta.gz`, the per-subgenome FASTAs, and the compleasm `chrs` subset, and scaffolded against the reference. A fragment is reclassified as `chrom_debris` only when its reference footprint is largely contained (≥80%) within a longer placed contig at high identity (so it is a redundant duplicate, not unique sequence) |
 | `chrom_unassigned` | Chromosome-length contig without reference assignment (novel or failed synteny gates) |
-| `organelle_complete` | Complete organelle genome (chrC or chrM) |
-| `organelle_debris` | Partial organelle sequence |
+| `organelle_complete` | One contig holds the organelle genome (chrC or chrM): it covers ≥ `--organelle-min-ref-cov` of the reference, ≥ `--organelle-min-cov` of the contig aligns, and its length is within the organelle's min/max ratio to the reference. Candidates are ranked circular first, then length closest to the reference; the others become `organelle_debris` |
+| `organelle_partial` | When no single contig passes, the fewest contigs (each ≥ `--organelle-min-cov` aligned) that together cover ≥ `--organelle-set-min-ref-cov` of the reference, named `chrM_1`, `chrM_2`, … in selection order. Written to `*.organelles.fasta.gz` |
+| `organelle_debris` | Other contig with ≥50% of its length aligned to an organelle reference; each contig is assigned to the organelle it matches best (aligned fraction × identity) |
 | `rDNA` | Contig made up mostly of 45S rDNA: seed BLAST coverage ≥ `--rdna-min-cov`, or rDNA array span coverage ≥ `--rdna-min-cov` after the consensus step (which can reroute `chrom_fragment`, debris and unclassified contigs). Named `contig_N`. If the contig also passed the synteny gate, `assigned_ref_id` is kept as a "homologous to chrN" annotation; this rests on rDNA similarity, which is shared between NORs. Written to `*.rdna.fasta.gz` and not scaffolded unless `--scaffold-rdna-contigs`. |
 | `cobiont` | Sequence from a co-occurring organism (symbiont, commensal, etc.) |
 | `chrom_debris` | High-coverage (≥80%), high-identity (≥90%) duplicate of an assembled chromosome contig, or a sub-chromosome-length contig redundant with a longer placed contig |
@@ -550,8 +551,9 @@ Each contig is assigned a confidence level (`high`, `medium`, or `low`) indicati
 | **chrom_assigned** (nucleotide mode) | Ref coverage ≥30% AND identity ≥50% AND GC deviation <2σ | Ref coverage 10-30% OR GC deviation 2-3σ | Ref coverage <10% OR identity <50% OR GC deviation >3σ |
 | **chrom_fragment** | Identity ≥80% AND GC deviation <2σ | Identity 50-80% OR GC deviation 2-3σ | Identity <50% OR GC deviation >3σ |
 | **chrom_unassigned** | — | GC deviation <2σ | GC deviation ≥2σ |
-| **organelle_complete** | Coverage ≥90% | Coverage 80-90% | — |
-| **organelle_debris** | — | Coverage ≥60% | Coverage <60% |
+| **organelle_complete** | Reference coverage ≥98% | Reference coverage < 98% | — |
+| **organelle_partial** | — | Always | — |
+| **organelle_debris** | — | Contig aligned ≥60% | Contig aligned <60% |
 | **rDNA** | Coverage ≥80% AND identity ≥95% | Coverage 50-80% OR identity <95% | Coverage <60% |
 | **cobiont** | Coverage ≥80% OR GC deviation >2σ | Coverage 50-80% | Coverage <50% |
 | **chrom_debris** | Coverage ≥90%, identity ≥95%, GC deviation <3σ | Coverage 80-90% OR identity 90-95% OR GC deviation ≥3σ | — |
@@ -613,9 +615,15 @@ All gate criteria must be satisfied for chromosome assignment (AND logic). The s
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `--organelle-min-cov` | 0.80 | Min query coverage |
-| `--chrC-len-tolerance` | 0.05 | Length tolerance for chrC |
-| `--chrM-len-tolerance` | 0.20 | Length tolerance for chrM |
+| `--organelle-min-ref-cov` | 0.95 | Min fraction of the reference covered by one contig (`organelle_complete`) |
+| `--organelle-min-cov` | 0.90 | Min fraction of the contig aligned (`organelle_complete`, `organelle_partial`) |
+| `--organelle-set-min-ref-cov` | 0.90 | Min combined reference coverage of an `organelle_partial` set |
+| `--chrC-min-len-ratio` | 0.90 | Min contig/reference length for a complete chrC (a contig lacking one inverted-repeat copy still covers the whole reference) |
+| `--chrC-max-len-ratio` | 1.50 | Max contig/reference length for a complete chrC (longer contigs are concatemers) |
+| `--chrM-min-len-ratio` | 0.50 | Min contig/reference length for a complete chrM (a reference can carry repeat copies the assembly collapses) |
+| `--chrM-max-len-ratio` | 3.00 | Max contig/reference length for a complete chrM (mitogenome size varies within a species, and an assembly can walk the repeat-mediated recombination graph) |
+
+Reference coverage is the merged BLAST subject intervals over the reference length. An oversized contig (a chrC concatemer, a long mitochondrial graph walk) above the max ratio can still be the only member of an `organelle_partial` set. Read depth is not used: when an assembly holds many copies of an organelle genome, reads split between them. `organelle_ref_cov`, `organelle_query_cov`, `organelle_identity` and `organelle_len_ratio` in `contig_summary.tsv` show how close each organelle contig came, and the log names the best contig when an organelle is not called.
 
 ### Cobiont detection
 

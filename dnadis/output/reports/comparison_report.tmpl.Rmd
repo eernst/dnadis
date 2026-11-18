@@ -633,6 +633,7 @@ clf_short <- c(
   "chrom_fragment"     = "ChrF",
   "chrom_unassigned"   = "Unasgn",
   "organelle_complete" = "Org",
+  "organelle_partial"  = "OrgP",
   "organelle_debris"   = "OrgD",
   "rDNA"               = "rDNA",
   "cobiont"            = "Cob",
@@ -886,7 +887,10 @@ busco_df %>%
 ```{r overview_table}
 # Detect whether reference has a plastid (chrC/chrPt) sequence
 ref_has_plastid <- any(grepl("^chr[C]$|^chrPt$", ref_lengths$ref_id))
-any_asm_has_chrC <- any(comp_df$chrC_found == "yes", na.rm = TRUE)
+any_asm_has_chrC <- any(comp_df$chrC_found %in% c("yes", "partial"), na.rm = TRUE)
+.org_mark <- function(found) {
+  case_when(found == "yes" ~ "\u2713", found == "partial" ~ "\u25D0", TRUE ~ "\u2014")
+}
 show_chrC <- ref_has_plastid || any_asm_has_chrC
 
 tbl <- comp_df %>%
@@ -910,8 +914,8 @@ tbl <- comp_df %>%
                              sprintf("%.2f%%", mean_identity * 100)),
     Cobionts = n_cobionts,
     rDNA = n_rdna,
-    chrC = ifelse(chrC_found == "yes", "\u2713", "\u2014"),
-    chrM = ifelse(chrM_found == "yes", "\u2713", "\u2014")
+    chrC = .org_mark(chrC_found),
+    chrM = .org_mark(chrM_found)
   )
 
 gt_obj <- tbl %>%
@@ -934,6 +938,10 @@ if (show_chrC) {
   gt_obj <- gt_obj %>%
     cols_hide(columns = chrC) %>%
     tab_spanner(label = "Other", columns = c(Cobionts, rDNA, chrM))
+}
+if (any(c(comp_df$chrC_found, comp_df$chrM_found) == "partial", na.rm = TRUE)) {
+  gt_obj <- gt_obj %>%
+    tab_source_note(md("◐ No single contig covers the organelle reference; several contigs together do (organelle_partial)."))
 }
 gt_obj
 ```
@@ -3614,12 +3622,13 @@ arr_tbl %>%
 ```
 
 
-`r if (has_per_asm && any(comp_df$chrC_found == "yes" | comp_df$chrM_found == "yes", na.rm = TRUE)) "# 7. Organelles" else ""`
+`r if (has_per_asm && any(comp_df$chrC_found != "no" | comp_df$chrM_found != "no", na.rm = TRUE)) "# 7. Organelles" else ""`
 
-```{r organelle_section, eval=(has_per_asm && any(comp_df$chrC_found == "yes" | comp_df$chrM_found == "yes", na.rm = TRUE))}
-# Extract organelle contigs from per-assembly data
+```{r organelle_section, eval=(has_per_asm && any(comp_df$chrC_found != "no" | comp_df$chrM_found != "no", na.rm = TRUE))}
+require_columns(comp_df, c("chrC_ref_cov", "chrM_ref_cov"), "comparison_summary.tsv")
+# Extract organelle contigs (one complete contig, or a partial set) per assembly
 org_df <- all_summary_df %>%
-  filter(classification == "organelle_complete") %>%
+  filter(classification %in% c("organelle_complete", "organelle_partial")) %>%
   mutate(
     org_type = case_when(
       grepl("chrC|Pt|chloro|plast", assigned_ref_id, ignore.case = TRUE) ~ "chrC",
@@ -3657,6 +3666,20 @@ org_wide <- comp_df %>%
     chrM_bp = replace_na(chrM_bp, 0),
     chrC_contigs = replace_na(chrC_contigs, "\u2014"),
     chrM_contigs = replace_na(chrM_contigs, "\u2014")
+  ) %>%
+  left_join(
+    comp_df %>% transmute(Assembly = as.character(assembly), chrC_found, chrM_found,
+                          chrC_ref_cov = as.numeric(chrC_ref_cov),
+                          chrM_ref_cov = as.numeric(chrM_ref_cov)),
+    by = "Assembly"
+  ) %>%
+  mutate(
+    chrC_cov = ifelse(is.na(chrC_ref_cov), "\u2014",
+                      sprintf("%.1f%%%s", chrC_ref_cov * 100,
+                              ifelse(chrC_found == "partial", " (set)", ""))),
+    chrM_cov = ifelse(is.na(chrM_ref_cov), "\u2014",
+                      sprintf("%.1f%%%s", chrM_ref_cov * 100,
+                              ifelse(chrM_found == "partial", " (set)", "")))
   )
 
 max_chrC_bp <- max(org_wide$chrC_bp, na.rm = TRUE)
@@ -3688,7 +3711,7 @@ org_gt_df <- org_wide %>%
     chrM_contig = chrM_contigs
   ) %>%
   ungroup() %>%
-  select(Assembly, chrC_contig, chrC_size, chrM_contig, chrM_size)
+  select(Assembly, chrC_contig, chrC_size, chrC_cov, chrM_contig, chrM_size, chrM_cov)
 
 # Dynamic column labels
 chrC_size_label <- "Size (bp)"
@@ -3702,12 +3725,12 @@ if (show_chrC_org) {
     fmt(columns = c(chrC_size, chrM_size), fns = function(x) lapply(x, html)) %>%
     fmt(columns = Assembly, fns = function(x) lapply(asm_report_link(x), html)) %>%
     cols_label(
-      chrC_contig = "Contig", chrC_size = chrC_size_label,
-      chrM_contig = "Contig", chrM_size = chrM_col_label
+      chrC_contig = "Contig", chrC_size = chrC_size_label, chrC_cov = "Ref covered",
+      chrM_contig = "Contig", chrM_size = chrM_col_label, chrM_cov = "Ref covered"
     ) %>%
     cols_width(chrC_size ~ px(140), chrM_size ~ px(140)) %>%
-    tab_spanner(label = "Chloroplast", columns = c(chrC_contig, chrC_size)) %>%
-    tab_spanner(label = "Mitochondria", columns = c(chrM_contig, chrM_size)) %>%
+    tab_spanner(label = "Chloroplast", columns = c(chrC_contig, chrC_size, chrC_cov)) %>%
+    tab_spanner(label = "Mitochondria", columns = c(chrM_contig, chrM_size, chrM_cov)) %>%
     tab_style(
       style = css(vertical_align = "middle"),
       locations = cells_body()
@@ -3716,13 +3739,13 @@ if (show_chrC_org) {
     gt_theme()
 } else {
   org_gt_df %>%
-    select(Assembly, chrM_contig, chrM_size) %>%
+    select(Assembly, chrM_contig, chrM_size, chrM_cov) %>%
     gt() %>%
     fmt(columns = chrM_size, fns = function(x) lapply(x, html)) %>%
     fmt(columns = Assembly, fns = function(x) lapply(asm_report_link(x), html)) %>%
-    cols_label(chrM_contig = "Contig", chrM_size = chrM_col_label) %>%
+    cols_label(chrM_contig = "Contig", chrM_size = chrM_col_label, chrM_cov = "Ref covered") %>%
     cols_width(chrM_size ~ px(140)) %>%
-    tab_spanner(label = "Mitochondria", columns = c(chrM_contig, chrM_size)) %>%
+    tab_spanner(label = "Mitochondria", columns = c(chrM_contig, chrM_size, chrM_cov)) %>%
     tab_style(
       style = css(vertical_align = "middle"),
       locations = cells_body()
