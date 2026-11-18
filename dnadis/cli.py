@@ -162,6 +162,7 @@ from dnadis.detection.cobiont import detect_cobionts
 from dnadis.detection.compleasm import run_compleasm
 from dnadis.classification.classifier import (
     assign_contig_names,
+    apply_organelle_swaps,
     classify_all_contigs,
     classify_debris_and_unclassified,
     compute_mean_gene_proportion,
@@ -186,6 +187,19 @@ from dnadis.output.tsv_output import (
 )
 from dnadis.output.plotting import run_assembly_report
 from dnadis.models import AssemblyResult, OrganelleCalls, ReferenceContext
+
+
+class _RemovedOrganelleTolerance(argparse.Action):
+    """--chrC/chrM-len-tolerance: accepted and ignored with a warning."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        organelle = "chrC" if "chrC" in option_string else "chrM"
+        # Logging is not configured yet while arguments are parsed
+        print(
+            f"[warn] {option_string} is no longer used; set --{organelle}-min-len-ratio / "
+            f"--{organelle}-max-len-ratio instead",
+            file=sys.stderr,
+        )
 
 
 def organelle_thresholds_from_args(args) -> OrganelleThresholds:
@@ -1318,18 +1332,7 @@ def run_assembly(
             if swaps:
                 chrC_contig = organelle_calls.chrC_contig
                 chrM_contig = organelle_calls.chrM_contig
-                for organelle, (old, new) in swaps.items():
-                    for clf in classifications:
-                        if clf.original_name == new:
-                            hit = organelle_calls.hits[new]
-                            clf.classification = "organelle_complete"
-                            clf.new_name = organelle
-                            clf.classification_confidence = (
-                                "high" if hit.ref_coverage >= 0.98 else "medium")
-                        elif old is not None and clf.original_name == old:
-                            clf.classification = "organelle_debris"
-                            clf.new_name = ""
-                            clf.classification_confidence = "medium"
+                apply_organelle_swaps(classifications, swaps, organelle_hits=organelle_calls.hits)
                 assign_contig_names(
                     classifications,
                     qry_lengths,
@@ -2313,10 +2316,17 @@ def main():
     org_thresh.add_argument(
         "--organelle-same-genome-identity", type=float, default=0.99,
         help="Min identity at which complete organelle candidates "
-             "count as one genome. Candidates from another genome (e.g. a "
-             "second species' plastome in the sample) are set aside unless "
-             "their genome holds the most organelle sequence [0.99]",
+             "count as one genome. When candidates come from more than one "
+             "genome (e.g. a second species' plastome in the sample), the one "
+             "with the most read bases is used with --reads; without reads, "
+             "the one with at least twice the assembled sequence of the next, "
+             "else all are ranked together [0.99]",
     )
+    for removed in ("--chrC-len-tolerance", "--chrM-len-tolerance"):
+        org_thresh.add_argument(  # replaced by the min/max length ratios
+            removed, action=_RemovedOrganelleTolerance, default=argparse.SUPPRESS,
+            help=argparse.SUPPRESS,
+        )
 
     # =========================================================================
     # Thresholds: rDNA detection

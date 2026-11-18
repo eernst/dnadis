@@ -799,3 +799,21 @@ def test_contig_summary_writes_gap_columns(tmp_path):
     rows = {d["original_name"]: d for d in (dict(zip(header, l.split("\t"))) for l in lines[1:])}
     assert (rows["g"]["n_gaps"], rows["g"]["gap_bp"]) == ("2", "150")
     assert (rows["c"]["n_gaps"], rows["c"]["gap_bp"]) == ("0", "0")
+
+
+def test_cut_concatemer_bp_accounting(tmp_path):
+    """A cut unit counts as organelle_complete bp, the rest of its concatemer as debris."""
+    c = _make_classification("cat", "organelle_complete", 1_000_000)
+    c.assigned_ref_id = "chrC"
+    c.organelle_unit = (100, 140_100, False)
+    base = tmp_path
+    r = build_assembly_result(
+        assembly_name="cc", assembly_path=base / "cc.fa", outprefix=base / "cc" / "cc",
+        classifications=[c], qry_lengths={"cat": 1_000_000}, ref_lengths_norm={},
+        ev=_make_empty_ev(), cobionts_filtered={}, chrC_contig="cat", chrM_contig=None,
+        rdna_arrays=[], depth_stats={}, chimera_primary_frac=0.8, chimera_secondary_frac=0.2,
+        summary_tsv=base / "s.tsv", segments_tsv=base / "seg.tsv",
+        evidence_tsv=base / "ev.tsv", macro_blocks_tsv=base / "mb.tsv",
+    )
+    assert r.classification_bp["organelle_complete"] == 140_000
+    assert r.classification_bp["debris"] == 860_000

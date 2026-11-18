@@ -282,10 +282,10 @@ def test_classifier_names_partial_set_and_routes_fasta(tmp_path):
     fa.write_text("".join(f">{k}\n{v}\n" for k, v in seqs.items()))
     lengths = {k: len(v) for k, v in seqs.items()}
     hits = {
-        "m1": OrganelleHit("chrM", 1.0, 0.999, 0.6, False, 0.55, "partial"),
-        "m2": OrganelleHit("chrM", 1.0, 0.999, 0.5, False, 0.45, "partial"),
-        "c1": OrganelleHit("chrC", 1.0, 0.999, 1.0, True, 0.97, "complete"),
-        "d1": OrganelleHit("chrC", 0.55, 0.99, 0.1, False, 0.05, "debris"),
+        "m1": OrganelleHit("chrM", 1.0, 0.999, 0.6, 0.55, "partial"),
+        "m2": OrganelleHit("chrM", 1.0, 0.999, 0.5, 0.45, "partial"),
+        "c1": OrganelleHit("chrC", 1.0, 0.999, 1.0, 0.97, "complete"),
+        "d1": OrganelleHit("chrC", 0.55, 0.99, 0.1, 0.05, "debris"),
     }
     ev = ChainEvidenceResult(
         qlens_from_paf={}, qr_union_bp={}, qr_matches={}, qr_alnlen={},
@@ -468,7 +468,7 @@ def test_classifier_describes_cut_unit(tmp_path):
 
     fa = tmp_path / "q.fa"
     fa.write_text(">cat\n" + "ACGT" * 1000 + "\n")
-    hit = OrganelleHit("chrC", 1.0, 0.997, 4000 / 1000, True, 1.0, "complete",
+    hit = OrganelleHit("chrC", 1.0, 0.997, 4000 / 1000, 1.0, "complete",
                        unit=OrganelleUnit(100, 1100, True, 0.99, 0.98, 0.996))
     ev = ChainEvidenceResult(
         qlens_from_paf={}, qr_union_bp={}, qr_matches={}, qr_alnlen={},
@@ -489,3 +489,83 @@ def test_classifier_describes_cut_unit(tmp_path):
     assert c.organelle_unit == (100, 1100, True)
     assert (c.organelle_ref_cov, c.organelle_len_ratio) == (0.99, 1.0)
     assert c.classification_confidence == "high"
+
+
+def test_low_query_coverage_candidate_survives_for_depth_repick(tmp_path):
+    """With --organelle-min-cov below the 0.5 debris floor, a candidate that
+    is not chosen stays in hits so the read-depth re-pick can use it."""
+    from dnadis.detection.organelle import repick_by_read_depth
+
+    lengths = {"a": CHRC, "b": int(CHRC / 0.45)}
+    rows = [_hsp("a", "chrC", 1, CHRC, 1, CHRC)]
+    rows.append(_hsp("b", "chrC", 1, CHRC, 1, CHRC))  # 45% of b aligned
+    grouper = lambda o, cands, assigned: ({"a": 0, "b": 1}, {0: 200_000, 1: lengths["b"]})
+    calls = _call(tmp_path, rows, lengths, genome_groups=grouper, min_query_cov=0.4,
+                  len_ratio=(("chrC", 0.9, 3.0), ("chrM", 0.5, 3.0)))
+    assert calls.chrC_contig == "a" and "b" in calls.hits
+    assert repick_by_read_depth(calls, {"a": 5.0, "b": 500.0}, lengths) == {"chrC": ("a", "b")}
+
+
+def test_foreign_concatemer_is_not_cut(tmp_path):
+    """A concatemer whose genome holds under half of the chrC sequence
+    (the sample's own plastome is in fragments) is not cut."""
+    L = int(2.2 * CHRC)
+    rows = _tiled("cat", "chrC", L, 0, CHRC)
+    lengths = {"cat": L}
+    for i in range(12):
+        name = f"frag{i}"
+        lengths[name] = 60_000
+        s = (i * 10_000) % (CHRC - 60_000)
+        rows.append(_hsp(name, "chrC", 1, 60_000, s + 1, s + 60_000))
+    own_bp = sum(v for k, v in lengths.items() if k != "cat")
+    calls = _call(tmp_path, rows, lengths,
+                  genome_groups=lambda o, cands, assigned: ({"cat": 0}, {0: L}))
+    assert own_bp > L and calls.chrC_contig is None
+    # Without the genome check the concatemer is cut
+    assert _call(tmp_path, rows, lengths).chrC_contig == "cat"
+
+
+def test_new_bp_matches_merge():
+    import random
+    from dnadis.detection.organelle import _new_bp
+    from dnadis.utils.io_utils import merge_intervals
+
+    rng = random.Random(3)
+    for _ in range(200):
+        def ivs(n):
+            out = []
+            for _ in range(n):
+                s = rng.randrange(0, 1000)
+                out.append((s, s + rng.randrange(1, 120)))
+            return merge_intervals(out)[0]
+        a, c = ivs(rng.randrange(0, 8)), ivs(rng.randrange(0, 8))
+        expected = merge_intervals(a + c)[1] - merge_intervals(c)[1] if a else 0
+        assert _new_bp(a, c) == expected
+
+
+def test_apply_organelle_swaps():
+    from dnadis.classification.classifier import apply_organelle_swaps
+    from dnadis.models import ContigClassification, OrganelleHit
+
+    def clf(name, cls, new):
+        return ContigClassification(original_name=name, new_name=new, classification=cls,
+                                    reversed=False, cobiont_taxid=None, cobiont_sci=None,
+                                    assigned_ref_id="chrM", ref_gene_proportion=None, contig_len=1)
+    clfs = [clf("old", "organelle_complete", "chrM"), clf("new", "organelle_debris", "contig_3")]
+    hits = {"new": OrganelleHit("chrM", 1.0, 0.999, 0.7, 0.97, "complete")}
+    apply_organelle_swaps(clfs, {"chrM": ("old", "new")}, hits)
+    assert (clfs[0].classification, clfs[0].new_name) == ("organelle_debris", "")
+    assert (clfs[1].classification, clfs[1].new_name) == ("organelle_complete", "chrM")
+    assert clfs[1].classification_confidence == "medium"
+
+
+def test_removed_tolerance_flag_warns():
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parent.parent / "dnadis.py"
+    res = subprocess.run([sys.executable, str(script), "--chrM-len-tolerance", "0.2"],
+                         capture_output=True, text=True)
+    assert "--chrM-len-tolerance is no longer used" in res.stderr
+    assert "unrecognized arguments" not in res.stderr
