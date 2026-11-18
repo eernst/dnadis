@@ -1501,6 +1501,8 @@ def run_assembly(
             qr_best_chain_ident=ev.qr_best_chain_ident or {},
             include_rdna=args.scaffold_rdna_contigs,
             no_join=sister_applied,
+            query_gaps=qry_gaps,
+            macro_block_rows=ev.macro_block_rows,
         )
 
         if scaffolded_seqs:

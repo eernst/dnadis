@@ -3,9 +3,12 @@
 
 Produces chromosome-scale pseudomolecules by:
 1. Grouping contigs by assigned reference chromosome
-2. Running RagTag scaffold per chromosome (if available)
-3. Falling back to built-in reference-position-based ordering otherwise
-4. Producing AGP 2.0 output describing scaffold structure
+2. Placing fragments into scaffold gaps (runs of >=10 N) of the group's
+   chromosome contigs where the reference positions of the gap flanks
+   bracket them
+3. Running RagTag scaffold per chromosome (if available)
+4. Falling back to built-in reference-position-based ordering otherwise
+5. Producing AGP 2.0 output describing scaffold structure
 """
 from __future__ import annotations
 
@@ -110,6 +113,344 @@ def _agp_gap_line(
         "yes",
         "align_genus",
     ]))
+
+
+# A scaffold is laid out as a list of parts: ("W", component, beg, end,
+# orientation) with 1-based inclusive component coordinates, or a gap,
+# ("N", "", 0, 0, "").  A contig with fragments placed into its input gaps
+# is a "composite": its parts in its own forward orientation, which replace
+# its full-length W part wherever the contig is laid out.
+_Part = Tuple[str, str, int, int, str]
+_GAP_PART: _Part = ("N", "", 0, 0, "")
+_FLIP = {"+": "-", "-": "+"}
+
+
+def _flip_parts(parts: List[_Part]) -> List[_Part]:
+    """Parts of the reverse complement of a layout."""
+    return [
+        (k, c, b, e, _FLIP[o] if k == "W" else o) for (k, c, b, e, o) in reversed(parts)
+    ]
+
+
+def _expand_composites(
+    parts: List[_Part], composites: Dict[str, List[_Part]],
+) -> List[_Part]:
+    """Replace each W part of a composite contig with the composite's parts."""
+    if not composites:
+        return parts
+    out: List[_Part] = []
+    for part in parts:
+        sub = composites.get(part[1]) if part[0] == "W" else None
+        if sub is None:
+            out.append(part)
+        else:
+            out.extend(sub if part[4] == "+" else _flip_parts(sub))
+    return out
+
+
+def _render_parts(
+    scaffold_name: str,
+    parts: List[_Part],
+    query_seqs: Dict[str, str],
+    gap_size: int,
+) -> Tuple[str, List[str]]:
+    """Scaffold sequence and AGP lines for a layout.
+
+    Components missing from ``query_seqs`` are skipped; gaps are written as
+    ``gap_size`` N, never at either end and never two in a row.
+    """
+    pieces: List[str] = []
+    rows: List[Tuple[str, int, int, str, int, int, str]] = []
+    for kind, comp, beg, end, orient in parts:
+        if kind == "N":
+            if gap_size > 0 and rows and rows[-1][0] == "W":
+                rows.append(("N", 0, 0, "", 0, 0, ""))
+                pieces.append("N" * gap_size)
+            continue
+        seq = query_seqs.get(comp, "")
+        if not seq or beg > end:
+            continue
+        sub = seq[beg - 1:end]
+        if orient == "-":
+            sub = reverse_complement(sub)
+        rows.append(("W", 0, 0, comp, beg, end, orient))
+        pieces.append(sub)
+    if rows and rows[-1][0] == "N":
+        rows.pop()
+        pieces.pop()
+
+    agp_lines: List[str] = []
+    pos = 1
+    for part_num, (row, piece) in enumerate(zip(rows, pieces), start=1):
+        end_pos = pos + len(piece) - 1
+        if row[0] == "N":
+            agp_lines.append(_agp_gap_line(scaffold_name, pos, end_pos, part_num, gap_size))
+        else:
+            _, _, _, comp, beg, end, orient = row
+            agp_lines.append(_agp_component_line(
+                scaffold_name, pos, end_pos, part_num, comp, beg, end, orient,
+            ))
+        pos = end_pos + 1
+    return "".join(pieces), agp_lines
+
+
+# ---------------------------------------------------------------------------
+# Placement of fragments into input scaffold gaps
+# ---------------------------------------------------------------------------
+
+# Reference slack at each side of a gap's bracket.  Flank and fragment
+# positions come from macro blocks, whose ends are coarse when the reference
+# is divergent.
+BRACKET_SLACK = 50_000
+
+# Macro blocks shorter than this are not used as gap flanks: in divergent,
+# repeat-rich stretches, short blocks often align far from their neighbours
+# on the reference.
+MIN_FLANK_BP = 20_000
+
+
+@dataclass(frozen=True)
+class _RefBlock:
+    """A macro block of one contig on one reference chromosome."""
+
+    qstart: int
+    qend: int
+    strand: str
+    ref_start: int
+    ref_end: int
+    bp: int
+
+
+def _index_ref_blocks(macro_block_rows) -> Dict[Tuple[str, str], List[_RefBlock]]:
+    """(contig original name, ref_id) -> macro blocks with reference coordinates.
+
+    Rows without reference coordinates (older 17-field tuples) are skipped.
+    """
+    out: Dict[Tuple[str, str], List[_RefBlock]] = defaultdict(list)
+    for row in macro_block_rows or ():
+        if len(row) < 19:
+            continue
+        ref_start, ref_end = row[17], row[18]
+        if ref_start is None or ref_end is None:
+            continue
+        out[(row[0], row[2])].append(_RefBlock(
+            qstart=int(row[7]), qend=int(row[8]), strand=row[5],
+            ref_start=int(ref_start), ref_end=int(ref_end), bp=int(row[10]),
+        ))
+    return dict(out)
+
+
+@dataclass(frozen=True)
+class _GapBracket:
+    """Reference positions at the two sides of an input gap in an anchor.
+
+    ``left_ref``/``right_ref`` are the reference positions at the gap-side
+    ends of the nearest flank blocks before and after the gap (in anchor
+    coordinates); ``left_strand``/``right_strand`` are those blocks' strands.
+    """
+
+    anchor: str
+    gap: Tuple[int, int]
+    left_ref: int
+    right_ref: int
+    left_strand: str
+    right_strand: str
+
+    @property
+    def lo(self) -> int:
+        return min(self.left_ref, self.right_ref)
+
+    @property
+    def hi(self) -> int:
+        return max(self.left_ref, self.right_ref)
+
+    def fit(
+        self, fs: int, fe: int, strand: str,
+    ) -> Optional[Tuple[str, Tuple[int, int]]]:
+        """Whether a fragment with reference footprint [fs, fe) and dominant
+        strand ``strand`` fits this gap: (orientation in the anchor, sort key
+        for fragments sharing the gap), or None.
+
+        With flanks on one strand, the footprint must lie between the flanks'
+        reference positions (``BRACKET_SLACK`` at each side).  With flanks on
+        opposite strands (a rearrangement next to the gap), the fragment must
+        continue the reference from exactly one flank: lie on the side of its
+        reference position that the flank runs toward, starting within
+        ``BRACKET_SLACK`` of it.  It is oriented with that flank and laid out
+        next to it.
+        """
+        if self.left_strand == self.right_strand:
+            if not (self.lo - BRACKET_SLACK <= fs and fe <= self.hi + BRACKET_SLACK):
+                return None
+            orient = "+" if strand == self.left_strand else "-"
+            mid = fs + fe
+            return orient, (0, mid if self.right_ref >= self.left_ref else -mid)
+
+        def continues(ref: int, toward_higher: bool) -> Optional[int]:
+            dist = fs - ref if toward_higher else ref - fe
+            return dist if -BRACKET_SLACK <= dist <= BRACKET_SLACK else None
+
+        # A + block runs toward higher reference positions; the sequence after
+        # a left flank continues its direction, the sequence before a right
+        # flank precedes it.
+        d_left = continues(self.left_ref, self.left_strand == "+")
+        d_right = continues(self.right_ref, self.right_strand == "-")
+        if (d_left is None) == (d_right is None):
+            return None
+        if d_left is not None:
+            return ("+" if strand == self.left_strand else "-"), (0, d_left)
+        return ("+" if strand == self.right_strand else "-"), (1, -d_right)
+
+
+def _gap_bracket(
+    anchor: str, gap: Tuple[int, int], blocks: List[_RefBlock],
+) -> Optional[_GapBracket]:
+    """The bracket of one gap, or None when the gap leaves no reference
+    sequence open: a flank block aligns across it, it has no flank block on
+    one side, or flanks on the same strand run backwards on the reference
+    by more than ``BRACKET_SLACK`` (the sequence on both sides already
+    covers what lies between).  Blocks
+    shorter than ``MIN_FLANK_BP`` are ignored.
+    """
+    gs, ge = gap
+    left: Optional[_RefBlock] = None
+    right: Optional[_RefBlock] = None
+    for b in blocks:
+        if b.bp < MIN_FLANK_BP:
+            continue
+        if b.qstart < gs and b.qend > ge:
+            return None
+        if b.qstart < gs:
+            if left is None or b.qend > left.qend:
+                left = b
+        elif right is None or b.qstart < right.qstart:
+            right = b
+    if left is None or right is None:
+        return None
+    left_ref = left.ref_end if left.strand == "+" else left.ref_start
+    right_ref = right.ref_start if right.strand == "+" else right.ref_end
+    if left.strand == right.strand:
+        step = right_ref - left_ref if left.strand == "+" else left_ref - right_ref
+        if step < -BRACKET_SLACK:
+            return None
+    return _GapBracket(anchor, gap, left_ref, right_ref, left.strand, right.strand)
+
+
+def _dominant_strand(blocks: List[_RefBlock]) -> str:
+    plus = sum(b.bp for b in blocks if b.strand == "+")
+    minus = sum(b.bp for b in blocks if b.strand == "-")
+    return "+" if plus >= minus else "-"
+
+
+def _place_fragments_in_gaps(
+    anchors: List[str],
+    fragments: List[str],
+    ref_id: str,
+    query_gaps: Dict[str, List[Tuple[int, int]]],
+    ref_blocks: Dict[Tuple[str, str], List[_RefBlock]],
+    query_lengths: Dict[str, int],
+) -> Tuple[Dict[str, List[_Part]], Dict[str, str], Dict[str, str]]:
+    """Place fragments into the input scaffold gaps of anchor contigs.
+
+    A fragment's reference footprint on ``ref_id`` runs from its first to its
+    last macro block, and its strand is the dominant one.  It is placed into
+    a gap when it fits that gap (``_GapBracket.fit``) and no other gap of the
+    group's anchors.  Fragments sharing a gap are laid out along the
+    reference from the left flank to the right (with opposite-strand flanks,
+    those continuing the left flank first); if two of them overlap on the
+    reference by at least half the shorter footprint, none of that gap's
+    fragments are placed.  Each filled gap becomes fragment(s) between
+    gaps of the scaffolder's gap size.
+
+    Args:
+        anchors: chrom_assigned contigs of the group (original names).
+        fragments: Other group members that may be placed.
+        ref_id: The group's reference chromosome.
+        query_gaps: Contig -> 0-based half-open N runs.
+        ref_blocks: From ``_index_ref_blocks``.
+        query_lengths: Contig -> length.
+
+    Returns:
+        (composites, placed, unplaced) where ``composites`` maps an anchor to
+        its parts with fragments in its gaps, ``placed`` maps each placed
+        fragment to a log description, and ``unplaced`` maps each fragment
+        that was not placed to ``gap_ambiguous`` (it fits several gaps, or
+        overlaps another fragment fitting the same gap) or ``no_gap_bracket``.
+    """
+    brackets: List[_GapBracket] = []
+    for anchor in anchors:
+        blocks = ref_blocks.get((anchor, ref_id), [])
+        for gap in query_gaps.get(anchor, ()):
+            br = _gap_bracket(anchor, gap, blocks)
+            if br is not None:
+                brackets.append(br)
+
+    footprint: Dict[str, Tuple[int, int]] = {}
+    unplaced: Dict[str, str] = {}
+    by_gap: Dict[Tuple[str, Tuple[int, int]], List[Tuple[Tuple[int, int], str, str]]] = (
+        defaultdict(list)
+    )
+    bracket_of: Dict[Tuple[str, Tuple[int, int]], _GapBracket] = {}
+    for frag in fragments:
+        blocks = ref_blocks.get((frag, ref_id), [])
+        hits = []
+        if blocks:
+            fs = min(b.ref_start for b in blocks)
+            fe = max(b.ref_end for b in blocks)
+            footprint[frag] = (fs, fe)
+            strand = _dominant_strand(blocks)
+            for br in brackets:
+                fit = br.fit(fs, fe, strand)
+                if fit is not None:
+                    hits.append((br, fit))
+        if len(hits) != 1:
+            unplaced[frag] = "gap_ambiguous" if hits else "no_gap_bracket"
+            continue
+        br, (orient, key) = hits[0]
+        by_gap[(br.anchor, br.gap)].append((key, frag, orient))
+        bracket_of[(br.anchor, br.gap)] = br
+
+    def _overlap(a: Tuple[int, int], b: Tuple[int, int]) -> float:
+        ov = min(a[1], b[1]) - max(a[0], b[0])
+        shorter = min(a[1] - a[0], b[1] - b[0])
+        return ov / shorter if shorter > 0 else 0.0
+
+    fills: Dict[str, List[Tuple[Tuple[int, int], List[Tuple[str, str]]]]] = defaultdict(list)
+    placed: Dict[str, str] = {}
+    for (anchor, gap), entries in sorted(by_gap.items()):
+        frags = [f for _, f, _ in entries]
+        if any(
+            _overlap(footprint[a], footprint[b]) >= 0.5
+            for i, a in enumerate(frags) for b in frags[i + 1:]
+        ):
+            for f in frags:
+                unplaced[f] = "gap_ambiguous"
+            continue
+        br = bracket_of[(anchor, gap)]
+        oriented = [(f, orient) for _, f, orient in sorted(entries)]
+        for f, orient in oriented:
+            fs, fe = footprint[f]
+            placed[f] = (
+                f"gap {anchor}:{gap[0] + 1}-{gap[1]} (flanks at reference "
+                f"{br.left_ref + 1:,} {br.left_strand} / {br.right_ref + 1:,} "
+                f"{br.right_strand}; fragment {fs + 1:,}-{fe:,}, placed {orient})"
+            )
+        fills[anchor].append((gap, oriented))
+
+    composites: Dict[str, List[_Part]] = {}
+    for anchor, gap_fills in fills.items():
+        parts: List[_Part] = []
+        prev = 0
+        for (gs, ge), oriented in sorted(gap_fills):
+            parts.append(("W", anchor, prev + 1, gs, "+"))
+            for f, orient in oriented:
+                parts.append(_GAP_PART)
+                parts.append(("W", f, 1, query_lengths[f], orient))
+            parts.append(_GAP_PART)
+            prev = ge
+        parts.append(("W", anchor, prev + 1, query_lengths[anchor], "+"))
+        composites[anchor] = parts
+    return composites, placed, unplaced
 
 
 # ---------------------------------------------------------------------------
@@ -340,6 +681,7 @@ def _builtin_scaffold(
     ref_id: str,
     scaffold_name: str,
     gap_size: int,
+    composites: Optional[Dict[str, List[_Part]]] = None,
 ) -> Tuple[str, List[str]]:
     """Built-in scaffolder: sort contigs by reference position midpoint.
 
@@ -351,6 +693,8 @@ def _builtin_scaffold(
         ref_id: Reference chromosome ID for range lookups.
         scaffold_name: Scaffold name for AGP output.
         gap_size: Number of Ns between contigs.
+        composites: Contigs with fragments placed into their input gaps
+            (see ``_place_fragments_in_gaps``), laid out with those fragments.
 
     Returns:
         Tuple of (scaffolded_sequence, agp_lines).
@@ -362,46 +706,18 @@ def _builtin_scaffold(
             return (rng[0] + rng[1]) / 2.0
         return float("inf")
 
-    sorted_contigs = sorted(contig_names, key=ref_midpoint)
-
-    scaffold_parts: List[str] = []
-    agp_lines: List[str] = []
-    scaffold_pos = 1  # AGP is 1-based
-    part_number = 0
-
-    for i, contig in enumerate(sorted_contigs):
+    parts: List[_Part] = []
+    for contig in sorted(contig_names, key=ref_midpoint):
         seq = sequences.get(contig, "")
         if not seq:
             continue
-
-        # Orient contig
-        if orientations.get(contig, False):
-            seq = reverse_complement(seq)
-            orientation = "-"
-        else:
-            orientation = "+"
-
-        # Add gap before non-first contig
-        if scaffold_parts and gap_size > 0:
-            part_number += 1
-            gap_end = scaffold_pos + gap_size - 1
-            agp_lines.append(_agp_gap_line(
-                scaffold_name, scaffold_pos, gap_end, part_number, gap_size,
-            ))
-            scaffold_parts.append("N" * gap_size)
-            scaffold_pos = gap_end + 1
-
-        # Add component
-        part_number += 1
-        comp_end = scaffold_pos + len(seq) - 1
-        agp_lines.append(_agp_component_line(
-            scaffold_name, scaffold_pos, comp_end, part_number,
-            contig, 1, len(seq), orientation,
-        ))
-        scaffold_parts.append(seq)
-        scaffold_pos = comp_end + 1
-
-    return "".join(scaffold_parts), agp_lines
+        if parts:
+            parts.append(_GAP_PART)
+        orient = "-" if orientations.get(contig, False) else "+"
+        parts.append(("W", contig, 1, len(seq), orient))
+    return _render_parts(
+        scaffold_name, _expand_composites(parts, composites or {}), sequences, gap_size,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -468,6 +784,7 @@ def _scaffold_from_ragtag_agp(
     scaffold_name: str,
     gap_size: int,
     ref_seq_key: str,
+    composites: Optional[Dict[str, List[_Part]]] = None,
 ) -> Tuple[Optional[str], List[str], List[str]]:
     """Build scaffold sequence + dnadis-style AGP lines from RagTag's AGP.
 
@@ -490,6 +807,9 @@ def _scaffold_from_ragtag_agp(
             as its own scaffold, also suffixed ``_RagTag``, and input contig
             names may already end in ``_RagTag``, so only the exact placed
             scaffold name identifies placed rows.
+        composites: Contigs with fragments placed into their input gaps.
+            RagTag scaffolded their filled sequences; each of their rows is
+            expanded into the composite's parts.
 
     Returns:
         Tuple of (scaffold_seq, agp_lines, unplaced).
@@ -499,7 +819,7 @@ def _scaffold_from_ragtag_agp(
           own scaffolds (i.e. could not place under ``-u``).
     """
     placed_name = f"{ref_seq_key}_RagTag"
-    placed: List[Tuple[str, str, int, int, str]] = []
+    placed: List[_Part] = []
     unplaced: List[str] = []
     with agp_path.open() as fh:
         for line in fh:
@@ -516,43 +836,17 @@ def _scaffold_from_ragtag_agp(
             if kind == "W":
                 placed.append(("W", fields[5], int(fields[6]), int(fields[7]), fields[8]))
             elif kind in {"N", "U"}:
-                placed.append(("N", "", 0, 0, ""))
+                placed.append(_GAP_PART)
 
     if not any(r[0] == "W" for r in placed):
         return None, [], unplaced
 
-    parts: List[str] = []
-    agp_lines: List[str] = []
-    pos = 1
-    part_num = 0
-    for kind, comp, beg, end, orient in placed:
-        if kind == "N":
-            if not parts:
-                continue  # don't lead with a gap
-            part_num += 1
-            gap_end = pos + gap_size - 1
-            agp_lines.append(_agp_gap_line(scaffold_name, pos, gap_end, part_num, gap_size))
-            parts.append("N" * gap_size)
-            pos = gap_end + 1
-        else:
-            seq = query_seqs.get(comp, "")
-            if not seq:
-                continue
-            sub = seq[beg - 1:end]
-            if orient == "-":
-                sub = reverse_complement(sub)
-            part_num += 1
-            comp_end = pos + len(sub) - 1
-            agp_lines.append(_agp_component_line(
-                scaffold_name, pos, comp_end, part_num,
-                comp, beg, end, orient,
-            ))
-            parts.append(sub)
-            pos = comp_end + 1
-
-    if not parts:
+    seq, agp_lines = _render_parts(
+        scaffold_name, _expand_composites(placed, composites or {}), query_seqs, gap_size,
+    )
+    if not seq:
         return None, [], unplaced
-    return "".join(parts), agp_lines, unplaced
+    return seq, agp_lines, unplaced
 
 
 def _parse_ragtag_confidence(
@@ -597,21 +891,22 @@ def _emit_trivial_scaffold(
     all_scaffolded: Dict[str, str],
     all_agp: List[str],
     log_label: str = "trivial scaffold",
+    composites: Optional[Dict[str, List[_Part]]] = None,
+    gap_size: int = 100,
 ) -> None:
-    """Emit a single-contig scaffold: orient, write to dict, append AGP line."""
+    """Emit a one-contig scaffold (with any fragments placed into its gaps):
+    orient, write to dict, append AGP lines."""
     seq = query_seqs.get(contig, "")
     if not seq:
         return
-    if contig_orientations.get(contig, False):
-        seq = reverse_complement(seq)
-        orientation = "-"
-    else:
-        orientation = "+"
+    orient = "-" if contig_orientations.get(contig, False) else "+"
+    parts = _expand_composites([("W", contig, 1, len(seq), orient)], composites or {})
+    seq, agp_lines = _render_parts(scaffold_name, parts, query_seqs, gap_size)
     all_scaffolded[scaffold_name] = seq
-    all_agp.append(_agp_component_line(
-        scaffold_name, 1, len(seq), 1, contig, 1, len(seq), orientation,
-    ))
-    logger.info(f"{scaffold_name}: {log_label} {contig}")
+    all_agp.extend(agp_lines)
+    n_filled = sum(1 for p in parts if p[0] == "W" and p[1] != contig)
+    extra = f" with {n_filled} fragment(s) in its gaps" if n_filled else ""
+    logger.info(f"{scaffold_name}: {log_label} {contig}{extra}")
 
 
 # ---------------------------------------------------------------------------
@@ -643,6 +938,7 @@ def _scaffold_group(
     threads: int,
     gap_size: int,
     assembly_context: str = "",
+    composites: Optional[Dict[str, List[_Part]]] = None,
 ) -> _ScaffoldGroupResult:
     """Scaffold a single multi-contig group (RagTag or built-in fallback).
 
@@ -664,6 +960,8 @@ def _scaffold_group(
         work_dir: Base working directory (per-group subdir is created).
         threads: Number of threads for RagTag.
         gap_size: Number of Ns between scaffolded contigs.
+        composites: Contigs with fragments placed into their input gaps;
+            RagTag scaffolds their filled sequences.
 
     Returns:
         _ScaffoldGroupResult with scaffold sequence, AGP lines, and confidences.
@@ -708,7 +1006,11 @@ def _scaffold_group(
             contigs_fasta = chr_work / "contigs.fa"
             contig_seqs_subset = {}
             for cn in contig_names:
-                if cn in query_seqs:
+                if cn in (composites or {}):
+                    contig_seqs_subset[cn] = _render_parts(
+                        cn, composites[cn], query_seqs, gap_size,
+                    )[0]
+                elif cn in query_seqs:
                     contig_seqs_subset[cn] = query_seqs[cn]
             write_fasta(contig_seqs_subset, contigs_fasta)
             # Remove stale .fai so pysam/samtools re-indexes
@@ -725,6 +1027,7 @@ def _scaffold_group(
             if agp_path:
                 scaffold_seq, agp_lines, unplaced = _scaffold_from_ragtag_agp(
                     agp_path, query_seqs, scaffold_name, gap_size, ref_seq_key,
+                    composites=composites,
                 )
                 if scaffold_seq and agp_lines:
                     if unplaced:
@@ -755,6 +1058,7 @@ def _scaffold_group(
         ref_id=ref_id,
         scaffold_name=scaffold_name,
         gap_size=gap_size,
+        composites=composites,
     )
     if scaffold_seq:
         result.scaffold_seq = scaffold_seq
@@ -782,12 +1086,18 @@ def scaffold_chromosomes(
     qr_best_chain_ident: Optional[Dict[Tuple[str, str], float]] = None,
     include_rdna: bool = False,
     no_join: Optional[Set[str]] = None,
+    query_gaps: Optional[Dict[str, List[Tuple[int, int]]]] = None,
+    macro_block_rows=None,
 ) -> Tuple[Dict[str, str], List[str], Dict[str, Tuple[float, float, float]]]:
     """Produce scaffolded chromosome pseudomolecules.
 
-    Groups contigs by (reference chromosome, haplotype group), then either:
-    - Emits trivial AGP for T2T single-contig groups (even if debris exists)
-    - Runs RagTag scaffold per group (if installed)
+    Groups contigs by (reference chromosome, haplotype group).  In each
+    group, fragments are first placed into input scaffold gaps of the
+    group's chrom_assigned contigs where the reference brackets them
+    (``_place_fragments_in_gaps``).  Then the group:
+    - Emits each T2T contig as its own scaffold, with any fragments placed
+      into its gaps; the group's other fragments are not joined to it
+    - Runs RagTag scaffold (if installed) on the rest
     - Falls back to built-in ordering by reference position
 
     Chromosome contigs not placed in any scaffold are emitted on their own,
@@ -815,6 +1125,11 @@ def scaffold_chromosomes(
             which chromosome they belong to but not where on it.  Fragments
             that copy own-chromosome sequence (``_own_assembly_copies``) are
             emitted on their own too, with ``scaffold_exclusion`` set.
+        query_gaps: Contig -> 0-based half-open N runs of the input
+            (``scan_fasta_gaps``).  Without it, no fragment is placed into
+            a gap.
+        macro_block_rows: Macro block tuples from chain parsing, which give
+            the reference positions of gap flanks and fragments.
 
     Returns:
         Tuple of (scaffolded_sequences, agp_lines, scaffold_confidences) where:
@@ -879,6 +1194,42 @@ def scaffold_chromosomes(
     if have_ragtag:
         ref_seqs = read_fasta_sequences(ref_fasta)
 
+    # Fragments placed into input scaffold gaps of the group's chromosome
+    # contigs leave the group; the contigs become composites.  Fragments of a
+    # group with gapped contigs that were not placed keep why in ``gap_unplaced``.
+    composites: Dict[str, List[_Part]] = {}
+    gap_unplaced: Dict[str, str] = {}
+    if query_gaps:
+        ref_blocks = _index_ref_blocks(macro_block_rows)
+        query_lengths = {name: len(seq) for name, seq in query_seqs.items()}
+        for (ref_id, grp), members in sorted(groups.items()):
+            anchors = [
+                c for c in members
+                if clf_lookup.get(c) and clf_lookup[c].classification == "chrom_assigned"
+            ]
+            gapped = [c for c in anchors if query_gaps.get(c)]
+            fragments = [c for c in members if c not in anchors and c in query_lengths]
+            if not gapped or not fragments:
+                continue
+            fills, placed, unplaced = _place_fragments_in_gaps(
+                gapped, fragments, ref_id, query_gaps, ref_blocks, query_lengths,
+            )
+            composites.update(fills)
+            gap_unplaced.update(unplaced)
+            for frag, where in placed.items():
+                logger.info(f"Placed {frag} into {where}")
+            if placed:
+                groups[(ref_id, grp)] = [c for c in members if c not in placed]
+        n_placed = sum(
+            1 for parts in composites.values() for p in parts
+            if p[0] == "W" and p[1] not in composites
+        )
+        if n_placed:
+            logger.done(
+                f"Placed {n_placed} fragment(s) into input scaffold gaps of "
+                f"{len(composites)} chromosome contig(s)"
+            )
+
     # Process each (ref_id, grp) — trivial scaffolds first, then parallel
     all_scaffolded: Dict[str, str] = {}
     all_agp: List[str] = []
@@ -908,13 +1259,12 @@ def scaffold_chromosomes(
             scaffold_name = base_name
 
         # Telomere-to-telomere handling: emit each contig with telomeres at
-        # both ends as its own trivial scaffold, whether or not it holds
-        # scaffold gaps from the input.  The remaining non-anchor members
-        # (chromosome fragments) are not joined to it; they are emitted
-        # unplaced below.  RagTag would only append them at the ends, and
-        # fragments that belong in an input gap cannot be placed there yet.
-        # Fragments redundant with the T2T contig were already demoted to
-        # chrom_debris, so the ones left here carry sequence it lacks.
+        # both ends as its own scaffold, with the fragments placed into its
+        # input gaps above.  The group's other fragments are not joined to
+        # it; they are emitted unplaced below, since RagTag would only append
+        # them at the ends.  Fragments redundant with the T2T contig were
+        # already demoted to chrom_debris, so the ones left here carry
+        # sequence it lacks.
         chrom_assigned_in_group = [
             c for c in contig_names
             if clf_lookup.get(c) and clf_lookup[c].classification == "chrom_assigned"
@@ -936,6 +1286,7 @@ def scaffold_chromosomes(
                     t2t_name, t2t_contig, query_seqs, contig_orientations,
                     all_scaffolded, all_agp,
                     log_label=f"T2T with {n_gaps} scaffold gap(s)" if n_gaps else "T2T",
+                    composites=composites, gap_size=gap_size,
                 )
 
             # Emit non-T2T chrom_assigned contigs as their own trivial
@@ -944,13 +1295,18 @@ def scaffold_chromosomes(
             non_t2t_chrom = [
                 c for c in chrom_assigned_in_group if c not in t2t_set
             ]
-            n_dropped = len(contig_names) - len(chrom_assigned_in_group)
-            if n_dropped > 0:
-                gapped = any(clf_lookup[c].n_gaps for c in t2t_contigs)
-                reason = ("T2T copy with scaffold gaps exists; fragments are not "
-                          "placed into gaps" if gapped else "T2T copy exists")
+            dropped = [c for c in contig_names if c not in chrom_assigned_in_group]
+            for contig in dropped:
+                if contig in gap_unplaced:
+                    clf_lookup[contig].scaffold_exclusion = gap_unplaced[contig]
+            if dropped:
+                n_gap = sum(1 for c in dropped if c in gap_unplaced)
+                reason = (
+                    f"T2T copy exists; {n_gap} fit no single input gap"
+                    if n_gap else "T2T copy exists"
+                )
                 logger.info(
-                    f"{scaffold_name}: leaving {n_dropped} fragment contig(s) "
+                    f"{scaffold_name}: leaving {len(dropped)} fragment contig(s) "
                     f"unplaced ({reason})"
                 )
             for contig in non_t2t_chrom:
@@ -959,6 +1315,7 @@ def scaffold_chromosomes(
                 _emit_trivial_scaffold(
                     ctg_name, contig, query_seqs, contig_orientations,
                     all_scaffolded, all_agp, log_label="non-T2T chrom copy",
+                    composites=composites, gap_size=gap_size,
                 )
 
             continue  # T2T + copies emitted; skip multi-contig scaffolding
@@ -973,6 +1330,7 @@ def scaffold_chromosomes(
             _emit_trivial_scaffold(
                 trivial_name, contig, query_seqs, contig_orientations,
                 all_scaffolded, all_agp, log_label="single contig",
+                composites=composites, gap_size=gap_size,
             )
             continue
 
@@ -995,6 +1353,7 @@ def scaffold_chromosomes(
             _emit_trivial_scaffold(
                 name, contig, query_seqs, contig_orientations,
                 all_scaffolded, all_agp, log_label="unplaced by RagTag",
+                composites=composites, gap_size=gap_size,
             )
 
     # ---- Second pass: scaffold multi-contig groups (possibly in parallel) ----
@@ -1021,6 +1380,7 @@ def scaffold_chromosomes(
                 threads=job_threads,
                 gap_size=gap_size,
                 assembly_context=_asm_ctx,
+                composites=composites,
             )
             _collect_group_result(result)
         else:
@@ -1050,6 +1410,7 @@ def scaffold_chromosomes(
                     threads=job_threads,
                     gap_size=gap_size,
                     assembly_context=_asm_ctx,
+                    composites=composites,
                 )
 
             with ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -1059,9 +1420,9 @@ def scaffold_chromosomes(
                     _collect_group_result(future.result())
 
     # Every chromosome contig belongs in the scaffold set.  Contigs not placed
-    # above (fragments beside a T2T copy, extra copies, fragments that copy
-    # own-chromosome sequence, fragments without a reference, no_join
-    # contigs, groups that produced no scaffold) are
+    # above (fragments beside a T2T copy that fit no single input gap, extra
+    # copies, fragments that copy own-chromosome sequence, fragments without
+    # a reference, no_join contigs, groups that produced no scaffold) are
     # emitted on their own under their contig names, like contigs RagTag
     # could not place.
     placed = {
@@ -1085,6 +1446,7 @@ def scaffold_chromosomes(
                 if clf.original_name in own_copies
                 else "unplaced"
             ),
+            composites=composites, gap_size=gap_size,
         )
 
     logger.done(f"Scaffolded {len(all_scaffolded)} chromosomes")
