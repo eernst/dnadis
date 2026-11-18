@@ -190,6 +190,10 @@ class ContigClassification:
     # half-open on the contig; written to the organelles FASTA instead of the
     # whole contig, which goes to the debris FASTA
     organelle_unit: Optional[Tuple[int, int, bool]] = None
+    # Organelle reference matched best (chrC, chrC_A, ...) and the identity
+    # margin over the next species' reference of the same organelle
+    organelle_ref: Optional[str] = None
+    organelle_ref_margin: Optional[float] = None
     classification_confidence: Optional[str] = None  # high/medium/low
     # Read depth fields (optional, from --reads analysis)
     depth_mean: Optional[float] = None
@@ -344,6 +348,15 @@ class OrganelleHit:
     status: str = "debris"
     # One unit cut from a tandem concatemer
     unit: Optional[OrganelleUnit] = None
+    # Organelle reference this contig matches best (chrC, or chrC_A for a
+    # species-tagged reference) and its identity margin over the next
+    # species' reference of the same organelle (None with one reference)
+    ref_name: str = ""
+    ref_margin: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        if not self.ref_name:
+            self.ref_name = self.organelle_type
 
     @property
     def is_complete(self) -> bool:
@@ -368,6 +381,8 @@ class OrganelleCalls:
     # Complete candidates set aside because they belong to another genome
     # than the one holding most of the organelle sequence in the assembly
     other_genomes: Dict[str, List[str]] = field(default_factory=dict)
+    # Organelle -> reference of the complete contig or partial set (chrC_A...)
+    ref_name: Dict[str, str] = field(default_factory=dict)
     # When candidates come from more than one genome: every complete
     # candidate in ranking order, and the genome group of each candidate and
     # assigned contig (for the read-depth re-pick after depth analysis)
@@ -768,3 +783,6 @@ class AssemblyResult:
     chrM_n_contigs: int = 0
     chrC_ref_cov: Optional[float] = None
     chrM_ref_cov: Optional[float] = None
+    # Reference of the chrC/chrM call (chrC_A... with species references)
+    chrC_ref_name: Optional[str] = None
+    chrM_ref_name: Optional[str] = None

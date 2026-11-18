@@ -75,7 +75,6 @@ from dnadis.detection.blast import (
 
 # Import detection modules from package
 from dnadis.detection.organelle import (
-    extract_organelle_from_ref,
     prepare_organelle_references,
     detect_organelles,
 )
@@ -169,7 +168,6 @@ __all__ = [
     "run_blastn_megablast",
     "parse_blast_coverage",
     # Detection
-    "extract_organelle_from_ref",
     "prepare_organelle_references",
     "detect_organelles",
     "prepare_rdna_reference",

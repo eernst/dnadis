@@ -14,9 +14,15 @@ from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from dnadis.detection.blast import run_makeblastdb, run_blastn_megablast
 from dnadis.models import OrganelleCalls, OrganelleHit, OrganelleUnit
-from dnadis.utils.io_utils import file_exists_and_valid, merge_intervals, replace_if_changed
+from dnadis.utils.io_utils import merge_intervals, open_maybe_gzip, replace_if_changed
 from dnadis.utils.logging_config import get_logger
-from dnadis.utils.reference_utils import normalize_organelle_id
+from dnadis.utils.reference_utils import (
+    bare_organelle_names_allowed,
+    find_organelle_sequences,
+    organelle_ref_name,
+    parse_organelle_id,
+    reference_species_tags,
+)
 from dnadis.utils.sequence_utils import (
     write_filtered_fasta,
     is_hifiasm_circular,
@@ -27,32 +33,72 @@ from dnadis.utils.sequence_utils import (
 logger = get_logger("organelle")
 
 
-def extract_organelle_from_ref(
-    ref_fasta: Path,
-    organelle_id: str,
-    output_path: Path,
-    ref_norm_to_orig: Optional[Dict[str, str]] = None,
-) -> bool:
-    """Extract a specific sequence (chrC or chrM) from reference FASTA.
+def read_fasta_headers(fasta: Path) -> List[Tuple[str, str, int]]:
+    """(id, description, length) of every sequence, streaming the file."""
+    headers: List[Tuple[str, str, int]] = []
+    seq_id, desc, length = None, "", 0
+    with open_maybe_gzip(fasta, "rt") as fh:
+        for line in fh:
+            if line.startswith(">"):
+                if seq_id is not None:
+                    headers.append((seq_id, desc, length))
+                parts = line[1:].strip().split(None, 1)
+                seq_id = parts[0] if parts else ""
+                desc = parts[1] if len(parts) > 1 else ""
+                length = 0
+            else:
+                length += len(line.strip())
+    if seq_id is not None:
+        headers.append((seq_id, desc, length))
+    return headers
 
-    Returns True if found and extracted, False otherwise.
+
+def _read_selected_sequences(fasta: Path, names: Set[str]) -> Dict[str, str]:
+    """Sequences of *names* from *fasta*, streaming the file."""
+    seqs: Dict[str, List[str]] = {}
+    current = None
+    with open_maybe_gzip(fasta, "rt") as fh:
+        for line in fh:
+            if line.startswith(">"):
+                current = line[1:].strip().split(None, 1)[0] if line[1:].strip() else ""
+                current = current if current in names else None
+                if current is not None:
+                    seqs[current] = []
+            elif current is not None:
+                seqs[current].append(line.strip())
+    return {k: "".join(v) for k, v in seqs.items()}
+
+
+def _write_organelle_refs(
+    chosen: Dict[Tuple[str, Optional[str]], Tuple[Path, str]],
+    organelle: str,
+    out_path: Path,
+) -> Optional[Path]:
+    """Write every reference of *organelle* to *out_path*, named chrC/chrC_A...
+
+    *chosen* maps (organelle, tag) to (source FASTA, sequence id).  The file
+    is replaced only when its content changes.
     """
-    if file_exists_and_valid(output_path):
-        logger.info(f"Reusing cached {organelle_id} reference: {output_path}")
-        return True
-
-    sequences = read_fasta_sequences(ref_fasta)
-    if ref_norm_to_orig:
-        candidate = ref_norm_to_orig.get(organelle_id)
-        if candidate and candidate in sequences:
-            write_fasta({candidate: sequences[candidate]}, output_path)
-            return True
-
-    for name, seq in sequences.items():
-        if normalize_organelle_id(name) == organelle_id:
-            write_fasta({name: seq}, output_path)
-            return True
-    return False
+    keys = sorted((k for k in chosen if k[0] == organelle), key=lambda k: (k[1] or ""))
+    if not keys:
+        return None
+    by_file: Dict[Path, Set[str]] = defaultdict(set)
+    for k in keys:
+        src, seq_id = chosen[k]
+        by_file[src].add(seq_id)
+    sequences = {src: _read_selected_sequences(src, ids) for src, ids in by_file.items()}
+    out: Dict[str, str] = {}
+    for k in keys:
+        src, seq_id = chosen[k]
+        name = organelle_ref_name(*k)
+        out[name] = sequences[src][seq_id]
+        logger.info(
+            f"{name} reference: {seq_id} from {src.name} ({len(out[name]):,} bp)"
+        )
+    tmp = out_path.with_suffix(out_path.suffix + ".tmp")
+    write_fasta(out, tmp)
+    replace_if_changed(tmp, out_path)
+    return out_path
 
 
 def prepare_organelle_references(
@@ -62,55 +108,59 @@ def prepare_organelle_references(
     work_dir: Path,
     ref_norm_to_orig: Optional[Dict[str, str]] = None,
 ) -> Tuple[Optional[Path], Optional[Path]]:
-    """Prepare organelle reference FASTAs.
+    """Prepare organelle reference FASTAs, one per organelle.
 
-    Priority:
-    1. User-provided path (if it exists as a file)
-    2. chrC/chrM from reference FASTA if present
-    3. None (skip this organelle)
+    Every organelle sequence recognised in *ref_fasta* is used
+    (``reference_utils.find_organelle_sequences``): by name, with a species
+    tag matching the nuclear subgenome suffixes (chrC_A, PtP...), or by an
+    NCBI-style description.  ``--chrC-ref``/``--chrM-ref`` replace the
+    reference's sequences for that organelle; every sequence in such a file
+    is used, tagged when its name carries a species tag.  Sequences are
+    named chrC, chrC_A, ... in the written files.
 
-    Returns (chrC_fasta_path, chrM_fasta_path)
+    Returns (chrC_fasta_path, chrM_fasta_path); None for an organelle with
+    no reference.
     """
     work_dir.mkdir(parents=True, exist_ok=True)
+    ref_headers = read_fasta_headers(ref_fasta)
+    ref_ids = [h[0] for h in ref_headers]
+    tags = reference_species_tags(ref_ids)
+    allow_bare = bare_organelle_names_allowed(ref_ids)
 
-    chrC_path: Optional[Path] = None
-    chrM_path: Optional[Path] = None
+    chosen: Dict[Tuple[str, Optional[str]], Tuple[Path, str]] = {
+        key: (ref_fasta, seq_id)
+        for key, seq_id in find_organelle_sequences(ref_headers, tags, allow_bare).items()
+    }
+    for organelle, arg in (("chrC", chrC_ref_arg), ("chrM", chrM_ref_arg)):
+        if not arg:
+            continue
+        path = Path(arg)
+        if not path.exists():
+            logger.warning(f"{organelle} reference not found: {arg}")
+            continue
+        chosen = {k: v for k, v in chosen.items() if k[0] != organelle}
+        user: Dict[Optional[str], List[Tuple[int, str]]] = defaultdict(list)
+        for seq_id, _, length in read_fasta_headers(path):
+            parsed = parse_organelle_id(seq_id, tags, allow_bare)
+            tag = parsed[1] if parsed and parsed[0] == organelle else None
+            user[tag].append((length, seq_id))
+        for tag, seqs in user.items():
+            seqs.sort(key=lambda x: (-x[0], x[1]))
+            chosen[(organelle, tag)] = (path, seqs[0][1])
+            if len(seqs) > 1:
+                logger.warning(
+                    f"{len(seqs)} sequences in {path.name} match {organelle_ref_name(organelle, tag)}: "
+                    f"using the longest, {seqs[0][1]}; ignoring " + ", ".join(n for _, n in seqs[1:])
+                )
+        logger.info(f"Using user-provided {organelle} reference: {path}")
 
-    # Handle chloroplast reference
-    if chrC_ref_arg:
-        chrC_arg_path = Path(chrC_ref_arg)
-        if chrC_arg_path.exists():
-            chrC_path = chrC_arg_path
-            logger.info(f"Using user-provided chrC reference: {chrC_path}")
-        else:
-            logger.warning(f"chrC reference not found: {chrC_ref_arg}")
-    else:
-        # Try to extract from reference
-        chrC_extracted = work_dir / "chrC_ref.fa"
-        if extract_organelle_from_ref(ref_fasta, "chrC", chrC_extracted, ref_norm_to_orig):
-            chrC_path = chrC_extracted
-            logger.info(f"Extracted chrC from reference: {chrC_path}")
-        else:
-            logger.info("No chrC found in reference FASTA")
-
-    # Handle mitochondrial reference
-    if chrM_ref_arg:
-        chrM_arg_path = Path(chrM_ref_arg)
-        if chrM_arg_path.exists():
-            chrM_path = chrM_arg_path
-            logger.info(f"Using user-provided chrM reference: {chrM_path}")
-        else:
-            logger.warning(f"chrM reference not found: {chrM_ref_arg}")
-    else:
-        # Try to extract from reference
-        chrM_extracted = work_dir / "chrM_ref.fa"
-        if extract_organelle_from_ref(ref_fasta, "chrM", chrM_extracted, ref_norm_to_orig):
-            chrM_path = chrM_extracted
-            logger.info(f"Extracted chrM from reference: {chrM_path}")
-        else:
-            logger.info("No chrM found in reference FASTA")
-
-    return chrC_path, chrM_path
+    paths = []
+    for organelle in ("chrC", "chrM"):
+        p = _write_organelle_refs(chosen, organelle, work_dir / f"{organelle}_ref.fa")
+        if p is None:
+            logger.info(f"No {organelle} reference found")
+        paths.append(p)
+    return paths[0], paths[1]
 
 
 @dataclass(frozen=True)
@@ -206,6 +256,11 @@ def parse_organelle_blast(blast_out: Path) -> Dict[Tuple[str, str], _PairEvidenc
     return pairs
 
 
+def organelle_of_ref(ref_name: str) -> str:
+    """chrC/chrM of an organelle reference name (chrC, chrC_A, ...)."""
+    return ref_name.split("_", 1)[0]
+
+
 def _covered_bp(intervals: List[Tuple[int, int]]) -> int:
     return merge_intervals(intervals)[1] if intervals else 0
 
@@ -239,28 +294,45 @@ def call_organelles(
         c for c, _ in pairs if is_hifiasm_circular(c)
     }
 
-    # Best organelle per contig
-    best: Dict[str, Tuple[str, OrganelleHit, _PairEvidence]] = {}
-    for (contig, organelle), ev in pairs.items():
-        ref_len = ref_lengths.get(organelle, 0)
+    # Best organelle reference (organelle and species) per contig.  With
+    # several species' references for an organelle, the margin is the
+    # contig's identity to its best one minus that to the next.
+    by_contig: Dict[str, List[Tuple[Tuple[float, float], OrganelleHit, _PairEvidence]]] = defaultdict(list)
+    for (contig, ref_name), ev in pairs.items():
+        ref_len = ref_lengths.get(ref_name, 0)
         qlen = query_lengths.get(contig, 0)
         if ref_len <= 0 or qlen <= 0:
             continue
         hit = OrganelleHit(
-            organelle_type=organelle,
+            organelle_type=organelle_of_ref(ref_name),
             coverage=_covered_bp(ev.query_intervals) / qlen,
             identity=(ev.matches / ev.aln_len) if ev.aln_len else 0.0,
             length_ratio=qlen / ref_len,
             ref_coverage=_covered_bp(ev.ref_intervals) / ref_len,
+            ref_name=ref_name,
         )
-        key = (hit.coverage * hit.identity, hit.ref_coverage)
-        prev = best.get(contig)
-        if prev is None or key > (prev[1].coverage * prev[1].identity, prev[1].ref_coverage):
-            best[contig] = (organelle, hit, ev)
+        by_contig[contig].append(((hit.coverage * hit.identity, hit.ref_coverage), hit, ev))
+    best: Dict[str, Tuple[str, OrganelleHit, _PairEvidence]] = {}
+    for contig, options in by_contig.items():
+        # The organelle is the one matched best (aligned fraction x identity);
+        # within it, the species reference with the highest identity over
+        # non-overlapping best HSPs.  Pooled identity counts inverted-repeat
+        # and repeat cross-matches, and small differences in aligned fraction
+        # would outweigh the 0.5-3 point identity differences between species.
+        organelle = max(options, key=lambda o: (o[0], o[1].ref_name))[1].organelle_type
+        same = [(_best_hsp_identity(ev)[0], hit.coverage, hit.ref_name, hit, ev)
+                for _, hit, ev in options if hit.organelle_type == organelle]
+        same.sort(key=lambda o: o[:3], reverse=True)
+        _, _, _, hit, ev = same[0]
+        if len(same) > 1:
+            hit.ref_margin = same[0][0] - same[1][0]
+        best[contig] = (organelle, hit, ev)
+
+    def ref_len_of(contig: str) -> int:
+        return ref_lengths[best[contig][1].ref_name]
 
     calls = OrganelleCalls()
-    for organelle in sorted(ref_lengths):
-        ref_len = ref_lengths[organelle]
+    for organelle in sorted({organelle_of_ref(r) for r in ref_lengths}):
         members = {c: (h, ev) for c, (o, h, ev) in best.items() if o == organelle}
         lo, hi = thresholds.len_bounds(organelle)
 
@@ -272,7 +344,7 @@ def call_organelles(
         ]
         candidates.sort(key=lambda c: (
             c not in circular,
-            abs(query_lengths[c] - ref_len),
+            abs(query_lengths[c] - ref_len_of(c)),
             -members[c][0].ref_coverage,
             c,
         ))
@@ -314,21 +386,31 @@ def call_organelles(
         chosen: Optional[str] = candidates[0] if candidates else None
         if chosen is None and organelle in thresholds.cut_units:
             chosen = _cut_concatemer(
-                members, ref_len, lo, hi, thresholds, circular, query_lengths, organelle,
+                members, ref_lengths, lo, hi, thresholds, circular, query_lengths, organelle,
                 genome_groups, assigned)
         partial: List[str] = []
         if chosen is None:
-            partial, set_cov = _greedy_organelle_set(
-                {c: ev for c, (h, ev) in members.items()
-                 if h.coverage >= thresholds.min_query_cov},
-                ref_len, thresholds.set_min_ref_cov, circular, query_lengths,
-            )
+            # Reference coordinates differ between species' references, so a
+            # set is built within one reference; the one covering most wins.
+            best_set: Tuple[List[str], float, str] = ([], 0.0, "")
+            for ref_name in sorted({h.ref_name for h, _ in members.values()}):
+                eligible = {c: ev for c, (h, ev) in members.items()
+                            if h.ref_name == ref_name and h.coverage >= thresholds.min_query_cov}
+                found, cov = _greedy_organelle_set(
+                    eligible, ref_lengths[ref_name], thresholds.set_min_ref_cov,
+                    circular, query_lengths,
+                )
+                if found and (cov, -len(found)) > (best_set[1], -len(best_set[0]) if best_set[0] else 0):
+                    best_set = (found, cov, ref_name)
+            partial = best_set[0]
             if partial:
                 calls.partial[organelle] = partial
-                calls.set_ref_coverage[organelle] = set_cov
+                calls.set_ref_coverage[organelle] = best_set[1]
+                calls.ref_name[organelle] = best_set[2]
         else:
             h = members[chosen][0]
             calls.set_ref_coverage[organelle] = h.unit.ref_coverage if h.unit else h.ref_coverage
+            calls.ref_name[organelle] = h.ref_name
 
         for contig, (hit, _) in members.items():
             if contig == chosen:
@@ -349,10 +431,11 @@ def call_organelles(
 
         if chosen:
             h = members[chosen][0]
+            margin = f", {h.ref_margin:+.4f} identity over the next species" if h.ref_margin is not None else ""
             logger.info(
                 f"Selected {organelle}: {chosen} ({query_lengths[chosen]:,} bp, "
-                f"{h.length_ratio:.2f}x reference, ref cov={h.ref_coverage:.3f}, "
-                f"query cov={h.coverage:.3f}, ident={h.identity:.4f})"
+                f"{h.length_ratio:.2f}x {h.ref_name}, ref cov={h.ref_coverage:.3f}, "
+                f"query cov={h.coverage:.3f}, ident={h.identity:.4f}{margin})"
             )
         elif partial:
             logger.info(
@@ -379,7 +462,7 @@ _PERIOD_ANCHORS = tuple(i / 50 for i in range(1, 50, 2))
 _UNIT_MIN_PLUS_COV = 0.80
 
 
-def _cut_concatemer(members, ref_len, lo, hi, thresholds, circular, query_lengths, organelle,
+def _cut_concatemer(members, ref_lengths, lo, hi, thresholds, circular, query_lengths, organelle,
                     genome_groups=None, assigned=()):
     """Cut one unit from the best oversized contig, if any passes.
 
@@ -401,7 +484,7 @@ def _cut_concatemer(members, ref_len, lo, hi, thresholds, circular, query_length
     for contig in oversized:
         hit, ev = members[contig]
         unit = find_concatemer_unit(
-            ev.hsps, query_lengths[contig], ref_len, lo, hi,
+            ev.hsps, query_lengths[contig], ref_lengths[hit.ref_name], lo, hi,
             thresholds.min_ref_cov, thresholds.min_query_cov,
         )
         if unit is None:
@@ -577,13 +660,16 @@ def detect_organelles(
         logger.info("No organelle references available, skipping organelle detection")
         return OrganelleCalls()
 
-    # Rename sequences to "chrC" and "chrM" so BLAST subject IDs match expected names
+    # One BLAST subject per organelle reference, named chrC or chrC_<tag>
+    # (prepare_organelle_references writes these names)
     combined_seqs: Dict[str, str] = {}
-    for name, ref in (("chrC", chrC_ref), ("chrM", chrM_ref)):
+    for organelle, ref in (("chrC", chrC_ref), ("chrM", chrM_ref)):
         if ref:
             seqs = read_fasta_sequences(ref)
-            if seqs:
-                combined_seqs[name] = next(iter(seqs.values()))
+            for i, (name, seq) in enumerate(seqs.items()):
+                if name != organelle and not name.startswith(organelle + "_"):
+                    name = organelle if i == 0 else f"{organelle}_{i + 1}"
+                combined_seqs[name] = seq
     ref_lengths = {name: len(seq) for name, seq in combined_seqs.items()}
     combined_ref = work_dir / "organelle_refs.fa"
     write_fasta(combined_seqs, combined_ref)
@@ -765,6 +851,7 @@ def repick_by_read_depth(
         calls.debris.discard(new)
         setattr(calls, f"{organelle}_contig", new)
         calls.set_ref_coverage[organelle] = new_hit.ref_coverage
+        calls.ref_name[organelle] = new_hit.ref_name
         swaps[organelle] = (current, new)
         logger.warning(
             f"{organelle}: {new} replaces {current} as the complete contig; its genome "

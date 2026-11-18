@@ -137,6 +137,7 @@ def build_assembly_result(
     synteny_mode: str = "nucleotide",
     qry_gaps: Optional[Dict[str, List[Tuple[int, int]]]] = None,
     organelle_ref_cov: Optional[Dict[str, float]] = None,
+    organelle_ref_name: Optional[Dict[str, str]] = None,
 ) -> AssemblyResult:
     """Build an AssemblyResult summarizing one assembly's analysis.
 
@@ -153,6 +154,8 @@ def build_assembly_result(
         chrM_contig: Name of chrM contig, or None.
         organelle_ref_cov: Organelle -> reference coverage of its complete
             contig or partial set (OrganelleCalls.set_ref_coverage).
+        organelle_ref_name: Organelle -> reference of that call, e.g. chrC_A
+            (OrganelleCalls.ref_name).
         rdna_arrays: List of detected rDNA arrays.
         depth_stats: Dict mapping contig name -> DepthStats.
         chimera_primary_frac: Primary fraction threshold for chimera detection.
@@ -396,6 +399,8 @@ def build_assembly_result(
         chrM_n_contigs=organelle_n_contigs["chrM"],
         chrC_ref_cov=organelle_ref_cov.get("chrC") if organelle_found["chrC"] != "no" else None,
         chrM_ref_cov=organelle_ref_cov.get("chrM") if organelle_found["chrM"] != "no" else None,
+        chrC_ref_name=(organelle_ref_name or {}).get("chrC") if organelle_found["chrC"] != "no" else None,
+        chrM_ref_name=(organelle_ref_name or {}).get("chrM") if organelle_found["chrM"] != "no" else None,
         mean_chrom_depth=mean_chrom_depth,
         chrom_ref_coverage=chrom_ref_coverage,
         classifications=classifications,
@@ -478,6 +483,8 @@ def write_comparison_summary_tsv(
         "chrM_n_contigs",
         "chrC_ref_cov",
         "chrM_ref_cov",
+        "chrC_ref_name",
+        "chrM_ref_name",
         "organelle_bp",
         "debris_bp",
         "unclassified_bp",
@@ -572,6 +579,8 @@ def write_comparison_summary_tsv(
                 str(r.chrM_n_contigs),
                 _fmt(r.chrC_ref_cov),
                 _fmt(r.chrM_ref_cov),
+                r.chrC_ref_name or "",
+                r.chrM_ref_name or "",
                 str(organelle_bp),
                 str(debris_bp),
                 str(unclassified_bp),

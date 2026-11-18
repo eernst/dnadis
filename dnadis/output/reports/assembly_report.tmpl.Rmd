@@ -26,7 +26,7 @@ params:
   # Version of the TSV columns and values this template reads.  Bump it when
   # the template starts to need columns or values that older dnadis runs did
   # not write; refresh_reports.py then refuses to re-render older outputs.
-  output_schema: 3
+  output_schema: 4
 output:
   html_document:
     self_contained: __SELF_CONTAINED__
@@ -2094,7 +2094,7 @@ cat('<div class="note-box">No organelle contigs were detected in this assembly.<
 
 ```{r organelle_prep, include=FALSE, eval=has_organelles}
 require_columns(org_df, c("organelle_ref_cov", "organelle_query_cov", "organelle_len_ratio",
-                         "organelle_unit"),
+                         "organelle_unit", "organelle_ref", "organelle_ref_margin"),
                 "contig_summary.tsv organelle evidence")
 org_show <- org_df %>%
   mutate(
@@ -2109,6 +2109,8 @@ org_show <- org_df %>%
     ref_cov_pct = as.numeric(organelle_ref_cov) * 100,
     query_cov_pct = as.numeric(organelle_query_cov) * 100,
     len_ratio = as.numeric(organelle_len_ratio),
+    org_ref = ifelse(is.na(organelle_ref), "", as.character(organelle_ref)),
+    ref_margin_pct = as.numeric(organelle_ref_margin) * 100,
     depth_val = if (has_depth) depth_mean else NA_real_
   )
 
@@ -2123,16 +2125,24 @@ has_org_partial <- nrow(org_partial) > 0
 has_org_debris <- nrow(org_debris) > 0
 
 .render_org_gt <- function(df, title, subtitle = NULL) {
-  sel <- c("contig", "original_name", "type", "length_kb", "len_ratio",
+  sel <- c("contig", "original_name", "type", "org_ref", "length_kb", "len_ratio",
            "ref_cov_pct", "query_cov_pct")
   labels <- list(contig = "Contig", original_name = "Original Name", type = "Type",
+                 org_ref = "Reference",
                  length_kb = "Length (kb)", len_ratio = "\u00d7 Ref length",
                  ref_cov_pct = "Ref covered (%)", query_cov_pct = "Contig aligned (%)")
+  # Several species' references: identity margin of the best one over the next
+  if (any(!is.na(df$ref_margin_pct))) {
+    sel <- c(sel, "ref_margin_pct")
+    labels$ref_margin_pct <- "Margin over next species (% identity)"
+  }
   if (has_depth) { sel <- c(sel, "depth_val"); labels$depth_val <- "Depth" }
   df %>% select(all_of(sel)) %>% gt() %>% cols_label(.list = labels) %>%
     fmt_number(columns = length_kb, decimals = 1) %>%
     fmt_number(columns = len_ratio, decimals = 2) %>%
     fmt_number(columns = c(ref_cov_pct, query_cov_pct), decimals = 1) %>%
+    fmt_number(columns = any_of("ref_margin_pct"), decimals = 2) %>%
+    sub_missing(columns = any_of("ref_margin_pct"), missing_text = "\u2014") %>%
     fmt_number(columns = any_of("depth_val"), decimals = 1) %>%
     tab_header(title = md(paste0("**", title, "**")),
                subtitle = if (is.null(subtitle)) NULL else md(subtitle)) %>%
