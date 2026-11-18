@@ -193,6 +193,7 @@ def organelle_thresholds_from_args(args) -> OrganelleThresholds:
         min_ref_cov=args.organelle_min_ref_cov,
         min_query_cov=args.organelle_min_cov,
         set_min_ref_cov=args.organelle_set_min_ref_cov,
+        same_genome_identity=args.organelle_same_genome_identity,
         len_ratio=(
             ("chrC", args.chrC_min_len_ratio, args.chrC_max_len_ratio),
             ("chrM", args.chrM_min_len_ratio, args.chrM_max_len_ratio),
@@ -2276,6 +2277,13 @@ def main():
         help="Max contig/reference length ratio for a complete chrM. High "
              "because mitogenome size varies within a species and an assembly "
              "can walk its repeat-mediated recombination graph [3.00]",
+    )
+    org_thresh.add_argument(
+        "--organelle-same-genome-identity", type=float, default=0.99,
+        help="Min identity at which complete organelle candidates "
+             "count as one genome. Candidates from another genome (e.g. a "
+             "second species' plastome in the sample) are set aside unless "
+             "their genome holds the most organelle sequence [0.99]",
     )
 
     # =========================================================================

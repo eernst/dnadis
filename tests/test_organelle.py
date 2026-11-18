@@ -30,12 +30,12 @@ def _hsp(contig, organelle, qs, qe, ss, se, pident=99.9):
     ]))
 
 
-def _call(tmp_path: Path, rows, lengths, circular=None, **kw):
+def _call(tmp_path: Path, rows, lengths, circular=None, genome_groups=None, **kw):
     blast = tmp_path / "organelle_blast.txt"
     blast.write_text("\n".join(rows) + "\n")
     return call_organelles(
         parse_organelle_blast(blast), lengths, REF,
-        OrganelleThresholds(**kw), circular_contigs=circular,
+        OrganelleThresholds(**kw), circular_contigs=circular, genome_groups=genome_groups,
     )
 
 
@@ -275,3 +275,81 @@ def test_classifier_names_partial_set_and_routes_fasta(tmp_path):
     assign_contig_names(clfs, lengths, None, overwrite=True)
     assert {c.new_name for c in clfs if c.original_name in ("m1", "m2", "c1")} == {"chrM_1", "chrM_2", "chrC"}
     assert _CATEGORY_BY_CLASS["organelle_partial"] == "organelles"
+
+
+class TestForeignGenome:
+    """A second plastome in the sample (another species) passing the complete
+    tests must not be picked over the assembly's own plastome."""
+
+    def _rows(self):
+        lengths = {"own_a": 173_000, "own_b": 217_000, "frag": 60_000, "foreign": 141_000}
+        rows = []
+        for c in ("own_a", "own_b"):
+            rows += _tiled(c, "chrC", lengths[c], 0, CHRC, 99.3)
+        rows += _tiled("foreign", "chrC", lengths["foreign"], 0, CHRC, 94.5)
+        rows.append(_hsp("frag", "chrC", 1, 60_000, 1, 60_000, 99.3))
+        return rows, lengths
+
+    def test_main_genome_wins_over_closer_length(self, tmp_path):
+        rows, lengths = self._rows()
+
+        def grouper(organelle, candidates, assigned):
+            group_of = {c: (1 if c == "foreign" else 0) for c in candidates}
+            bp = {0: sum(lengths[c] for c in assigned if c != "foreign"), 1: lengths["foreign"]}
+            return group_of, bp
+
+        calls = _call(tmp_path, rows, lengths, genome_groups=grouper)
+        assert calls.chrC_contig == "own_a"
+        assert calls.other_genomes == {"chrC": ["foreign"]}
+        assert "foreign" in calls.debris
+        # Without grouping, the foreign plastome is closest to reference length
+        assert _call(tmp_path, rows, lengths).chrC_contig == "foreign"
+
+    def test_single_genome_is_unchanged(self, tmp_path):
+        rows, lengths = self._rows()
+        calls = _call(tmp_path, rows, lengths,
+                      genome_groups=lambda o, cands, a: ({c: 0 for c in cands}, {0: 1}))
+        assert calls.chrC_contig == "foreign" and calls.other_genomes == {}
+
+
+def test_group_by_identity_links_copies_and_weights_fragments(tmp_path):
+    from dnadis.detection.organelle import group_by_identity
+
+    lengths = {"a": 1000, "b": 1500, "x": 1000, "f1": 400, "f2": 300}
+    rows = [
+        _hsp("a", "b", 1, 1000, 1, 1000, 99.9), _hsp("b", "a", 1, 1000, 1, 1000, 99.9),
+        _hsp("x", "a", 1, 1000, 1, 1000, 94.5), _hsp("a", "x", 1, 1000, 1, 1000, 94.5),
+        _hsp("f1", "b", 1, 400, 1, 400, 99.8),
+        _hsp("f2", "x", 1, 300, 1, 300, 99.9),
+    ]
+    blast = tmp_path / "g.txt"
+    blast.write_text("\n".join(rows) + "\n")
+    group_of, bp = group_by_identity(
+        parse_organelle_blast(blast), ["a", "b", "x"], ["a", "b", "x", "f1", "f2"], lengths)
+    assert group_of["a"] == group_of["b"] != group_of["x"]
+    assert bp[group_of["a"]] == 1000 + 1500 + 400
+    assert bp[group_of["x"]] == 1000 + 300
+
+
+def test_blast_genome_grouper_end_to_end(tmp_path):
+    """Real megablast on random sequences: two near-identical copies and a 6%
+    divergent genome form two groups."""
+    import random
+    from dnadis.detection.organelle import blast_genome_grouper
+    from dnadis.utils.io_utils import have_exe
+
+    if not (have_exe("blastn") and have_exe("makeblastdb")):
+        pytest.skip("BLAST+ not installed")
+    rng = random.Random(1)
+
+    def mutate(seq, rate):
+        return "".join(rng.choice("ACGT".replace(b, "")) if rng.random() < rate else b for b in seq)
+
+    base = "".join(rng.choice("ACGT") for _ in range(20_000))
+    seqs = {"a": base, "b": mutate(base, 0.001), "x": mutate(base, 0.06), "f": base[:5_000]}
+    fa = tmp_path / "q.fa"
+    fa.write_text("".join(f">{k}\n{v}\n" for k, v in seqs.items()))
+    lengths = {k: len(v) for k, v in seqs.items()}
+    group_of, bp = blast_genome_grouper(fa, lengths, tmp_path / "w", 1)("chrC", ["a", "b", "x"], ["f"])
+    assert group_of["a"] == group_of["b"] != group_of["x"]
+    assert bp[group_of["a"]] == 45_000

@@ -344,6 +344,9 @@ class OrganelleCalls:
     set_ref_coverage: Dict[str, float] = field(default_factory=dict)
     debris: Set[str] = field(default_factory=set)
     hits: Dict[str, "OrganelleHit"] = field(default_factory=dict)
+    # Complete candidates set aside because they belong to another genome
+    # than the one holding most of the organelle sequence in the assembly
+    other_genomes: Dict[str, List[str]] = field(default_factory=dict)
 
     def organelle_contigs(self) -> Set[str]:
         """Every contig with an organelle call (complete, partial or debris)."""

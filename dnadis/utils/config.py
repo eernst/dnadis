@@ -120,6 +120,7 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
         "chrC_max_len_ratio": "chrC_max_len_ratio",
         "chrM_min_len_ratio": "chrM_min_len_ratio",
         "chrM_max_len_ratio": "chrM_max_len_ratio",
+        "organelle_same_genome_identity": "organelle_same_genome_identity",
     },
     "thresholds_rdna": {
         "rdna_min_cov": "rdna_min_cov",
