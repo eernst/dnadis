@@ -475,7 +475,9 @@ has_compleasm <- "compleasm_chrs_S" %in% names(comp_df) &&
 #   joined   - a component of a multi-contig scaffold
 #   single   - a chrom_assigned contig left on its own
 #   unplaced - a chrom_fragment contig left on its own
-# A contig missing from the AGP counts as left on its own.
+# A contig missing from the AGP counts as left on its own.  A contig with
+# fragments placed into its input gaps has one W row per piece; components
+# are counted once.
 scaf_states <- c("joined", "single", "unplaced")
 scaf_state_colors <- c(
   joined   = unname(classification_colors["chrom_assigned"]),
@@ -499,7 +501,8 @@ if (has_per_asm && !is.null(all_agp_df) && nrow(all_agp_df) > 0) {
   agp_w <- all_agp_df %>% filter(type == "W")
   scaf_info <- all_agp_df %>%
     group_by(assembly, scaffold) %>%
-    summarise(scaf_len = max(end), n_comp = sum(type == "W"), .groups = "drop")
+    summarise(scaf_len = max(end), n_comp = n_distinct(component[type == "W"]),
+              .groups = "drop")
   memb <- agp_w %>%
     select(assembly, component, scaffold) %>%
     distinct(assembly, component, .keep_all = TRUE) %>%
@@ -757,7 +760,7 @@ scaf_gt_df %>%
   tab_source_note(md(paste0(
     "**Joined**: share of Chr + ChrF Mb inside multi-contig scaffolds. ",
     "**ChrF placed / alone**: fragment Mb joined into a scaffold or left on its own. ",
-    "**Joins**: contig-to-contig joins. ",
+    "**Joins**: contigs added to scaffolds (n − 1 for a scaffold of n contigs; a fragment placed into an input gap counts once). ",
     if (any(scaf_gt_df$in_gaps > 0, na.rm = TRUE))
       "**Input gaps**: scaffold gaps (N runs) already inside the input sequences; contig N50 is over the pieces between them, and a slot whose contig has gaps is not counted as one contig. " else "",
     "**Chromosomes in one piece**: reference chromosome × copy-set slots whose ",
@@ -2230,12 +2233,12 @@ build_synteny_plot <- function(sg) {
     for (sn in scaffold_names) {
       sa <- agp_idx[[paste(asm, sn, sep = "\x01")]]
       if (is.null(sa) || nrow(sa) <= 1) next
-      comp_rows <- sa %>% filter(type == "W")
-      scaffolded_components <- c(scaffolded_components, comp_rows$component)
+      comps <- unique(sa$component[sa$type == "W"])
+      scaffolded_components <- c(scaffolded_components, comps)
       specs[[length(specs) + 1]] <- list(
         kind = "scaffold", name = sn, length = max(sa$end),
-        sa = sa, components = comp_rows$component,
-        ref_pos = ref_position(asm, comp_rows$component, rid)
+        sa = sa, components = comps,
+        ref_pos = ref_position(asm, comps, rid)
       )
     }
 
@@ -2373,7 +2376,10 @@ build_synteny_plot <- function(sg) {
 
         if (identical(sp$kind, "scaffold")) {
           sa <- sp$sa
-          comp_rows <- sa %>% filter(type == "W")
+          # One row per component (a contig with fragments in its input
+          # gaps has one W row per piece); the caps use all W rows.
+          w_rows <- sa %>% filter(type == "W")
+          comp_rows <- w_rows %>% distinct(component, .keep_all = TRUE)
           comp_dnadis <- asm_lookup_df$contig[match(
             paste(asm, comp_rows$component, sep = "\x01"),
             paste(asm_lookup_df$assembly, asm_lookup_df$original_name, sep = "\x01"))]
@@ -2385,7 +2391,7 @@ build_synteny_plot <- function(sg) {
 
           # Outer telomeres of a scaffold come from its terminal components,
           # oriented by the AGP strand (the placement, not the contig's own).
-          comp_ord <- comp_rows[order(comp_rows$part_num), , drop = FALSE]
+          comp_ord <- w_rows[order(w_rows$part_num), , drop = FALSE]
           cf <- comp_ord[1, ]; cl <- comp_ord[nrow(comp_ord), ]
           kf <- paste(asm, cf$component, sep = "\x01")
           kl <- paste(asm, cl$component, sep = "\x01")

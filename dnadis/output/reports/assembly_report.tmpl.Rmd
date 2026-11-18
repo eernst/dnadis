@@ -848,7 +848,7 @@ rdna_annot <- if (nzchar(params$rdna_annotations_tsv) && file.exists(params$rdna
 scaffold_brackets <- if (nzchar(params$agp_tsv) && file.exists(params$agp_tsv)) {
   agp_raw <- readr::read_tsv(params$agp_tsv, comment = "#", col_names = FALSE,
     show_col_types = FALSE, col_types = cols(.default = col_character()))
-  agp_raw %>% filter(X5 == "W") %>% select(scaffold = X1, component = X6) %>%
+  agp_raw %>% filter(X5 == "W") %>% distinct(scaffold = X1, component = X6) %>%
     group_by(scaffold) %>% filter(n() > 1) %>% ungroup()
 } else tibble()
 
