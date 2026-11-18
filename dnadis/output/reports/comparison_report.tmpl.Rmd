@@ -24,7 +24,7 @@ params:
   # Version of the TSV columns and values this template reads.  Bump it when
   # the template starts to need columns or values that older dnadis runs did
   # not write; refresh_reports.py then refuses to re-render older outputs.
-  output_schema: 2
+  output_schema: 3
 output:
   html_document:
     self_contained: __SELF_CONTAINED__
