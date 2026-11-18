@@ -151,6 +151,7 @@ from dnadis.detection.organelle import (
     OrganelleThresholds,
     prepare_organelle_references,
     detect_organelles,
+    repick_by_read_depth,
 )
 from dnadis.detection.rdna import (
     prepare_rdna_reference,
@@ -1305,6 +1306,37 @@ def run_assembly(
 
         if depth_stats:
             logger.done(f"Depth analysis complete for {len(depth_stats)} contigs")
+
+        # Organelle candidates from more than one genome (another species'
+        # organelles in the sample): the one with the most read bases wins.
+        if depth_stats and organelle_calls.complete_candidates:
+            swaps = repick_by_read_depth(
+                organelle_calls,
+                {c.original_name: c.depth_median for c in classifications if c.depth_median},
+                qry_lengths,
+            )
+            if swaps:
+                chrC_contig = organelle_calls.chrC_contig
+                chrM_contig = organelle_calls.chrM_contig
+                for organelle, (old, new) in swaps.items():
+                    for clf in classifications:
+                        if clf.original_name == new:
+                            hit = organelle_calls.hits[new]
+                            clf.classification = "organelle_complete"
+                            clf.new_name = organelle
+                            clf.classification_confidence = (
+                                "high" if hit.ref_coverage >= 0.98 else "medium")
+                        elif old is not None and clf.original_name == old:
+                            clf.classification = "organelle_debris"
+                            clf.new_name = ""
+                            clf.classification_confidence = "medium"
+                assign_contig_names(
+                    classifications,
+                    qry_lengths,
+                    args.add_subgenome_suffix,
+                    ref_norm_to_orig=ref_norm_to_orig,
+                    overwrite=True,
+                )
     elif reads and args.skip_depth:
         logger.info("Phase 13: Skipping depth analysis (--skip-depth)")
 
