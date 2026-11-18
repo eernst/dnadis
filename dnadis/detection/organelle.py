@@ -129,6 +129,10 @@ class OrganelleThresholds:
     set_min_ref_cov: float = 0.90
     debris_min_query_cov: float = 0.50
     same_genome_identity: float = 0.99
+    # Organelles whose oversized contigs (tandem concatemers) may be cut to
+    # one unit.  Not chrM: a long mitochondrial contig is a walk through the
+    # repeat-mediated recombination graph, not a tandem array.
+    cut_units: Tuple[str, ...] = ("chrC",)
     len_ratio: Tuple[Tuple[str, float, float], ...] = (
         ("chrC", 0.90, 1.50),
         ("chrM", 0.50, 3.00),
@@ -165,8 +169,9 @@ class _PairEvidence:
     ref_intervals: List[Tuple[int, int]] = field(default_factory=list)
     matches: float = 0.0
     aln_len: int = 0
-    # (query start, query end, identity, alignment length) per HSP
-    hsps: List[Tuple[int, int, float, int]] = field(default_factory=list)
+    # Per HSP: query start, query end, identity, alignment length, reference
+    # start, reference end (half-open), and whether it aligns to the minus strand
+    hsps: List[Tuple[int, int, float, int, int, int, bool]] = field(default_factory=list)
 
 
 def parse_organelle_blast(blast_out: Path) -> Dict[Tuple[str, str], _PairEvidence]:
@@ -184,8 +189,10 @@ def parse_organelle_blast(blast_out: Path) -> Dict[Tuple[str, str], _PairEvidenc
             try:
                 pident = float(fields[2])
                 aln_length = int(fields[3])
-                qstart, qend = sorted((int(fields[6]), int(fields[7])))
-                sstart, send = sorted((int(fields[8]), int(fields[9])))
+                q1, q2, s1, s2 = (int(fields[i]) for i in (6, 7, 8, 9))
+                qstart, qend = sorted((q1, q2))
+                sstart, send = sorted((s1, s2))
+                minus = (s1 > s2) != (q1 > q2)
             except ValueError:
                 continue
             ev = pairs[(fields[0], fields[1])]
@@ -194,7 +201,8 @@ def parse_organelle_blast(blast_out: Path) -> Dict[Tuple[str, str], _PairEvidenc
             ev.ref_intervals.append((sstart - 1, send))
             ev.matches += pident * aln_length / 100.0
             ev.aln_len += aln_length
-            ev.hsps.append((qstart - 1, qend, pident / 100.0, aln_length))
+            ev.hsps.append((qstart - 1, qend, pident / 100.0, aln_length,
+                            sstart - 1, send, minus))
     return pairs
 
 
@@ -304,6 +312,9 @@ def call_organelles(
                     )
 
         chosen: Optional[str] = candidates[0] if candidates else None
+        if chosen is None and organelle in thresholds.cut_units:
+            chosen = _cut_concatemer(
+                members, ref_len, lo, hi, thresholds, circular, query_lengths, organelle)
         partial: List[str] = []
         if chosen is None:
             partial, set_cov = _greedy_organelle_set(
@@ -315,7 +326,8 @@ def call_organelles(
                 calls.partial[organelle] = partial
                 calls.set_ref_coverage[organelle] = set_cov
         else:
-            calls.set_ref_coverage[organelle] = members[chosen][0].ref_coverage
+            h = members[chosen][0]
+            calls.set_ref_coverage[organelle] = h.unit.ref_coverage if h.unit else h.ref_coverage
 
         for contig, (hit, _) in members.items():
             if contig == chosen:
@@ -355,6 +367,145 @@ def call_organelles(
                 f"query cov={h.coverage:.3f})"
             )
     return calls
+
+
+@dataclass(frozen=True)
+class OrganelleUnit:
+    """One unit cut from a tandem concatemer (0-based half-open on the
+    contig; ``reverse`` when the unit reads on the contig's minus strand)."""
+    start: int
+    end: int
+    reverse: bool
+    ref_coverage: float
+    query_coverage: float
+    identity: float
+
+
+# Reference positions used to measure the repeat period of a concatemer.
+_PERIOD_ANCHORS = tuple(i / 50 for i in range(1, 50, 2))
+# Fraction of a unit window that must align on the contig's main strand: a
+# head-to-head (palindromic) window is half minus strand.  Below 1 because an
+# inverted single-copy region (plastid flip-flop isomer) aligns minus.
+_UNIT_MIN_PLUS_COV = 0.80
+
+
+def _cut_concatemer(members, ref_len, lo, hi, thresholds, circular, query_lengths, organelle):
+    """Cut one unit from the best oversized contig, if any passes.
+
+    Oversized contigs cover the reference and align along their length but
+    exceed the max length ratio.  Ranked circular first, then shortest.
+    Returns the contig name with ``hit.unit`` set, or None.
+    """
+    oversized = [
+        c for c, (h, _) in members.items()
+        if h.ref_coverage >= thresholds.min_ref_cov
+        and h.coverage >= thresholds.min_query_cov
+        and h.length_ratio > hi
+    ]
+    oversized.sort(key=lambda c: (c not in circular, query_lengths[c], c))
+    for contig in oversized:
+        hit, ev = members[contig]
+        unit = find_concatemer_unit(
+            ev.hsps, query_lengths[contig], ref_len, lo, hi,
+            thresholds.min_ref_cov, thresholds.min_query_cov,
+        )
+        if unit is None:
+            logger.info(
+                f"{organelle}: no unit cut from {contig} ({hit.length_ratio:.2f}x reference): "
+                f"no consistent repeat period or no window passes"
+            )
+            continue
+        hit.unit = unit
+        logger.info(
+            f"{organelle}: cut one unit from concatemer {contig} "
+            f"({query_lengths[contig]:,} bp, {hit.length_ratio:.2f}x reference): "
+            f"{unit.start + 1:,}-{unit.end:,}{' (reverse)' if unit.reverse else ''}, "
+            f"{unit.end - unit.start:,} bp, ref cov={unit.ref_coverage:.3f}, "
+            f"ident={unit.identity:.4f}"
+        )
+        return contig
+    return None
+
+
+def find_concatemer_unit(
+    hsps: List[Tuple[int, int, float, int, int, int, bool]],
+    qlen: int,
+    ref_len: int,
+    min_len_ratio: float,
+    max_len_ratio: float,
+    min_ref_cov: float,
+    min_query_cov: float,
+) -> Optional[OrganelleUnit]:
+    """One reference-length unit of a tandem concatemer, from its HSPs.
+
+    The period is the median distance between successive occurrences of the
+    same reference positions along the contig (on its main strand).  Windows
+    of one period that start at the reference start are tested like a
+    complete contig: reference coverage, aligned fraction, length ratio, and
+    collinearity (most of the window on the main strand).  The window with
+    the highest reference coverage is returned.
+    """
+    if not hsps or qlen <= 0 or ref_len <= 0:
+        return None
+    plus_bp = sum(h[3] for h in hsps if not h[6])
+    minus_bp = sum(h[3] for h in hsps if h[6])
+    reverse = minus_bp > plus_bp
+    # Orient so the main strand is plus
+    oriented = [
+        (qlen - qe, qlen - qs, ident, length, ss, se, not minus) if reverse
+        else (qs, qe, ident, length, ss, se, minus)
+        for qs, qe, ident, length, ss, se, minus in hsps
+    ]
+
+    def occurrences(x: int) -> List[int]:
+        return sorted({qs + (x - ss) for qs, qe, _, _, ss, se, minus in oriented
+                       if not minus and ss <= x < se and qs + (x - ss) < qe})
+
+    diffs = []
+    for f in _PERIOD_ANCHORS:
+        pos = occurrences(int(f * ref_len))
+        diffs += [b - a for a, b in zip(pos, pos[1:])
+                  if min_len_ratio * ref_len <= b - a <= max_len_ratio * ref_len]
+    if len(diffs) < 2:
+        return None
+    diffs.sort()
+    period = diffs[len(diffs) // 2]
+    if sum(abs(d - period) <= 0.01 * period for d in diffs) < len(diffs) / 2:
+        return None
+
+    x0 = int(_PERIOD_ANCHORS[0] * ref_len)
+    best: Optional[Tuple[Tuple[float, float], OrganelleUnit]] = None
+    for occ in occurrences(x0):
+        start, end = occ - x0, occ - x0 + period
+        if start < 0 or end > qlen:
+            continue
+        q_iv, r_iv, plus_iv = [], [], []
+        matches = aligned = 0.0
+        for qs, qe, ident, length, ss, se, minus in oriented:
+            a, b = max(qs, start), min(qe, end)
+            if a >= b:
+                continue
+            q_iv.append((a, b))
+            if minus:
+                r_iv.append((max(ss, se - (b - qs)), max(ss, se - (a - qs))))
+            else:
+                r_iv.append((min(se, ss + (a - qs)), min(se, ss + (b - qs))))
+                plus_iv.append((a, b))
+            matches += ident * (b - a)
+            aligned += b - a
+        ref_cov = _covered_bp([iv for iv in r_iv if iv[0] < iv[1]]) / ref_len
+        query_cov = _covered_bp(q_iv) / period
+        plus_cov = _covered_bp(plus_iv) / period
+        if (ref_cov < min_ref_cov or query_cov < min_query_cov
+                or plus_cov < _UNIT_MIN_PLUS_COV):
+            continue
+        identity = matches / aligned if aligned else 0.0
+        if reverse:
+            start, end = qlen - end, qlen - start
+        unit = OrganelleUnit(start, end, reverse, ref_cov, query_cov, identity)
+        if best is None or (ref_cov, identity) > best[0]:
+            best = ((ref_cov, identity), unit)
+    return best[1] if best else None
 
 
 def _greedy_organelle_set(
@@ -536,7 +687,7 @@ def _best_hsp_identity(ev: _PairEvidence) -> Tuple[float, int]:
     taken: List[Tuple[int, int]] = []
     matches = 0.0
     aligned = 0
-    for qs, qe, ident, length in sorted(ev.hsps, key=lambda h: (-h[3], -h[2])):
+    for qs, qe, ident, length, *_ in sorted(ev.hsps, key=lambda h: (-h[3], -h[2])):
         if any(qs < e and s < qe for s, e in taken):
             continue
         taken.append((qs, qe))

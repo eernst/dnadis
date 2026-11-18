@@ -186,6 +186,10 @@ class ContigClassification:
     organelle_query_cov: Optional[float] = None  # Fraction of the contig aligned
     organelle_identity: Optional[float] = None
     organelle_len_ratio: Optional[float] = None  # Contig length / reference length
+    # One unit cut from a tandem concatemer: (start, end, reverse), 0-based
+    # half-open on the contig; written to the organelles FASTA instead of the
+    # whole contig, which goes to the debris FASTA
+    organelle_unit: Optional[Tuple[int, int, bool]] = None
     classification_confidence: Optional[str] = None  # high/medium/low
     # Read depth fields (optional, from --reads analysis)
     depth_mean: Optional[float] = None
@@ -327,6 +331,8 @@ class OrganelleHit:
     is_complete: bool  # True if classified as complete organelle
     ref_coverage: float = 0.0  # Fraction of the reference covered by this contig
     status: str = "debris"
+    # One unit cut from a tandem concatemer (detection.organelle.OrganelleUnit)
+    unit: Optional[object] = None
 
 
 @dataclass

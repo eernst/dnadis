@@ -102,9 +102,21 @@ def write_classified_fastas(
             orig_seq = sequences.get(clf.original_name, "")
             if not orig_seq:
                 continue
+            if clf.organelle_unit is not None:
+                # One unit cut from a tandem concatemer
+                start, end, reverse = clf.organelle_unit
+                unit_seq = orig_seq[start:end]
+                out_seqs[clf.new_name] = reverse_complement(unit_seq) if reverse else unit_seq
+                continue
             if contig_orientations.get(clf.original_name, False):
                 orig_seq = reverse_complement(orig_seq)
             out_seqs[clf.new_name] = orig_seq
+
+        if category == "debris":
+            # The whole concatemer an organelle unit was cut from
+            for clf in classifications:
+                if clf.organelle_unit is not None and sequences.get(clf.original_name):
+                    out_seqs[f"{clf.new_name}_concatemer"] = sequences[clf.original_name]
 
         sorted_seqs = dict(sorted(out_seqs.items(), key=lambda x: sort_key(x[0])))
         write_fasta_if_changed(sorted_seqs, output_path, threads=threads)

@@ -2093,11 +2093,17 @@ cat('<div class="note-box">No organelle contigs were detected in this assembly.<
 ```
 
 ```{r organelle_prep, include=FALSE, eval=has_organelles}
-require_columns(org_df, c("organelle_ref_cov", "organelle_query_cov", "organelle_len_ratio"),
+require_columns(org_df, c("organelle_ref_cov", "organelle_query_cov", "organelle_len_ratio",
+                         "organelle_unit"),
                 "contig_summary.tsv organelle evidence")
 org_show <- org_df %>%
   mutate(
-    length_kb = length / 1e3,
+    organelle_unit = ifelse(is.na(organelle_unit), "", as.character(organelle_unit)),
+    length_kb = organelle_unit_length(length, organelle_unit) / 1e3,
+    original_name = ifelse(organelle_unit != "",
+                           paste0(original_name, ":", organelle_unit, " (one unit of a ",
+                                  sprintf("%.0f", length / 1e3), " kb concatemer)"),
+                           original_name),
     type = case_when(str_detect(assigned_ref_id, "chrC|chloroplast|plastid") ~ "chrC",
                      str_detect(assigned_ref_id, "chrM|mito") ~ "chrM", TRUE ~ "organelle"),
     ref_cov_pct = as.numeric(organelle_ref_cov) * 100,

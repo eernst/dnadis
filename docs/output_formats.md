@@ -112,6 +112,7 @@ These columns provide the underlying evidence used to determine classification c
 | `organelle_query_cov` | float | Organelle contigs: fraction of the contig aligned to that reference |
 | `organelle_identity` | float | Organelle contigs: alignment identity (matches / aligned length) |
 | `organelle_len_ratio` | float | Organelle contigs: contig length / reference length (above 1 for concatemers and long mitochondrial graph walks) |
+| `organelle_unit` | string | `organelle_complete` chrC cut from a tandem concatemer: the unit written to `organelles.fasta.gz`, as 1-based `start-end` on the contig and the strand it reads on, e.g. `41747-182188(+)`. The other `organelle_*` columns then describe the unit, while `length` stays the contig's. The whole contig is in `debris.fasta.gz` as `chrC_concatemer`. Empty otherwise |
 
 ### Read Depth Columns
 

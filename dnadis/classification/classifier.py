@@ -1849,6 +1849,18 @@ def classify_all_contigs(
     def _organelle_clf(contig: str, classification: str, new_name: str,
                        confidence: str) -> ContigClassification:
         hit = organelle_hits.get(contig) if organelle_hits else None
+        unit = hit.unit if hit is not None and classification == "organelle_complete" else None
+        if unit is not None:
+            # Describe the unit written as the organelle, not the concatemer
+            qlen = query_lengths.get(contig, 0)
+            ref_len = qlen / hit.length_ratio if hit.length_ratio else 0
+            ref_cov, query_cov, identity = unit.ref_coverage, unit.query_coverage, unit.identity
+            len_ratio = (unit.end - unit.start) / ref_len if ref_len else None
+        elif hit is not None:
+            ref_cov, query_cov, identity, len_ratio = (
+                hit.ref_coverage, hit.coverage, hit.identity, hit.length_ratio)
+        else:
+            ref_cov = query_cov = identity = len_ratio = None
         return ContigClassification(
             original_name=contig,
             new_name=new_name,
@@ -1862,10 +1874,11 @@ def classify_all_contigs(
             gc_content=_get_gc(contig),
             gc_deviation=None,  # Organelles have different GC, don't compare to nuclear
             classification_confidence=confidence,
-            organelle_ref_cov=hit.ref_coverage if hit else None,
-            organelle_query_cov=hit.coverage if hit else None,
-            organelle_identity=hit.identity if hit else None,
-            organelle_len_ratio=hit.length_ratio if hit else None,
+            organelle_ref_cov=ref_cov,
+            organelle_query_cov=query_cov,
+            organelle_identity=identity,
+            organelle_len_ratio=len_ratio,
+            organelle_unit=(unit.start, unit.end, unit.reverse) if unit is not None else None,
         )
 
     # organelle_complete: one contig covers the reference. High confidence when
@@ -1873,7 +1886,9 @@ def classify_all_contigs(
     for organelle, contig in (("chrC", chrC_contig), ("chrM", chrM_contig)):
         if contig and contig not in classified_contigs:
             hit = organelle_hits.get(contig) if organelle_hits else None
-            confidence = "high" if hit is None or hit.ref_coverage >= 0.98 else "medium"
+            ref_cov = (hit.unit.ref_coverage if hit is not None and hit.unit is not None
+                       else hit.ref_coverage if hit is not None else 1.0)
+            confidence = "high" if ref_cov >= 0.98 else "medium"
             classifications.append(_organelle_clf(contig, "organelle_complete", organelle, confidence))
             classified_contigs.add(contig)
 
