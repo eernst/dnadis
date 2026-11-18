@@ -1747,6 +1747,7 @@ def run_assembly(
         synteny_mode=args.synteny_mode,
         qry_gaps=qry_gaps,
         organelle_ref_cov=organelle_calls.set_ref_coverage,
+        organelle_ref_name=organelle_calls.ref_name,
     )
     result.rearrangements = rearrangement_calls
     result.rearrangements_tsv = rearrangements_tsv

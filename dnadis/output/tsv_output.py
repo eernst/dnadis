@@ -150,6 +150,8 @@ def write_contig_summary_tsv(
         "organelle_identity",
         "organelle_len_ratio",
         "organelle_unit",
+        "organelle_ref",
+        "organelle_ref_margin",
         "depth_mean",
         "depth_median",
         "depth_std",
@@ -391,6 +393,9 @@ def write_contig_summary_tsv(
                         cobiont_coverage,
                         *organelle_cols,
                         organelle_unit,
+                        (clf.organelle_ref or "") if clf else "",
+                        (f"{clf.organelle_ref_margin:.4f}"
+                         if clf and clf.organelle_ref_margin is not None else ""),
                         depth_mean,
                         depth_median,
                         depth_std,

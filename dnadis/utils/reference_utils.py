@@ -37,12 +37,27 @@ def normalize_ref_id(ref_id: str) -> str:
 _NUCLEAR_SINGLE_RE = re.compile(r"^(?P<chrom>chr\d+)$")
 _NUCLEAR_RE = re.compile(r"^(?P<chrom>chr\d+)(?P<sg>[A-Z])$")
 
-# Organelles (plant convention)
+# Organelles (plant convention).  Names recognised as organelle sequences
+# (case-insensitive), listed in the README.  A species tag may follow (see
+# parse_organelle_id); bare "C"/"M" count only in references whose nuclear
+# chromosomes are numbered 1..n or I, II, III...
 _ORGANELLE = {"chrC", "chrM"}
 _ORGANELLE_ALIASES = {
-    "chrC": {"chrc", "cpdna", "chloroplast", "plastid", "pt"},
-    "chrM": {"chrm", "mt", "mitochondrion", "mitochondria", "mitochondrial"},
+    "chrC": {"chrc", "chrpt", "pt", "cpdna", "ptdna", "plastid",
+             "plastome", "chloroplast", "chrchloroplast", "chrplastid"},
+    "chrM": {"chrm", "chrmt", "mt", "mtdna", "mito", "mitochondrion",
+             "mitochondria", "mitochondrial", "mitogenome", "chrmitochondrion",
+             "chrmito"},
 }
+_BARE_ORGANELLE = {"C": "chrC", "M": "chrM"}
+# Organelle named in a FASTA description (NCBI style)
+_DESC_ORGANELLE = (
+    ("chrC", re.compile(r"\b(chloroplast|plastid)\b", re.IGNORECASE)),
+    ("chrM", re.compile(r"\bmitochondri(on|al|a)\b", re.IGNORECASE)),
+)
+_DESC_COMPLETE = re.compile(r"\bcomplete\s+(genome|sequence)\b", re.IGNORECASE)
+_ROMAN_RE = re.compile(r"^[IVXLC]+$")
+_NUMBERED_RE = re.compile(r"^\d+$")
 
 # Reference naming presets (tried in order when pattern not provided)
 _REF_ID_PATTERNS = [
@@ -53,7 +68,8 @@ _REF_ID_PATTERNS = [
 _ACTIVE_REF_ID_PATTERNS: Optional[List[re.Pattern[str]]] = None
 
 
-def normalize_organelle_id(ref_id: str) -> Optional[str]:
+def _strict_organelle_id(ref_id: str) -> Optional[str]:
+    """chrC/chrM when *ref_id* is exactly an organelle name (any case)."""
     if not ref_id:
         return None
     norm = normalize_ref_id(ref_id)
@@ -65,6 +81,120 @@ def normalize_organelle_id(ref_id: str) -> Optional[str]:
     if norm_l in _ORGANELLE_ALIASES["chrM"]:
         return "chrM"
     return None
+
+
+# One species tag after an organelle name: chrC_A, chrCA, Pt.P, Mt-Dt
+_ORGANELLE_TAG_RE = re.compile(r"^(?P<base>.+?)(?:[_.\-][A-Za-z0-9]{1,3}|[A-Z][a-z]?)$")
+
+
+def normalize_organelle_id(ref_id: str) -> Optional[str]:
+    """chrC/chrM for an organelle sequence name, with or without a species tag."""
+    organelle = _strict_organelle_id(ref_id)
+    if organelle or not ref_id:
+        return organelle
+    m = _ORGANELLE_TAG_RE.match(ref_id)
+    return _strict_organelle_id(m.group("base")) if m else None
+
+
+def parse_organelle_id(
+    ref_id: str,
+    species_tags: Optional[Set[str]] = None,
+    allow_bare: bool = False,
+) -> Optional[Tuple[str, Optional[str]]]:
+    """Organelle and species tag of a reference sequence ID, or None.
+
+    The tag is one of *species_tags* (the subgenome suffixes of the nuclear
+    chromosomes, e.g. A/P/T), after the organelle name with an optional
+    ``_``, ``.`` or ``-``: chrCA, chrC_A, Pt.A, Mt-T.  With *allow_bare*,
+    "C" and "M" alone also count.
+    """
+    if not ref_id:
+        return None
+    if allow_bare and ref_id in _BARE_ORGANELLE:
+        return _BARE_ORGANELLE[ref_id], None
+    organelle = _strict_organelle_id(ref_id)
+    if organelle:
+        return organelle, None
+    for tag in sorted(species_tags or (), key=len, reverse=True):
+        for sep in ("_", ".", "-", ""):
+            suffix = sep + tag
+            if len(ref_id) > len(suffix) and ref_id.endswith(suffix):
+                organelle = _strict_organelle_id(ref_id[: -len(suffix)])
+                if organelle:
+                    return organelle, tag
+    # An organelle name with a suffix that is not a nuclear tag: untagged
+    organelle = normalize_organelle_id(ref_id)
+    return (organelle, None) if organelle else None
+
+
+def organelle_from_description(description: str) -> Optional[str]:
+    """chrC/chrM from an NCBI-style description such as 'Sorghum bicolor
+    chloroplast, complete genome', or None."""
+    if not description or not _DESC_COMPLETE.search(description):
+        return None
+    hits = [org for org, pat in _DESC_ORGANELLE if pat.search(description)]
+    return hits[0] if len(hits) == 1 else None
+
+
+def reference_species_tags(ref_ids) -> Set[str]:
+    """Subgenome suffixes of the nuclear chromosomes (e.g. {'A', 'P', 'T'})."""
+    tags = set()
+    for ref_id in ref_ids:
+        if is_nuclear_chromosome(ref_id):
+            sub = split_chrom_subgenome(ref_id)[1]
+            if sub != "NA":
+                tags.add(sub)
+    return tags
+
+
+def bare_organelle_names_allowed(ref_ids) -> bool:
+    """True when the nuclear chromosomes are numbered (1..n) or Roman (I, II...)."""
+    ids = [i for i in ref_ids if i not in _BARE_ORGANELLE]
+    return any(_NUMBERED_RE.match(i) or _ROMAN_RE.match(i) for i in ids)
+
+
+def find_organelle_sequences(
+    headers: List[Tuple[str, str, int]],
+    species_tags: Optional[Set[str]] = None,
+    allow_bare: Optional[bool] = None,
+) -> Dict[Tuple[str, Optional[str]], str]:
+    """Organelle reference sequences among FASTA *headers* (id, description, length).
+
+    Returns (organelle, species tag or None) -> sequence id.  A sequence is
+    recognised by its ID (see parse_organelle_id) or, failing that, by an
+    NCBI-style description.  Species tags and whether bare C/M count come
+    from the headers themselves unless given.  When several sequences share
+    an organelle and tag, the longest is used and the others are named in a
+    warning.
+    """
+    ids = [h[0] for h in headers]
+    tags = reference_species_tags(ids) if species_tags is None else species_tags
+    bare = bare_organelle_names_allowed(ids) if allow_bare is None else allow_bare
+    found: Dict[Tuple[str, Optional[str]], List[Tuple[int, str]]] = {}
+    for seq_id, description, length in headers:
+        parsed = parse_organelle_id(seq_id, tags, bare)
+        if parsed is None:
+            organelle = organelle_from_description(description)
+            parsed = (organelle, None) if organelle else None
+        if parsed is not None:
+            found.setdefault(parsed, []).append((length, seq_id))
+    chosen: Dict[Tuple[str, Optional[str]], str] = {}
+    for key, seqs in found.items():
+        seqs.sort(key=lambda x: (-x[0], x[1]))
+        chosen[key] = seqs[0][1]
+        if len(seqs) > 1:
+            label = key[0] + (f" ({key[1]})" if key[1] else "")
+            logger.warning(
+                f"{len(seqs)} reference sequences match {label}: using the longest, "
+                f"{seqs[0][1]} ({seqs[0][0]:,} bp); ignoring "
+                + ", ".join(f"{n} ({L:,} bp)" for L, n in seqs[1:])
+            )
+    return chosen
+
+
+def organelle_ref_name(organelle: str, tag: Optional[str]) -> str:
+    """Name of an organelle reference in dnadis outputs: chrC, or chrC_A with a tag."""
+    return f"{organelle}_{tag}" if tag else organelle
 
 
 def get_ref_id_patterns() -> List[re.Pattern[str]]:

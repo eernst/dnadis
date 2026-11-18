@@ -112,6 +112,8 @@ These columns provide the underlying evidence used to determine classification c
 | `organelle_query_cov` | float | Organelle contigs: fraction of the contig aligned to that reference |
 | `organelle_identity` | float | Organelle contigs: alignment identity (matches / aligned length) |
 | `organelle_len_ratio` | float | Organelle contigs: contig length / reference length (above 1 for concatemers and long mitochondrial graph walks) |
+| `organelle_ref` | string | Organelle contigs: the organelle reference the contig matches best, `chrC`/`chrM`, or `chrC_A` etc. when the reference has one per species (see README, Organelle references) |
+| `organelle_ref_margin` | float | Organelle contigs, with several species' references for the organelle: identity to the best reference minus identity to the next species' reference. Empty with one reference |
 | `organelle_unit` | string | `organelle_complete` chrC cut from a tandem concatemer: the unit written to `organelles.fasta.gz`, as 1-based `start-end` on the contig and the strand it reads on, e.g. `41747-182188(+)`. The other `organelle_*` columns then describe the unit, while `length` stays the contig's. The whole contig is in `debris.fasta.gz` as `chrC_concatemer`. Empty otherwise |
 
 ### Read Depth Columns
@@ -406,7 +408,7 @@ Multi-assembly runs only: one row per reference chromosome and assembly (`{prefi
 | 2 | integer | Gap start, 0-based |
 | 3 | integer | Gap end, exclusive |
 
-Organelle columns: `chrC_found` / `chrM_found` are `yes` (one `organelle_complete` contig), `partial` (an `organelle_partial` set) or `no`; `chrC_n_contigs` / `chrM_n_contigs` count those contigs; `chrC_ref_cov` / `chrM_ref_cov` give the fraction of the reference they cover (combined, for a set). `organelle_bp` sums `organelle_complete`, `organelle_partial` and `organelle_debris`.
+Organelle columns: `chrC_found` / `chrM_found` are `yes` (one `organelle_complete` contig), `partial` (an `organelle_partial` set) or `no`; `chrC_n_contigs` / `chrM_n_contigs` count those contigs; `chrC_ref_cov` / `chrM_ref_cov` give the fraction of the reference they cover (combined, for a set), and `chrC_ref_name` / `chrM_ref_name` name that reference (`chrC_A` etc. with per-species references). `organelle_bp` sums `organelle_complete`, `organelle_partial` and `organelle_debris`.
 
 ## cobionts.tsv
 

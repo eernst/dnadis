@@ -1879,6 +1879,8 @@ def classify_all_contigs(
             organelle_identity=identity,
             organelle_len_ratio=len_ratio,
             organelle_unit=(unit.start, unit.end, unit.reverse) if unit is not None else None,
+            organelle_ref=hit.ref_name if hit is not None else None,
+            organelle_ref_margin=hit.ref_margin if hit is not None else None,
         )
 
     # organelle_complete: one contig covers the reference. High confidence when

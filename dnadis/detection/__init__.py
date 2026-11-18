@@ -10,7 +10,6 @@ from dnadis.detection.cobiont import detect_cobionts
 from dnadis.detection.debris import detect_chromosome_debris
 from dnadis.detection.organelle import (
     detect_organelles,
-    extract_organelle_from_ref,
     prepare_organelle_references,
 )
 from dnadis.detection.rdna import detect_rdna_contigs, prepare_rdna_reference
@@ -23,7 +22,6 @@ __all__ = [
     "run_blastn_megablast",
     "parse_blast_coverage",
     # organelle.py
-    "extract_organelle_from_ref",
     "prepare_organelle_references",
     "detect_organelles",
     # rdna.py

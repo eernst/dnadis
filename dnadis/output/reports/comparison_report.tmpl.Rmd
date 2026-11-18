@@ -24,7 +24,7 @@ params:
   # Version of the TSV columns and values this template reads.  Bump it when
   # the template starts to need columns or values that older dnadis runs did
   # not write; refresh_reports.py then refuses to re-render older outputs.
-  output_schema: 3
+  output_schema: 4
 output:
   html_document:
     self_contained: __SELF_CONTAINED__
@@ -3625,7 +3625,8 @@ arr_tbl %>%
 `r if (has_per_asm && any(comp_df$chrC_found != "no" | comp_df$chrM_found != "no", na.rm = TRUE)) "# 7. Organelles" else ""`
 
 ```{r organelle_section, eval=(has_per_asm && any(comp_df$chrC_found != "no" | comp_df$chrM_found != "no", na.rm = TRUE))}
-require_columns(comp_df, c("chrC_ref_cov", "chrM_ref_cov"), "comparison_summary.tsv")
+require_columns(comp_df, c("chrC_ref_cov", "chrM_ref_cov", "chrC_ref_name", "chrM_ref_name"),
+                "comparison_summary.tsv")
 # Extract organelle contigs (one complete contig, or a partial set) per assembly
 require_columns(all_summary_df, c("organelle_unit"), "contig_summary.tsv")
 org_df <- all_summary_df %>%
@@ -3672,16 +3673,20 @@ org_wide <- comp_df %>%
   left_join(
     comp_df %>% transmute(Assembly = as.character(assembly), chrC_found, chrM_found,
                           chrC_ref_cov = as.numeric(chrC_ref_cov),
-                          chrM_ref_cov = as.numeric(chrM_ref_cov)),
+                          chrM_ref_cov = as.numeric(chrM_ref_cov),
+                          chrC_ref_name = as.character(chrC_ref_name),
+                          chrM_ref_name = as.character(chrM_ref_name)),
     by = "Assembly"
   ) %>%
   mutate(
     chrC_cov = ifelse(is.na(chrC_ref_cov), "\u2014",
-                      sprintf("%.1f%%%s", chrC_ref_cov * 100,
-                              ifelse(chrC_found == "partial", " (set)", ""))),
+                      sprintf("%.1f%%%s of %s", chrC_ref_cov * 100,
+                              ifelse(chrC_found == "partial", " (set)", ""),
+                              ifelse(is.na(chrC_ref_name) | chrC_ref_name == "", "chrC", chrC_ref_name))),
     chrM_cov = ifelse(is.na(chrM_ref_cov), "\u2014",
-                      sprintf("%.1f%%%s", chrM_ref_cov * 100,
-                              ifelse(chrM_found == "partial", " (set)", "")))
+                      sprintf("%.1f%%%s of %s", chrM_ref_cov * 100,
+                              ifelse(chrM_found == "partial", " (set)", ""),
+                              ifelse(is.na(chrM_ref_name) | chrM_ref_name == "", "chrM", chrM_ref_name)))
   )
 
 max_chrC_bp <- max(org_wide$chrC_bp, na.rm = TRUE)

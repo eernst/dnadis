@@ -263,8 +263,8 @@ Gap-compressed identity (minimap2 `de`) is used because accessions differ by ins
 
 | Argument | Description |
 |----------|-------------|
-| `--chrC-ref` | Chloroplast reference FASTA (default: extract from --ref) |
-| `--chrM-ref` | Mitochondrion reference FASTA (default: extract from --ref) |
+| `--chrC-ref` | Chloroplast reference FASTA; every sequence in it is used, replacing those found in `--ref` (default: organelle sequences in `--ref`, see [Organelle references](#organelle-references)) |
+| `--chrM-ref` | Mitochondrion reference FASTA; as `--chrC-ref` |
 | `--rdna-ref` | rDNA reference FASTA, or 'default' for bundled Arabidopsis 45S |
 | `--skip-rdna-consensus` | Skip building consensus 45S rDNA and annotating rDNA loci (enabled by default) |
 | `--centrifuger-idx` | Centrifuger index prefix for cobiont screening |
@@ -610,6 +610,19 @@ Each contig is assigned a confidence level (`high`, `medium`, or `low`) indicati
 | Min segments | 1 | Hardcoded (nucleotide mode requires ≥1 segment) |
 
 All gate criteria must be satisfied for chromosome assignment (AND logic). The segment count threshold differs: protein mode requires ≥5 segments (configurable), while nucleotide mode requires ≥1 segment (hardcoded) because perfect full-length alignments produce fewer segments.
+
+### Organelle references
+
+Every organelle sequence in the reference FASTA is used as an organelle reference, recognised by its ID (any case):
+
+| Organelle | Names |
+|-----------|-------|
+| Chloroplast (plastid) | `chrC`, `chrPt`, `Pt`, `cpDNA`, `ptDNA`, `plastid`, `plastome`, `chloroplast`, `chrChloroplast`, `chrPlastid`; bare `C` when the nuclear chromosomes are named `1, 2, 3…` or `I, II, III…` |
+| Mitochondrion | `chrM`, `chrMt`, `Mt`, `mtDNA`, `mito`, `mitochondrion`, `mitochondria`, `mitochondrial`, `mitogenome`, `chrMitochondrion`, `chrMito`; bare `M` under the same rule as `C` |
+
+A sequence whose ID is not in the list counts when its FASTA description names one organelle and says `complete genome` or `complete sequence`, as NCBI organelle records do (e.g. `>NC_008602.1 Sorghum bicolor chloroplast, complete genome`).
+
+In a reference with several species or subgenomes (nuclear chromosomes `chr1A`, `chr1P`, `chr1T`…), an organelle name followed by one of those suffixes, directly or after `_`, `.` or `-`, is that species' reference: `chrCA`, `chrC_P`, `Pt.T`, `Mt-A`. An organelle sequence without such a suffix is still used, without a species. Each organelle contig is assigned to the reference it matches best; `organelle_ref` in `contig_summary.tsv` names it (e.g. `chrC_A`) and `organelle_ref_margin` gives its identity margin over the next species' reference of that organelle. When several sequences match the same organelle and species, the longest is used and the log names the others. `--chrC-ref`/`--chrM-ref` replace the organelle's sequences from `--ref`; species suffixes in those files are read the same way.
 
 ### Organelle detection
 
