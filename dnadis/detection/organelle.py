@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from dnadis.detection.blast import run_makeblastdb, run_blastn_megablast
 from dnadis.models import OrganelleCalls, OrganelleHit
@@ -18,6 +18,7 @@ from dnadis.utils.io_utils import file_exists_and_valid, merge_intervals
 from dnadis.utils.logging_config import get_logger
 from dnadis.utils.reference_utils import normalize_organelle_id
 from dnadis.utils.sequence_utils import (
+    write_filtered_fasta,
     is_hifiasm_circular,
     read_fasta_sequences,
     write_fasta,
@@ -127,6 +128,7 @@ class OrganelleThresholds:
     min_query_cov: float = 0.90
     set_min_ref_cov: float = 0.90
     debris_min_query_cov: float = 0.50
+    same_genome_identity: float = 0.99
     len_ratio: Tuple[Tuple[str, float, float], ...] = (
         ("chrC", 0.90, 1.50),
         ("chrM", 0.50, 3.00),
@@ -141,6 +143,16 @@ class OrganelleThresholds:
 
 # A set member must add at least this fraction of the reference.
 _SET_MIN_GAIN = 0.01
+
+# Two contigs belong to the same organelle genome at or above
+# OrganelleThresholds.same_genome_identity with at least this fraction of the
+# query aligned.  Copies of one plastome in an assembly are near-identical;
+# plastomes of related species are typically 94-99% identical.
+_SAME_GENOME_MIN_COV = 0.50
+
+# (organelle, complete candidates, all contigs assigned to that organelle)
+#   -> (candidate -> genome group, group -> bp of assigned contigs in it)
+GenomeGrouper = Callable[[str, List[str], List[str]], Tuple[Dict[str, int], Dict[int, int]]]
 
 
 @dataclass
@@ -189,6 +201,7 @@ def call_organelles(
     ref_lengths: Dict[str, int],
     thresholds: OrganelleThresholds = OrganelleThresholds(),
     circular_contigs: Optional[Set[str]] = None,
+    genome_groups: Optional[GenomeGrouper] = None,
 ) -> OrganelleCalls:
     """Call complete, partial and debris organelle contigs from BLAST evidence.
 
@@ -198,6 +211,13 @@ def call_organelles(
 
     Complete candidates are ranked circular first, then by length closest to
     the reference.  A candidate that is not selected stays organelle debris.
+
+    A sample can hold the organelle genome of another species (a second
+    plant in the culture, contamination), and its contigs can pass the
+    complete tests.  With ``genome_groups``, candidates are grouped into
+    genomes by their identity to each other, and only the genome holding the
+    most organelle sequence in the assembly is ranked; the others are
+    reported in ``OrganelleCalls.other_genomes``.
     """
     circular = circular_contigs if circular_contigs is not None else {
         c for c, _ in pairs if is_hifiasm_circular(c)
@@ -241,6 +261,28 @@ def call_organelles(
             -members[c][0].ref_coverage,
             c,
         ))
+
+        if genome_groups is not None and len(candidates) > 1:
+            group_of, group_bp = genome_groups(
+                organelle, candidates,
+                sorted(c for c, (h, _) in members.items()
+                       if h.coverage >= thresholds.debris_min_query_cov),
+            )
+            groups = {group_of[c] for c in candidates}
+            if len(groups) > 1:
+                first_rank = {g: min(i for i, c in enumerate(candidates) if group_of[c] == g)
+                              for g in groups}
+                main = max(groups, key=lambda g: (group_bp.get(g, 0), -first_rank[g]))
+                others = [c for c in candidates if group_of[c] != main]
+                candidates = [c for c in candidates if group_of[c] == main]
+                calls.other_genomes[organelle] = others
+                logger.warning(
+                    f"{organelle}: candidates come from {len(groups)} different genomes "
+                    f"(< {thresholds.same_genome_identity:.1%} identity to each other). Using the one "
+                    f"with the most {organelle} sequence in the assembly "
+                    f"({group_bp.get(main, 0):,} bp); kept as organelle_debris: "
+                    + ", ".join(others)
+                )
 
         chosen: Optional[str] = candidates[0] if candidates else None
         partial: List[str] = []
@@ -379,4 +421,84 @@ def detect_organelles(
         ref_lengths,
         thresholds=thresholds,
         circular_contigs=circular_contigs,
+        genome_groups=blast_genome_grouper(
+            query_fasta, query_lengths, work_dir, threads,
+            min_identity=thresholds.same_genome_identity,
+        ),
     )
+
+
+def blast_genome_grouper(
+    query_fasta: Path,
+    query_lengths: Dict[str, int],
+    work_dir: Path,
+    threads: int,
+    min_identity: float = 0.99,
+) -> GenomeGrouper:
+    """Group complete candidates into genomes with megablast (see call_organelles).
+
+    Candidates at >= ``min_identity`` over half their length are linked
+    (single linkage).  Every contig assigned to the organelle counts toward the group
+    of the candidate it matches best, if at that identity.
+    """
+    def grouper(organelle: str, candidates: List[str], assigned: List[str]):
+        gdir = work_dir / f"genome_groups_{organelle}"
+        gdir.mkdir(parents=True, exist_ok=True)
+        cand_fa, query_fa = gdir / "candidates.fa", gdir / "assigned.fa"
+        write_filtered_fasta(query_fasta, cand_fa, set(candidates))
+        write_filtered_fasta(query_fasta, query_fa, set(assigned) | set(candidates))
+        db = gdir / "candidates"
+        run_makeblastdb(cand_fa, db, err_path=gdir / "makeblastdb.err")
+        out = gdir / "assigned_vs_candidates.txt"
+        run_blastn_megablast(
+            query_fasta=query_fa, db_paths=[str(db)], output_path=out, threads=threads,
+            max_hsps=100, max_target_seqs=len(candidates), err_path=gdir / "blastn.err",
+        )
+        return group_by_identity(parse_organelle_blast(out), candidates, assigned,
+                                 query_lengths, min_identity)
+
+    return grouper
+
+
+def group_by_identity(
+    pairs: Dict[Tuple[str, str], _PairEvidence],
+    candidates: List[str],
+    assigned: List[str],
+    query_lengths: Dict[str, int],
+    min_identity: float = 0.99,
+) -> Tuple[Dict[str, int], Dict[int, int]]:
+    """Genome groups of candidates and the bp of assigned contigs in each."""
+    def same_genome(q: str, s: str) -> Optional[float]:
+        ev = pairs.get((q, s))
+        qlen = query_lengths.get(q, 0)
+        if ev is None or not ev.aln_len or qlen <= 0:
+            return None
+        ident = ev.matches / ev.aln_len
+        cov = _covered_bp(ev.query_intervals) / qlen
+        return ident if ident >= min_identity and cov >= _SAME_GENOME_MIN_COV else None
+
+    parent = {c: c for c in candidates}
+
+    def find(c: str) -> str:
+        while parent[c] != c:
+            parent[c] = parent[parent[c]]
+            c = parent[c]
+        return c
+
+    for q in candidates:
+        for s in candidates:
+            if q != s and same_genome(q, s) is not None:
+                parent[find(q)] = find(s)
+    roots = sorted({find(c) for c in candidates})
+    group_of = {c: roots.index(find(c)) for c in candidates}
+
+    group_bp: Dict[int, int] = defaultdict(int)
+    for q in set(assigned) | set(candidates):
+        if q in group_of:
+            group_bp[group_of[q]] += query_lengths.get(q, 0)
+            continue
+        hits = [(ident, s) for s in candidates
+                if (ident := same_genome(q, s)) is not None]
+        if hits:
+            group_bp[group_of[max(hits)[1]]] += query_lengths.get(q, 0)
+    return group_of, dict(group_bp)
