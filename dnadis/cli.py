@@ -118,6 +118,7 @@ from dnadis.utils.sequence_utils import (
     read_gc_content_tsv,
     read_ref_gc_tsv,
     resolve_circular_contigs,
+    scan_fasta_gaps,
     write_filtered_fasta,
     write_gc_content_tsv,
     write_ref_gc_tsv,
@@ -538,6 +539,22 @@ def run_assembly(
 
     qry_lengths = read_fasta_lengths(qry)
     logger.info(f"Query contigs: {len(qry_lengths)}")
+
+    # Scaffold gaps (N runs) inside the input sequences
+    qry_gaps = scan_fasta_gaps(qry)
+    gaps_bed = Path(str(outprefix) + ".gaps.bed")
+    if qry_gaps:
+        with open(gaps_bed, "w") as fh:
+            for contig, runs in qry_gaps.items():
+                for start, end in runs:
+                    fh.write(f"{contig}\t{start}\t{end}\n")
+        n_gaps = sum(len(r) for r in qry_gaps.values())
+        gap_bp = sum(e - s for r in qry_gaps.values() for s, e in r)
+        logger.info(
+            f"Scaffold gaps: {n_gaps} in {len(qry_gaps)} sequence(s), {gap_bp:,} bp: {gaps_bed}"
+        )
+    elif gaps_bed.exists():
+        gaps_bed.unlink()
 
     # GC content cache paths (per-assembly)
     gc_content_tsv = Path(str(outprefix) + ".gc_content.tsv")
@@ -1179,6 +1196,9 @@ def run_assembly(
 
     for clf in classifications:
         clf.reversed = contig_orientations.get(clf.original_name, False)
+        runs = qry_gaps.get(clf.original_name, ())
+        clf.n_gaps = len(runs)
+        clf.gap_bp = sum(e - s for s, e in runs)
         call = sister_calls.get(clf.original_name) if sister_calls else None
         if call is not None:
             clf.sister_decision = call.decision
@@ -1673,6 +1693,7 @@ def run_assembly(
         compleasm_chrs=compleasm_chrs_result,
         compleasm_non_chrs=compleasm_non_chrs_result,
         synteny_mode=args.synteny_mode,
+        qry_gaps=qry_gaps,
     )
     result.rearrangements = rearrangement_calls
     result.rearrangements_tsv = rearrangements_tsv
@@ -1701,6 +1722,7 @@ def run_assembly(
             rdna_arrays_tsv=rdna_arrays_tsv_path,
             cobionts_tsv=cobiont_tsv_arg,
             agp_tsv=agp_tsv,
+            gaps_bed=gaps_bed,
             compleasm_chrs_summary=compleasm_chrs_sum,
             compleasm_non_chrs_summary=compleasm_non_sum,
             rearrangements_tsv=rearrangements_tsv,

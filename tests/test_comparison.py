@@ -56,6 +56,24 @@ class TestChromContiguityState:
         anchors = [_anchor("h1", 1, True, True), _anchor("h2", 2, True, True)]
         assert _chrom_contiguity_state(anchors, 0) == ("T2T", 2)
 
+    def test_capped_anchor_with_gaps_is_gapped(self):
+        a = _anchor("a", 1, True, True)
+        a.n_gaps = 4
+        assert _chrom_contiguity_state([a], 0) == ("gapped", 1)
+
+    def test_uncapped_anchor_with_gaps_is_single(self):
+        a = _anchor("a", 1, True, False)
+        a.n_gaps = 4
+        assert _chrom_contiguity_state([a], 0) == ("single", 1)
+
+    def test_gapped_copy_ranks_between_t2t_and_single(self):
+        gapped = _anchor("h2", 2, True, True)
+        gapped.n_gaps = 1
+        assert _chrom_contiguity_state([_anchor("h1", 1, True, True), gapped], 0) == ("gapped", 2)
+        gapped2 = _anchor("h3", 1, True, True)
+        gapped2.n_gaps = 1
+        assert _chrom_contiguity_state([gapped2, _anchor("h4", 2)], 0) == ("single", 2)
+
     def test_copies_take_least_contiguous_state(self):
         anchors = [_anchor("h1", 1, True, True), _anchor("h2", 2)]
         assert _chrom_contiguity_state(anchors, 0) == ("single", 2)
@@ -146,6 +164,7 @@ def _make_assembly_result(
     qry_lengths: dict = None,
     ref_lengths_norm: dict = None,
     tmp_path: Path = None,
+    qry_gaps: dict = None,
 ) -> AssemblyResult:
     """Build an AssemblyResult using build_assembly_result with defaults."""
     if classifications is None:
@@ -191,6 +210,7 @@ def _make_assembly_result(
         segments_tsv=base / f"{name}.segments.tsv",
         evidence_tsv=base / f"{name}.evidence_summary.tsv",
         macro_blocks_tsv=base / f"{name}.macro_blocks.tsv",
+        qry_gaps=qry_gaps,
     )
 
 
@@ -547,6 +567,44 @@ class TestWriteChromosomeCompletenessTsv:
         data = dict(zip(s_lines[0].split("\t"), s_lines[1].split("\t")))
         assert (data["n_chr_t2t"], data["n_chr_split"], data["n_chr_multi_copy"]) == ("1", "1", "1")
 
+    def test_gapped_state_and_gap_columns(self, tmp_path):
+        """A telomere-to-telomere contig with scaffold gaps is counted as
+        gapped, and the summary reports gaps and the gap-free contig N50."""
+        ref_lengths = {"chr1": 30_000_000, "chr2": 25_000_000}
+        c1 = _anchor("g", 1, True, True)
+        c1.contig_len = 30_000_000
+        c1.n_gaps, c1.gap_bp = 2, 200
+        c2 = _anchor("t", 1, True, True)
+        c2.assigned_ref_id, c2.contig_len = "chr2", 25_000_000
+        gaps = {"g": [(10_000_000, 10_000_100), (20_000_000, 20_000_100)]}
+        r = _make_assembly_result("asm1", [c1, c2],
+                                  qry_lengths={"g": 30_000_000, "t": 25_000_000},
+                                  ref_lengths_norm=ref_lengths, tmp_path=tmp_path,
+                                  qry_gaps=gaps)
+        assert (r.n_gaps, r.gap_bp) == (2, 200)
+        assert r.n50 == 30_000_000
+        # Pieces: 25 Mb, then 10 Mb and two 9.9999 Mb pieces of the gapped contig.
+        assert (r.contig_n50, r.contig_l50) == (10_000_000, 2)
+
+        out = tmp_path / "completeness.tsv"
+        write_chromosome_completeness_tsv(out, [r], ref_lengths)
+        lines = out.read_text().strip().split("\n")
+        header = lines[0].split("\t")
+        rows = {d["ref_id"]: d for d in (dict(zip(header, l.split("\t"))) for l in lines[1:])}
+        assert (rows["chr1"]["state"], rows["chr1"]["n_gaps"]) == ("gapped", "2")
+        assert (rows["chr2"]["state"], rows["chr2"]["n_gaps"]) == ("T2T", "0")
+
+        summary = tmp_path / "summary.tsv"
+        write_comparison_summary_tsv(summary, [r])
+        s_lines = summary.read_text().strip().split("\n")
+        data = dict(zip(s_lines[0].split("\t"), s_lines[1].split("\t")))
+        assert (data["n_chr_t2t"], data["n_chr_gapped"]) == ("1", "1")
+        assert (data["n_gaps"], data["gap_bp"], data["contig_n50"]) == ("2", "200", "10000000")
+
+    def test_gapless_contig_n50_equals_n50(self, tmp_path):
+        r = _make_assembly_result(tmp_path=tmp_path)
+        assert (r.contig_n50, r.contig_l50, r.n_gaps) == (r.n50, r.l50, 0)
+
     def test_single_assembly(self, tmp_path):
         ref_lengths = {"chr1": 30_000_000}
         clfs = [_make_classification("ctg1", "chrom_assigned", 30_000_000, "chr1")]
@@ -690,3 +748,25 @@ class TestComparisonWithCompleasm:
 
         assert data["compleasm_lineage"] == ""
         assert data["compleasm_chrs_S"] == ""
+
+
+def test_contig_summary_writes_gap_columns(tmp_path):
+    """contig_summary.tsv carries n_gaps and gap_bp after length."""
+    from dnadis.output.tsv_output import write_contig_summary_tsv
+
+    gapped = _make_classification("g", "chrom_assigned", 1_000)
+    gapped.n_gaps, gapped.gap_bp = 2, 150
+    clean = _make_classification("c", "chrom_assigned", 1_000)
+    out = tmp_path / "x.contig_summary.tsv"
+    write_contig_summary_tsv(
+        out, [gapped, clean], {}, {"g": 1_000, "c": 1_000},
+        {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {},
+        chr_like_minlen=500, chimera_primary_frac=0.8, chimera_secondary_frac=0.2,
+        assign_min_frac=0.1, assign_min_ratio=1.0,
+    )
+    lines = out.read_text().strip().split("\n")
+    header = lines[0].split("\t")
+    assert header[header.index("length") + 1:header.index("length") + 3] == ["n_gaps", "gap_bp"]
+    rows = {d["original_name"]: d for d in (dict(zip(header, l.split("\t"))) for l in lines[1:])}
+    assert (rows["g"]["n_gaps"], rows["g"]["gap_bp"]) == ("2", "150")
+    assert (rows["c"]["n_gaps"], rows["c"]["gap_bp"]) == ("0", "0")

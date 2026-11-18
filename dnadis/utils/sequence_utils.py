@@ -332,6 +332,59 @@ def calculate_gc_content_fasta(fasta_path: Path) -> Dict[str, float]:
     return gc_contents
 
 
+# Shortest N run read as a scaffold gap.  Shorter runs are ambiguity codes.
+GAP_MIN_N = 10
+
+_N_RUN = re.compile(r"[Nn]+")
+
+
+def scan_fasta_gaps(
+    fasta_path: Path, min_run: int = GAP_MIN_N
+) -> Dict[str, List[Tuple[int, int]]]:
+    """Find N runs of at least ``min_run`` bp in every sequence of a FASTA.
+
+    Streams the file; runs that cross line breaks are joined.
+
+    Returns:
+        Dict mapping sequence name to its gaps as 0-based half-open
+        (start, end) intervals, in order.  Sequences without gaps are absent.
+    """
+    gaps: Dict[str, List[Tuple[int, int]]] = {}
+    name: Optional[str] = None
+    pos = 0
+    run_start: Optional[int] = None  # open run reaching the end of the last line
+
+    def close(end: int) -> None:
+        if run_start is not None and end - run_start >= min_run:
+            gaps.setdefault(name, []).append((run_start, end))
+
+    with open_maybe_gzip(fasta_path, "rt") as fh:
+        for line in fh:
+            if line.startswith(">"):
+                if name is not None:
+                    close(pos)
+                name = line[1:].strip().split()[0]
+                pos = 0
+                run_start = None
+                continue
+            seq = line.strip()
+            if not seq:
+                continue
+            if run_start is not None and seq[0] not in "Nn":
+                close(pos)  # the open run ended with the last line
+                run_start = None
+            for m in _N_RUN.finditer(seq):
+                start = run_start if (m.start() == 0 and run_start is not None) else pos + m.start()
+                run_start = start
+                if m.end() < len(seq):
+                    close(pos + m.end())
+                    run_start = None
+            pos += len(seq)
+    if name is not None:
+        close(pos)
+    return gaps
+
+
 def calculate_gc_stats(gc_contents: Dict[str, float]) -> tuple[float, float]:
     """Calculate mean and standard deviation of GC contents.
 

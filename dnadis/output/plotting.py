@@ -165,6 +165,7 @@ def run_assembly_report(
     rdna_arrays_tsv: Optional[Path] = None,
     cobionts_tsv: Optional[Path] = None,
     agp_tsv: Optional[Path] = None,
+    gaps_bed: Optional[Path] = None,
     compleasm_chrs_summary: Optional[Path] = None,
     compleasm_non_chrs_summary: Optional[Path] = None,
     top_n_cobionts: int = 10,
@@ -198,6 +199,7 @@ def run_assembly_report(
     rdna_arrays_str = _abs_esc(rdna_arrays_tsv) if rdna_arrays_tsv and rdna_arrays_tsv.exists() else ""
     cobiont_str = _abs_esc(cobionts_tsv) if cobionts_tsv and cobionts_tsv.exists() else ""
     agp_str = _abs_esc(agp_tsv) if agp_tsv and agp_tsv.exists() else ""
+    gaps_str = _abs_esc(gaps_bed) if gaps_bed and gaps_bed.exists() else ""
     compleasm_chrs_str = _abs_esc(compleasm_chrs_summary) if compleasm_chrs_summary and compleasm_chrs_summary.exists() else ""
     compleasm_non_str = _abs_esc(compleasm_non_chrs_summary) if compleasm_non_chrs_summary and compleasm_non_chrs_summary.exists() else ""
     rearr_str = _abs_esc(rearrangements_tsv) if rearrangements_tsv and rearrangements_tsv.exists() else ""
@@ -212,6 +214,7 @@ def run_assembly_report(
         .replace("__RDNA_ARRAYS__", rdna_arrays_str)
         .replace("__COBIONTS_TSV__", cobiont_str)
         .replace("__AGP__", agp_str)
+        .replace("__GAPS__", gaps_str)
         .replace("__COMPLEASM_CHRS__", compleasm_chrs_str)
         .replace("__COMPLEASM_NONCHRS__", compleasm_non_str)
         .replace("__REARRANGEMENTS__", rearr_str)

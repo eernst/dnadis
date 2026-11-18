@@ -275,30 +275,34 @@ merge_intervals_bp <- function(starts, ends) {
 # Returns a tibble with one row per reference chromosome:
 #   ref_id, chrom_id, subgenome, ref_len, n_contigs, n_anchor, n_frag,
 #   n_copies, assembled_bp, union_bp, coverage (0-1), both_telo (logical),
-#   state.
-# state in: T2T, single, split, fragments_only, absent.
+#   n_gaps, state.
+# state in: T2T, gapped, single, split, fragments_only, absent.
 #
 # n_anchor counts chrom_assigned contigs (substantial, gate-passing chromosome
 # pieces) and n_frag counts chrom_fragment contigs (sub-chr_like_minlen arms).
 # Anchors are grouped into copies of the chromosome by ref_copy: anchors that
 # overlap on the reference are separate copies, anchors that tile it are
-# pieces of one copy.  A copy is T2T (one contig, telomeres at both ends),
+# pieces of one copy.  A copy is T2T (one gap-free contig, telomeres at both
+# ends), gapped (one contig, telomeres at both ends, scaffold gaps inside),
 # single (one contig) or split (two or more contigs); the chromosome takes its
 # least contiguous copy's state.  Anchors without a ref_copy (no alignment to
 # the reference) are left out unless no anchor has one; then they are taken as
 # one copy.  both_telo: at least one anchor has telomeres at both ends.
+# n_gaps: scaffold gaps (N runs) summed over the anchors.
 # Mirrors comparison.py:_chrom_contiguity_state; tests/test_report_templates.py
 # checks that the two agree.
 compute_chrom_contiguity <- function(summary_df, ref_lengths, macro_df = NULL,
                                      chr_like_minlen = 0) {
   yn <- function(x) !is.na(x) & x == "yes"
   require_columns(summary_df, c("classification", "assigned_ref_id", "length",
-                                "ref_copy", "has_5p_telomere", "has_3p_telomere"),
+                                "ref_copy", "has_5p_telomere", "has_3p_telomere",
+                                "n_gaps"),
                   "contig_summary.tsv")
 
   chrom_contigs <- summary_df %>%
     filter(classification %in% c("chrom_assigned", "chrom_fragment"),
-           !is.na(assigned_ref_id), nzchar(assigned_ref_id))
+           !is.na(assigned_ref_id), nzchar(assigned_ref_id)) %>%
+    mutate(n_gaps = coalesce(as.integer(n_gaps), 0L))
 
   # Union coverage per ref_id from macro-block reference intervals, restricted
   # to each chromosomal contig's own assigned reference.
@@ -321,6 +325,7 @@ compute_chrom_contiguity <- function(summary_df, ref_lengths, macro_df = NULL,
       assembled_bp = sum(length, na.rm = TRUE),
       both_telo    = any(classification == "chrom_assigned" &
                          yn(has_5p_telomere) & yn(has_3p_telomere)),
+      n_gaps       = sum(n_gaps[classification == "chrom_assigned"]),
       .groups = "drop"
     ) %>%
     mutate(n_frag = n_contigs - n_anchor)
@@ -333,10 +338,14 @@ compute_chrom_contiguity <- function(summary_df, ref_lengths, macro_df = NULL,
     group_by(ref_id, ref_copy) %>%
     summarise(
       n_pieces = n(),
-      t2t      = n() == 1 & yn(has_5p_telomere[1]) & yn(has_3p_telomere[1]),
+      telo     = n() == 1 & yn(has_5p_telomere[1]) & yn(has_3p_telomere[1]),
+      gaps     = n_gaps[1],
       .groups  = "drop"
     ) %>%
-    mutate(copy_rank = dplyr::case_when(n_pieces > 1 ~ 3L, t2t ~ 1L, TRUE ~ 2L)) %>%
+    mutate(copy_rank = dplyr::case_when(n_pieces > 1 ~ 4L,
+                                        telo & gaps == 0 ~ 1L,
+                                        telo ~ 2L,
+                                        TRUE ~ 3L)) %>%
     group_by(ref_id) %>%
     summarise(n_copies = n(), copy_rank = max(copy_rank), .groups = "drop")
 
@@ -356,6 +365,7 @@ compute_chrom_contiguity <- function(summary_df, ref_lengths, macro_df = NULL,
       n_copies     = coalesce(n_copies, 0L),
       assembled_bp = coalesce(assembled_bp, 0),
       both_telo    = coalesce(both_telo, FALSE),
+      n_gaps       = coalesce(n_gaps, 0L),
       union_bp     = coalesce(union_bp, 0),
       coverage     = pmin(1, ifelse(ref_len > 0, union_bp / ref_len, 0)),
       # State is derived from anchors only; fragment contigs (n_frag) are
@@ -366,7 +376,8 @@ compute_chrom_contiguity <- function(summary_df, ref_lengths, macro_df = NULL,
         n_contigs == 0     ~ "absent",
         n_anchor == 0      ~ "fragments_only",
         copy_rank == 1L    ~ "T2T",
-        copy_rank == 2L    ~ "single",
+        copy_rank == 2L    ~ "gapped",
+        copy_rank == 3L    ~ "single",
         TRUE               ~ "split"
       )
     ) %>%
@@ -376,10 +387,11 @@ compute_chrom_contiguity <- function(summary_df, ref_lengths, macro_df = NULL,
 # Display palette / labels for chromosome assembly states (best → missing).
 # State reflects anchor reconstruction only; fragment load is shown as a
 # separate +N badge and the number of copies as a ×N badge.
-chrom_state_levels <- c("T2T", "single", "split",
+chrom_state_levels <- c("T2T", "gapped", "single", "split",
                         "fragments_only", "absent")
 chrom_state_colors <- c(
   "T2T"            = "#1a7d3c",
+  "gapped"         = "#3b9a57",
   "single"         = "#5bb56e",
   "split"          = "#f0a73a",
   "fragments_only" = "#d6452f",
@@ -387,6 +399,7 @@ chrom_state_colors <- c(
 )
 chrom_state_labels <- c(
   "T2T"            = "T2T",
+  "gapped"         = "T2T with gaps",
   "single"         = "Single contig",
   "split"          = "Split",
   "fragments_only" = "Fragments only",
