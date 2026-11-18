@@ -347,6 +347,11 @@ class OrganelleCalls:
     # Complete candidates set aside because they belong to another genome
     # than the one holding most of the organelle sequence in the assembly
     other_genomes: Dict[str, List[str]] = field(default_factory=dict)
+    # When candidates come from more than one genome: every complete
+    # candidate in ranking order, and the genome group of each candidate and
+    # assigned contig (for the read-depth re-pick after depth analysis)
+    complete_candidates: Dict[str, List[str]] = field(default_factory=dict)
+    genome_groups: Dict[str, Dict[str, int]] = field(default_factory=dict)
 
     def organelle_contigs(self) -> Set[str]:
         """Every contig with an organelle call (complete, partial or debris)."""

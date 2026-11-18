@@ -150,6 +150,10 @@ _SET_MIN_GAIN = 0.01
 # plastomes of related species are typically 94-99% identical.
 _SAME_GENOME_MIN_COV = 0.50
 
+# Without read depth, the genome with the most organelle sequence is used only
+# when it has at least this many times the sequence of the next one.
+_GROUP_DOMINANCE = 2.0
+
 # (organelle, complete candidates, all contigs assigned to that organelle)
 #   -> (candidate -> genome group, group -> bp of assigned contigs in it)
 GenomeGrouper = Callable[[str, List[str], List[str]], Tuple[Dict[str, int], Dict[int, int]]]
@@ -161,6 +165,8 @@ class _PairEvidence:
     ref_intervals: List[Tuple[int, int]] = field(default_factory=list)
     matches: float = 0.0
     aln_len: int = 0
+    # (query start, query end, identity, alignment length) per HSP
+    hsps: List[Tuple[int, int, float, int]] = field(default_factory=list)
 
 
 def parse_organelle_blast(blast_out: Path) -> Dict[Tuple[str, str], _PairEvidence]:
@@ -188,6 +194,7 @@ def parse_organelle_blast(blast_out: Path) -> Dict[Tuple[str, str], _PairEvidenc
             ev.ref_intervals.append((sstart - 1, send))
             ev.matches += pident * aln_length / 100.0
             ev.aln_len += aln_length
+            ev.hsps.append((qstart - 1, qend, pident / 100.0, aln_length))
     return pairs
 
 
@@ -270,19 +277,31 @@ def call_organelles(
             )
             groups = {group_of[c] for c in candidates}
             if len(groups) > 1:
+                calls.genome_groups[organelle] = dict(group_of)
+                calls.complete_candidates[organelle] = list(candidates)
                 first_rank = {g: min(i for i, c in enumerate(candidates) if group_of[c] == g)
                               for g in groups}
-                main = max(groups, key=lambda g: (group_bp.get(g, 0), -first_rank[g]))
-                others = [c for c in candidates if group_of[c] != main]
-                candidates = [c for c in candidates if group_of[c] == main]
-                calls.other_genomes[organelle] = others
-                logger.warning(
-                    f"{organelle}: candidates come from {len(groups)} different genomes "
-                    f"(< {thresholds.same_genome_identity:.1%} identity to each other). Using the one "
-                    f"with the most {organelle} sequence in the assembly "
-                    f"({group_bp.get(main, 0):,} bp); kept as organelle_debris: "
-                    + ", ".join(others)
-                )
+                by_bp = sorted(groups, key=lambda g: (-group_bp.get(g, 0), first_rank[g]))
+                main, runner_up = by_bp[0], by_bp[1]
+                if group_bp.get(main, 0) >= _GROUP_DOMINANCE * group_bp.get(runner_up, 0):
+                    others = [c for c in candidates if group_of[c] != main]
+                    candidates = [c for c in candidates if group_of[c] == main]
+                    calls.other_genomes[organelle] = others
+                    logger.warning(
+                        f"{organelle}: candidates come from {len(groups)} different genomes "
+                        f"(< {thresholds.same_genome_identity:.1%} identity to each other). Using "
+                        f"the one with the most {organelle} sequence in the assembly "
+                        f"({group_bp.get(main, 0):,} vs {group_bp.get(runner_up, 0):,} bp); "
+                        f"kept as organelle_debris: " + ", ".join(others)
+                    )
+                else:
+                    logger.warning(
+                        f"{organelle}: candidates come from {len(groups)} different genomes "
+                        f"(< {thresholds.same_genome_identity:.1%} identity to each other) with "
+                        f"similar amounts of sequence ({group_bp.get(main, 0):,} vs "
+                        f"{group_bp.get(runner_up, 0):,} bp); ranking all of them. With read "
+                        f"depth, the genome with the most read bases is used."
+                    )
 
         chosen: Optional[str] = candidates[0] if candidates else None
         partial: List[str] = []
@@ -467,15 +486,18 @@ def group_by_identity(
     query_lengths: Dict[str, int],
     min_identity: float = 0.99,
 ) -> Tuple[Dict[str, int], Dict[int, int]]:
-    """Genome groups of candidates and the bp of assigned contigs in each."""
+    """Genome groups and the bp of assigned contigs in each.
+
+    Returns a group for every candidate and every assigned contig that
+    matches one, and the summed contig length per group.
+    """
     def same_genome(q: str, s: str) -> Optional[float]:
         ev = pairs.get((q, s))
         qlen = query_lengths.get(q, 0)
-        if ev is None or not ev.aln_len or qlen <= 0:
+        if ev is None or not ev.hsps or qlen <= 0:
             return None
-        ident = ev.matches / ev.aln_len
-        cov = _covered_bp(ev.query_intervals) / qlen
-        return ident if ident >= min_identity and cov >= _SAME_GENOME_MIN_COV else None
+        ident, covered = _best_hsp_identity(ev)
+        return ident if ident >= min_identity and covered / qlen >= _SAME_GENOME_MIN_COV else None
 
     parent = {c: c for c in candidates}
 
@@ -493,12 +515,88 @@ def group_by_identity(
     group_of = {c: roots.index(find(c)) for c in candidates}
 
     group_bp: Dict[int, int] = defaultdict(int)
-    for q in set(assigned) | set(candidates):
-        if q in group_of:
-            group_bp[group_of[q]] += query_lengths.get(q, 0)
-            continue
-        hits = [(ident, s) for s in candidates
-                if (ident := same_genome(q, s)) is not None]
-        if hits:
-            group_bp[group_of[max(hits)[1]]] += query_lengths.get(q, 0)
+    for q in sorted(set(assigned) | set(candidates)):
+        if q not in group_of:
+            hits = [(ident, s) for s in candidates
+                    if (ident := same_genome(q, s)) is not None]
+            if not hits:
+                continue
+            group_of[q] = group_of[max(hits)[1]]
+        group_bp[group_of[q]] += query_lengths.get(q, 0)
     return group_of, dict(group_bp)
+
+
+def _best_hsp_identity(ev: _PairEvidence) -> Tuple[float, int]:
+    """Identity and aligned bp over non-overlapping HSPs, longest first.
+
+    Pooling every HSP would count matches between different repeat copies
+    (frequent in mitogenomes), which lowers the identity of two copies of
+    one genome.
+    """
+    taken: List[Tuple[int, int]] = []
+    matches = 0.0
+    aligned = 0
+    for qs, qe, ident, length in sorted(ev.hsps, key=lambda h: (-h[3], -h[2])):
+        if any(qs < e and s < qe for s, e in taken):
+            continue
+        taken.append((qs, qe))
+        matches += ident * length
+        aligned += length
+    return (matches / aligned if aligned else 0.0), aligned
+
+
+def repick_by_read_depth(
+    calls: OrganelleCalls,
+    depth_median: Dict[str, float],
+    query_lengths: Dict[str, int],
+) -> Dict[str, Tuple[Optional[str], str]]:
+    """Re-choose complete organelle contigs by read depth when candidates
+    come from more than one genome.
+
+    The genome whose contigs hold the most read bases (median depth x length,
+    summed over every contig assigned to it) is the sample's own; another
+    species' organelle genome in the sample is at lower depth even where it
+    has as much or more assembled sequence.  Updates ``calls`` in place and
+    returns organelle -> (previous complete contig, new one) for changes.
+    """
+    swaps: Dict[str, Tuple[Optional[str], str]] = {}
+    for organelle, candidates in calls.complete_candidates.items():
+        group_of = calls.genome_groups.get(organelle, {})
+        read_bases: Dict[int, float] = defaultdict(float)
+        for contig, group in group_of.items():
+            depth = depth_median.get(contig)
+            if depth:
+                read_bases[group] += depth * query_lengths.get(contig, 0)
+        if not read_bases:
+            continue
+        main = max(read_bases, key=lambda g: read_bases[g])
+        logger.info(
+            f"{organelle}: read bases per genome: "
+            + ", ".join(
+                f"{'/'.join(c for c in candidates if group_of[c] == g)[:60]} "
+                f"{read_bases.get(g, 0) / 1e6:,.1f} Mb"
+                for g in sorted({group_of[c] for c in candidates})
+            )
+        )
+        new = next((c for c in candidates if group_of[c] == main), None)
+        if new is None:
+            continue
+        calls.other_genomes[organelle] = [c for c in candidates if group_of[c] != main]
+        current = getattr(calls, f"{organelle}_contig")
+        if new == current:
+            continue
+        if current is not None:
+            old_hit = calls.hits[current]
+            old_hit.status, old_hit.is_complete = "debris", False
+            calls.debris.add(current)
+        new_hit = calls.hits[new]
+        new_hit.status, new_hit.is_complete = "complete", True
+        calls.debris.discard(new)
+        setattr(calls, f"{organelle}_contig", new)
+        calls.set_ref_coverage[organelle] = new_hit.ref_coverage
+        swaps[organelle] = (current, new)
+        logger.warning(
+            f"{organelle}: {new} replaces {current} as the complete contig; its genome "
+            f"has the most read bases ({read_bases[main] / 1e6:,.1f} Mb)"
+        )
+    return swaps

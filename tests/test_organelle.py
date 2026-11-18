@@ -353,3 +353,71 @@ def test_blast_genome_grouper_end_to_end(tmp_path):
     group_of, bp = blast_genome_grouper(fa, lengths, tmp_path / "w", 1)("chrC", ["a", "b", "x"], ["f"])
     assert group_of["a"] == group_of["b"] != group_of["x"]
     assert bp[group_of["a"]] == 45_000
+
+
+def test_repeat_cross_hits_do_not_split_one_genome(tmp_path):
+    """Two copies of a mitogenome: long collinear HSPs at 99.97% plus many
+    cross-matches between repeat copies at ~85%. Pooled identity drops below
+    99%; identity over non-overlapping best HSPs keeps them one genome."""
+    from dnadis.detection.organelle import group_by_identity
+
+    lengths = {"m1": 174_000, "m2": 174_000}
+    rows = []
+    for q, s in (("m1", "m2"), ("m2", "m1")):
+        rows += [_hsp(q, s, 1, 80_000, 1, 80_000, 99.97),
+                 _hsp(q, s, 80_001, 174_000, 80_001, 174_000, 99.99)]
+        rows += [_hsp(q, s, 1000 * i + 1, 1000 * i + 6000, 100_001, 106_000, 85.0)
+                 for i in range(0, 160, 2)]
+    blast = tmp_path / "g.txt"
+    blast.write_text("\n".join(rows) + "\n")
+    pairs = parse_organelle_blast(blast)
+    pooled = pairs[("m1", "m2")].matches / pairs[("m1", "m2")].aln_len
+    assert pooled < 0.99
+    group_of, _ = group_by_identity(pairs, ["m1", "m2"], [], lengths)
+    assert group_of["m1"] == group_of["m2"]
+
+
+class TestTwoMitogenomes:
+    """One contig each from two mitogenomes (the sample's own and another
+    species'): sequence amounts are similar, so read depth decides."""
+
+    lengths = {"own_c": 250_000, "other_l": 300_000}
+
+    def _rows(self):
+        rows = []
+        for c, L in self.lengths.items():  # each covers all of chrM
+            rows += [_hsp(c, "chrM", 1, L, 1, L), _hsp(c, "chrM", 1, CHRM - L, L + 1, CHRM)]
+        return rows
+
+    @staticmethod
+    def _grouper(organelle, candidates, assigned):
+        group_of = {c: (0 if c == "own_c" else 1) for c in candidates}
+        return group_of, {0: 250_000, 1: 300_000}
+
+    def test_similar_amounts_keep_all_candidates(self, tmp_path):
+        calls = _call(tmp_path, self._rows(), self.lengths,
+                      circular={"own_c"}, genome_groups=self._grouper)
+        assert calls.other_genomes == {}
+        assert calls.chrM_contig == "own_c"  # circular first
+        assert calls.complete_candidates["chrM"] == ["own_c", "other_l"]
+
+    def test_read_depth_repicks(self, tmp_path):
+        from dnadis.detection.organelle import repick_by_read_depth
+
+        calls = _call(tmp_path, self._rows(), self.lengths, genome_groups=self._grouper)
+        assert calls.chrM_contig == "other_l"  # no circularity: closest length
+        swaps = repick_by_read_depth(calls, {"own_c": 608.0, "other_l": 16.0}, self.lengths)
+        assert swaps == {"chrM": ("other_l", "own_c")}
+        assert calls.chrM_contig == "own_c"
+        assert calls.hits["own_c"].status == "complete"
+        assert calls.hits["other_l"].status == "debris" and "other_l" in calls.debris
+        assert calls.other_genomes == {"chrM": ["other_l"]}
+        # Already the high-depth genome: no change
+        assert repick_by_read_depth(calls, {"own_c": 608.0, "other_l": 16.0}, self.lengths) == {}
+
+    def test_no_depth_no_change(self, tmp_path):
+        from dnadis.detection.organelle import repick_by_read_depth
+
+        calls = _call(tmp_path, self._rows(), self.lengths, genome_groups=self._grouper)
+        assert repick_by_read_depth(calls, {}, self.lengths) == {}
+        assert calls.chrM_contig == "other_l"
