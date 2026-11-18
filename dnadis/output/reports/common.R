@@ -189,6 +189,17 @@ classification_levels <- c(
 # ---------------------------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------------------------
+# Length written for an organelle contig: one unit when it was cut from a
+# concatemer (contig_summary organelle_unit "start-end(+)"), else the contig.
+organelle_unit_length <- function(length, unit) {
+  unit <- ifelse(is.na(unit), "", as.character(unit))
+  coords <- regmatches(unit, regexec("^(\\d+)-(\\d+)", unit))
+  unit_len <- vapply(coords, function(m) {
+    if (length(m) == 3) as.numeric(m[3]) - as.numeric(m[2]) + 1 else NA_real_
+  }, numeric(1))
+  ifelse(is.na(unit_len), as.numeric(length), unit_len)
+}
+
 save_pdf <- function(path, plot, width = 7.2, height = 5, dpi = 300) {
   dev <- if (capabilities("cairo")) cairo_pdf else "pdf"
   invisible(ggsave(path, plot, width = width, height = height, dpi = dpi, device = dev))

@@ -122,11 +122,49 @@ class TestConcatemers:
         assert {"cat7l", "cat14l"} <= calls.debris
         assert calls.hits["cat14l"].status == "debris"
 
-    def test_only_concatemer_becomes_partial(self, tmp_path):
+    def test_only_concatemer_is_cut_to_one_unit(self, tmp_path):
         L = int(7.5 * CHRC)
         calls = _call(tmp_path, _tiled("cat7l", "chrC", L, 0, CHRC), {"cat7l": L})
+        assert calls.chrC_contig == "cat7l"
+        unit = calls.hits["cat7l"].unit
+        assert (unit.start, unit.end, unit.reverse) == (0, CHRC, False)
+        assert unit.ref_coverage == pytest.approx(1.0)
+        assert calls.set_ref_coverage["chrC"] == pytest.approx(1.0)
+
+    def test_concatemer_offset_from_reference_start(self, tmp_path):
+        """The unit starts where the contig reaches the reference start."""
+        L, off = int(3.3 * CHRC), 50_000
+        rows = [_hsp("cat", "chrC", 1, off, CHRC - off + 1, CHRC)]
+        rows += [_hsp("cat", "chrC", q, min(q + CHRC - 1, L), 1, min(CHRC, L - q + 1))
+                 for q in range(off + 1, L + 1, CHRC)]
+        calls = _call(tmp_path, rows, {"cat": L})
+        unit = calls.hits["cat"].unit
+        assert (unit.start, unit.end) == (off, off + CHRC)
+
+    def test_reverse_strand_concatemer(self, tmp_path):
+        L = 3 * CHRC
+        rows = [_hsp("rev", "chrC", q, q + CHRC - 1, CHRC, 1) for q in range(1, L, CHRC)]
+        calls = _call(tmp_path, rows, {"rev": L})
+        unit = calls.hits["rev"].unit
+        assert unit.reverse and unit.end - unit.start == CHRC
+        assert unit.ref_coverage == pytest.approx(1.0)
+
+    def test_head_to_head_concatemer_is_not_cut(self, tmp_path):
+        """Units alternate strand: every one-period window is half inverted."""
+        L = 4 * CHRC
+        rows = []
+        for i, q in enumerate(range(1, L, CHRC)):
+            ss, se = (1, CHRC) if i % 2 == 0 else (CHRC, 1)
+            rows.append(_hsp("pal", "chrC", q, q + CHRC - 1, ss, se))
+        calls = _call(tmp_path, rows, {"pal": L})
         assert calls.chrC_contig is None
-        assert calls.partial["chrC"] == ["cat7l"]
+        assert calls.partial["chrC"] == ["pal"]
+
+    def test_mitochondrial_contigs_are_not_cut(self, tmp_path):
+        L = int(3.5 * CHRM)
+        calls = _call(tmp_path, _tiled("mwalk", "chrM", L, 0, CHRM), {"mwalk": L})
+        assert calls.chrM_contig is None
+        assert calls.hits["mwalk"].unit is None
 
     def test_circular_preferred_over_closer_length(self, tmp_path):
         lengths = {"ptg10l": CHRC, "ptg11c": int(1.3 * CHRC)}
@@ -421,3 +459,33 @@ class TestTwoMitogenomes:
         calls = _call(tmp_path, self._rows(), self.lengths, genome_groups=self._grouper)
         assert repick_by_read_depth(calls, {}, self.lengths) == {}
         assert calls.chrM_contig == "other_l"
+
+
+def test_classifier_describes_cut_unit(tmp_path):
+    from dnadis.classification.classifier import classify_all_contigs
+    from dnadis.detection.organelle import OrganelleUnit
+    from dnadis.models import ChainEvidenceResult, OrganelleHit
+
+    fa = tmp_path / "q.fa"
+    fa.write_text(">cat\n" + "ACGT" * 1000 + "\n")
+    hit = OrganelleHit("chrC", 1.0, 0.997, 4000 / 1000, True, 1.0, "complete",
+                       unit=OrganelleUnit(100, 1100, True, 0.99, 0.98, 0.996))
+    ev = ChainEvidenceResult(
+        qlens_from_paf={}, qr_union_bp={}, qr_matches={}, qr_alnlen={},
+        qr_gene_count={}, contig_total={}, contig_refs={}, qr_score_topk={},
+        qr_weight_all={}, qr_nchains_kept={}, best_ref={}, best_score={},
+        best_bp={}, second_ref={}, second_score={}, second_bp={},
+        chain_segments_rows=[], macro_block_rows=[], chain_summary_rows=[],
+        qr_ref_span_bp={}, qr_best_chain_ident={},
+    )
+    clfs = classify_all_contigs(
+        query_fasta=fa, query_lengths={"cat": 4000}, best_ref={}, chr_like_minlen=10**9,
+        ev=ev, ref_gene_counts={}, chrC_contig="cat", chrM_contig=None,
+        organelle_debris=set(), rdna_contigs=set(), cobionts={},
+        chromosome_debris=set(), other_debris=set(), add_subgenome_suffix=None,
+        organelle_hits={"cat": hit},
+    )
+    c = clfs[0]
+    assert c.organelle_unit == (100, 1100, True)
+    assert (c.organelle_ref_cov, c.organelle_len_ratio) == (0.99, 1.0)
+    assert c.classification_confidence == "high"

@@ -149,6 +149,7 @@ def write_contig_summary_tsv(
         "organelle_query_cov",
         "organelle_identity",
         "organelle_len_ratio",
+        "organelle_unit",
         "depth_mean",
         "depth_median",
         "depth_std",
@@ -318,6 +319,10 @@ def write_contig_summary_tsv(
             collinearity_score = f"{clf.collinearity_score:.3f}" if clf and clf.collinearity_score is not None else ""
             cobiont_score = f"{clf.cobiont_score:.3f}" if clf and clf.cobiont_score is not None else ""
             cobiont_coverage = f"{clf.cobiont_coverage:.3f}" if clf and clf.cobiont_coverage is not None else ""
+            unit = clf.organelle_unit if clf else None
+            organelle_unit = (
+                f"{unit[0] + 1}-{unit[1]}{'(-)' if unit[2] else '(+)'}" if unit else ""
+            )
             organelle_cols = [
                 f"{v:.4f}" if clf and v is not None else ""
                 for v in ((clf.organelle_ref_cov, clf.organelle_query_cov,
@@ -385,6 +390,7 @@ def write_contig_summary_tsv(
                         cobiont_score,
                         cobiont_coverage,
                         *organelle_cols,
+                        organelle_unit,
                         depth_mean,
                         depth_median,
                         depth_std,

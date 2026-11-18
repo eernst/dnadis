@@ -383,3 +383,19 @@ def test_own_assembly_copies_in_t2t_and_fragment_only_groups(tmp_path, monkeypat
         "chr2A_f3": seqs["hapF"],
     }
     assert [c.original_name for c in clfs if c.scaffold_exclusion] == ["hapT", "hapF"]
+
+
+def test_concatemer_unit_goes_to_organelles_and_whole_contig_to_debris(tmp_path):
+    unit = "ACGTTGCAAGGC" * 10
+    seq = "TT" + unit + unit + unit + "GG"
+    q = tmp_path / "q.fa"
+    q.write_text(f">cat\n{seq}\n>rv\n{seq}\n")
+    clfs = [
+        _clf("cat", "chrC", "organelle_complete", "chrC", organelle_unit=(2, 2 + len(unit), False)),
+        _clf("rv", "chrM", "organelle_complete", "chrM", organelle_unit=(2, 2 + len(unit), True)),
+    ]
+    paths = write_classified_fastas(q, clfs, {}, tmp_path / "asm")
+    assert read_fasta_sequences(paths["organelles"]) == {
+        "chrC": unit, "chrM": reverse_complement(unit)}
+    assert read_fasta_sequences(paths["debris"]) == {
+        "chrC_concatemer": seq, "chrM_concatemer": seq}

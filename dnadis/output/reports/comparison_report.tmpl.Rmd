@@ -3627,8 +3627,10 @@ arr_tbl %>%
 ```{r organelle_section, eval=(has_per_asm && any(comp_df$chrC_found != "no" | comp_df$chrM_found != "no", na.rm = TRUE))}
 require_columns(comp_df, c("chrC_ref_cov", "chrM_ref_cov"), "comparison_summary.tsv")
 # Extract organelle contigs (one complete contig, or a partial set) per assembly
+require_columns(all_summary_df, c("organelle_unit"), "contig_summary.tsv")
 org_df <- all_summary_df %>%
   filter(classification %in% c("organelle_complete", "organelle_partial")) %>%
+  mutate(length = organelle_unit_length(length, organelle_unit)) %>%
   mutate(
     org_type = case_when(
       grepl("chrC|Pt|chloro|plast", assigned_ref_id, ignore.case = TRUE) ~ "chrC",
