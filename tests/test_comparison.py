@@ -387,15 +387,20 @@ class TestBuildAssemblyResult:
         assert r.chrom_ref_coverage["chr1"].n_contigs == 1
 
     def test_organelle_detection(self, tmp_path):
-        """chrC_found and chrM_found reflect organelle detection."""
+        """chrC_found/chrM_found are yes (one contig), partial (a set) or no."""
         ev = _make_empty_ev()
         base = tmp_path
+        clfs = [_make_classification("ctg1", "unclassified", 10_000)]
+        for name in ("m1", "m2"):
+            c = _make_classification(name, "organelle_partial", 200_000)
+            c.assigned_ref_id = "chrM"
+            clfs.append(c)
         r = build_assembly_result(
             assembly_name="org",
             assembly_path=base / "org.fa",
             outprefix=base / "org" / "org",
-            classifications=[_make_classification("ctg1", "unclassified", 10_000)],
-            qry_lengths={"ctg1": 10_000},
+            classifications=clfs,
+            qry_lengths={"ctg1": 10_000, "m1": 200_000, "m2": 200_000},
             ref_lengths_norm={},
             ev=ev,
             cobionts_filtered={},
@@ -409,9 +414,33 @@ class TestBuildAssemblyResult:
             segments_tsv=base / "seg.tsv",
             evidence_tsv=base / "ev.tsv",
             macro_blocks_tsv=base / "mb.tsv",
+            organelle_ref_cov={"chrC": 0.99, "chrM": 0.93},
         )
-        assert r.chrC_found is True
-        assert r.chrM_found is False
+        assert (r.chrC_found, r.chrC_n_contigs, r.chrC_ref_cov) == ("yes", 1, 0.99)
+        assert (r.chrM_found, r.chrM_n_contigs, r.chrM_ref_cov) == ("partial", 2, 0.93)
+
+        r_none = build_assembly_result(
+            assembly_name="none",
+            assembly_path=base / "none.fa",
+            outprefix=base / "none" / "none",
+            classifications=clfs[:1],
+            qry_lengths={"ctg1": 10_000},
+            ref_lengths_norm={},
+            ev=ev,
+            cobionts_filtered={},
+            chrC_contig=None,
+            chrM_contig=None,
+            rdna_arrays=[],
+            depth_stats={},
+            chimera_primary_frac=0.8,
+            chimera_secondary_frac=0.2,
+            summary_tsv=base / "s.tsv",
+            segments_tsv=base / "seg.tsv",
+            evidence_tsv=base / "ev.tsv",
+            macro_blocks_tsv=base / "mb.tsv",
+            organelle_ref_cov={"chrM": 0.4},
+        )
+        assert (r_none.chrM_found, r_none.chrM_n_contigs, r_none.chrM_ref_cov) == ("no", 0, None)
 
     def test_cobiont_metrics(self, tmp_path):
         clfs = [

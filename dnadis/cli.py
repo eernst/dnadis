@@ -148,6 +148,7 @@ from dnadis.alignment.chain_parsing import (
     parse_paf_chain_evidence_and_segments,
 )
 from dnadis.detection.organelle import (
+    OrganelleThresholds,
     prepare_organelle_references,
     detect_organelles,
 )
@@ -183,7 +184,20 @@ from dnadis.output.tsv_output import (
     write_rdna_arrays_tsv,
 )
 from dnadis.output.plotting import run_assembly_report
-from dnadis.models import AssemblyResult, ReferenceContext
+from dnadis.models import AssemblyResult, OrganelleCalls, ReferenceContext
+
+
+def organelle_thresholds_from_args(args) -> OrganelleThresholds:
+    """Organelle call criteria from the command-line arguments."""
+    return OrganelleThresholds(
+        min_ref_cov=args.organelle_min_ref_cov,
+        min_query_cov=args.organelle_min_cov,
+        set_min_ref_cov=args.organelle_set_min_ref_cov,
+        len_ratio=(
+            ("chrC", args.chrC_min_len_ratio, args.chrC_max_len_ratio),
+            ("chrM", args.chrM_min_len_ratio, args.chrM_max_len_ratio),
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -888,11 +902,18 @@ def run_assembly(
         blast_query_fasta = qry
         blast_query_lengths = qry_lengths
 
+    # Resolve which contigs are circular (assembler evidence): organelle
+    # detection prefers circular candidates, and the classifier routes circular
+    # non-organelle/non-cobiont contigs to circular_element.
+    circular_contigs, circular_known = resolve_circular_contigs(
+        qry,
+        set(qry_lengths.keys()),
+        circular_fasta=Path(args.circular_fasta) if args.circular_fasta else None,
+        circular_list=Path(args.circular_list) if args.circular_list else None,
+    )
+
     # --- Phases 4-5: Organelle + rDNA detection (parallel in cluster mode) ---
-    chrC_contig: Optional[str] = None
-    chrM_contig: Optional[str] = None
-    organelle_debris: Set[str] = set()
-    organelle_hits: Dict = {}
+    organelle_calls = OrganelleCalls()
     rdna_contigs: Set[str] = set()
     rdna_hits: Dict = {}
     rdna_hit_intervals: Dict[str, list] = {}  # Raw BLAST intervals for consensus building
@@ -918,9 +939,8 @@ def run_assembly(
                 chrM_ref=ref_ctx.chrM_ref,
                 work_dir=work_dir / "organelles",
                 threads=_job_threads(blast_spec),
-                min_coverage=args.organelle_min_cov,
-                chrC_len_tol=getattr(args, 'chrC_len_tolerance', 0.05),
-                chrM_len_tol=getattr(args, 'chrM_len_tolerance', 0.20),
+                thresholds=organelle_thresholds_from_args(args),
+                circular_contigs=circular_contigs if circular_known else None,
                 resource_spec=blast_spec if use_cluster else None,
             )
     else:
@@ -945,10 +965,11 @@ def run_assembly(
 
     # Collect organelle results
     if organelle_future is not None:
-        chrC_contig, chrM_contig, organelle_debris, organelle_hits = organelle_future.result()
+        organelle_calls = organelle_future.result()
+    chrC_contig = organelle_calls.chrC_contig
+    chrM_contig = organelle_calls.chrM_contig
 
-    already_classified = {chrC_contig, chrM_contig} | organelle_debris
-    already_classified.discard(None)
+    already_classified = organelle_calls.organelle_contigs()
 
     # In local mode, submit rDNA now with accurate exclude_contigs
     if not use_cluster and not args.skip_rdna and ref_ctx.rdna_ref:
@@ -1143,14 +1164,6 @@ def run_assembly(
 
     # cobionts_filtered (coverage >= threshold) was computed before the debris
     # phase so low-coverage hits could be debris-screened; reuse it here.
-    # Resolve which contigs are circular (assembler evidence) so the classifier
-    # can route circular non-organelle/non-cobiont contigs to circular_element.
-    circular_contigs, circular_known = resolve_circular_contigs(
-        qry,
-        set(qry_lengths.keys()),
-        circular_fasta=Path(args.circular_fasta) if args.circular_fasta else None,
-        circular_list=Path(args.circular_list) if args.circular_list else None,
-    )
 
     classifications = classify_all_contigs(
         query_fasta=qry,
@@ -1161,7 +1174,8 @@ def run_assembly(
         ref_gene_counts=ref_gene_counts,
         chrC_contig=chrC_contig,
         chrM_contig=chrM_contig,
-        organelle_debris=organelle_debris,
+        organelle_debris=organelle_calls.debris,
+        organelle_partial=organelle_calls.partial,
         rdna_contigs=rdna_contigs,
         cobionts=cobionts_filtered,
         chromosome_debris=chromosome_debris,
@@ -1173,7 +1187,7 @@ def run_assembly(
         ref_gc_std=ref_gc_std,
         asm_gc_mean=asm_gc_mean,
         asm_gc_std=asm_gc_std,
-        organelle_hits=organelle_hits,
+        organelle_hits=organelle_calls.hits,
         rdna_hits=rdna_hits,
         chrom_debris_hits=chrom_debris_hits,
         other_debris_hits=other_debris_hits,
@@ -1360,8 +1374,7 @@ def run_assembly(
             # Only reclassify contigs that are not already chromosomes or organelles
             if rdna_loci:
                 from dnadis.detection.rdna_consensus import identify_rdna_contigs_from_loci
-                exclude_from_reclass = chromosome_contigs | {chrC_contig, chrM_contig} | organelle_debris
-                exclude_from_reclass.discard(None)
+                exclude_from_reclass = chromosome_contigs | organelle_calls.organelle_contigs()
 
                 # Array spans bridge hit-free stretches up to one repeat unit
                 # (e.g. IGS not aligned by the probe) and split at longer ones.
@@ -1378,7 +1391,8 @@ def run_assembly(
                 n_reclassified = 0
                 for clf in classifications:
                     if clf.original_name in new_rdna_contigs and clf.classification not in (
-                        "chrom_assigned", "organelle_complete", "organelle_debris", "rDNA",
+                        "chrom_assigned", "organelle_complete", "organelle_partial",
+                        "organelle_debris", "rDNA",
                     ):
                         old_class = clf.classification
                         clf.classification = "rDNA"
@@ -1696,6 +1710,7 @@ def run_assembly(
         compleasm_non_chrs=compleasm_non_chrs_result,
         synteny_mode=args.synteny_mode,
         qry_gaps=qry_gaps,
+        organelle_ref_cov=organelle_calls.set_ref_coverage,
     )
     result.rearrangements = rearrangement_calls
     result.rearrangements_tsv = rearrangements_tsv
@@ -2224,16 +2239,43 @@ def main():
     # =========================================================================
     org_thresh = p.add_argument_group("Thresholds: Organelle detection")
     org_thresh.add_argument(
-        "--organelle-min-cov", type=float, default=0.80,
-        help="Min query coverage for organelle candidate [0.80]",
+        "--organelle-min-ref-cov", type=float, default=0.95,
+        help="Min fraction of the chrC/chrM reference covered by one contig for "
+             "organelle_complete [0.95]",
     )
     org_thresh.add_argument(
-        "--chrC-len-tolerance", type=float, default=0.05,
-        help="Length tolerance for chrC candidates (fraction) [0.05]",
+        "--organelle-min-cov", type=float, default=0.90,
+        help="Min fraction of a contig aligned to the organelle reference for "
+             "organelle_complete and organelle_partial [0.90]",
     )
     org_thresh.add_argument(
-        "--chrM-len-tolerance", type=float, default=0.20,
-        help="Length tolerance for chrM candidates (fraction) [0.20]",
+        "--organelle-set-min-ref-cov", type=float, default=0.90,
+        help="When no single contig passes, min combined reference coverage of "
+             "the fewest contigs that together cover the organelle; they are "
+             "called organelle_partial [0.90]",
+    )
+    org_thresh.add_argument(
+        "--chrC-min-len-ratio", type=float, default=0.90,
+        help="Min contig/reference length ratio for a complete chrC. Below it a "
+             "contig can lack one inverted-repeat copy and still cover the "
+             "whole reference [0.90]",
+    )
+    org_thresh.add_argument(
+        "--chrC-max-len-ratio", type=float, default=1.50,
+        help="Max contig/reference length ratio for a complete chrC; longer "
+             "contigs are concatemers [1.50]",
+    )
+    org_thresh.add_argument(
+        "--chrM-min-len-ratio", type=float, default=0.50,
+        help="Min contig/reference length ratio for a complete chrM. Low "
+             "because a mitochondrial reference can carry repeat copies that "
+             "the assembly collapses [0.50]",
+    )
+    org_thresh.add_argument(
+        "--chrM-max-len-ratio", type=float, default=3.00,
+        help="Max contig/reference length ratio for a complete chrM. High "
+             "because mitogenome size varies within a species and an assembly "
+             "can walk its repeat-mediated recombination graph [3.00]",
     )
 
     # =========================================================================

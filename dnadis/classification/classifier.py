@@ -1478,7 +1478,7 @@ def _containment_fraction(
 
 
 # Categories eligible to be rerouted to circular_element.  This is an explicit
-# allowlist: a circular organelle (organelle_complete/organelle_debris), a
+# allowlist: a circular organelle (organelle_complete/_partial/_debris), a
 # circular bacterial cobiont, a circular rDNA array, and confident linear
 # chromosomes (chrom_assigned) are all preserved and never rerouted.
 _REROUTABLE_TO_CIRCULAR = frozenset({
@@ -1528,6 +1528,7 @@ def classify_all_contigs(
     other_debris: Set[str],
     add_subgenome_suffix: Optional[str],
     ref_norm_to_orig: Optional[Dict[str, str]] = None,
+    organelle_partial: Optional[Dict[str, List[str]]] = None,
     query_gc: Optional[Dict[str, float]] = None,
     ref_gc_mean: Optional[float] = None,
     ref_gc_std: Optional[float] = None,
@@ -1561,7 +1562,8 @@ def classify_all_contigs(
       assignment that are not redundant with a longer placed contig
     - chrom_unassigned: Chromosome-length contigs without synteny
     - organelle_complete: Complete organelle genomes (chrC, chrM)
-    - organelle_debris: Partial organelle sequences
+    - organelle_partial: Contigs that together cover an organelle genome
+    - organelle_debris: Other organelle sequences
     - rDNA: Ribosomal DNA repeat units
     - cobiont: Sequences from co-occurring organisms (symbionts, commensals, etc.)
     - circular_element: Circular non-organelle/non-cobiont contigs (eccDNA
@@ -1599,6 +1601,8 @@ def classify_all_contigs(
         chrC_contig: Chloroplast contig name
         chrM_contig: Mitochondrial contig name
         organelle_debris: Set of organelle debris contigs
+        organelle_partial: Organelle -> contigs that together cover it when
+            no single contig does (from OrganelleCalls.partial)
         rdna_contigs: Set of rDNA contigs
         cobionts: Dict of contig -> CobiontHit with taxid, name, coverage, score
         chromosome_debris: Set of chromosome debris contigs (from chr-vs-chr alignment)
@@ -1842,75 +1846,52 @@ def classify_all_contigs(
         classified_contigs.add(contig)
 
     # 2. Organelle contigs
-    # organelle_complete: High confidence - passed strict detection criteria
-    # (coverage >80%, length within tolerance)
-    if chrC_contig and chrC_contig not in classified_contigs:
-        hit = organelle_hits.get(chrC_contig) if organelle_hits else None
-        # High confidence if coverage >= 90%, medium if >= 80% (our threshold)
-        confidence = "high"
-        if hit and hit.coverage < 0.90:
-            confidence = "medium"
-        classifications.append(ContigClassification(
-            original_name=chrC_contig,
-            new_name="chrC",
-            classification="organelle_complete",
+    def _organelle_clf(contig: str, classification: str, new_name: str,
+                       confidence: str) -> ContigClassification:
+        hit = organelle_hits.get(contig) if organelle_hits else None
+        return ContigClassification(
+            original_name=contig,
+            new_name=new_name,
+            classification=classification,
             reversed=False,
             cobiont_taxid=None,
             cobiont_sci=None,
-            assigned_ref_id="chrC",
+            assigned_ref_id=hit.organelle_type if hit else (new_name.split("_")[0] or None),
             ref_gene_proportion=None,
-            contig_len=query_lengths.get(chrC_contig, 0),
-            gc_content=_get_gc(chrC_contig),
+            contig_len=query_lengths.get(contig, 0),
+            gc_content=_get_gc(contig),
             gc_deviation=None,  # Organelles have different GC, don't compare to nuclear
             classification_confidence=confidence,
-        ))
-        classified_contigs.add(chrC_contig)
+            organelle_ref_cov=hit.ref_coverage if hit else None,
+            organelle_query_cov=hit.coverage if hit else None,
+            organelle_identity=hit.identity if hit else None,
+            organelle_len_ratio=hit.length_ratio if hit else None,
+        )
 
-    if chrM_contig and chrM_contig not in classified_contigs:
-        hit = organelle_hits.get(chrM_contig) if organelle_hits else None
-        # High confidence if coverage >= 90%, medium if >= 80% (our threshold)
-        confidence = "high"
-        if hit and hit.coverage < 0.90:
-            confidence = "medium"
-        classifications.append(ContigClassification(
-            original_name=chrM_contig,
-            new_name="chrM",
-            classification="organelle_complete",
-            reversed=False,
-            cobiont_taxid=None,
-            cobiont_sci=None,
-            assigned_ref_id="chrM",
-            ref_gene_proportion=None,
-            contig_len=query_lengths.get(chrM_contig, 0),
-            gc_content=_get_gc(chrM_contig),
-            gc_deviation=None,  # Organelles have different GC, don't compare to nuclear
-            classification_confidence=confidence,
-        ))
-        classified_contigs.add(chrM_contig)
+    # organelle_complete: one contig covers the reference. High confidence when
+    # it covers >= 98% of it, medium otherwise.
+    for organelle, contig in (("chrC", chrC_contig), ("chrM", chrM_contig)):
+        if contig and contig not in classified_contigs:
+            hit = organelle_hits.get(contig) if organelle_hits else None
+            confidence = "high" if hit is None or hit.ref_coverage >= 0.98 else "medium"
+            classifications.append(_organelle_clf(contig, "organelle_complete", organelle, confidence))
+            classified_contigs.add(contig)
 
-    # Organelle debris: Medium confidence - partial organelle match
-    for contig in organelle_debris:
+    # organelle_partial: the fewest contigs that together cover the reference
+    # when no single contig does; named chrM_1, chrM_2, ... in selection order.
+    for organelle, members in sorted((organelle_partial or {}).items()):
+        for i, contig in enumerate(members, start=1):
+            if contig not in classified_contigs:
+                classifications.append(
+                    _organelle_clf(contig, "organelle_partial", f"{organelle}_{i}", "medium"))
+                classified_contigs.add(contig)
+
+    # Organelle debris: medium confidence, low if under 60% of the contig aligns
+    for contig in sorted(organelle_debris):
         if contig not in classified_contigs:
             hit = organelle_hits.get(contig) if organelle_hits else None
-            # Medium confidence by default (partial match)
-            # Low confidence if coverage is very low (<60%)
-            confidence = "medium"
-            if hit and hit.coverage < 0.60:
-                confidence = "low"
-            classifications.append(ContigClassification(
-                original_name=contig,
-                new_name="",
-                classification="organelle_debris",
-                reversed=False,
-                cobiont_taxid=None,
-                cobiont_sci=None,
-                assigned_ref_id=hit.organelle_type if hit else None,
-                ref_gene_proportion=None,
-                contig_len=query_lengths.get(contig, 0),
-                gc_content=_get_gc(contig),
-                gc_deviation=None,  # Organelles have different GC
-                classification_confidence=confidence,
-            ))
+            confidence = "low" if hit and hit.coverage < 0.60 else "medium"
+            classifications.append(_organelle_clf(contig, "organelle_debris", "", confidence))
             classified_contigs.add(contig)
 
     # 3. rDNA contigs
@@ -2266,7 +2247,7 @@ def assign_contig_names(
 
     With ``overwrite=False`` only empty names are filled. With
     ``overwrite=True`` every name is regenerated except the fixed
-    ``organelle_complete`` names (chrC/chrM); use this after a contig has been
+    organelle names (chrC/chrM, chrM_1...); use this after a contig has been
     moved out of a chromosome class, so it loses its chromosome-style name.
     """
     name_mapping = generate_contig_names(
@@ -2276,7 +2257,7 @@ def assign_contig_names(
         ref_norm_to_orig=ref_norm_to_orig,
     )
     for clf in classifications:
-        if overwrite and clf.classification != "organelle_complete":
+        if overwrite and clf.classification not in ("organelle_complete", "organelle_partial"):
             clf.new_name = ""
         if not clf.new_name:
             clf.new_name = name_mapping.get(clf.original_name, clf.original_name)

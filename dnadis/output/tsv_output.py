@@ -145,6 +145,10 @@ def write_contig_summary_tsv(
         "collinearity_score",
         "cobiont_score",
         "cobiont_coverage",
+        "organelle_ref_cov",
+        "organelle_query_cov",
+        "organelle_identity",
+        "organelle_len_ratio",
         "depth_mean",
         "depth_median",
         "depth_std",
@@ -216,7 +220,7 @@ def write_contig_summary_tsv(
             # For non-chromosome classifications (organelles, rDNA, cobionts, debris),
             # use the classification's assigned_ref_id instead of chain evidence
             clf_class = clf.classification if clf else "unclassified"
-            if clf and clf_class in ("organelle_complete", "organelle_debris", "rDNA",
+            if clf and clf_class in ("organelle_complete", "organelle_partial", "organelle_debris", "rDNA",
                                      "cobiont", "circular_element", "debris",
                                      "chrom_debris", "unclassified"):
                 assigned_ref_id = clf.assigned_ref_id if clf.assigned_ref_id else ""
@@ -232,7 +236,7 @@ def write_contig_summary_tsv(
 
             # For non-chromosome classifications (organelles, debris, etc.), don't require
             # chain evidence (bs > 0) - they have assigned_ref_id from their detection method
-            needs_chain_evidence = clf_class not in ("organelle_complete", "organelle_debris",
+            needs_chain_evidence = clf_class not in ("organelle_complete", "organelle_partial", "organelle_debris",
                                                       "rDNA", "cobiont", "circular_element",
                                                       "debris", "chrom_debris", "unclassified")
             if not assigned_ref_id or (needs_chain_evidence and bs <= 0.0):
@@ -314,6 +318,11 @@ def write_contig_summary_tsv(
             collinearity_score = f"{clf.collinearity_score:.3f}" if clf and clf.collinearity_score is not None else ""
             cobiont_score = f"{clf.cobiont_score:.3f}" if clf and clf.cobiont_score is not None else ""
             cobiont_coverage = f"{clf.cobiont_coverage:.3f}" if clf and clf.cobiont_coverage is not None else ""
+            organelle_cols = [
+                f"{v:.4f}" if clf and v is not None else ""
+                for v in ((clf.organelle_ref_cov, clf.organelle_query_cov,
+                           clf.organelle_identity, clf.organelle_len_ratio) if clf else (None,) * 4)
+            ]
 
             # Read depth columns
             depth_mean = f"{clf.depth_mean:.2f}" if clf and clf.depth_mean is not None else ""
@@ -375,6 +384,7 @@ def write_contig_summary_tsv(
                         collinearity_score,
                         cobiont_score,
                         cobiont_coverage,
+                        *organelle_cols,
                         depth_mean,
                         depth_median,
                         depth_std,

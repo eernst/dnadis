@@ -199,8 +199,15 @@ def write_filtered_fasta(
 
 
 def is_hifiasm_circular(contig_name: str) -> bool:
-    """Check if contig name matches hifiasm circular pattern (ptg*c)."""
-    return bool(re.match(r"ptg\d+c", contig_name))
+    """Check if a contig name has hifiasm's circular suffix.
+
+    Primary contigs and unitigs are named ``ptg000001c``/``utg000001c``;
+    haplotype-resolved contigs ``h1tg000001c``, ``h2tg000001c``.
+    """
+    return bool(_HIFIASM_CIRCULAR_RE.match(contig_name))
+
+
+_HIFIASM_CIRCULAR_RE = re.compile(r"(?:[pu]tg|h\d+tg)\d+c(?![0-9A-Za-z])")
 
 
 def _read_fasta_names(path: Path) -> Set[str]:

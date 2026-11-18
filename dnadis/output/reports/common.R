@@ -140,6 +140,7 @@ classification_colors <- c(
   "chrom_fragment"     = lighten(oi[5], amount = 0.25),
   "chrom_unassigned"   = oi[2],
   "organelle_complete" = oi[3],
+  "organelle_partial"  = lighten(oi[3], amount = 0.4),
   "organelle_debris"   = oi[4],
   "rDNA"               = oi[1],
   "cobiont"        = oi[7],
@@ -154,6 +155,7 @@ classification_labels <- c(
   "chrom_fragment"     = "Chromosome (fragment)",
   "chrom_unassigned"   = "Chromosome (unassigned)",
   "organelle_complete" = "Organelle (complete)",
+  "organelle_partial"  = "Organelle (partial set)",
   "organelle_debris"   = "Organelle (debris)",
   "rDNA"               = "rDNA",
   "cobiont"        = "Cobiont",
@@ -168,6 +170,7 @@ clf_labels_short <- c(
   "chrom_fragment"     = "Chr fragment",
   "chrom_unassigned"   = "Chr unassigned",
   "organelle_complete" = "Organelle",
+  "organelle_partial"  = "Organelle partial",
   "organelle_debris"   = "Organelle debris",
   "rDNA"               = "rDNA",
   "cobiont"        = "Cobiont",
@@ -179,7 +182,7 @@ clf_labels_short <- c(
 
 classification_levels <- c(
   "chrom_assigned", "chrom_fragment", "chrom_unassigned", "organelle_complete",
-  "organelle_debris", "rDNA", "cobiont", "circular_element", "chrom_debris",
+  "organelle_partial", "organelle_debris", "rDNA", "cobiont", "circular_element", "chrom_debris",
   "debris", "unclassified"
 )
 

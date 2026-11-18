@@ -63,7 +63,7 @@ These columns describe how much of a chromosome a contig represents, from refere
 | `seq_identity_vs_ref` | float | Best-chain alignment identity to the assigned reference chromosome (0.0-1.0) |
 | `has_5p_telomere` | yes/no | Telomere detected at the **start** (first `--telomere-window`, 10 kb) of the **raw input** contig: telomere repeat runs total ≥ `--telomere-min-bp` (200 bp). Set for `chrom_assigned` and `chrom_fragment` contigs |
 | `has_3p_telomere` | yes/no | Telomere detected at the **end** (last `--telomere-window`, 10 kb) of the **raw input** contig, by the same rule |
-| `is_circular` | yes/no | Contig is circular per assembler evidence (`--circular-fasta`/`--circular-list`, an auto-detected `*.circ.fasta*` sibling, or the hifiasm `ptg*c` name suffix). Blank when circularity could not be determined from any source. Drives the `circular_element` classification. |
+| `is_circular` | yes/no | Contig is circular per assembler evidence (`--circular-fasta`/`--circular-list`, an auto-detected `*.circ.fasta*` sibling, or the hifiasm `ptg*c`/`h1tg*c` circular name suffix). Blank when circularity could not be determined from any source. Drives the `circular_element` classification. |
 | `depth_ratio` | float | `depth_median` ÷ the chromosomal baseline (median `depth_median` of chromosome-scale `chrom_assigned` contigs). A copy-number signal: ≈1 for single-copy sequence, ≫1 for amplified sequence (e.g. an amplified circular element). Requires `--reads`. |
 | `redundancy_target` | string | Chromosome-length contig (new name) holding the region that best explains this contig, from an `asm20` alignment of every non-chromosome-length contig (organelle and rDNA contigs excluded) to the chromosome-length contigs. Empty for chromosome-length contigs and for contigs with no alignment. |
 | `redundancy_region` | string | That region on `redundancy_target`, `start-end` (1-based): the window of about 1.5× this contig's length holding the most of its aligned sequence. Dispersed repeat hits scatter across a chromosome and do not fill one window, so they give low coverage. |
@@ -108,6 +108,10 @@ These columns provide the underlying evidence used to determine classification c
 | `collinearity_score` | float | Fraction of aligned bp that maintains reference coordinate order (0.0-1.0). High values (>0.9) indicate well-ordered synteny; low values (<0.5) suggest rearrangements, chimeras, or misassembly. Only populated for `chrom_assigned` contigs with ≥2 chains. |
 | `cobiont_score` | float | Cobiont evidence strength (0.0-1.0); normalized centrifuger score |
 | `cobiont_coverage` | float | Fraction of contig covered by cobiont alignments (0.0-1.0) |
+| `organelle_ref_cov` | float | Organelle contigs: fraction of the chrC/chrM reference (`assigned_ref_id`) covered by this contig's BLAST alignments. Blank for other contigs |
+| `organelle_query_cov` | float | Organelle contigs: fraction of the contig aligned to that reference |
+| `organelle_identity` | float | Organelle contigs: alignment identity (matches / aligned length) |
+| `organelle_len_ratio` | float | Organelle contigs: contig length / reference length (above 1 for concatemers and long mitochondrial graph walks) |
 
 ### Read Depth Columns
 
@@ -197,11 +201,12 @@ These depth metrics are useful for:
 | `chrom_assigned` | Chromosome-length contig assigned to a reference chromosome |
 | `chrom_fragment` | Sub-chromosome-length contig with a passing reference assignment, representing unique chromosomal sequence too short to be called a full chromosome. Included with chromosomes in `chrs.fasta.gz`, the per-subgenome FASTAs, and the compleasm `chrs` subset. Distinguished from `chrom_debris` by reference-footprint containment: a fragment is reclassified as `chrom_debris` only if its reference footprint is largely contained (≥80%) within a longer placed contig's footprint AND it aligns at high identity (≥`--chr-debris-min-identity`). |
 | `chrom_unassigned` | Chromosome-length contig without reference assignment (novel or failed synteny gates) |
-| `organelle_complete` | Complete organelle genome (chrC or chrM) |
-| `organelle_debris` | Partial organelle sequence |
+| `organelle_complete` | One contig holds the organelle genome (chrC or chrM): it covers ≥ `--organelle-min-ref-cov` of the reference, ≥ `--organelle-min-cov` of the contig aligns, and its length is within the organelle's min/max ratio to the reference. Candidates are ranked circular first, then length closest to the reference; the others become `organelle_debris` |
+| `organelle_partial` | When no single contig passes, the fewest contigs (each ≥ `--organelle-min-cov` aligned) that together cover ≥ `--organelle-set-min-ref-cov` of the reference, named `chrM_1`, `chrM_2`, … in selection order. Written to `*.organelles.fasta.gz` |
+| `organelle_debris` | Other contig with ≥50% of its length aligned to an organelle reference; each contig is assigned to the organelle it matches best (aligned fraction × identity) |
 | `rDNA` | Contig made up mostly of 45S rDNA: seed BLAST coverage ≥ `--rdna-min-cov`, or rDNA array span coverage ≥ `--rdna-min-cov` after the consensus step (which can reroute `chrom_fragment`, debris and unclassified contigs). Named `contig_N`. If the contig also passed the synteny gate, `assigned_ref_id` is kept as a "homologous to chrN" annotation; this rests on rDNA similarity, which is shared between NORs. Written to `*.rdna.fasta.gz` and not scaffolded unless `--scaffold-rdna-contigs`. |
 | `cobiont` | Sequence from a co-occurring organism (symbiont, commensal, etc.) |
-| `circular_element` | Circular contig (per assembler evidence) that is not better explained as an organelle, rDNA, or cobiont — an extrachromosomal circular DNA (eccDNA) candidate rather than part of a linear nuclear chromosome. Rerouted from `chrom_fragment`/`chrom_debris`/`chrom_unassigned`/`debris`/`unclassified`; `assigned_ref_id` is kept as a "homologous to chrN" annotation. Written to `*.circles.fasta.gz` and excluded from `chrs.fasta.gz`, the compleasm `chrs` subset, phylogeny, and scaffolding. Circularity is resolved from `--circular-fasta`/`--circular-list`, an auto-detected `*.circ.fasta*` sibling of the query, or the hifiasm `ptg*c` name suffix. See `is_circular` / `depth_ratio` for the orthogonal circularity and amplification signals. |
+| `circular_element` | Circular contig (per assembler evidence) that is not better explained as an organelle, rDNA, or cobiont — an extrachromosomal circular DNA (eccDNA) candidate rather than part of a linear nuclear chromosome. Rerouted from `chrom_fragment`/`chrom_debris`/`chrom_unassigned`/`debris`/`unclassified`; `assigned_ref_id` is kept as a "homologous to chrN" annotation. Written to `*.circles.fasta.gz` and excluded from `chrs.fasta.gz`, the compleasm `chrs` subset, phylogeny, and scaffolding. Circularity is resolved from `--circular-fasta`/`--circular-list`, an auto-detected `*.circ.fasta*` sibling of the query, or the hifiasm `ptg*c`/`h1tg*c` circular name suffix. See `is_circular` / `depth_ratio` for the orthogonal circularity and amplification signals. |
 | `chrom_debris` | High-coverage (≥80%), high-identity (≥90%) duplicate of an assembled chromosome, or a sub-chromosome-length contig whose reference footprint is redundant with a longer placed contig |
 | `debris` | Assembly debris with reference homology (≥50% coverage) or protein hits (≥2) |
 | `unclassified` | Could not be classified (below chromosome-length threshold) |
@@ -233,8 +238,9 @@ The `classification_confidence` column indicates how certain the classification 
 | `chrom_assigned` | Gene proportion ≥20% AND GC deviation <2σ | Gene proportion 10-20% OR GC deviation 2-3σ | Gene proportion <10% OR GC deviation >3σ |
 | `chrom_fragment` | Identity ≥80% AND GC deviation <2σ | Identity 50-80% OR GC deviation 2-3σ | Identity <50% OR GC deviation >3σ |
 | `chrom_unassigned` | — | GC deviation <2σ | GC deviation ≥2σ |
-| `organelle_complete` | Coverage ≥90% | Coverage 80-90% | — |
-| `organelle_debris` | — | Coverage ≥60% | Coverage <60% |
+| `organelle_complete` | Reference coverage ≥98% | Reference coverage <98% | — |
+| `organelle_partial` | — | Always | — |
+| `organelle_debris` | — | Contig aligned ≥60% | Contig aligned <60% |
 | `rDNA` | Coverage ≥80% AND identity ≥95% | Coverage 50-80% OR identity <95% | Coverage <60% |
 | `cobiont` | Coverage ≥80% OR GC deviation >2σ | Coverage 50-80% | Coverage <50% |
 | `circular_element` | Always (assembler circularity is strong structural evidence) | — | — |
@@ -398,6 +404,8 @@ Multi-assembly runs only: one row per reference chromosome and assembly (`{prefi
 | 1 | string | Input sequence name (`original_name` in contig_summary.tsv) |
 | 2 | integer | Gap start, 0-based |
 | 3 | integer | Gap end, exclusive |
+
+Organelle columns: `chrC_found` / `chrM_found` are `yes` (one `organelle_complete` contig), `partial` (an `organelle_partial` set) or `no`; `chrC_n_contigs` / `chrM_n_contigs` count those contigs; `chrC_ref_cov` / `chrM_ref_cov` give the fraction of the reference they cover (combined, for a set). `organelle_bp` sums `organelle_complete`, `organelle_partial` and `organelle_debris`.
 
 ## cobionts.tsv
 
