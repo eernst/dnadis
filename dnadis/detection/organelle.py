@@ -169,8 +169,10 @@ class OrganelleThresholds:
 
     A contig is ``complete`` when it covers ``min_ref_cov`` of the reference
     (each contig position counted once for the ``one_to_one`` organelles),
-    at least ``min_query_cov`` of the contig aligns, and its length is within
-    the organelle's (min, max) ratio to the reference length.  When no contig
+    at least ``min_query_cov`` of the contig aligns, its length is within
+    the organelle's (min, max) ratio to the reference length, and, for the
+    ``closed_circle`` organelles, a linear contig's ends meet on the
+    reference.  When no contig
     passes, the fewest contigs (each at ``min_query_cov``) that together cover
     ``set_min_ref_cov`` of the reference are ``partial``.  Other contigs with
     at least ``debris_min_query_cov`` aligned are ``debris``.
@@ -191,6 +193,13 @@ class OrganelleThresholds:
     # collapse mitochondrial repeat copies the reference carries, and only
     # their cross-matches cover the reference.
     one_to_one: Tuple[str, ...] = ("chrC",)
+    # Organelles whose linear contigs are complete only when their two ends
+    # meet on the circular reference, at most max_end_gap bp apart
+    # (end_join()); contigs whose ends overlap are trimmed to one copy.  A
+    # plastome assembled linear can stop short of closing and still cover
+    # nearly all of the reference.  Not chrM (repeat-graph walks).
+    closed_circle: Tuple[str, ...] = ("chrC",)
+    max_end_gap: int = 1000
     len_ratio: Tuple[Tuple[str, float, float], ...] = (
         ("chrC", 0.90, 1.50),
         ("chrM", 0.50, 3.00),
@@ -202,6 +211,12 @@ class OrganelleThresholds:
                 return lo, hi
         return 0.0, float("inf")
 
+
+# Complete candidates whose length differs from the reference by the same
+# number of these steps (fraction of the reference length) are ranked by
+# their end overlap: one-copy units trimmed from contigs of one genome differ
+# by a few bp in the estimated period.
+_LENGTH_STEP = 0.005
 
 # A set member must add at least this fraction of the reference.
 _SET_MIN_GAIN = 0.01
@@ -318,6 +333,101 @@ def one_to_one_ref_intervals(
     return merge_intervals(r_taken)[0]
 
 
+# HSPs starting (ending) within this many bp of the contig's first (last)
+# aligned base are tested as its ends: a contig end inside an inverted repeat
+# aligns to both reference copies.
+_END_SLACK = 1000
+
+
+def end_join(
+    hsps: List[Tuple[int, int, float, int, int, int, bool]],
+    qlen: int,
+    ref_len: int,
+) -> Optional[Tuple[int, Optional[int]]]:
+    """How a linear contig's two ends meet on the circular reference.
+
+    Returns ``(gap, period)``.  ``gap`` is the reference sequence between the
+    reference position at the contig's end and the one at its start (read
+    in the contig's direction), less the contig sequence outside those end
+    HSPs, which may fill it (down to 0); negative when the ends overlap.
+    ``period`` is the contig length of one copy of the circle when the ends
+    overlap: the contig position, after its start, that aligns to the
+    reference position at its start (None if no HSP holds it).  Returns
+    None when no HSPs at the two ends align to the same strand.
+    """
+    if not hsps or qlen <= 0 or ref_len <= 0:
+        return None
+    first = min(h[0] for h in hsps)
+    last = max(h[1] for h in hsps)
+    starts = [h for h in hsps if h[0] <= first + _END_SLACK]
+    ends = [h for h in hsps if h[1] >= last - _END_SLACK]
+    best: Optional[Tuple[int, int, tuple, tuple]] = None
+    for a in starts:
+        for b in ends:
+            if a[6] != b[6]:
+                continue
+            # Plus strand: the contig continues past b's reference end to a's
+            # reference start.  Minus: past b's reference start (reading
+            # down) to a's reference end.  The contig sequence before a and
+            # after b may fill a gap, but does not make an overlap.
+            d = (a[4] - b[5]) if not a[6] else (b[4] - a[5])
+            d = (d + ref_len // 2) % ref_len - ref_len // 2
+            gap = d if d <= 0 else max(0, d - a[0] - (qlen - b[1]))
+            if best is None or abs(gap) < abs(best[0]):
+                best = (gap, d, a, b)
+    if best is None:
+        return None
+    gap, d, a, b = best
+    period = None
+    if gap < 0:
+        # Of the contig positions aligned to a's first reference base, the
+        # one closest to where the overlap puts the start of the next copy
+        expected = b[1] + d - a[0]
+        qs_a, _, _, _, ss_a, se_a, minus = a
+        x = se_a - 1 if minus else ss_a
+        for qs, qe, _, _, ss, se, m in hsps:
+            if m != minus or not ss <= x < se or qe <= qs:
+                continue
+            scale = (qe - qs) / (se - ss)
+            p = qs + round(((se - 1 - x) if minus else (x - ss)) * scale) - qs_a
+            if p > _END_SLACK and (period is None or abs(p - expected) < abs(period - expected)):
+                period = p
+    return gap, period
+
+
+def _window_stats(
+    hsps: List[Tuple[int, int, float, int, int, int, bool]],
+    start: int,
+    end: int,
+    ref_len: int,
+    one_to_one: bool,
+) -> Tuple[float, float, float, float]:
+    """Reference coverage, aligned fraction, plus-strand aligned fraction and
+    identity of the contig window [start, end), from HSPs clipped to it."""
+    q_iv, plus_iv, clipped = [], [], []
+    matches = aligned = 0.0
+    for qs, qe, ident, length, ss, se, minus in hsps:
+        a, b = max(qs, start), min(qe, end)
+        if a >= b:
+            continue
+        q_iv.append((a, b))
+        if minus:
+            r = (max(ss, se - (b - qs)), max(ss, se - (a - qs)))
+        else:
+            r = (min(se, ss + (a - qs)), min(se, ss + (b - qs)))
+            plus_iv.append((a, b))
+        clipped.append((a, b, ident, b - a, *r, minus))
+        matches += ident * (b - a)
+        aligned += b - a
+    if one_to_one:
+        ref_cov = _covered_bp(one_to_one_ref_intervals(clipped)) / ref_len
+    else:
+        ref_cov = _covered_bp([h[4:6] for h in clipped if h[4] < h[5]]) / ref_len
+    span = end - start
+    return (ref_cov, _covered_bp(q_iv) / span, _covered_bp(plus_iv) / span,
+            matches / aligned if aligned else 0.0)
+
+
 def call_organelles(
     pairs: Dict[Tuple[str, str], _PairEvidence],
     query_lengths: Dict[str, int],
@@ -332,8 +442,12 @@ def call_organelles(
     of the contig x identity): plastid-derived stretches of the mitogenome
     otherwise label chloroplast fragments as mitochondrial.
 
-    Complete candidates are ranked circular first, then by length closest to
-    the reference.  A candidate that is not selected stays organelle debris.
+    A linear contig of a ``closed_circle`` organelle (chrC) is complete only
+    when its ends meet on the reference (``end_join()``); one whose ends
+    overlap is trimmed to one copy (``hit.unit``).  Complete candidates are
+    ranked circular first, then by length (of the unit, if any) closest to
+    the reference, then by end overlap.  A candidate that is not selected
+    stays organelle debris.
 
     A sample can hold the organelle genome of another species (a second
     plant in the culture, contamination), and its contigs can pass the
@@ -395,16 +509,65 @@ def call_organelles(
         members = {c: (h, ev) for c, (o, h, ev) in best.items() if o == organelle}
         lo, hi = thresholds.len_bounds(organelle)
 
-        candidates = [
-            c for c, (h, _) in members.items()
-            if h.ref_coverage >= thresholds.min_ref_cov
-            and h.coverage >= thresholds.min_query_cov
-            and lo <= h.length_ratio <= hi
-        ]
+        # Linear contigs whose ends do not meet on the reference; contigs
+        # whose ends overlap get the one-copy unit
+        open_ends: Dict[str, Optional[int]] = {}
+        overlap: Dict[str, int] = {}
+        if organelle in thresholds.closed_circle:
+            for c, (h, ev) in members.items():
+                if c in circular:
+                    continue
+                join = end_join(ev.hsps, query_lengths[c], ref_len_of(c))
+                if join is None:
+                    open_ends[c] = None
+                    continue
+                gap, period = join
+                overlap[c] = max(0, -gap)
+                fits = (period is not None and period < query_lengths[c]
+                        and lo <= period / ref_len_of(c) <= hi)
+                # An overlap longer than the allowed gap must hold one copy:
+                # sequence at an end that aligns elsewhere (a divergent or
+                # chimeric piece) can mimic one
+                if gap > thresholds.max_end_gap or (gap < -thresholds.max_end_gap and not fits):
+                    open_ends[c] = gap
+                elif fits and h.length_ratio <= hi:
+                    ref_cov, query_cov, _, identity = _window_stats(
+                        ev.hsps, 0, period, ref_len_of(c), organelle in thresholds.one_to_one)
+                    h.unit = OrganelleUnit(0, period, False, ref_cov, query_cov, identity)
+
+        def passes(c: str) -> bool:
+            h = members[c][0]
+            ref_cov, query_cov, length = _effective(h, query_lengths[c])
+            return (ref_cov >= thresholds.min_ref_cov
+                    and query_cov >= thresholds.min_query_cov
+                    and lo <= length / ref_len_of(c) <= hi)
+
+        candidates = [c for c in members if passes(c) and c not in open_ends]
+        for c in sorted(set(open_ends) & {c for c in members if passes(c)}):
+            gap = open_ends[c]
+            logger.info(
+                f"{organelle}: {c} is not complete: " + (
+                    f"its ends align to opposite strands of {members[c][0].ref_name}"
+                    if gap is None else
+                    f"its ends are {gap:,} bp apart on {members[c][0].ref_name} "
+                    f"(> {thresholds.max_end_gap:,})" if gap > 0 else
+                    f"its ends overlap by {-gap:,} bp on {members[c][0].ref_name}, "
+                    f"but not by one copy")
+            )
+
+        def length_off(c: str) -> int:
+            return abs(_effective(members[c][0], query_lengths[c])[2] - ref_len_of(c))
+
+        # Circular first, then length closest to the reference (in steps, so
+        # that trimmed copies of one genome tie), then the least sequence
+        # repeated at the ends
         candidates.sort(key=lambda c: (
             c not in circular,
-            abs(query_lengths[c] - ref_len_of(c)),
-            -members[c][0].ref_coverage,
+            round(length_off(c) / (_LENGTH_STEP * ref_len_of(c))),
+            overlap.get(c, 0),
+            length_off(c),
+            -_effective(members[c][0], query_lengths[c])[0],
+            query_lengths[c],
             c,
         ))
         all_candidates = set(candidates)
@@ -496,6 +659,12 @@ def call_organelles(
                 f"{h.length_ratio:.2f}x {h.ref_name}, ref cov={h.ref_coverage:.3f}, "
                 f"query cov={h.coverage:.3f}, ident={h.identity:.4f}{margin})"
             )
+            if h.unit is not None and h.unit.start == 0 and h.length_ratio <= hi:
+                logger.info(
+                    f"{organelle}: {chosen} ends overlap by "
+                    f"{query_lengths[chosen] - h.unit.end:,} bp; writing 1-{h.unit.end:,} "
+                    f"as {organelle} (ref cov={h.unit.ref_coverage:.3f})"
+                )
         elif partial:
             logger.info(
                 f"No single {organelle} contig passes; {len(partial)} contigs together "
@@ -519,6 +688,14 @@ _PERIOD_ANCHORS = tuple(i / 50 for i in range(1, 50, 2))
 # head-to-head (palindromic) window is half minus strand.  Below 1 because an
 # inverted single-copy region (plastid flip-flop isomer) aligns minus.
 _UNIT_MIN_PLUS_COV = 0.80
+
+
+def _effective(hit: OrganelleHit, qlen: int) -> Tuple[float, float, int]:
+    """Reference coverage, aligned fraction and length of what is written as
+    the organelle: the unit when one was cut or trimmed, else the contig."""
+    if hit.unit is not None:
+        return hit.unit.ref_coverage, hit.unit.query_coverage, hit.unit.end - hit.unit.start
+    return hit.ref_coverage, hit.coverage, qlen
 
 
 def _cut_concatemer(members, ref_lengths, lo, hi, thresholds, circular, query_lengths, organelle,
@@ -628,31 +805,11 @@ def find_concatemer_unit(
         start, end = occ - x0, occ - x0 + period
         if start < 0 or end > qlen:
             continue
-        q_iv, r_iv, plus_iv, clipped = [], [], [], []
-        matches = aligned = 0.0
-        for qs, qe, ident, length, ss, se, minus in oriented:
-            a, b = max(qs, start), min(qe, end)
-            if a >= b:
-                continue
-            q_iv.append((a, b))
-            if minus:
-                r_iv.append((max(ss, se - (b - qs)), max(ss, se - (a - qs))))
-            else:
-                r_iv.append((min(se, ss + (a - qs)), min(se, ss + (b - qs))))
-                plus_iv.append((a, b))
-            clipped.append((a, b, ident, b - a, *r_iv[-1], minus))
-            matches += ident * (b - a)
-            aligned += b - a
-        if one_to_one:
-            ref_cov = _covered_bp(one_to_one_ref_intervals(clipped)) / ref_len
-        else:
-            ref_cov = _covered_bp([iv for iv in r_iv if iv[0] < iv[1]]) / ref_len
-        query_cov = _covered_bp(q_iv) / period
-        plus_cov = _covered_bp(plus_iv) / period
+        ref_cov, query_cov, plus_cov, identity = _window_stats(
+            oriented, start, end, ref_len, one_to_one)
         if (ref_cov < min_ref_cov or query_cov < min_query_cov
                 or plus_cov < _UNIT_MIN_PLUS_COV):
             continue
-        identity = matches / aligned if aligned else 0.0
         if reverse:
             start, end = qlen - end, qlen - start
         unit = OrganelleUnit(start, end, reverse, ref_cov, query_cov, identity)
@@ -918,7 +1075,8 @@ def repick_by_read_depth(
         new_hit.status = "complete"
         calls.debris.discard(new)
         setattr(calls, f"{organelle}_contig", new)
-        calls.set_ref_coverage[organelle] = new_hit.ref_coverage
+        calls.set_ref_coverage[organelle] = (
+            new_hit.unit.ref_coverage if new_hit.unit else new_hit.ref_coverage)
         calls.ref_name[organelle] = new_hit.ref_name
         swaps[organelle] = (current, new)
         logger.warning(

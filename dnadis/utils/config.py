@@ -118,6 +118,7 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
         "organelle_set_min_ref_cov": "organelle_set_min_ref_cov",
         "chrC_min_len_ratio": "chrC_min_len_ratio",
         "chrC_max_len_ratio": "chrC_max_len_ratio",
+        "chrC_max_end_gap": "chrC_max_end_gap",
         "chrM_min_len_ratio": "chrM_min_len_ratio",
         "chrM_max_len_ratio": "chrM_max_len_ratio",
         "organelle_same_genome_identity": "organelle_same_genome_identity",

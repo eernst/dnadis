@@ -1849,18 +1849,6 @@ def classify_all_contigs(
     def _organelle_clf(contig: str, classification: str, new_name: str,
                        confidence: str) -> ContigClassification:
         hit = organelle_hits.get(contig) if organelle_hits else None
-        unit = hit.unit if hit is not None and classification == "organelle_complete" else None
-        if unit is not None:
-            # Describe the unit written as the organelle, not the concatemer
-            qlen = query_lengths.get(contig, 0)
-            ref_len = qlen / hit.length_ratio if hit.length_ratio else 0
-            ref_cov, query_cov, identity = unit.ref_coverage, unit.query_coverage, unit.identity
-            len_ratio = (unit.end - unit.start) / ref_len if ref_len else None
-        elif hit is not None:
-            ref_cov, query_cov, identity, len_ratio = (
-                hit.ref_coverage, hit.coverage, hit.identity, hit.length_ratio)
-        else:
-            ref_cov = query_cov = identity = len_ratio = None
         return ContigClassification(
             original_name=contig,
             new_name=new_name,
@@ -1874,13 +1862,7 @@ def classify_all_contigs(
             gc_content=_get_gc(contig),
             gc_deviation=None,  # Organelles have different GC, don't compare to nuclear
             classification_confidence=confidence,
-            organelle_ref_cov=ref_cov,
-            organelle_query_cov=query_cov,
-            organelle_identity=identity,
-            organelle_len_ratio=len_ratio,
-            organelle_unit=(unit.start, unit.end, unit.reverse) if unit is not None else None,
-            organelle_ref=hit.ref_name if hit is not None else None,
-            organelle_ref_margin=hit.ref_margin if hit is not None else None,
+            **organelle_fields(hit, classification, query_lengths.get(contig, 0)),
         )
 
     # organelle_complete: one contig covers the reference. High confidence when
@@ -2260,6 +2242,32 @@ def organelle_complete_confidence(hit: Optional[OrganelleHit]) -> str:
     return "high" if ref_cov >= 0.98 else "medium"
 
 
+def organelle_fields(hit: Optional[OrganelleHit], classification: str,
+                     qlen: int) -> Dict[str, object]:
+    """``organelle_*`` ContigClassification fields of a contig.  For a
+    complete contig with a unit (cut from a concatemer or trimmed of
+    overlapping ends), they describe the unit written as the organelle."""
+    unit = hit.unit if hit is not None and classification == "organelle_complete" else None
+    if unit is not None:
+        ref_len = qlen / hit.length_ratio if hit.length_ratio else 0
+        ref_cov, query_cov, identity = unit.ref_coverage, unit.query_coverage, unit.identity
+        len_ratio = (unit.end - unit.start) / ref_len if ref_len else None
+    elif hit is not None:
+        ref_cov, query_cov, identity, len_ratio = (
+            hit.ref_coverage, hit.coverage, hit.identity, hit.length_ratio)
+    else:
+        ref_cov = query_cov = identity = len_ratio = None
+    return dict(
+        organelle_ref_cov=ref_cov,
+        organelle_query_cov=query_cov,
+        organelle_identity=identity,
+        organelle_len_ratio=len_ratio,
+        organelle_unit=(unit.start, unit.end, unit.reverse) if unit is not None else None,
+        organelle_ref=hit.ref_name if hit is not None else None,
+        organelle_ref_margin=hit.ref_margin if hit is not None else None,
+    )
+
+
 def apply_organelle_swaps(
     classifications: List[ContigClassification],
     swaps: Dict[str, Tuple[Optional[str], str]],
@@ -2279,11 +2287,17 @@ def apply_organelle_swaps(
             clf.classification = "organelle_complete"
             clf.new_name = organelle
             clf.classification_confidence = organelle_complete_confidence(organelle_hits.get(new))
+            for k, v in organelle_fields(organelle_hits.get(new), clf.classification,
+                                         clf.contig_len).items():
+                setattr(clf, k, v)
         clf = by_name.get(old) if old is not None else None
         if clf is not None:
             clf.classification = "organelle_debris"
             clf.new_name = ""
             clf.classification_confidence = "medium"
+            for k, v in organelle_fields(organelle_hits.get(old), clf.classification,
+                                         clf.contig_len).items():
+                setattr(clf, k, v)
 
 
 def assign_contig_names(
