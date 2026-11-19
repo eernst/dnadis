@@ -167,7 +167,8 @@ def prepare_organelle_references(
 class OrganelleThresholds:
     """Criteria for organelle calls (see ``call_organelles``).
 
-    A contig is ``complete`` when it covers ``min_ref_cov`` of the reference,
+    A contig is ``complete`` when it covers ``min_ref_cov`` of the reference
+    (each contig position counted once for the ``one_to_one`` organelles),
     at least ``min_query_cov`` of the contig aligns, and its length is within
     the organelle's (min, max) ratio to the reference length.  When no contig
     passes, the fewest contigs (each at ``min_query_cov``) that together cover
@@ -183,6 +184,13 @@ class OrganelleThresholds:
     # one unit.  Not chrM: a long mitochondrial contig is a walk through the
     # repeat-mediated recombination graph, not a tandem array.
     cut_units: Tuple[str, ...] = ("chrC",)
+    # Organelles whose reference coverage counts each contig position once
+    # (one_to_one_ref_intervals()).  A plastome's inverted repeats match both
+    # reference copies, so a contig with one IR copy partly missing still
+    # covers the whole reference by the union of HSPs.  Not chrM: assemblies
+    # collapse mitochondrial repeat copies the reference carries, and only
+    # their cross-matches cover the reference.
+    one_to_one: Tuple[str, ...] = ("chrC",)
     len_ratio: Tuple[Tuple[str, float, float], ...] = (
         ("chrC", 0.90, 1.50),
         ("chrM", 0.50, 3.00),
@@ -265,6 +273,51 @@ def _covered_bp(intervals: List[Tuple[int, int]]) -> int:
     return merge_intervals(intervals)[1] if intervals else 0
 
 
+def _subtract(iv: Tuple[int, int], taken: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
+    """Parts of half-open *iv* outside every interval in *taken*."""
+    parts = [iv]
+    for s, e in taken:
+        parts = [p for a, b in parts
+                 for p in ((a, min(b, s)), (max(a, e), b)) if p[0] < p[1]]
+    return parts
+
+
+def one_to_one_ref_intervals(
+    hsps: List[Tuple[int, int, float, int, int, int, bool]],
+) -> List[Tuple[int, int]]:
+    """Merged reference intervals with each query and reference position used once.
+
+    HSPs are taken longest first.  Each keeps only the part of its query
+    interval not yet taken, mapped to the reference (linearly, ignoring
+    indels), and of that only the reference not yet taken.  A repeat copy in
+    the contig thus covers one reference copy: the collinear HSP when it is
+    longer, else whichever cross-match comes first, leaving the other
+    reference copy to the contig's other repeat copy.
+    """
+    q_taken: List[Tuple[int, int]] = []
+    r_taken: List[Tuple[int, int]] = []
+    for qs, qe, _, length, ss, se, minus in sorted(hsps, key=lambda h: (-h[3], -h[2], h[0], h[4])):
+        if qe <= qs or se <= ss:
+            continue
+        scale = (se - ss) / (qe - qs)
+
+        def to_ref(a: int, b: int) -> Tuple[int, int]:
+            if minus:
+                return se - round((b - qs) * scale), se - round((a - qs) * scale)
+            return ss + round((a - qs) * scale), ss + round((b - qs) * scale)
+
+        def to_query(x: int, y: int) -> Tuple[int, int]:
+            if minus:
+                return qs + round((se - y) / scale), qs + round((se - x) / scale)
+            return qs + round((x - ss) / scale), qs + round((y - ss) / scale)
+
+        for a, b in _subtract((qs, qe), q_taken):
+            for x, y in _subtract(to_ref(a, b), r_taken):
+                r_taken.append((x, y))
+                q_taken.append(to_query(x, y))
+    return merge_intervals(r_taken)[0]
+
+
 def call_organelles(
     pairs: Dict[Tuple[str, str], _PairEvidence],
     query_lengths: Dict[str, int],
@@ -297,22 +350,27 @@ def call_organelles(
     # Best organelle reference (organelle and species) per contig.  With
     # several species' references for an organelle, the margin is the
     # contig's identity to its best one minus that to the next.
-    by_contig: Dict[str, List[Tuple[Tuple[float, float], OrganelleHit, _PairEvidence]]] = defaultdict(list)
+    # contig -> [(rank key, hit, evidence, covered reference intervals)]
+    by_contig: Dict[str, List[tuple]] = defaultdict(list)
     for (contig, ref_name), ev in pairs.items():
         ref_len = ref_lengths.get(ref_name, 0)
         qlen = query_lengths.get(contig, 0)
         if ref_len <= 0 or qlen <= 0:
             continue
+        ref_ivs = (one_to_one_ref_intervals(ev.hsps)
+                   if organelle_of_ref(ref_name) in thresholds.one_to_one
+                   else merge_intervals(ev.ref_intervals)[0])
         hit = OrganelleHit(
             organelle_type=organelle_of_ref(ref_name),
             coverage=_covered_bp(ev.query_intervals) / qlen,
             identity=(ev.matches / ev.aln_len) if ev.aln_len else 0.0,
             length_ratio=qlen / ref_len,
-            ref_coverage=_covered_bp(ev.ref_intervals) / ref_len,
+            ref_coverage=_covered_bp(ref_ivs) / ref_len,
             ref_name=ref_name,
         )
-        by_contig[contig].append(((hit.coverage * hit.identity, hit.ref_coverage), hit, ev))
+        by_contig[contig].append(((hit.coverage * hit.identity, hit.ref_coverage), hit, ev, ref_ivs))
     best: Dict[str, Tuple[str, OrganelleHit, _PairEvidence]] = {}
+    covered_ref: Dict[str, List[Tuple[int, int]]] = {}
     for contig, options in by_contig.items():
         # The organelle is the one matched best (aligned fraction x identity);
         # within it, the species reference with the highest identity over
@@ -320,13 +378,14 @@ def call_organelles(
         # and repeat cross-matches, and small differences in aligned fraction
         # would outweigh the 0.5-3 point identity differences between species.
         organelle = max(options, key=lambda o: (o[0], o[1].ref_name))[1].organelle_type
-        same = [(_best_hsp_identity(ev)[0], hit.coverage, hit.ref_name, hit, ev)
-                for _, hit, ev in options if hit.organelle_type == organelle]
+        same = [(_best_hsp_identity(ev)[0], hit.coverage, hit.ref_name, hit, ev, ivs)
+                for _, hit, ev, ivs in options if hit.organelle_type == organelle]
         same.sort(key=lambda o: o[:3], reverse=True)
-        _, _, _, hit, ev = same[0]
+        _, _, _, hit, ev, ivs = same[0]
         if len(same) > 1:
             hit.ref_margin = same[0][0] - same[1][0]
         best[contig] = (organelle, hit, ev)
+        covered_ref[contig] = ivs
 
     def ref_len_of(contig: str) -> int:
         return ref_lengths[best[contig][1].ref_name]
@@ -394,7 +453,7 @@ def call_organelles(
             # set is built within one reference; the one covering most wins.
             best_set: Tuple[List[str], float, str] = ([], 0.0, "")
             for ref_name in sorted({h.ref_name for h, _ in members.values()}):
-                eligible = {c: ev for c, (h, ev) in members.items()
+                eligible = {c: covered_ref[c] for c, (h, _) in members.items()
                             if h.ref_name == ref_name and h.coverage >= thresholds.min_query_cov}
                 found, cov = _greedy_organelle_set(
                     eligible, ref_lengths[ref_name], thresholds.set_min_ref_cov,
@@ -486,6 +545,7 @@ def _cut_concatemer(members, ref_lengths, lo, hi, thresholds, circular, query_le
         unit = find_concatemer_unit(
             ev.hsps, query_lengths[contig], ref_lengths[hit.ref_name], lo, hi,
             thresholds.min_ref_cov, thresholds.min_query_cov,
+            one_to_one=organelle in thresholds.one_to_one,
         )
         if unit is None:
             logger.info(
@@ -521,6 +581,7 @@ def find_concatemer_unit(
     max_len_ratio: float,
     min_ref_cov: float,
     min_query_cov: float,
+    one_to_one: bool = False,
 ) -> Optional[OrganelleUnit]:
     """One reference-length unit of a tandem concatemer, from its HSPs.
 
@@ -529,7 +590,9 @@ def find_concatemer_unit(
     of one period that start at the reference start are tested like a
     complete contig: reference coverage, aligned fraction, length ratio, and
     collinearity (most of the window on the main strand).  The window with
-    the highest reference coverage is returned.
+    the highest reference coverage is returned.  With *one_to_one*, the
+    window's reference coverage counts each window position once
+    (``one_to_one_ref_intervals()``).
     """
     if not hsps or qlen <= 0 or ref_len <= 0:
         return None
@@ -565,7 +628,7 @@ def find_concatemer_unit(
         start, end = occ - x0, occ - x0 + period
         if start < 0 or end > qlen:
             continue
-        q_iv, r_iv, plus_iv = [], [], []
+        q_iv, r_iv, plus_iv, clipped = [], [], [], []
         matches = aligned = 0.0
         for qs, qe, ident, length, ss, se, minus in oriented:
             a, b = max(qs, start), min(qe, end)
@@ -577,9 +640,13 @@ def find_concatemer_unit(
             else:
                 r_iv.append((min(se, ss + (a - qs)), min(se, ss + (b - qs))))
                 plus_iv.append((a, b))
+            clipped.append((a, b, ident, b - a, *r_iv[-1], minus))
             matches += ident * (b - a)
             aligned += b - a
-        ref_cov = _covered_bp([iv for iv in r_iv if iv[0] < iv[1]]) / ref_len
+        if one_to_one:
+            ref_cov = _covered_bp(one_to_one_ref_intervals(clipped)) / ref_len
+        else:
+            ref_cov = _covered_bp([iv for iv in r_iv if iv[0] < iv[1]]) / ref_len
         query_cov = _covered_bp(q_iv) / period
         plus_cov = _covered_bp(plus_iv) / period
         if (ref_cov < min_ref_cov or query_cov < min_query_cov
@@ -595,7 +662,7 @@ def find_concatemer_unit(
 
 
 def _greedy_organelle_set(
-    eligible: Dict[str, _PairEvidence],
+    eligible: Dict[str, List[Tuple[int, int]]],
     ref_len: int,
     min_ref_cov: float,
     circular: Set[str],
@@ -603,14 +670,15 @@ def _greedy_organelle_set(
 ) -> Tuple[List[str], float]:
     """Fewest contigs that together cover ``min_ref_cov`` of the reference.
 
-    Greedy set cover: each step adds the contig that covers the most reference
+    Greedy set cover over each contig's covered reference intervals
+    (*eligible*): each step adds the contig that covers the most reference
     bp not yet covered (ties: circular, then shorter).  Returns ([], coverage)
     when the threshold is not reached.
     """
     chosen: List[str] = []
     covered: List[Tuple[int, int]] = []
     covered_bp = 0
-    remaining = {c: merge_intervals(ev.ref_intervals)[0] for c, ev in eligible.items()}
+    remaining = {c: merge_intervals(ivs)[0] for c, ivs in eligible.items()}
     while remaining and covered_bp < min_ref_cov * ref_len:
         gains = {c: _new_bp(ivs, covered) for c, ivs in remaining.items()}
         pick = min(gains, key=lambda c: (-gains[c], c not in circular, query_lengths.get(c, 0), c))

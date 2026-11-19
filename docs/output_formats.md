@@ -108,7 +108,7 @@ These columns provide the underlying evidence used to determine classification c
 | `collinearity_score` | float | Fraction of aligned bp that maintains reference coordinate order (0.0-1.0). High values (>0.9) indicate well-ordered synteny; low values (<0.5) suggest rearrangements, chimeras, or misassembly. Only populated for `chrom_assigned` contigs with ≥2 chains. |
 | `cobiont_score` | float | Cobiont evidence strength (0.0-1.0); normalized centrifuger score |
 | `cobiont_coverage` | float | Fraction of contig covered by cobiont alignments (0.0-1.0) |
-| `organelle_ref_cov` | float | Organelle contigs: fraction of the chrC/chrM reference (`assigned_ref_id`) covered by this contig's BLAST alignments. Blank for other contigs |
+| `organelle_ref_cov` | float | Organelle contigs: fraction of the chrC/chrM reference (`assigned_ref_id`) covered by this contig's BLAST alignments (chrC: each contig position counted once, so an inverted-repeat copy covers one reference copy). Blank for other contigs |
 | `organelle_query_cov` | float | Organelle contigs: fraction of the contig aligned to that reference |
 | `organelle_identity` | float | Organelle contigs: alignment identity (matches / aligned length) |
 | `organelle_len_ratio` | float | Organelle contigs: contig length / reference length (above 1 for concatemers and long mitochondrial graph walks) |

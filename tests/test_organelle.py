@@ -13,6 +13,7 @@ import pytest
 from dnadis.detection.organelle import (
     OrganelleThresholds,
     call_organelles,
+    one_to_one_ref_intervals,
     parse_organelle_blast,
 )
 from dnadis.utils.sequence_utils import is_hifiasm_circular
@@ -100,14 +101,128 @@ class TestCompleteCalls:
         assert calls.chrC_contig is None
 
     def test_chrC_missing_inverted_repeat_is_below_length_floor(self, tmp_path):
-        """A contig lacking one inverted-repeat copy covers the whole reference
-        (its IR aligns to both copies) but is 0.85x long: not complete."""
+        """A contig lacking one inverted-repeat copy, 0.85x long: its IR
+        aligns to both reference copies, but counted once it covers 0.85."""
         L = int(0.85 * CHRC)
         rows = [_hsp("ptg5l", "chrC", 1, L, 1, L),
                 _hsp("ptg5l", "chrC", L - (CHRC - L) + 1, L, L + 1, CHRC)]
         calls = _call(tmp_path, rows, {"ptg5l": L})
-        assert calls.hits["ptg5l"].ref_coverage == pytest.approx(1.0)
+        assert calls.hits["ptg5l"].ref_coverage == pytest.approx(0.85, abs=1e-3)
         assert calls.chrC_contig is None
+
+
+# Plastome layout of the synthetic chrC reference (0-based, half-open):
+# LSC, IRb, SSC, IRa, with IRa the reverse complement of IRb.
+LSC_END, IRB_END, SSC_END = 82_000, 104_000, 118_000
+
+
+def _ira_of_irb(start, end):
+    """1-based subject start/end (minus strand) of IRa matching IRb[start:end]."""
+    return CHRC - (start - LSC_END), CHRC - (end - LSC_END) + 1
+
+
+class TestInvertedRepeats:
+    """chrC reference coverage counts each contig position once."""
+
+    def test_complete_plastome_with_ir_cross_matches(self, tmp_path):
+        rows = [
+            _hsp("cp1l", "chrC", 1, CHRC, 1, CHRC),
+            # Each IR copy of the contig also matches the other reference copy
+            _hsp("cp1l", "chrC", LSC_END + 1, IRB_END, CHRC, SSC_END + 1),
+            _hsp("cp1l", "chrC", SSC_END + 1, CHRC, IRB_END, LSC_END + 1),
+        ]
+        calls = _call(tmp_path, rows, {"cp1l": CHRC})
+        assert calls.chrC_contig == "cp1l"
+        assert calls.hits["cp1l"].ref_coverage == pytest.approx(1.0)
+
+    def test_cross_matches_taken_first_still_cover_both_copies(self, tmp_path):
+        """Collinear HSPs broken at the IR boundaries: the IR cross-matches
+        are as long and score higher, so they are taken first.  Each contig
+        IR copy still covers one reference copy."""
+        rows = [
+            _hsp("cp2l", "chrC", 1, LSC_END, 1, LSC_END),
+            _hsp("cp2l", "chrC", LSC_END + 1, IRB_END, LSC_END + 1, IRB_END),
+            _hsp("cp2l", "chrC", IRB_END + 1, SSC_END, IRB_END + 1, SSC_END),
+            _hsp("cp2l", "chrC", SSC_END + 1, CHRC, SSC_END + 1, CHRC),
+            _hsp("cp2l", "chrC", LSC_END + 1, IRB_END, CHRC, SSC_END + 1, pident=99.95),
+            _hsp("cp2l", "chrC", SSC_END + 1, CHRC, IRB_END, LSC_END + 1, pident=99.95),
+        ]
+        calls = _call(tmp_path, rows, {"cp2l": CHRC})
+        assert calls.chrC_contig == "cp2l"
+        assert calls.hits["cp2l"].ref_coverage == pytest.approx(1.0)
+
+    def test_linear_contig_with_ir_copy_partly_missing(self, tmp_path):
+        """Contig = the last 8.5 kb of IRa, then LSC + IRb + SSC + 1.7 kb of
+        IRa: 0.92x the reference, inside the length window.  The union of
+        HSPs covers the whole reference (IRb matches IRa); counted once,
+        12.3 kb of IRa is missing and the contig is not complete.  At 0.92
+        coverage it is a one-contig partial set."""
+        tail = 8_500           # contig 1-8500 = ref IRa 131501-140000
+        head = SSC_END + 1_700  # contig 8501-.. = ref 1-119700
+        L = tail + head
+        rows = [
+            _hsp("ptg37l", "chrC", tail + 1, L, 1, head),
+            _hsp("ptg37l", "chrC", 1, tail, CHRC - tail + 1, CHRC),
+            # Cross-matches of each IR stretch to the other reference copy
+            _hsp("ptg37l", "chrC", 1, tail, LSC_END + tail, LSC_END + 1),
+            _hsp("ptg37l", "chrC", tail + LSC_END + 1, tail + IRB_END,
+                 *_ira_of_irb(LSC_END + 1, IRB_END)),
+            _hsp("ptg37l", "chrC", tail + SSC_END + 1, L, IRB_END, IRB_END - 1_700 + 1),
+        ]
+        calls = _call(tmp_path, rows, {"ptg37l": L})
+        hit = calls.hits["ptg37l"]
+        assert 0.90 <= hit.length_ratio <= 1.50
+        assert hit.ref_coverage == pytest.approx(L / CHRC, abs=1e-3)
+        assert calls.chrC_contig is None
+        assert calls.partial["chrC"] == ["ptg37l"]
+
+    def test_full_length_candidate_wins_over_contig_missing_ir(self, tmp_path):
+        tail, head = 8_500, SSC_END + 1_700
+        short = tail + head
+        rows = [
+            _hsp("short1l", "chrC", tail + 1, short, 1, head),
+            _hsp("short1l", "chrC", 1, tail, CHRC - tail + 1, CHRC),
+            _hsp("short1l", "chrC", tail + LSC_END + 1, tail + IRB_END,
+                 *_ira_of_irb(LSC_END + 1, IRB_END)),
+        ]
+        # Linear plastome with 13 kb of end overlap (1.09x)
+        full = CHRC + 13_000
+        rows += [_hsp("full2l", "chrC", 1, CHRC, 1, CHRC),
+                 _hsp("full2l", "chrC", CHRC + 1, full, 1, 13_000)]
+        calls = _call(tmp_path, rows, {"short1l": short, "full2l": full})
+        assert calls.chrC_contig == "full2l"
+
+    def test_partial_set_counts_ir_once(self, tmp_path):
+        """LSC+IRb and SSC contigs: the union covers IRa through the IRb
+        cross-match, but counted once they cover 0.84 (< 0.90): no set."""
+        rows = [
+            _hsp("a1l", "chrC", 1, IRB_END, 1, IRB_END),
+            _hsp("a1l", "chrC", LSC_END + 1, IRB_END, *_ira_of_irb(LSC_END + 1, IRB_END)),
+            _hsp("b2l", "chrC", 1, SSC_END - IRB_END, IRB_END + 1, SSC_END),
+        ]
+        calls = _call(tmp_path, rows, {"a1l": IRB_END, "b2l": SSC_END - IRB_END})
+        assert "chrC" not in calls.partial
+
+    def test_chrM_keeps_union_coverage(self, tmp_path):
+        """Mitochondrial repeat copies collapsed in the assembly cover the
+        reference only through cross-matches: chrM is not counted once."""
+        L = int(0.66 * CHRM)
+        rows = [_hsp("m1c", "chrM", 1, L, 1, L),
+                _hsp("m1c", "chrM", 1, CHRM - L, L + 1, CHRM)]
+        calls = _call(tmp_path, rows, {"m1c": L})
+        assert calls.hits["m1c"].ref_coverage == pytest.approx(1.0)
+
+
+def test_one_to_one_ref_intervals_trims_overlaps():
+    hsps = [
+        (0, 100, 0.999, 100, 1000, 1100, False),
+        # Overlaps the first on the query: only query 100-150 is new, which
+        # is reference 2000-2050 on the minus strand
+        (50, 150, 0.999, 100, 2000, 2100, True),
+        # Reference already covered by the first HSP
+        (300, 400, 0.999, 100, 1000, 1100, False),
+    ]
+    assert one_to_one_ref_intervals(hsps) == [(1000, 1100), (2000, 2050)]
 
 
 class TestConcatemers:
