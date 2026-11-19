@@ -153,6 +153,20 @@ CONFIG_SCHEMA: Dict[str, Dict[str, str]] = {
         "telomere_min_bp": "telomere_min_bp",
         "subgenome_k": "subgenome_k",
     },
+    "rearrangements": {
+        "rearrangement_threshold": "rearrangement_threshold",
+        "rearrangement_density_frac": "rearrangement_density_frac",
+    },
+    "fusion_evidence": {
+        "skip_fusion_evidence": "skip_fusion_evidence",
+        "fusion_min_frac": "fusion_min_frac",
+        "fusion_junction_flank": "fusion_junction_flank",
+        "fusion_depth_drop_ratio": "fusion_depth_drop_ratio",
+        "fusion_depth_spike_ratio": "fusion_depth_spike_ratio",
+        "fusion_min_evidence_depth": "fusion_min_evidence_depth",
+        "fusion_max_junction_gap": "fusion_max_junction_gap",
+        "fusion_split_reads": "fusion_split_reads",
+    },
     "scaffolding": {
         "scaffold": "scaffold",
         "scaffold_gap_size": "scaffold_gap_size",

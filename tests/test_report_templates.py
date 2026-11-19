@@ -212,29 +212,77 @@ def test_templates_declare_output_schema():
         assert refresh_reports.output_schema(template.read_text()) >= 1, template.name
 
 
+def test_assembly_report_requires_columns_dnadis_writes(tmp_path):
+    """Columns the assembly report requires from rearrangements.tsv are ones
+    write_rearrangements_tsv() writes, even with no calls."""
+    from dnadis.output.tsv_output import write_rearrangements_tsv
+
+    text = (REPORTS_DIR / "assembly_report.tmpl.Rmd").read_text()
+    calls = re.findall(r'require_columns\(\s*rearr_df\s*,\s*c\(([^)]*)\)', text)
+    assert calls, "assembly report does not check rearrangements.tsv columns"
+    required = {c for call in calls for c in re.findall(r'"([^"]+)"', call)}
+
+    out = tmp_path / "rearrangements.tsv"
+    write_rearrangements_tsv(out, [])
+    header = out.read_text().splitlines()[0].split("\t")
+    assert required <= set(header), required - set(header)
+
+
 def test_refresh_skips_reports_with_older_outputs(tmp_path, capsys):
-    """A report generated before the template's output schema is left alone."""
+    """A report generated before the template's output schema is left alone,
+    unless the input the newer schema versions changed has no rows here."""
     import refresh_reports
 
     template_dir = tmp_path / "templates"
     template_dir.mkdir()
     (template_dir / "assembly_report.tmpl.Rmd").write_text(
-        "params:\n  summary_tsv: \"__SUMMARY__\"\n  output_schema: 2\n")
+        "params:\n  summary_tsv: \"__SUMMARY__\"\n"
+        "  rearrangements_tsv: \"__REARRANGEMENTS__\"\n  output_schema: 5\n")
     run_dir = tmp_path / "run"
     run_dir.mkdir()
+    rearr = run_dir / "asm.rearrangements.tsv"
+    rearr.write_text("contig\trearrangement_type\nc1\tfusion\n")
     old = run_dir / "asm.assembly_report.Rmd"
-    old_text = "params:\n  summary_tsv: \"/x/asm.contig_summary.tsv\"\n  output_schema: 1\n"
-    old.write_text(old_text)
 
-    result = refresh_reports.refresh_script(
-        "assembly_report", old, template_dir, run_dir / "asm")
-    assert result is None
-    assert old.read_text() == old_text
+    def generated(schema):
+        return ("params:\n  summary_tsv: \"/x/asm.contig_summary.tsv\"\n"
+                f"  rearrangements_tsv: \"\"\n  output_schema: {schema}\n")
+
+    def refresh():
+        return refresh_reports.refresh_script(
+            "assembly_report", old, template_dir, run_dir / "asm")
+
+    # Schema 4 -> 5 changed rearrangements.tsv, which has rows here.
+    old.write_text(generated(4))
+    assert refresh() is None
+    assert old.read_text() == generated(4)
     assert "Rerun dnadis" in capsys.readouterr().err
 
-    old.write_text(old_text.replace("output_schema: 1", "output_schema: 2"))
-    assert refresh_reports.refresh_script(
-        "assembly_report", old, template_dir, run_dir / "asm") is not None
+    # Schema 3 -> 5 also spans a change to inputs every report reads.
+    old.write_text(generated(3))
+    rearr.unlink()
+    assert refresh() is None
+
+    # Without rearrangements, the schema 5 change does not apply.
+    old.write_text(generated(4))
+    assert refresh() is True
+    rearr.write_text("contig\trearrangement_type\n")
+    old.write_text(generated(4))
+    assert refresh() is True
+
+    old.write_text(generated(5))
+    assert refresh() is not None
+
+
+def test_schema_inputs_cover_every_template_version():
+    import refresh_reports
+
+    for template in TEMPLATES:
+        need = refresh_reports.output_schema(template.read_text())
+        versions = refresh_reports.SCHEMA_INPUTS.get(template.name, {})
+        assert set(versions) == set(range(1, need + 1)), template.name
+        for placeholder in versions.values():
+            assert placeholder is None or placeholder in template.read_text()
 
 
 def test_refresh_prefers_current_agp_name(tmp_path):
