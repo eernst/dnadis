@@ -113,10 +113,14 @@ def write_classified_fastas(
             out_seqs[clf.new_name] = orig_seq
 
         if category == "debris":
-            # The whole concatemer an organelle unit was cut from
+            # The whole contig an organelle unit was cut from: a concatemer
+            # (two or more copies), or a contig whose ends overlap
             for clf in classifications:
-                if clf.organelle_unit is not None and sequences.get(clf.original_name):
-                    out_seqs[f"{clf.new_name}_concatemer"] = sequences[clf.original_name]
+                whole = sequences.get(clf.original_name) if clf.organelle_unit else None
+                if whole:
+                    start, end, _ = clf.organelle_unit
+                    suffix = "concatemer" if len(whole) >= 2 * (end - start) else "untrimmed"
+                    out_seqs[f"{clf.new_name}_{suffix}"] = whole
 
         sorted_seqs = dict(sorted(out_seqs.items(), key=lambda x: sort_key(x[0])))
         write_fasta_if_changed(sorted_seqs, output_path, threads=threads)

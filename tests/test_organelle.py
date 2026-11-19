@@ -250,23 +250,52 @@ class TestContigEnds:
         assert _call(tmp_path, rows, {"near1l": L}).chrC_contig == "near1l"
 
     def test_unaligned_end_sequence_fills_the_gap(self, tmp_path):
-        """3 kb of divergent sequence at the contig start, where the
-        reference has 3 kb the contig does not align to."""
-        rows = [_hsp("div1l", "chrC", 3_001, CHRC, 3_001, CHRC)]
-        assert end_join(_hsps(rows), CHRC, CHRC)[0] == 0
+        """1.5 kb of divergent sequence at the contig start, where the
+        reference has 1.5 kb the contig does not align to: 1 kb of it fills
+        the gap, leaving 500 bp."""
+        rows = [_hsp("div1l", "chrC", 1_501, CHRC, 1_501, CHRC)]
+        assert end_join(_hsps(rows), CHRC, CHRC)[0] == 500
         assert _call(tmp_path, rows, {"div1l": CHRC}).chrC_contig == "div1l"
+
+    def test_chimeric_end_does_not_fill_the_gap(self, tmp_path):
+        """12 kb of reference missing between the ends, and 12 kb of
+        unaligned (nuclear) sequence at one end: still open."""
+        L = CHRC - 12_000 + 12_000
+        rows = [_hsp("chi1l", "chrC", 1, CHRC - 12_000, 12_001, CHRC)]
+        assert end_join(_hsps(rows), L, CHRC)[0] == 11_000
+        assert _call(tmp_path, rows, {"chi1l": L}).chrC_contig is None
+
+    def test_short_end_hsp_does_not_close_an_open_contig(self, tmp_path):
+        """A 300 bp repeat at the contig end aligning next to where the
+        contig starts does not close a contig missing 6 kb."""
+        L = CHRC - 6_000 + 300
+        rows = [_hsp("rep1l", "chrC", 1, CHRC - 6_000, 1, CHRC - 6_000),
+                _hsp("rep1l", "chrC", CHRC - 6_000 + 1, L, CHRC - 300 + 1, CHRC)]
+        assert end_join(_hsps(rows), L, CHRC)[0] == 6_000 - 300
+        assert _call(tmp_path, rows, {"rep1l": L}).chrC_contig is None
 
     def test_overlapping_ends_trimmed_on_minus_strand(self, tmp_path):
         L = CHRC + 12_000
         rows = [_hsp("ovl1l", "chrC", 1, CHRC, CHRC, 1),
                 _hsp("ovl1l", "chrC", CHRC + 1, L, CHRC, CHRC - 12_000 + 1)]
-        assert end_join(_hsps(rows), L, CHRC) == (-12_000, CHRC)
+        assert end_join(_hsps(rows), L, CHRC) == (-12_000, (0, CHRC))
         calls = _call(tmp_path, rows, {"ovl1l": L})
         assert calls.chrC_contig == "ovl1l"
         unit = calls.hits["ovl1l"].unit
-        assert (unit.start, unit.end) == (0, CHRC)
+        assert (unit.start, unit.end, unit.reverse) == (0, CHRC, True)
         assert unit.ref_coverage == pytest.approx(1.0)
         assert calls.set_ref_coverage["chrC"] == pytest.approx(1.0)
+
+    def test_copy_starts_after_unaligned_sequence(self, tmp_path):
+        """1.5 kb of unaligned sequence before the first HSP: the copy
+        starts at the first aligned base, not at the contig start."""
+        L = 1_500 + CHRC + 12_000
+        rows = [_hsp("pad1l", "chrC", 1_501, 1_500 + CHRC, 1, CHRC),
+                _hsp("pad1l", "chrC", 1_501 + CHRC, L, 1, 12_000)]
+        assert end_join(_hsps(rows), L, CHRC) == (-12_000, (1_500, 1_500 + CHRC))
+        calls = _call(tmp_path, rows, {"pad1l": L})
+        assert calls.chrC_contig == "pad1l"
+        assert calls.hits["pad1l"].unit.ref_coverage == pytest.approx(1.0)
 
     def test_end_piece_aligning_elsewhere_is_not_an_overlap(self, tmp_path):
         """la0077-like: an unclosed contig (ref 7001-140000) whose first 2 kb
