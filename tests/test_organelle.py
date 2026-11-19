@@ -13,6 +13,7 @@ import pytest
 from dnadis.detection.organelle import (
     OrganelleThresholds,
     call_organelles,
+    end_join,
     one_to_one_ref_intervals,
     parse_organelle_blast,
 )
@@ -191,6 +192,8 @@ class TestInvertedRepeats:
                  _hsp("full2l", "chrC", CHRC + 1, full, 1, 13_000)]
         calls = _call(tmp_path, rows, {"short1l": short, "full2l": full})
         assert calls.chrC_contig == "full2l"
+        unit = calls.hits["full2l"].unit
+        assert (unit.start, unit.end, unit.reverse) == (0, CHRC, False)
 
     def test_partial_set_counts_ir_once(self, tmp_path):
         """LSC+IRb and SSC contigs: the union covers IRa through the IRb
@@ -211,6 +214,106 @@ class TestInvertedRepeats:
                 _hsp("m1c", "chrM", 1, CHRM - L, L + 1, CHRM)]
         calls = _call(tmp_path, rows, {"m1c": L})
         assert calls.hits["m1c"].ref_coverage == pytest.approx(1.0)
+
+
+class TestContigEnds:
+    """A linear chrC contig is complete only when its ends meet on the
+    reference; overlapping ends are trimmed to one copy."""
+
+    def test_unclosed_contig_is_not_complete(self, tmp_path):
+        """Contig = ref 5001-140000: 0.964x long and covering 0.964 of the
+        reference, but its ends are 5 kb apart."""
+        L = CHRC - 5_000
+        rows = [_hsp("open1l", "chrC", 1, L, 5_001, CHRC)]
+        calls = _call(tmp_path, rows, {"open1l": L})
+        assert calls.hits["open1l"].ref_coverage == pytest.approx(0.964, abs=1e-3)
+        assert calls.chrC_contig is None
+        assert calls.partial["chrC"] == ["open1l"]
+        # A circular contig is closed by the assembler; a 5 kb gap is
+        # within a larger --chrC-max-end-gap
+        assert _call(tmp_path, rows, {"open1l": L}, circular={"open1l"}).chrC_contig == "open1l"
+        assert _call(tmp_path, rows, {"open1l": L}, max_end_gap=5_000).chrC_contig == "open1l"
+
+    def test_unclosed_minus_strand_contig(self, tmp_path):
+        """sc566-like: the contig reads the reference backwards from 82 kb
+        through the IRa, the SSC and part of the IRb, missing ref 82-88 kb."""
+        L = CHRC - 6_000
+        rows = [_hsp("rev1l", "chrC", 1, LSC_END, LSC_END, 1),
+                _hsp("rev1l", "chrC", LSC_END + 1, L, CHRC, LSC_END + 6_001)]
+        calls = _call(tmp_path, rows, {"rev1l": L})
+        assert end_join(_hsps(rows), L, CHRC)[0] == 6_000
+        assert calls.chrC_contig is None
+
+    def test_small_gap_is_closed(self, tmp_path):
+        L = CHRC - 600
+        rows = [_hsp("near1l", "chrC", 1, L, 601, CHRC)]
+        assert _call(tmp_path, rows, {"near1l": L}).chrC_contig == "near1l"
+
+    def test_unaligned_end_sequence_fills_the_gap(self, tmp_path):
+        """3 kb of divergent sequence at the contig start, where the
+        reference has 3 kb the contig does not align to."""
+        rows = [_hsp("div1l", "chrC", 3_001, CHRC, 3_001, CHRC)]
+        assert end_join(_hsps(rows), CHRC, CHRC)[0] == 0
+        assert _call(tmp_path, rows, {"div1l": CHRC}).chrC_contig == "div1l"
+
+    def test_overlapping_ends_trimmed_on_minus_strand(self, tmp_path):
+        L = CHRC + 12_000
+        rows = [_hsp("ovl1l", "chrC", 1, CHRC, CHRC, 1),
+                _hsp("ovl1l", "chrC", CHRC + 1, L, CHRC, CHRC - 12_000 + 1)]
+        assert end_join(_hsps(rows), L, CHRC) == (-12_000, CHRC)
+        calls = _call(tmp_path, rows, {"ovl1l": L})
+        assert calls.chrC_contig == "ovl1l"
+        unit = calls.hits["ovl1l"].unit
+        assert (unit.start, unit.end) == (0, CHRC)
+        assert unit.ref_coverage == pytest.approx(1.0)
+        assert calls.set_ref_coverage["chrC"] == pytest.approx(1.0)
+
+    def test_end_piece_aligning_elsewhere_is_not_an_overlap(self, tmp_path):
+        """la0077-like: an unclosed contig (ref 7001-140000) whose first 2 kb
+        align 50 kb away.  The ends look 48 kb overlapped, but no one-copy
+        unit fits."""
+        L = 2_000 + CHRC - 7_000
+        rows = [_hsp("chim1l", "chrC", 1, 2_000, 50_001, 52_000, pident=94.0),
+                _hsp("chim1l", "chrC", 2_001, L, 7_001, CHRC)]
+        calls = _call(tmp_path, rows, {"chim1l": L})
+        assert calls.chrC_contig is None
+
+    def test_ends_on_opposite_strands_are_not_closed(self, tmp_path):
+        L = CHRC
+        rows = [_hsp("inv1l", "chrC", 1, 70_000, 1, 70_000),
+                _hsp("inv1l", "chrC", 70_001, L, CHRC, 70_001)]
+        assert end_join(_hsps(rows), L, CHRC) is None
+        assert _call(tmp_path, rows, {"inv1l": L}).chrC_contig is None
+
+    def test_least_overlap_wins_among_trimmed_copies(self, tmp_path):
+        """Both trim to one copy; the contig with the smaller overlap wins
+        even though its trimmed length is a few bp further from the
+        reference."""
+        rows, lengths = [], {}
+        for c, extra, unit in (("big1l", 60_000, CHRC), ("small2l", 1_800, CHRC + 40)):
+            L = unit + extra
+            lengths[c] = L
+            rows += [_hsp(c, "chrC", 1, unit, 1, CHRC),
+                     _hsp(c, "chrC", unit + 1, L, 1, extra)]
+        calls = _call(tmp_path, rows, lengths)
+        assert calls.chrC_contig == "small2l"
+        assert calls.hits["small2l"].unit.end == CHRC + 40
+
+    def test_chrM_ends_are_not_tested(self, tmp_path):
+        L = int(0.8 * CHRM)
+        rows = [_hsp("m2l", "chrM", 1, L, 1, L), _hsp("m2l", "chrM", 1, CHRM - L, L + 1, CHRM)]
+        calls = _call(tmp_path, rows, {"m2l": L})
+        assert calls.chrM_contig == "m2l" and calls.hits["m2l"].unit is None
+
+
+def _hsps(rows):
+    """Parsed HSP tuples of the rows of one contig."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "b.txt"
+        p.write_text("\n".join(rows) + "\n")
+        (ev,) = parse_organelle_blast(p).values()
+    return ev.hsps
 
 
 def test_one_to_one_ref_intervals_trims_overlaps():
@@ -435,7 +538,7 @@ class TestForeignGenome:
     tests must not be picked over the assembly's own plastome."""
 
     def _rows(self):
-        lengths = {"own_a": 173_000, "own_b": 217_000, "frag": 60_000, "foreign": 141_000}
+        lengths = {"own_a": 173_000, "own_b": 217_000, "frag": 60_000, "foreign": 140_200}
         rows = []
         for c in ("own_a", "own_b"):
             rows += _tiled(c, "chrC", lengths[c], 0, CHRC, 99.3)
@@ -672,6 +775,29 @@ def test_apply_organelle_swaps():
     assert (clfs[0].classification, clfs[0].new_name) == ("organelle_debris", "")
     assert (clfs[1].classification, clfs[1].new_name) == ("organelle_complete", "chrM")
     assert clfs[1].classification_confidence == "medium"
+    assert clfs[1].organelle_ref_cov == 0.97
+
+
+def test_apply_organelle_swaps_carries_trimmed_unit():
+    """A candidate with overlapping ends chosen by read depth is written as
+    its one-copy unit."""
+    from dnadis.classification.classifier import apply_organelle_swaps
+    from dnadis.models import ContigClassification, OrganelleHit, OrganelleUnit
+
+    def clf(name, cls, new, length):
+        return ContigClassification(original_name=name, new_name=new, classification=cls,
+                                    reversed=False, cobiont_taxid=None, cobiont_sci=None,
+                                    assigned_ref_id="chrC", ref_gene_proportion=None,
+                                    contig_len=length, organelle_ref_cov=0.99)
+    clfs = [clf("old", "organelle_complete", "chrC", CHRC),
+            clf("new", "organelle_debris", "", CHRC + 10_000)]
+    hits = {"old": OrganelleHit("chrC", 1.0, 0.999, 1.0, 0.99, "debris"),
+            "new": OrganelleHit("chrC", 1.0, 0.999, (CHRC + 10_000) / CHRC, 1.0, "complete",
+                                unit=OrganelleUnit(0, CHRC, False, 1.0, 1.0, 0.999))}
+    apply_organelle_swaps(clfs, {"chrC": ("old", "new")}, hits)
+    assert clfs[1].organelle_unit == (0, CHRC, False)
+    assert clfs[1].organelle_len_ratio == pytest.approx(1.0)
+    assert clfs[0].organelle_unit is None
 
 
 def test_removed_tolerance_flag_warns():

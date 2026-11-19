@@ -209,6 +209,7 @@ def organelle_thresholds_from_args(args) -> OrganelleThresholds:
         min_query_cov=args.organelle_min_cov,
         set_min_ref_cov=args.organelle_set_min_ref_cov,
         same_genome_identity=args.organelle_same_genome_identity,
+        max_end_gap=args.chrC_max_end_gap,
         len_ratio=(
             ("chrC", args.chrC_min_len_ratio, args.chrC_max_len_ratio),
             ("chrM", args.chrM_min_len_ratio, args.chrM_max_len_ratio),
@@ -2300,6 +2301,12 @@ def main():
         "--chrC-max-len-ratio", type=float, default=1.50,
         help="Max contig/reference length ratio for a complete chrC; longer "
              "contigs are concatemers [1.50]",
+    )
+    org_thresh.add_argument(
+        "--chrC-max-end-gap", type=int, default=1000,
+        help="Max reference bp between the two ends of a linear chrC contig "
+             "for a complete chrC; contigs whose ends overlap are trimmed to "
+             "one copy [1000]",
     )
     org_thresh.add_argument(
         "--chrM-min-len-ratio", type=float, default=0.50,
