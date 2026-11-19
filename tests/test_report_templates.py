@@ -212,6 +212,22 @@ def test_templates_declare_output_schema():
         assert refresh_reports.output_schema(template.read_text()) >= 1, template.name
 
 
+def test_assembly_report_requires_columns_dnadis_writes(tmp_path):
+    """Columns the assembly report requires from rearrangements.tsv are ones
+    write_rearrangements_tsv() writes, even with no calls."""
+    from dnadis.output.tsv_output import write_rearrangements_tsv
+
+    text = (REPORTS_DIR / "assembly_report.tmpl.Rmd").read_text()
+    calls = re.findall(r'require_columns\(\s*rearr_df\s*,\s*c\(([^)]*)\)', text)
+    assert calls, "assembly report does not check rearrangements.tsv columns"
+    required = {c for call in calls for c in re.findall(r'"([^"]+)"', call)}
+
+    out = tmp_path / "rearrangements.tsv"
+    write_rearrangements_tsv(out, [])
+    header = out.read_text().splitlines()[0].split("\t")
+    assert required <= set(header), required - set(header)
+
+
 def test_refresh_skips_reports_with_older_outputs(tmp_path, capsys):
     """A report generated before the template's output schema is left alone."""
     import refresh_reports

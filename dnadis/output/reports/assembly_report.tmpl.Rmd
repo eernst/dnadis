@@ -26,7 +26,7 @@ params:
   # Version of the TSV columns and values this template reads.  Bump it when
   # the template starts to need columns or values that older dnadis runs did
   # not write; refresh_reports.py then refuses to re-render older outputs.
-  output_schema: 4
+  output_schema: 5
 output:
   html_document:
     self_contained: __SELF_CONTAINED__
@@ -118,6 +118,9 @@ rearr_df <- if (has_rearrangements) {
   if (nrow(tmp) > 0) tmp else NULL
 } else NULL
 has_rearrangements <- !is.null(rearr_df)
+if (has_rearrangements) {
+  require_columns(rearr_df, c("fusion_call", "evidence_codes"), "rearrangements.tsv")
+}
 
 has_depth <- "depth_mean" %in% names(summary_df) && !all(is.na(summary_df$depth_mean))
 # Amplification view: available when relative depth (depth_ratio) was computed.
@@ -1604,9 +1607,7 @@ rearr_show <- rearr_df %>%
     conf_html = sapply(confidence, conf_badge)
   )
 
-# Fusion verdict / evidence codes (columns absent in older TSVs)
-if (!"fusion_call" %in% names(rearr_show)) rearr_show$fusion_call <- NA_character_
-if (!"evidence_codes" %in% names(rearr_show)) rearr_show$evidence_codes <- NA_character_
+# Fusion verdict / evidence codes
 rearr_show <- rearr_show %>%
   mutate(
     fusion_label = ifelse(is.na(fusion_call) | fusion_call == "", NA_character_,
