@@ -114,7 +114,7 @@ These columns provide the underlying evidence used to determine classification c
 | `organelle_len_ratio` | float | Organelle contigs: contig length / reference length (above 1 for concatemers and long mitochondrial graph walks) |
 | `organelle_ref` | string | Organelle contigs: the organelle reference the contig matches best, `chrC`/`chrM`, or `chrC_A` etc. when the reference has one per species (see README, Organelle references) |
 | `organelle_ref_margin` | float | Organelle contigs, with several species' references for the organelle: identity to the best reference minus identity to the next species' reference. Empty with one reference |
-| `organelle_unit` | string | `organelle_complete` chrC cut from a tandem concatemer, or trimmed from a contig whose ends overlap: the unit written to `organelles.fasta.gz`, as 1-based `start-end` on the contig and the strand it reads on, e.g. `41747-182188(+)`. The other `organelle_*` columns then describe the unit, while `length` stays the contig's. The whole contig is in `debris.fasta.gz` as `chrC_concatemer`. Empty otherwise |
+| `organelle_unit` | string | `organelle_complete` chrC cut from a tandem concatemer, or trimmed from a contig whose ends overlap: the unit written to `organelles.fasta.gz`, as 1-based `start-end` on the contig and the strand it reads on, e.g. `41747-182188(+)`. The other `organelle_*` columns then describe the unit, while `length` stays the contig's. The whole contig is in `debris.fasta.gz` as `chrC_concatemer` (two or more copies) or `chrC_untrimmed`. Empty otherwise |
 
 ### Read Depth Columns
 

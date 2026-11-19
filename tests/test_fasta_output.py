@@ -399,3 +399,14 @@ def test_concatemer_unit_goes_to_organelles_and_whole_contig_to_debris(tmp_path)
         "chrC": unit, "chrM": reverse_complement(unit)}
     assert read_fasta_sequences(paths["debris"]) == {
         "chrC_concatemer": seq, "chrM_concatemer": seq}
+
+
+def test_contig_with_overlapping_ends_goes_to_debris_as_untrimmed(tmp_path):
+    unit = "ACGTTGCAAGGC" * 10
+    seq = unit + unit[:30]
+    q = tmp_path / "q.fa"
+    q.write_text(f">ovl\n{seq}\n")
+    clfs = [_clf("ovl", "chrC", "organelle_complete", "chrC", organelle_unit=(0, len(unit), True))]
+    paths = write_classified_fastas(q, clfs, {}, tmp_path / "asm")
+    assert read_fasta_sequences(paths["organelles"]) == {"chrC": reverse_complement(unit)}
+    assert read_fasta_sequences(paths["debris"]) == {"chrC_untrimmed": seq}

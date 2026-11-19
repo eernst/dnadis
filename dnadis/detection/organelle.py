@@ -212,10 +212,10 @@ class OrganelleThresholds:
         return 0.0, float("inf")
 
 
-# Complete candidates whose length differs from the reference by the same
-# number of these steps (fraction of the reference length) are ranked by
-# their end overlap: one-copy units trimmed from contigs of one genome differ
-# by a few bp in the estimated period.
+# Complete candidates whose length is within this fraction of the reference
+# length of the best one's are ranked by their end overlap: one-copy units
+# trimmed from contigs of one genome differ by a few bp in the estimated
+# period.
 _LENGTH_STEP = 0.005
 
 # A set member must add at least this fraction of the reference.
@@ -338,23 +338,36 @@ def one_to_one_ref_intervals(
 # aligns to both reference copies.
 _END_SLACK = 1000
 
+# HSPs shorter than this are not used as contig ends: a dispersed repeat or
+# tRNA near an end can align anywhere.
+_END_MIN_HSP = 1000
+
+# At most this much unaligned sequence at the contig ends fills a gap
+# between them: more can be chimeric (nuclear) sequence rather than a
+# divergent stretch of the organelle.
+_END_MAX_FILL = 1000
+
 
 def end_join(
     hsps: List[Tuple[int, int, float, int, int, int, bool]],
     qlen: int,
     ref_len: int,
-) -> Optional[Tuple[int, Optional[int]]]:
+) -> Optional[Tuple[int, Optional[Tuple[int, int]]]]:
     """How a linear contig's two ends meet on the circular reference.
 
-    Returns ``(gap, period)``.  ``gap`` is the reference sequence between the
+    Returns ``(gap, copy)``.  ``gap`` is the reference sequence between the
     reference position at the contig's end and the one at its start (read
     in the contig's direction), less the contig sequence outside those end
-    HSPs, which may fill it (down to 0); negative when the ends overlap.
-    ``period`` is the contig length of one copy of the circle when the ends
-    overlap: the contig position, after its start, that aligns to the
-    reference position at its start (None if no HSP holds it).  Returns
+    HSPs (at most ``_END_MAX_FILL``), which may fill it (down to 0);
+    negative when the ends overlap.  HSPs shorter than ``_END_MIN_HSP`` are
+    not used.
+    ``copy`` is one copy of the circle on the contig when the ends overlap:
+    from the start of the first HSP to the later contig position that
+    aligns to the same reference position (None if no HSP holds it or it
+    runs past the contig end).  Returns
     None when no HSPs at the two ends align to the same strand.
     """
+    hsps = [h for h in hsps if h[1] - h[0] >= _END_MIN_HSP]
     if not hsps or qlen <= 0 or ref_len <= 0:
         return None
     first = min(h[0] for h in hsps)
@@ -372,7 +385,7 @@ def end_join(
             # after b may fill a gap, but does not make an overlap.
             d = (a[4] - b[5]) if not a[6] else (b[4] - a[5])
             d = (d + ref_len // 2) % ref_len - ref_len // 2
-            gap = d if d <= 0 else max(0, d - a[0] - (qlen - b[1]))
+            gap = d if d <= 0 else max(0, d - min(_END_MAX_FILL, a[0] + qlen - b[1]))
             if best is None or abs(gap) < abs(best[0]):
                 best = (gap, d, a, b)
     if best is None:
@@ -392,7 +405,9 @@ def end_join(
             p = qs + round(((se - 1 - x) if minus else (x - ss)) * scale) - qs_a
             if p > _END_SLACK and (period is None or abs(p - expected) < abs(period - expected)):
                 period = p
-    return gap, period
+    if period is None or qs_a + period > qlen:
+        return gap, None
+    return gap, (qs_a, qs_a + period)
 
 
 def _window_stats(
@@ -521,10 +536,10 @@ def call_organelles(
                 if join is None:
                     open_ends[c] = None
                     continue
-                gap, period = join
+                gap, copy = join
                 overlap[c] = max(0, -gap)
-                fits = (period is not None and period < query_lengths[c]
-                        and lo <= period / ref_len_of(c) <= hi)
+                fits = (copy is not None and copy[1] - copy[0] < query_lengths[c]
+                        and lo <= (copy[1] - copy[0]) / ref_len_of(c) <= hi)
                 # An overlap longer than the allowed gap must hold one copy:
                 # sequence at an end that aligns elsewhere (a divergent or
                 # chimeric piece) can mimic one
@@ -532,8 +547,11 @@ def call_organelles(
                     open_ends[c] = gap
                 elif fits and h.length_ratio <= hi:
                     ref_cov, query_cov, _, identity = _window_stats(
-                        ev.hsps, 0, period, ref_len_of(c), organelle in thresholds.one_to_one)
-                    h.unit = OrganelleUnit(0, period, False, ref_cov, query_cov, identity)
+                        ev.hsps, *copy, ref_len_of(c), organelle in thresholds.one_to_one)
+                    # Read the unit along the reference, like a cut unit
+                    minus_bp = sum(x[3] for x in ev.hsps if x[6])
+                    reverse = minus_bp > sum(x[3] for x in ev.hsps if not x[6])
+                    h.unit = OrganelleUnit(*copy, reverse, ref_cov, query_cov, identity)
 
         def passes(c: str) -> bool:
             h = members[c][0]
@@ -542,8 +560,9 @@ def call_organelles(
                     and query_cov >= thresholds.min_query_cov
                     and lo <= length / ref_len_of(c) <= hi)
 
-        candidates = [c for c in members if passes(c) and c not in open_ends]
-        for c in sorted(set(open_ends) & {c for c in members if passes(c)}):
+        passed = {c for c in members if passes(c)}
+        candidates = [c for c in members if c in passed and c not in open_ends]
+        for c in sorted(passed & set(open_ends)):
             gap = open_ends[c]
             logger.info(
                 f"{organelle}: {c} is not complete: " + (
@@ -558,13 +577,22 @@ def call_organelles(
         def length_off(c: str) -> int:
             return abs(_effective(members[c][0], query_lengths[c])[2] - ref_len_of(c))
 
-        # Circular first, then length closest to the reference (in steps, so
-        # that trimmed copies of one genome tie), then the least sequence
-        # repeated at the ends
+        # Circular first; then those within one length step of the length
+        # closest to the reference (trimmed copies of one genome differ by a
+        # few bp), by the least sequence repeated at the ends; then the rest
+        # by length closest to the reference
+        best_off = {}
+        for c in candidates:
+            k = c not in circular
+            best_off[k] = min(best_off.get(k, length_off(c)), length_off(c))
+
+        def near(c: str) -> bool:
+            return length_off(c) <= best_off[c not in circular] + _LENGTH_STEP * ref_len_of(c)
+
         candidates.sort(key=lambda c: (
             c not in circular,
-            round(length_off(c) / (_LENGTH_STEP * ref_len_of(c))),
-            overlap.get(c, 0),
+            not near(c),
+            overlap.get(c, 0) if near(c) else 0,
             length_off(c),
             -_effective(members[c][0], query_lengths[c])[0],
             query_lengths[c],
@@ -659,10 +687,11 @@ def call_organelles(
                 f"{h.length_ratio:.2f}x {h.ref_name}, ref cov={h.ref_coverage:.3f}, "
                 f"query cov={h.coverage:.3f}, ident={h.identity:.4f}{margin})"
             )
-            if h.unit is not None and h.unit.start == 0 and h.length_ratio <= hi:
+            if h.unit is not None and h.length_ratio <= hi:
+                # Trimmed (a cut concatemer is longer than the max ratio)
                 logger.info(
-                    f"{organelle}: {chosen} ends overlap by "
-                    f"{query_lengths[chosen] - h.unit.end:,} bp; writing 1-{h.unit.end:,} "
+                    f"{organelle}: {chosen} ends overlap; writing one copy, "
+                    f"{h.unit.start + 1:,}-{h.unit.end:,}{' (reverse)' if h.unit.reverse else ''}, "
                     f"as {organelle} (ref cov={h.unit.ref_coverage:.3f})"
                 )
         elif partial:
