@@ -2278,7 +2278,8 @@ def main():
     org_thresh.add_argument(
         "--organelle-min-ref-cov", type=float, default=0.95,
         help="Min fraction of the chrC/chrM reference covered by one contig for "
-             "organelle_complete [0.95]",
+             "organelle_complete; for chrC each contig position counts once, so "
+             "an inverted-repeat copy covers one reference copy [0.95]",
     )
     org_thresh.add_argument(
         "--organelle-min-cov", type=float, default=0.90,
@@ -2293,9 +2294,7 @@ def main():
     )
     org_thresh.add_argument(
         "--chrC-min-len-ratio", type=float, default=0.90,
-        help="Min contig/reference length ratio for a complete chrC. Below it a "
-             "contig can lack one inverted-repeat copy and still cover the "
-             "whole reference [0.90]",
+        help="Min contig/reference length ratio for a complete chrC [0.90]",
     )
     org_thresh.add_argument(
         "--chrC-max-len-ratio", type=float, default=1.50,
