@@ -434,12 +434,14 @@ Organelle columns: `chrC_found` / `chrM_found` are `yes` (one `organelle_complet
 | `core_type`, `core_start`, `core_end` | Segment between the two sides' sister chains (`gap`) or aligned as part of both (`shared`) |
 | `core_copies` | Median copies of that segment per sister assembly (≥ 95% identity over ≥ 80% of it) |
 | `tandem_start`, `tandem_end` | Tandem array (≥ 5 kb) around the break, from the contig sequence (1 kb bins whose k-mers mostly recur within 10 kb); spanning reads must cover it and clipped ends inside it are not counted |
+| `telomere_side` | Telomere array whose chromosome end points at the break (≥ 1 kb of repeat runs within 20 kb of the break interval): `left` (the left side ends with a telomere), `right` (the right side starts with one) or `both` (two arrays facing each other); empty when none |
+| `telomere_start`, `telomere_end`, `telomere_bp` | Extent of that array (both arrays for `both`) and bp of telomere repeat runs in it |
 | `n_sister_units` | Sister units examined (one per assembly, or per `query_subgenome` group) |
 | `n_carry`, `n_nearby`, `n_carry_same_genotype`, `n_contradict`, `n_ends`, `n_absent` | Units per status |
 | `carriers`, `nearby`, `same_genotype_carriers`, `contradictors` | Unit labels per status (`<assembly>` or `<assembly>_<group>`) |
 | `reads_split`, `reads_split_pos`, `reads_spanning` | With `--bam`: reads in the largest clipped-end cluster and its position, and reads spanning the break (or the shared segment) |
 | `partner_junction` | Junction in another contig joining the same two chromosomes at nearby reference positions (the reciprocal product) |
-| `flags` | `homeolog_switch` (same chromosome number, different subgenomes), `reads_split`, `reads_span`, `reads_mixed`, `tandem_repeat` (a break inside a tandem array) |
+| `flags` | `homeolog_switch` (same chromosome number, different subgenomes), `reads_split`, `reads_span`, `reads_mixed`, `tandem_repeat` (a break inside a tandem array), `interstitial_telomere` (a telomere array at the break) |
 | `evidence` | The counts in words |
 
 ## cobionts.tsv

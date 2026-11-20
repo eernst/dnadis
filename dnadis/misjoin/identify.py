@@ -36,6 +36,13 @@ Calls (``call`` column) and the default ``action``:
     structural variant, or from a segment whose location differs between
     the reference's lineage and the assembly's.
 
+A telomere repeat array of ``telomere_min_bp`` or more near the break whose
+chromosome end faces the break (``telomere_side``) means a chromosome end
+lies inside the contig.  It moves a single break to the array's outer edge,
+raises a ``misjoin`` or ``repeat_misjoin`` call to high confidence and is
+flagged ``interstitial_telomere``; other calls keep their action (a
+sister-supported join of chromosome ends is a fusion shared with sisters).
+
 Reads override the action when they are clear: ``min_split`` split reads at
 the break with fewer than two spanning reads give ``break``; ``min_spanning``
 spanning reads with fewer than ``min_split`` split reads give ``keep``.
@@ -48,6 +55,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from dnadis.detection.telomere import DEFAULT_TELOMERE_MOTIF, telomere_arrays
 from dnadis.misjoin import reads as rd
 from dnadis.misjoin import sisters as sis
 from dnadis.misjoin.junctions import (
@@ -73,6 +81,7 @@ COLUMNS = [
     "right_contig_start", "right_contig_end",
     "ref_gap_start", "ref_gap_end",
     "core_type", "core_start", "core_end", "core_copies", "tandem_start", "tandem_end",
+    "telomere_side", "telomere_start", "telomere_end", "telomere_bp",
     "n_sister_units", "n_carry", "n_nearby", "n_carry_same_genotype", "n_spans", "n_contradict",
     "n_ends", "n_absent",
     "carriers", "nearby", "same_genotype_carriers", "contradictors",
@@ -92,6 +101,9 @@ class IdentifyParams:
     max_probe_bp: int = 150_000
     partner_identity: float = 0.99
     repeat_edge_tol: int = 2_000
+    telomere_motif: str = DEFAULT_TELOMERE_MOTIF
+    telomere_min_bp: int = 1_000
+    telomere_window: int = 20_000
     sisters: sis.SisterParams = field(default_factory=sis.SisterParams)
     reads: rd.ReadParams = field(default_factory=rd.ReadParams)
 
@@ -119,6 +131,7 @@ class JunctionCall:
     reads: List[Optional[rd.ReadEvidence]] = field(default_factory=list)
     partner: str = ""
     flags: List[str] = field(default_factory=list)
+    telomere: Optional[Tuple[str, int, int, int]] = None   # (side, start, end, run bp)
 
 
 # ---------------------------------------------------------------------------
@@ -277,6 +290,48 @@ def mark_tandem(jc: JunctionCall, seq: Optional[str], p: rd.ReadParams) -> None:
         jc.flags.append("tandem_repeat")
 
 
+def mark_telomere(jc: JunctionCall, seq: Optional[str], p: IdentifyParams) -> None:
+    """Record a chromosome end at the junction: a telomere array facing the break.
+
+    Arrays of ``telomere_min_bp`` run bp within ``telomere_window`` of the
+    break interval count when their chromosome end points at it: a ``+``
+    array ending at or before the interval end closes the left side
+    (``left``), a ``-`` array starting at or after the interval start opens
+    the right side (``right``); one of each facing each other is ``both``.
+    """
+    if seq is None or not p.telomere_motif:
+        return
+    lo = min(b.lo for b in jc.breaks)
+    hi = max(b.hi for b in jc.breaks)
+    s, e = max(0, lo - p.telomere_window), min(len(seq), hi + p.telomere_window)
+    arrays = [a for a in telomere_arrays(seq[s:e], p.telomere_motif, offset=s)
+              if a[2] >= p.telomere_min_bp]
+    # nearest to the break on each side
+    left = max((a for a in arrays if a[3] == "+" and a[1] <= hi), key=lambda a: a[1], default=None)
+    right = min((a for a in arrays if a[3] == "-" and a[0] >= lo), key=lambda a: a[0], default=None)
+    if left and right and left[1] > right[0]:
+        # interleaved arrays: keep the longer one
+        left, right = (left, None) if left[2] >= right[2] else (None, right)
+    if left and right:
+        side, edge = "both", left[1]
+        jc.telomere = ("both", left[0], right[1], left[2] + right[2])
+    elif left:
+        side, edge = "left", left[1]
+        jc.telomere = ("left", left[0], left[1], left[2])
+    elif right:
+        side, edge = "right", right[0]
+        jc.telomere = ("right", right[0], right[1], right[2])
+    else:
+        return
+    jc.flags.append("interstitial_telomere")
+    if len(jc.breaks) == 1 and jc.breaks[0].kind == "single":
+        b = jc.breaks[0]
+        if b.lo <= edge <= b.hi:
+            b.pos = edge
+    if jc.call in ("misjoin", "repeat_misjoin"):
+        jc.confidence = "high"
+
+
 def apply_reads(jc: JunctionCall, evs: List[Optional[rd.ReadEvidence]], p: rd.ReadParams) -> None:
     """Refine positions and override the action from read evidence."""
     jc.reads = evs
@@ -340,6 +395,11 @@ def _evidence_text(jc: JunctionCall) -> str:
         parts.append(f"{hi - lo:,} bp {what}{cp}")
     for t in dict.fromkeys(b.tandem for b in jc.breaks if b.tandem):
         parts.append(f"break in a {t[1] - t[0]:,} bp tandem array")
+    if jc.telomere:
+        side, lo, hi, bp = jc.telomere
+        what = {"left": "ends the left side", "right": "starts the right side",
+                "both": "on both sides, facing each other"}[side]
+        parts.append(f"telomere array ({bp:,} bp of repeats) {what}")
     seen = [e for e in jc.reads if e is not None]
     if seen:
         parts.append("reads: " + "; ".join(
@@ -388,6 +448,10 @@ def call_rows(jc: JunctionCall) -> List[Dict[str, str]]:
             "core_copies": jc.core_copies,
             "tandem_start": b.tandem[0] if b.tandem else None,
             "tandem_end": b.tandem[1] if b.tandem else None,
+            "telomere_side": jc.telomere[0] if jc.telomere else None,
+            "telomere_start": jc.telomere[1] if jc.telomere else None,
+            "telomere_end": jc.telomere[2] if jc.telomere else None,
+            "telomere_bp": jc.telomere[3] if jc.telomere else None,
             "n_sister_units": len(units),
             "n_carry": len(_status(units, "carries")),
             "n_nearby": len(_status(units, "nearby")),
@@ -695,6 +759,7 @@ def identify(
                         shared.get(key), gaps[name].get(j.contig, []))
             jc.partner = partners[name].get(j.junction_id, "")
             mark_tandem(jc, seqs.get((name, j.contig)), params.reads)
+            mark_telomere(jc, seqs.get((name, j.contig)), params)
             if bam is not None:
                 evs = []
                 for b in jc.breaks:

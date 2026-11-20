@@ -422,6 +422,62 @@ def test_mark_tandem_flags_break():
     assert row["tandem_start"] and "tandem array" in row["evidence"]
 
 
+def test_telomere_arrays_merge_runs_per_strand():
+    from dnadis.detection.telomere import telomere_arrays
+    fwd = "TTTAGGG" * 50 + "TTCAGGG" + "TTTAGGG" * 50     # one variant repeat
+    rev = "CCCTAAA" * 20
+    seq = "ACGT" * 250 + fwd + "ACGT" * 500 + rev
+    arrays = telomere_arrays(seq, offset=10)
+    assert [(a[0], a[1], a[2], a[3]) for a in arrays] == [
+        (1_010, 1_010 + len(fwd), 700, "+"),
+        (1_010 + len(fwd) + 2_000, 1_010 + len(fwd) + 2_000 + 140, 140, "-"),
+    ]
+
+
+def _telomere_contig(arrays):
+    """A 5.6 Mb contig without telomere repeats, with (position, strand, copies) arrays."""
+    seq = list("ACGT" * 1_400_000)
+    for pos, strand, n in arrays:
+        unit = "TTTAGGG" if strand == "+" else "CCCTAAA"
+        seq[pos:pos + 7 * n] = unit * n
+    return "".join(seq)
+
+
+@pytest.mark.parametrize("arrays, side, pos", [
+    ([(2_945_000, "-", 300)], "right", 2_945_000),            # right side starts with a telomere
+    ([(2_955_000 - 2_100, "+", 300)], "left", 2_955_000),      # left side ends with one
+    ([(2_946_000, "+", 300), (2_948_200, "-", 300)], "both", 2_948_100),
+])
+def test_mark_telomere_at_break(arrays, side, pos):
+    jc = idf.decide("asm", _junction(), _units(["contradicts"] * 2), idf.IdentifyParams(), [])
+    assert (jc.call, jc.confidence) == ("misjoin", "medium")
+    idf.mark_telomere(jc, _telomere_contig(arrays), idf.IdentifyParams())
+    assert jc.telomere[0] == side and jc.breaks[0].pos == pos
+    assert jc.confidence == "high" and "interstitial_telomere" in jc.flags
+    row = idf.call_rows(jc)[0]
+    assert row["telomere_side"] == side and row["telomere_bp"] in ("2100", "4200")
+    assert "telomere array" in row["evidence"]
+
+
+@pytest.mark.parametrize("arrays", [
+    [(2_965_000, "+", 300)],     # right of the break, its chromosome end pointing away
+    [(2_930_000, "-", 300)],     # left of the break, pointing away
+    [(2_950_000, "-", 100)],     # 700 bp: too short
+    [(2_900_000, "-", 300)],     # beyond the window
+])
+def test_mark_telomere_ignores_arrays_not_at_a_chromosome_end(arrays):
+    jc = idf.decide("asm", _junction(), _units(["contradicts"] * 2), idf.IdentifyParams(), [])
+    idf.mark_telomere(jc, _telomere_contig(arrays), idf.IdentifyParams())
+    assert jc.telomere is None and jc.confidence == "medium" and jc.breaks[0].pos == 2_950_000
+
+
+def test_mark_telomere_keeps_a_sister_supported_join():
+    jc = idf.decide("asm", _junction(), _units(["carries"] * 2), idf.IdentifyParams(), [])
+    idf.mark_telomere(jc, _telomere_contig([(2_945_000, "-", 300)]), idf.IdentifyParams())
+    assert (jc.action, jc.telomere[0]) == ("keep", "right")
+    assert "interstitial_telomere" in jc.flags
+
+
 def test_read_evidence_inside_tandem_array(tmp_path):
     pysam = pytest.importorskip("pysam")
     header = {"HD": {"VN": "1.6", "SO": "coordinate"}, "SQ": [{"SN": "ctg", "LN": 100_000}]}

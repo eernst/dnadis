@@ -88,6 +88,13 @@ def _identify_parser(sub) -> None:
                    help="contradicting sister units needed to call a misjoin")
     g.add_argument("--repeat-min-copies", type=int, default=d.repeat_min_copies,
                    help="copies per sister that make the segment between the sides a repeat")
+    g = p.add_argument_group("telomeres")
+    g.add_argument("--telomere-motif", default=d.telomere_motif,
+                   help="telomere repeat motif ('' to skip the telomere check)")
+    g.add_argument("--telomere-min-bp", type=int, default=d.telomere_min_bp,
+                   help="bp of telomere repeat runs that mark a chromosome end at a break")
+    g.add_argument("--telomere-window", type=int, default=d.telomere_window,
+                   help="distance from the break interval searched for telomere arrays")
     g = p.add_argument_group("read evidence")
     g.add_argument("--min-mapq", type=int, default=r.min_mapq)
     g.add_argument("--min-clip", type=int, default=r.min_clip)
@@ -152,6 +159,8 @@ def run_identify(args) -> int:
     params = idf.IdentifyParams(
         min_block_bp=args.min_block_bp, min_side_bp=args.min_side_bp,
         min_contradict=args.min_contradict, repeat_min_copies=args.repeat_min_copies,
+        telomere_motif=args.telomere_motif, telomere_min_bp=args.telomere_min_bp,
+        telomere_window=args.telomere_window,
     )
     params.sisters.flank = args.flank
     params.sisters.min_identity = args.min_identity
