@@ -33,6 +33,8 @@ def results(tmp_path):
         lin / "hmmer_output" / "x.tbl",
         lin / "miniprot.done",
         root / "pairwise" / "a_vs_b.paf.gz",
+        root / "misjoin_work" / "regions.1.fa",
+        root / "misjoin_work" / "paf" / "regions.asm2.paf.gz",
     ]
     keep = [
         asm / "asm1.chrs.fasta.gz",

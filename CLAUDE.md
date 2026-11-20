@@ -78,6 +78,10 @@ pytest -m "not integration"
 ./dnadis.py cleanup results/ --dry-run
 ./dnadis.py cleanup results/
 
+# Find contigs that join two reference chromosomes, call misjoins from sister assemblies (and reads), split them
+./dnadis.py misjoin identify results/ -a asm1 --fofn assemblies.tsv --bam asm1=reads.bam
+./dnadis.py misjoin break asm1.fasta.gz results/asm1/asm1.misjoins.tsv -o asm1.broken.fasta.gz
+
 # Dump config template
 ./dnadis.py --dump-config > config.toml
 
@@ -100,6 +104,13 @@ dnadis/
 ├── models.py              # Data models (ReferenceContext, Block, Chain, ContigClassification, etc.)
 ├── cli.py                 # Main entry point: prepare_reference(), run_assembly(), main()
 ├── cleanup.py             # `dnadis cleanup RESULTS_DIR` subcommand (dispatched at the top of cli.main)
+├── misjoin/               # `dnadis misjoin {identify,break}` subcommand (dispatched at the top of cli.main)
+│   ├── junctions.py       # Reference-chromosome switches along contigs, from macro_blocks.tsv
+│   ├── sisters.py         # Sister-assembly alignment of junction regions, per-unit status, repeat copies
+│   ├── reads.py           # Split-read clusters and spanning reads at a break (pysam)
+│   ├── identify.py        # Calls, break positions, misjoins.tsv
+│   ├── breaker.py         # Split a FASTA at accepted breaks; AGP to input coordinates
+│   └── cli.py
 ├── data/                  # Bundled reference data
 │   └── rfam/              # Rfam 15.0 subset: eukaryotic rRNA covariance models (auto-pressed on first use)
 ├── alignment/             # Alignment and synteny block building
@@ -287,6 +298,8 @@ The permissive parameters are balanced by downstream filtering (identity thresho
 **Scaffold gaps in the input**: phase 1 runs `sequence_utils.py:scan_fasta_gaps()` (runs of ≥ `GAP_MIN_N` = 10 N, joined across line breaks) and writes `<prefix>.gaps.bed` when any exist; `cli.py` sets `ContigClassification.n_gaps`/`gap_bp` right after `classify_all_contigs()`, and they go to contig_summary.tsv. Gaps do not change `is_chromosome_scale` (a telomere-to-telomere scaffold still spans the chromosome), but a one-contig copy with both telomeres is `T2T` only when gap-free and `gapped` otherwise. `build_assembly_result(qry_gaps=...)` adds `n_gaps`, `gap_bp` and `contig_n50`/`contig_l50` (pieces between gaps) to `comparison_summary.tsv`, and `chromosome_completeness.tsv` gets `n_gaps`. The assembly report reads `gaps.bed` through the `__GAPS__` placeholder; the comparison report finds each assembly's `gaps.bed` beside its contig summary. With `--scaffold`, `scaffolding.py:_place_fragments_in_gaps()` places fragments into these gaps before T2T handling and RagTag (see "Gap placement" below).
 
 **Gap placement** (`scaffolding.py`): per scaffold group, each gap of a gapped `chrom_assigned` contig gets a `_GapBracket` from its nearest macro blocks (≥ `MIN_FLANK_BP` = 20 kb; `ev.macro_block_rows` with reference coordinates) on each side; a block across the gap, a missing side, or same-strand flanks running backwards (by more than `BRACKET_SLACK` = 50 kb) leave the gap closed. `_GapBracket.fit()`: with same-strand flanks, the fragment footprint (first to last macro block on the reference) must lie between the flanks' reference positions ± `BRACKET_SLACK`; with opposite-strand flanks, it must continue the reference from exactly one flank within `BRACKET_SLACK`. A fragment fitting exactly one gap is placed; fragments of one gap that overlap on the reference by ≥ half the shorter are all left out. Placement rests on the reference, not on fragment-flank sequence overlap (such overlaps are absent when the assembler broke the contig at the gap). A filled anchor is a *composite*: a list of `_Part`s (W sub-ranges of the anchor around each filled gap, fragment W parts, gap parts) that `_expand_composites()` substitutes for the anchor's W part (flipped if reversed) in the T2T/trivial emit, the built-in scaffolder and the RagTag AGP translation; RagTag is given the filled sequence under the anchor name. `_render_parts()` builds every scaffold's sequence and AGP. Unplaced fragments beside a T2T contig get `scaffold_exclusion` `gap_ambiguous`/`no_gap_bracket`. AGP readers count components with `distinct`/`n_distinct`, since a composite anchor has several W rows.
+
+**Misjoin calls** (`dnadis misjoin`, `misjoin/`): a subcommand rather than a pipeline phase, since it reads finished results (and, in multi-assembly runs, every assembly's) and its output is a list to review before `break` changes an input. `junctions.py` finds reference-chromosome switches from macro blocks (runs < `--min-side-bp` dropped smallest first; organelle blocks ignored). `sisters.py` aligns each junction's region (merged per contig; query) to every other assembly's `chrs.fasta.gz` (target; minimap2 `asm20 -c --secondary=no`: indexing the sister and mapping the small regions is ~15× faster than the reverse) restricted to sisters with a subgenome of the junction; the target assembly is never its own sister. Units are `(assembly, query_subgenome)`; per unit the best contig on each flank is chained (local diagonal drift ≤ `chain_tol`) and the unit `carries`/`nearby`/`carries_same_genotype`/`spans`/`contradicts`/`ends`/`absent`. Same-genotype carriers (identity ≥ 99.95%) do not count, because a scaffolded or re-run version of the same contigs inherits their misjoins. `identify.py:locate_breaks()` takes the furthest left-chain end and earliest right-chain start over non-carrying units (divergent sisters stop early, so the closest sister bounds the break); overlapping chains give a shared segment. A second pass aligns a probe (break ± 20 kb) with `-N 200 -p 0.1`; `copy_profile()`/`repeat_runs()` find bins with a median of ≥ 3 copies per sister, and a run within 2 kb of the break interval turns it into two breaks at the run's edges (`repeat_misjoin`): a swap through a repeat copy must be cut on both sides. Reads (`--bam`) refine positions and override the action. `breaker.py` cuts at `break_pos` (0-based, cut before that base), names pieces `_b1…`, and writes AGP v2.1 with every output sequence.
 
 **Report templates and TSV versions**: generated `.Rmd` files inline `common.R` (`plotting.py:inline_common_r()`), so they never run helpers from another dnadis version. Each template's params carry `output_schema`; bump it when a template starts to read TSV columns or values that older runs did not write. `refresh_reports.py` refuses to re-render a report whose generated `.Rmd` records an older schema (or none), since its TSVs predate the template; a dnadis rerun regenerates them. Templates check required columns with `require_columns()` instead of falling back silently.
 

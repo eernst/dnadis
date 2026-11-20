@@ -401,6 +401,33 @@ The per-assembly work directories (`{name}/{name}_classification/`) hold interme
 
 Read-alignment BAMs (present when the run used `--keep-depth-bam`) are removed unless `--keep-bams` is given. `--sister-anchors` also removes the sister-anchoring anchor/candidate FASTAs (a rerun with `--sister-anchoring` then redoes the sister alignments). `--legacy-outputs` removes outputs under pre-bgzip file names (`*.fasta`, `*.scaffolded.*`, `*.circular_elements.fasta`), but only where the current-name file exists.
 
+### Finding and breaking misjoins
+
+dnadis assigns each contig to a reference chromosome but does not split contigs, so a contig that joins two chromosomes by mistake carries the join into `--scaffold`. `misjoin identify` lists the places where a contig switches from one reference chromosome to another and calls each one from the other assemblies in the results folder (sisters) and, optionally, reads; `misjoin break` splits contigs at the calls you accept.
+
+```bash
+./dnadis.py misjoin identify results/ -a asm1 --fofn assemblies.tsv -t 16 --jobs 4
+./dnadis.py misjoin break asm1.fasta.gz results/asm1/asm1.misjoins.tsv -o asm1.broken.fasta.gz
+```
+
+**Junctions.** The contig's macro blocks are grouped into runs on one reference chromosome. Runs with less than `--min-side-bp` (50 kb) aligned are dropped, smallest first (repeat copies and small segments the reference places elsewhere), and the boundary between two remaining runs on different chromosomes is a junction. Blocks on organelle references are ignored. From the reference alone, the break lies between the last block of one run and the first block of the next, and the reference cannot tell a misjoin from a structural variant, or from a segment that sits on another chromosome in the reference's lineage.
+
+**Sisters.** Up to `--flank` (300 kb) of each side, plus the sequence between them, is aligned (minimap2 `asm20`) to the chromosome contigs (`chrs.fasta.gz`) of every other assembly with chromosomes of that subgenome. A sister unit is one assembly, or one `query_subgenome` group of it when the assembly holds two copies of a subgenome. Per unit, the sister contig with most sequence on each side is followed along the contig as a chain of collinear hits, and the unit:
+
+- *carries* the join: one sister contig runs from one side into the other in order and orientation;
+- is *nearby*: one sister contig holds both sides within 1 Mb, not collinear;
+- *spans* it: the sister's chromosome on one side resumes beyond the whole (short) run of the other side, which is then an insertion relative to the sister;
+- *contradicts* it: the sides are on different sister contigs (or far apart on one), and at least one continues for `--min-extend` (50 kb) past the point where it stops matching;
+- *ends* there: the sister contigs stop at the junction too.
+
+A carrier at gap-compressed identity ≥ `--same-genotype-identity` (99.95%) is the same genotype as the contig (e.g. a scaffolded version of the same contigs, or another assembly of the same reads) and does not count: an assembly built from the same contigs inherits their misjoins. Use `--exclude-sister` for derived assemblies that differ more than that.
+
+**Calls.** One carrying or nearby unit makes the junction `sister_supported` (`keep`): the sister shares the join, so it is a structural variant of that lineage or a segment placed differently by the reference. With no carrier, `--min-contradict` (2) contradicting units make it a `misjoin` (`break`); spanning units in at least the same number make it an `insertion` (`review`); otherwise it is `unresolved` (`review`), or `reference_only` (`review`) without sisters. The break lies between the furthest point any non-carrying sister follows the left side's chromosome and the earliest point any follows the right side's; a sister's chain stops early where it is divergent, so the closest sister sets the bounds. When the two chains overlap, or the sequence at the break has a median of `--repeat-min-copies` (3) or more copies per sister (counted by aligning 20 kb either side of the break, secondary alignments included), the call is `repeat_misjoin` with two breaks, one at each edge of the shared or repeated segment: a swap between two chromosomes through a repeat copy is undone only by cutting the copy out of both contigs. `partner_junction` names the junction in another contig that joins the same two chromosomes at nearby reference positions (the other product of an exchange).
+
+**Reads** (`--bam NAME=reads.bam`, aligned to the input contigs): clipped read ends (≥ 1 kb clip, MAPQ ≥ 20) are clustered at each break, and reads spanning it with 2 kb on each side (across the whole segment, for a repeat break) are counted. `--min-split` (3) split reads with fewer than two spanning reads confirm the break (`break`, `high`) and move it to the cluster; `--min-spanning` (3) spanning reads with fewer split reads keep the contig whole (`keep`). Repeat-swap breaks are rarely spanned by reads when the repeat is longer than the reads' unique flanks.
+
+The output is `<assembly>.misjoins.tsv` in each assembly's folder (columns in `docs/output_formats.md`); alignments are cached under `RESULTS_DIR/misjoin_work/` (removed by `cleanup`). Without `--fasta`/`--fofn`, contig sequences are read from the class FASTAs. `misjoin break` cuts every contig at the `break_pos` of its rows with `action` `break` (`--actions break,review` or `all` to include others; filter the TSV to choose rows), names the pieces `<contig>_b1`, `_b2`, … in contig order, writes other contigs unchanged and writes an AGP mapping each output sequence to its input coordinates.
+
 ### Summary tables
 
 | File | Description |

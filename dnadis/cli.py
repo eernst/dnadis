@@ -1953,10 +1953,18 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1] == "cleanup":
         from dnadis.cleanup import main as cleanup_main
         sys.exit(cleanup_main(sys.argv[2:]))
+    if len(sys.argv) > 1 and sys.argv[1] == "misjoin":
+        from dnadis.misjoin.cli import main as misjoin_main
+        sys.exit(misjoin_main(sys.argv[2:]))
 
     p = argparse.ArgumentParser(
         description="Genome assembly comprehension and curation tool for contig classification using synteny evidence (protein-anchored or nucleotide whole-genome alignment).",
-        epilog="Subcommands:\n  dnadis.py cleanup RESULTS_DIR   remove bulky intermediates after a run (see cleanup --help)",
+        epilog=(
+            "Subcommands:\n"
+            "  dnadis.py cleanup RESULTS_DIR            remove bulky intermediates after a run (see cleanup --help)\n"
+            "  dnadis.py misjoin identify RESULTS_DIR   find contigs joining two reference chromosomes and call misjoins\n"
+            "  dnadis.py misjoin break FASTA TSV -o OUT split contigs at the called breaks (see misjoin --help)"
+        ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
