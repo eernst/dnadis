@@ -272,17 +272,25 @@ def apply_reads(jc: JunctionCall, evs: List[Optional[rd.ReadEvidence]], p: rd.Re
     seen = [e for b, e in zip(jc.breaks, evs) if e is not None and b.kind != "scaffold_gap"]
     if not seen:
         return
+    split = min(e.split_reads for e in seen)
+    span = max(e.spanning for e in seen)
+    if split >= p.min_split and span >= 2:
+        # reads both leave and cross the junction (two haplotypes, or reads
+        # from another copy of a repeat): the break is not confirmed
+        if jc.action == "break":
+            jc.action = "review"
+            jc.confidence = "low"
+        jc.flags.append("reads_mixed")
+        return
     for b, e in zip(jc.breaks, evs):
         if b.kind != "scaffold_gap" and e and e.split_pos is not None and e.split_reads >= p.min_split:
             b.pos = e.split_pos
             b.lo, b.hi = min(b.lo, b.pos), max(b.hi, b.pos)
-    split = min(e.split_reads for e in seen)
-    span = max(e.spanning for e in seen)
-    if split >= p.min_split and span < 2:
+    if split >= p.min_split:
         jc.action = "break"
         jc.confidence = "high"
         jc.flags.append("reads_split")
-    elif span >= p.min_spanning and split < p.min_split:
+    elif span >= p.min_spanning:
         jc.action = "keep"
         jc.flags.append("reads_span")
 

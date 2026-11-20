@@ -378,6 +378,19 @@ def test_apply_reads_overrides_action():
     idf.apply_reads(jc, [rd.ReadEvidence(split_reads=0, spanning=20)], p)
     assert jc.action == "keep" and "reads_span" in jc.flags
 
+    # reads that both split and span: a sister-called break goes to review,
+    # the position stays, and a keep stays a keep
+    jc = idf.decide("asm", _junction(), _units(["contradicts"] * 3), idf.IdentifyParams(), [])
+    assert jc.action == "break"
+    pos = jc.breaks[0].pos
+    idf.apply_reads(jc, [rd.ReadEvidence(split_reads=3, split_pos=pos + 6_000, spanning=2)], p)
+    assert (jc.action, jc.confidence) == ("review", "low") and "reads_mixed" in jc.flags
+    assert jc.breaks[0].pos == pos
+
+    jc = idf.decide("asm", _junction(), _units(["carries"]), idf.IdentifyParams(), [])
+    idf.apply_reads(jc, [rd.ReadEvidence(split_reads=15, split_pos=1, spanning=19)], p)
+    assert jc.action == "keep" and "reads_mixed" in jc.flags
+
 
 def test_read_evidence_from_bam(tmp_path):
     pysam = pytest.importorskip("pysam")

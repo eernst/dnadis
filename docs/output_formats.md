@@ -438,7 +438,7 @@ Organelle columns: `chrC_found` / `chrM_found` are `yes` (one `organelle_complet
 | `carriers`, `nearby`, `same_genotype_carriers`, `contradictors` | Unit labels per status (`<assembly>` or `<assembly>_<group>`) |
 | `reads_split`, `reads_split_pos`, `reads_spanning` | With `--bam`: reads in the largest clipped-end cluster and its position, and reads spanning the break (or the shared segment) |
 | `partner_junction` | Junction in another contig joining the same two chromosomes at nearby reference positions (the reciprocal product) |
-| `flags` | `homeolog_switch` (same chromosome number, different subgenomes), `reads_split`, `reads_span` |
+| `flags` | `homeolog_switch` (same chromosome number, different subgenomes), `reads_split`, `reads_span`, `reads_mixed` |
 | `evidence` | The counts in words |
 
 ## cobionts.tsv
