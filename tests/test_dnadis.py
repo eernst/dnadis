@@ -2107,6 +2107,65 @@ def test_select_subgenome_k_rejects_narrow_cluster_with_wide_tail():
     assert k == 1
 
 
+def test_infer_query_subgenomes_single_genome_with_overlapping_pieces_not_split(caplog):
+    """A single genome whose chromosomes carry overlapping pieces keeps one set.
+
+    No contig is chromosome-scale, so without the separation test every
+    contig would join the nearest of two cluster means and each chromosome
+    would be named and scaffolded as two partial sets.
+    """
+    import logging
+    import math
+    from dnadis.classification.classifier import infer_query_subgenomes
+
+    n = 80
+    values = [0.99 - 0.012 * -math.log(1 - (r + 0.5) / n) for r in range(n)]
+    _, ref_to_clfs, scores = _subgenome_k_inputs(
+        {f"chr{i}A": [values[i + 20 * q] for q in range(4)] for i in range(20)})
+    clfs = [c for v in ref_to_clfs.values() for c in v]
+    for c in clfs:
+        c.is_chromosome_scale = False
+    footprints = {(c.original_name, c.assigned_ref_id): [(0, 1_000_000)] for c in clfs}
+
+    with caplog.at_level(logging.INFO):
+        infer_query_subgenomes(clfs, scores, scores, ref_footprints=footprints)
+
+    assert all(c.query_subgenome is None and c.query_subgenome_grp == 1 for c in clfs)
+    assert "Subgenome clustering (A): k=2 passes paired validation" in caplog.text
+
+
+def test_infer_query_subgenomes_close_pair_of_three_sets_are_copies():
+    """Two of three sets that overlap in identity share a set as numbered copies."""
+    from dnadis.classification.classifier import (
+        generate_contig_names, infer_query_subgenomes,
+    )
+    from dnadis.models import ContigClassification
+
+    clfs, scores, lengths = [], {}, {}
+    for i in range(1, 11):
+        ref = f"chr{i}A"
+        for tag, base in (("a", 0.950), ("b", 0.940), ("c", 0.890)):
+            name = f"{tag}{i}"
+            c = ContigClassification(
+                original_name=name, new_name="", classification="chrom_assigned",
+                reversed=False, cobiont_taxid=None, cobiont_sci=None,
+                assigned_ref_id=ref, ref_gene_proportion=0.5, contig_len=10_000_000)
+            c.is_chromosome_scale = True
+            clfs.append(c)
+            scores[(name, ref)] = base + ((i * 7) % 5 - 2) * 0.0015
+            lengths[name] = 10_000_000
+
+    infer_query_subgenomes(clfs, scores, scores)
+    names = generate_contig_names(clfs, lengths, "A")
+
+    by = {c.original_name: c for c in clfs}
+    for i in range(1, 11):
+        assert by[f"a{i}"].query_subgenome == by[f"b{i}"].query_subgenome == "s1"
+        assert by[f"c{i}"].query_subgenome == "s2"
+        assert {names[f"a{i}"], names[f"b{i}"]} == {f"chr{i}A_s1_c1", f"chr{i}A_s1_c2"}
+        assert names[f"c{i}"] == f"chr{i}A_s2"
+
+
 def test_select_subgenome_k_keeps_tight_close_subgenomes():
     """Two tight sets 1% identity apart are separated, however small the gap."""
     from dnadis.classification.classifier import _select_subgenome_k

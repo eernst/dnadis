@@ -934,8 +934,10 @@ def _copies_covering_fragment(
 
 # Smallest Ashman's D between adjacent clusters for a split into query
 # subgenome sets.  D > 2 is the usual bound for two separate Gaussians
-# (Ashman et al. 1994); a skewed single distribution with a long low tail
-# can still fit two components at D ~2.2, so the bound is set above that.
+# (Ashman et al. 1994); a narrow cluster beside a wide low tail (one
+# genome with leftover haplotigs and repeat-rich pieces) still fits two
+# components at D 2.2-2.7, so the bound is set above that range.  Calibrated
+# on gap-compressed identity (nucleotide mode).
 _MIN_SUBGENOME_SEPARATION = 3.0
 
 
@@ -965,6 +967,7 @@ def _select_subgenome_k(
     min_consistency: float = 0.70,
     ref_footprints: Optional[Dict[Tuple[str, str], List[Tuple[int, int]]]] = None,
     min_separation: float = _MIN_SUBGENOME_SEPARATION,
+    label: str = "default",
 ) -> Tuple[int, List[float], List[float]]:
     """Select the number of query subgenomes using GMM + paired validation.
 
@@ -994,6 +997,7 @@ def _select_subgenome_k(
             have their copies in different clusters (default 0.70).
         min_separation: Minimum Ashman's D between adjacent clusters
             (default ``_MIN_SUBGENOME_SEPARATION``).
+        label: Reference subgenome named in log messages.
         ref_footprints: Optional ``(contig, ref_id) -> merged reference
             intervals``.  When given, only contigs whose footprint overlaps
             another contig's on the same reference count as copies in the
@@ -1072,7 +1076,7 @@ def _select_subgenome_k(
         d = _cluster_separation(sorted_means, sorted_stds)
         if d < min_separation:
             logger.info(
-                f"Subgenome clustering: k={k} passes paired validation but its "
+                f"Subgenome clustering ({label}): k={k} passes paired validation but its "
                 f"clusters overlap (Ashman's D={d:.2f} < {min_separation:g}); not split"
             )
             return False
@@ -1246,7 +1250,7 @@ def infer_query_subgenomes(
         # Fit candidate GMMs (k=1..3)
         best_k, sorted_means, sorted_stds = _select_subgenome_k(
             all_idents, ref_to_clfs, ref_ids, qr_cluster_score,
-            ref_footprints=ref_footprints,
+            ref_footprints=ref_footprints, label=ref_sg or "default",
         )
 
         ref_sg_gmm[ref_sg] = (best_k, sorted_means)
@@ -1328,9 +1332,10 @@ def infer_query_subgenomes(
         # fragment joins it; if none remain it is an extra copy of the region
         # (collapsed duplicate, divergent haplotig, segmental duplication)
         # and gets no set.  Otherwise the nearest cluster mean among the
-        # remaining sets decides.  The cluster score rises as a contig's
-        # unaligned (repeat) fraction falls, so it is biased by contig size
-        # and is used only when the footprints do not decide.
+        # remaining sets decides.  The cluster score is noisier for short
+        # contigs, which rest on fewer alignments (and, as the coverage-weighted
+        # score without ``de`` tags, rises as the unaligned repeat fraction
+        # falls), so it is used only when the footprints do not decide.
         frag_assign: List[Tuple[ContigClassification, Optional[int], str]] = []
         for frag in fragments:
             covering = None
