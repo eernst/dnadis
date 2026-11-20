@@ -932,6 +932,37 @@ def _copies_covering_fragment(
     return covering
 
 
+# Smallest Ashman's D between adjacent clusters for a split into query
+# subgenome sets.  D > 2 is the usual bound for two separate Gaussians
+# (Ashman et al. 1994); a narrow cluster beside a wide low tail (one
+# genome with leftover haplotigs and repeat-rich pieces) still fits two
+# components at D 2.2-2.7, so the bound is set above that range.  Calibrated
+# on gap-compressed identity (nucleotide mode).
+_MIN_SUBGENOME_SEPARATION = 3.0
+# The coverage-weighted score (protein mode) depends on how much of each
+# contig aligns, so genuine sets overlap there (D 1.3-6.2), and paired
+# validation alone has not split a single genome on that score.
+_MIN_SUBGENOME_SEPARATION_COVERAGE_SCORE = 0.0
+
+
+def _cluster_separation(sorted_means: List[float], sorted_stds: List[float]) -> float:
+    """Smallest Ashman's D between adjacent clusters (means sorted).
+
+    D = sqrt(2) * |m1 - m2| / sqrt(s1^2 + s2^2).  It scales the gap between
+    means by the clusters' widths, so two tight clusters a small identity gap
+    apart are separated, and a narrow cluster beside a wide one with nearly
+    the same mean is not.
+    """
+    d_min = math.inf
+    for (m1, s1), (m2, s2) in zip(zip(sorted_means, sorted_stds),
+                                  zip(sorted_means[1:], sorted_stds[1:])):
+        spread = math.sqrt(s1 * s1 + s2 * s2)
+        gap = abs(m1 - m2)
+        d = math.sqrt(2) * gap / spread if spread > 0 else (math.inf if gap > 0 else 0.0)
+        d_min = min(d_min, d)
+    return d_min
+
+
 def _select_subgenome_k(
     all_idents: List[float],
     ref_to_clfs: Dict[str, List['ContigClassification']],
@@ -939,6 +970,8 @@ def _select_subgenome_k(
     qr_cluster_score: Dict[Tuple[str, str], float],
     min_consistency: float = 0.70,
     ref_footprints: Optional[Dict[Tuple[str, str], List[Tuple[int, int]]]] = None,
+    min_separation: float = _MIN_SUBGENOME_SEPARATION,
+    label: str = "default",
 ) -> Tuple[int, List[float], List[float]]:
     """Select the number of query subgenomes using GMM + paired validation.
 
@@ -949,11 +982,14 @@ def _select_subgenome_k(
        what fraction have their copies landing in different clusters?).
        Accept k=2 if consistency >= min_consistency.
 
-    Paired validation is the sole gatekeeper — no minimum separation
-    threshold is imposed.  If 70%+ of chromosomes consistently place
-    their copies in different clusters, the split is accepted regardless
-    of how small the identity gap is.  This avoids rejecting valid
-    segmentations for closely related ancestral subgenomes.
+    A split must also pass a separation test: adjacent clusters must have
+    Ashman's D >= ``min_separation`` (see :func:`_cluster_separation`).
+    Paired validation alone accepts a cut through one broad identity
+    distribution whenever most chromosomes carry several overlapping contigs
+    (leftover haplotigs, repeat-rich pieces, chimeric contigs in a
+    fragmented single-genome assembly): their scores then fall on both sides
+    of the cut.  D is scaled by cluster width, not a fixed identity gap, so
+    closely related subgenomes still split when each set is tight.
 
     Args:
         all_idents: All cluster scores from multi-copy chromosomes.
@@ -963,6 +999,9 @@ def _select_subgenome_k(
             for clustering (same definition as values in ``all_idents``).
         min_consistency: Minimum fraction of 2-copy chromosomes that must
             have their copies in different clusters (default 0.70).
+        min_separation: Minimum Ashman's D between adjacent clusters
+            (default ``_MIN_SUBGENOME_SEPARATION``).
+        label: Reference subgenome named in log messages.
         ref_footprints: Optional ``(contig, ref_id) -> merged reference
             intervals``.  When given, only contigs whose footprint overlaps
             another contig's on the same reference count as copies in the
@@ -1035,18 +1074,30 @@ def _select_subgenome_k(
             best_bic = bic
             bic_k = k
 
-    # Validate BIC result via paired consistency
+    def _accept(sorted_means, sorted_stds, k):
+        if not _validate_k_by_pairing(sorted_means, k):
+            return False
+        d = _cluster_separation(sorted_means, sorted_stds)
+        if d < min_separation:
+            logger.info(
+                f"Subgenome clustering ({label}): k={k} passes paired validation but its "
+                f"clusters overlap (Ashman's D={d:.2f} < {min_separation:g}); not split"
+            )
+            return False
+        return True
+
+    # Validate BIC result via paired consistency and separation
     if bic_k > 1 and bic_k in fits:
         _, bic_means, bic_stds, _ = fits[bic_k]
         sorted_means, sorted_stds = _sort_components(bic_means, bic_stds, bic_k)
-        if _validate_k_by_pairing(sorted_means, bic_k):
+        if _accept(sorted_means, sorted_stds, bic_k):
             return bic_k, sorted_means, sorted_stds
 
-    # Rescue: try k=2 with paired validation (BIC may be too conservative)
-    if 2 in fits:
+    # Rescue: try k=2 (BIC may be too conservative)
+    if 2 in fits and bic_k != 2:
         _, means_2, stds_2, _ = fits[2]
         sorted_means, sorted_stds = _sort_components(means_2, stds_2, 2)
-        if _validate_k_by_pairing(sorted_means, 2):
+        if _accept(sorted_means, sorted_stds, 2):
             return 2, sorted_means, sorted_stds
 
     # Fall back to k=1
@@ -1102,6 +1153,7 @@ def infer_query_subgenomes(
     subgenome_k: float = 1.0,
     ref_footprints: Optional[Dict[Tuple[str, str], List[Tuple[int, int]]]] = None,
     cluster_fit_pairs: Optional[Set[Tuple[str, str]]] = None,
+    min_separation: float = _MIN_SUBGENOME_SEPARATION,
 ) -> None:
     """Infer query subgenomes when multiple contigs map to the same reference.
 
@@ -1129,6 +1181,11 @@ def infer_query_subgenomes(
         cluster_fit_pairs: Optional ``(contig, ref_id)`` pairs whose scores
             inform the GMM fit; when given, other contigs are still assigned
             to the nearest cluster but do not shape it.
+        min_separation: Minimum Ashman's D between adjacent clusters for a
+            split (see :func:`_select_subgenome_k`).  The default is set for
+            gap-compressed identity; the caller passes
+            ``_MIN_SUBGENOME_SEPARATION_COVERAGE_SCORE`` for the
+            coverage-weighted score.
         ref_footprints: Optional ``(contig, ref_id) -> merged reference
             intervals``.  When given, the paired validation counts only
             contigs that overlap on the reference as copies, so pieces of one
@@ -1203,7 +1260,8 @@ def infer_query_subgenomes(
         # Fit candidate GMMs (k=1..3)
         best_k, sorted_means, sorted_stds = _select_subgenome_k(
             all_idents, ref_to_clfs, ref_ids, qr_cluster_score,
-            ref_footprints=ref_footprints,
+            ref_footprints=ref_footprints, min_separation=min_separation,
+            label=ref_sg or "default",
         )
 
         ref_sg_gmm[ref_sg] = (best_k, sorted_means)
@@ -1285,9 +1343,10 @@ def infer_query_subgenomes(
         # fragment joins it; if none remain it is an extra copy of the region
         # (collapsed duplicate, divergent haplotig, segmental duplication)
         # and gets no set.  Otherwise the nearest cluster mean among the
-        # remaining sets decides.  The cluster score rises as a contig's
-        # unaligned (repeat) fraction falls, so it is biased by contig size
-        # and is used only when the footprints do not decide.
+        # remaining sets decides.  The cluster score is noisier for short
+        # contigs, which rest on fewer alignments (and, as the coverage-weighted
+        # score without ``de`` tags, rises as the unaligned repeat fraction
+        # falls), so it is used only when the footprints do not decide.
         frag_assign: List[Tuple[ContigClassification, Optional[int], str]] = []
         for frag in fragments:
             covering = None
@@ -2221,6 +2280,10 @@ def classify_all_contigs(
             subgenome_k=subgenome_k,
             ref_footprints=ref_footprints,
             cluster_fit_pairs=fit_pairs,
+            min_separation=(
+                _MIN_SUBGENOME_SEPARATION if ev.qr_gc_ident
+                else _MIN_SUBGENOME_SEPARATION_COVERAGE_SCORE
+            ),
         )
 
     assign_contig_names(
