@@ -1535,6 +1535,19 @@ def run_assembly(
     if args.scaffold:
         logger.phase("Phase 15: Reference-guided scaffolding")
         from dnadis.output.scaffolding import scaffold_chromosomes, write_agp, orientations_from_agp
+        from dnadis.output.tsv_output import chimera_fractions
+
+        # Same rule as the contig_summary ``chimeric`` column
+        chimeric_contigs = {
+            q for q in qry_lengths
+            if chimera_fractions(
+                int(ev.contig_total.get(q, 0) or 0),
+                len(ev.contig_refs.get(q, set()) or set()),
+                int(best_bp.get(q, 0) or 0),
+                int(second_bp.get(q, 0) or 0),
+                args.chimera_primary_frac, args.chimera_secondary_frac,
+            ) is not None
+        }
 
         scaffolded_seqs, agp_lines, scaffold_confidences = scaffold_chromosomes(
             query_fasta=qry,
@@ -1554,6 +1567,7 @@ def run_assembly(
             no_join=sister_applied,
             query_gaps=qry_gaps,
             macro_block_rows=ev.macro_block_rows,
+            chimeric=chimeric_contigs,
         )
 
         if scaffolded_seqs:
