@@ -939,6 +939,10 @@ def _copies_covering_fragment(
 # components at D 2.2-2.7, so the bound is set above that range.  Calibrated
 # on gap-compressed identity (nucleotide mode).
 _MIN_SUBGENOME_SEPARATION = 3.0
+# The coverage-weighted score (protein mode) depends on how much of each
+# contig aligns, so genuine sets overlap there (D 1.3-6.2), and paired
+# validation alone has not split a single genome on that score.
+_MIN_SUBGENOME_SEPARATION_COVERAGE_SCORE = 0.0
 
 
 def _cluster_separation(sorted_means: List[float], sorted_stds: List[float]) -> float:
@@ -1149,6 +1153,7 @@ def infer_query_subgenomes(
     subgenome_k: float = 1.0,
     ref_footprints: Optional[Dict[Tuple[str, str], List[Tuple[int, int]]]] = None,
     cluster_fit_pairs: Optional[Set[Tuple[str, str]]] = None,
+    min_separation: float = _MIN_SUBGENOME_SEPARATION,
 ) -> None:
     """Infer query subgenomes when multiple contigs map to the same reference.
 
@@ -1176,6 +1181,11 @@ def infer_query_subgenomes(
         cluster_fit_pairs: Optional ``(contig, ref_id)`` pairs whose scores
             inform the GMM fit; when given, other contigs are still assigned
             to the nearest cluster but do not shape it.
+        min_separation: Minimum Ashman's D between adjacent clusters for a
+            split (see :func:`_select_subgenome_k`).  The default is set for
+            gap-compressed identity; the caller passes
+            ``_MIN_SUBGENOME_SEPARATION_COVERAGE_SCORE`` for the
+            coverage-weighted score.
         ref_footprints: Optional ``(contig, ref_id) -> merged reference
             intervals``.  When given, the paired validation counts only
             contigs that overlap on the reference as copies, so pieces of one
@@ -1250,7 +1260,8 @@ def infer_query_subgenomes(
         # Fit candidate GMMs (k=1..3)
         best_k, sorted_means, sorted_stds = _select_subgenome_k(
             all_idents, ref_to_clfs, ref_ids, qr_cluster_score,
-            ref_footprints=ref_footprints, label=ref_sg or "default",
+            ref_footprints=ref_footprints, min_separation=min_separation,
+            label=ref_sg or "default",
         )
 
         ref_sg_gmm[ref_sg] = (best_k, sorted_means)
@@ -2269,6 +2280,10 @@ def classify_all_contigs(
             subgenome_k=subgenome_k,
             ref_footprints=ref_footprints,
             cluster_fit_pairs=fit_pairs,
+            min_separation=(
+                _MIN_SUBGENOME_SEPARATION if ev.qr_gc_ident
+                else _MIN_SUBGENOME_SEPARATION_COVERAGE_SCORE
+            ),
         )
 
     assign_contig_names(

@@ -2134,6 +2134,65 @@ def test_infer_query_subgenomes_single_genome_with_overlapping_pieces_not_split(
     assert "Subgenome clustering (A): k=2 passes paired validation" in caplog.text
 
 
+@pytest.mark.parametrize("gc_ident, expected", [
+    (True, 3.0),    # gap-compressed identity (nucleotide mode)
+    (False, 0.0),   # coverage-weighted score (no de tags, protein mode)
+])
+def test_classify_sets_subgenome_separation_by_cluster_score(monkeypatch, gc_ident, expected):
+    """The separation bound applies to gap-compressed identity only."""
+    import dnadis.classification.classifier as clf_mod
+
+    seen = {}
+    monkeypatch.setattr(clf_mod, "infer_query_subgenomes",
+                        lambda *a, **kw: seen.update(kw))
+    macro_rows = [_make_macro_row("anchor", "chr1A", "+", 0, 10_000_000, 9_000_000,
+                                  0, 10_000_000)]
+    ev = _minimal_chain_evidence(macro_rows, {("anchor", "chr1A"): 0.96},
+                                 {("anchor", "chr1A"): 10_000_000})
+    if gc_ident:
+        ev.qr_gc_ident = {("anchor", "chr1A"): 0.97}
+        ev.qr_gc_ident_bp = {("anchor", "chr1A"): 9_000_000}
+    clf_mod.classify_all_contigs(
+        query_fasta=Path("/nonexistent.fa"),
+        query_lengths={"anchor": 10_000_000},
+        best_ref={"anchor": "chr1A"},
+        chr_like_minlen=5_000_000,
+        ev=ev,
+        ref_gene_counts={},
+        chrC_contig=None,
+        chrM_contig=None,
+        organelle_debris=set(),
+        rdna_contigs=set(),
+        cobionts={},
+        chromosome_debris=set(),
+        other_debris=set(),
+        add_subgenome_suffix=None,
+        ref_lengths={"chr1A": 15_000_000},
+        synteny_mode="nucleotide" if gc_ident else "protein",
+    )
+    assert seen["min_separation"] == expected
+
+
+def test_infer_query_subgenomes_min_separation_zero_splits_overlapping_sets():
+    """With no separation bound, paired validation alone decides the split."""
+    import math
+    from dnadis.classification.classifier import infer_query_subgenomes
+
+    n = 80
+    values = [0.99 - 0.012 * -math.log(1 - (r + 0.5) / n) for r in range(n)]
+    _, ref_to_clfs, scores = _subgenome_k_inputs(
+        {f"chr{i}A": [values[i + 20 * q] for q in range(4)] for i in range(20)})
+    clfs = [c for v in ref_to_clfs.values() for c in v]
+    for c in clfs:
+        c.is_chromosome_scale = False
+    footprints = {(c.original_name, c.assigned_ref_id): [(0, 1_000_000)] for c in clfs}
+
+    infer_query_subgenomes(clfs, scores, scores, ref_footprints=footprints,
+                           min_separation=0.0)
+
+    assert {c.query_subgenome_grp for c in clfs} == {1, 2}
+
+
 def test_infer_query_subgenomes_close_pair_of_three_sets_are_copies():
     """Two of three sets that overlap in identity share a set as numbered copies."""
     from dnadis.classification.classifier import (
