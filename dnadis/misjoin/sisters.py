@@ -40,6 +40,17 @@ flank is followed along the junction contig as a chain of collinear hits
 ``absent``
     Neither flank aligns.
 
+Units of any status whose chains reach ``same_genotype_identity`` are marked
+``same_genotype``: independent assemblies of one inbred line (or of the same
+reads) are that close to the target as well, so a same-genotype carrier may
+be a structural variant of that genotype rather than an inherited misjoin.
+
+A unit is a sister for a junction only when its chromosome contigs
+(``chrom_assigned``/``chrom_fragment``) assigned to each junction
+chromosome of a subgenome it holds add up to ``min_chrom_frac`` of that
+chromosome's reference length: a near-empty haplotype (a few Mb of
+fragments) cannot show where a chromosome continues.
+
 The chain ends refine the break: ``x_left`` is where the left side's sister
 chain stops on the junction contig, ``x_right`` where the right side's
 starts.  When ``x_left <= x_right`` the break lies between them; when the
@@ -57,7 +68,7 @@ from statistics import median_low
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from dnadis.alignment.external_tools import get_minimap2_exe
-from dnadis.misjoin.junctions import Junction
+from dnadis.misjoin.junctions import Junction, read_reference_lengths
 from dnadis.utils.io_utils import (
     merge_intervals,
     open_maybe_gzip,
@@ -143,6 +154,7 @@ class SisterContig:
     subgenome: str
     group: str           # query_subgenome ('' when the assembly has one copy)
     length: int
+    ref_id: str = ""     # assigned reference chromosome
 
 
 @dataclass
@@ -150,19 +162,39 @@ class SisterAssembly:
     name: str
     chrs_fasta: Path
     contigs: Dict[str, SisterContig] = field(default_factory=dict)
+    ref_lengths: Dict[str, int] = field(default_factory=dict)
 
     @property
     def subgenomes(self) -> Set[str]:
         return {c.subgenome for c in self.contigs.values()}
+
+    def _label(self, c: SisterContig) -> str:
+        return f"{self.name}_{c.group}" if c.group else self.name
 
     def units(self, subgenomes: Sequence[str]) -> Dict[str, Set[str]]:
         """unit label -> contig names of the given subgenomes."""
         out: Dict[str, Set[str]] = defaultdict(set)
         for c in self.contigs.values():
             if c.subgenome in subgenomes:
-                label = f"{self.name}_{c.group}" if c.group else self.name
-                out[label].add(c.name)
+                out[self._label(c)].add(c.name)
         return dict(out)
+
+    def covers(self, label: str, sides: Sequence[Tuple[str, str]], min_frac: float) -> bool:
+        """Whether unit *label* holds enough of each junction chromosome.
+
+        *sides* are (reference id, subgenome) pairs.  A side whose subgenome
+        the unit does not hold, or whose reference length is unknown (an
+        older run, another reference), is not tested.
+        """
+        mine = [c for c in self.contigs.values() if self._label(c) == label]
+        held = {c.subgenome for c in mine}
+        for ref, sg in sides:
+            if sg not in held or ref not in self.ref_lengths:
+                continue
+            bp = sum(c.length for c in mine if c.ref_id == ref)
+            if bp < min_frac * self.ref_lengths[ref]:
+                return False
+        return True
 
 
 def load_sister(a: AssemblyOutputs) -> Optional[SisterAssembly]:
@@ -178,7 +210,9 @@ def load_sister(a: AssemblyOutputs) -> Optional[SisterAssembly]:
             subgenome=row.get("assigned_subgenome") or "",
             group=row.get("query_subgenome") or "",
             length=int(row["length"]),
+            ref_id=row.get("assigned_ref_id") or "",
         )
+    s.ref_lengths, _ = read_reference_lengths(a.directory.parent)
     return s if s.contigs else None
 
 
@@ -379,6 +413,7 @@ class SisterParams:
     profile_bin: int = 100
     min_extend: int = 50_000
     same_genotype_identity: float = 0.9995
+    min_chrom_frac: float = 0.5
     repeat_identity: float = 0.95
     repeat_cov: float = 0.80
 
@@ -394,6 +429,7 @@ class UnitEvidence:
     left_continues: bool = False
     right_continues: bool = False
     identity: Optional[float] = None
+    same_genotype: bool = False
 
 
 def _overlap(a0: int, a1: int, b0: int, b1: int) -> int:
@@ -479,11 +515,12 @@ def evaluate_unit(
         rchain = _chain(use, ranchor, rightward=False, tol=p.chain_tol)
         ev.x_right = min(h.rstart for h in rchain)
     ev.identity = round(_chain_identity(lchain + rchain), 5)
+    ev.same_genotype = ev.identity >= p.same_genotype_identity
 
     if lchain and rchain and lc == rc:
         lend = max(lchain, key=lambda h: (h.rend, h.rstart))
         rstart = min(rchain, key=lambda h: (h.rstart, h.rend))
-        same_geno = ev.identity >= p.same_genotype_identity
+        same_geno = ev.same_genotype
         connected = ranchor in lchain or lanchor in rchain
         collinear = lanchor.strand == ranchor.strand and (
             connected or abs(lend.diag() - rstart.diag()) <= p.carry_tol)

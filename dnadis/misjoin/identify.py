@@ -29,6 +29,14 @@ Calls (``call`` column) and the default ``action``:
     holds both sides near each other on one contig): a
     structural variant shared with that sister (or a segment placed
     differently by the reference's lineage), not a misjoin.
+``genotype_specific`` (review)
+    No unit of another genotype carries the join, ``min_genotype_carriers``
+    or more units of the same genotype do, and none of the same genotype
+    contradicts it.  Assemblies of one genotype are not independent tests
+    (built from the same reads, or one derived from another's contigs), but
+    when all of them agree the join may be a structural variant of that
+    genotype; when one of them contradicts it, it is called on the
+    contradicting units as usual.
 ``unresolved`` (review)
     Sisters neither carry nor contradict the join often enough.
 ``reference_only`` (review)
@@ -43,6 +51,17 @@ raises a ``misjoin`` or ``repeat_misjoin`` call to high confidence and is
 flagged ``interstitial_telomere``; other calls keep their action (a
 sister-supported join of chromosome ends is a fusion shared with sisters).
 
+A short run of another chromosome (contig extent under ``max_insert_bp``)
+between two runs of one chromosome gives two junctions; a break at either
+would cut that chromosome, so a ``misjoin`` call there becomes
+``insertion`` (review, flag ``short_insert``), unless the break is at a
+scaffold gap.  ``high`` confidence needs
+units that ``end`` at the junction to be at most a tenth of the units with
+evidence.  When both sides' runs are sparse (aligned over less than
+``min_side_density`` of their extent on the contig: scattered repeat hits
+in a knob, satellite or transposon-rich region, not chromosome segments),
+a ``break`` becomes ``review`` (flag ``sparse_sides``).
+
 Reads override the action when they are clear: ``min_split`` split reads at
 the break with fewer than two spanning reads give ``break``; ``min_spanning``
 spanning reads with fewer than ``min_split`` split reads give ``keep``.
@@ -50,10 +69,11 @@ spanning reads with fewer than ``min_split`` split reads give ``keep``.
 from __future__ import annotations
 
 import csv
+import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 from dnadis.detection.telomere import DEFAULT_TELOMERE_MOTIF, telomere_arrays
 from dnadis.misjoin import reads as rd
@@ -64,6 +84,7 @@ from dnadis.misjoin.junctions import (
     find_partners,
     is_homeolog_switch,
     read_macro_blocks,
+    read_reference_lengths,
 )
 from dnadis.utils.io_utils import open_maybe_gzip
 from dnadis.utils.logging_config import get_logger
@@ -104,6 +125,9 @@ class IdentifyParams:
     telomere_motif: str = DEFAULT_TELOMERE_MOTIF
     telomere_min_bp: int = 1_000
     telomere_window: int = 20_000
+    min_genotype_carriers: int = 2
+    max_insert_bp: int = 300_000
+    min_side_density: float = 0.1
     sisters: sis.SisterParams = field(default_factory=sis.SisterParams)
     reads: rd.ReadParams = field(default_factory=rd.ReadParams)
 
@@ -252,12 +276,17 @@ def decide(
     carry = _status(units, "carries") + _status(units, "nearby")
     contra = _status(units, "contradicts")
     spans = _status(units, "spans")
+    ends = _status(units, "ends")
     present = [u for u in units if u.status != "absent"]
+    same_carry = _status(units, "carries_same_genotype")
+    same_contra = [u for u in contra if u.same_genotype]
     breaks, core, copies = place_breaks(j, units, repeats, shared, gaps, p)
 
     if carry:
         call, action = "sister_supported", "keep"
         confidence = "high" if len(carry) >= 2 else "medium"
+    elif len(same_carry) >= p.min_genotype_carriers and not same_contra:
+        call, action, confidence = "genotype_specific", "review", "low"
     elif not present:
         call, action, confidence = "reference_only", "review", "low"
     elif spans and len(spans) >= len(contra):
@@ -266,7 +295,8 @@ def decide(
         call = "repeat_misjoin" if len(breaks) == 2 else "misjoin"
         action = "break"
         both_sides = any(u.left_continues for u in contra) and any(u.right_continues for u in contra)
-        confidence = "high" if len(contra) >= 3 and both_sides and not spans else "medium"
+        few_ends = 10 * len(ends) <= len(present)
+        confidence = "high" if len(contra) >= 3 and both_sides and not spans and few_ends else "medium"
     else:
         call, action, confidence = "unresolved", "review", "low"
     jc = JunctionCall(asm, j, call, action, confidence, breaks, units, core, copies)
@@ -276,7 +306,36 @@ def decide(
         jc.flags.append("nested_runs")
     if core and core[0] == "scaffold_gap":
         jc.flags.append("scaffold_gap")
+    if _side_density(j.left) < p.min_side_density and _side_density(j.right) < p.min_side_density:
+        # neither side is a chromosome segment: scattered repeat hits (knobs,
+        # satellite or transposon-rich regions) that the reference places on
+        # several chromosomes
+        jc.flags.append("sparse_sides")
+        if action == "break":
+            jc.action, jc.confidence = "review", "low"
     return jc
+
+
+def _side_density(s) -> float:
+    """Aligned fraction of a side's run on the contig."""
+    return s.aligned_bp / max(1, s.qend - s.qstart)
+
+
+def mark_short_inserts(calls: Sequence[JunctionCall], max_bp: int) -> None:
+    """Turn misjoin calls around a short run between two runs of one chromosome
+    into insertions (*calls*: the junctions in contig order).  Breaks at
+    scaffold gaps are kept: cutting both gaps lifts a scaffolded contig out."""
+    for a, b in zip(calls, calls[1:]):
+        ja, jb = a.junction, b.junction
+        mid = ja.right
+        if (ja.contig != jb.contig or jb.index != ja.index + 1
+                or ja.left.ref_id != jb.right.ref_id or mid.qend - mid.qstart >= max_bp):
+            continue
+        for jc in (a, b):
+            if jc.call in ("misjoin", "repeat_misjoin") and "scaffold_gap" not in jc.flags:
+                jc.call, jc.action, jc.confidence = "insertion", "review", "low"
+            if "short_insert" not in jc.flags:
+                jc.flags.append("short_insert")
 
 
 def mark_tandem(jc: JunctionCall, seq: Optional[str], p: rd.ReadParams) -> None:
@@ -541,6 +600,7 @@ class IdentifyInputs:
     fastas: Dict[str, Path] = field(default_factory=dict)
     bams: Dict[str, Path] = field(default_factory=dict)
     cram_reference: Optional[Path] = None
+    derived: Dict[str, Set[str]] = field(default_factory=dict)   # assembly -> assemblies sharing its contigs
 
 
 def _run_alignments(
@@ -570,10 +630,12 @@ def _query_files(
 
     A sister gets the regions of the other assemblies whose junctions involve
     a subgenome it has; sisters with the same set share one query file.
+    Query files and PAFs are named by the set of regions, so runs with other
+    targets sharing the work folder never reuse each other's alignments.
     """
     work_dir.mkdir(parents=True, exist_ok=True)
     (work_dir / "paf").mkdir(exist_ok=True)
-    files: Dict[Tuple[str, ...], Path] = {}
+    files: Dict[Tuple[str, ...], Tuple[Path, str]] = {}
     plan = []
     for name in sorted(sisters):
         sgs = sisters[name].subgenomes
@@ -582,10 +644,12 @@ def _query_files(
             continue
         key = tuple(r.name for r in mine)
         if key not in files:
-            path = work_dir / f"{stem}.{len(files) + 1}.fa"
+            tag = hashlib.sha1("\n".join(key).encode()).hexdigest()[:12]
+            path = work_dir / f"{stem}.{tag}.fa"
             sis.write_regions_fasta(mine, seqs, path)
-            files[key] = path
-        plan.append((name, files[key], work_dir / "paf" / f"{stem}.{name}.paf.gz"))
+            files[key] = (path, tag)
+        path, tag = files[key]
+        plan.append((name, path, work_dir / "paf" / f"{stem}.{tag}.{name}.paf.gz"))
     return plan
 
 
@@ -649,14 +713,21 @@ def _partner_segments(
 def _sister_units(
     name: str, j: Junction, sister_asms: Dict[str, sis.SisterAssembly],
     region_hits: Dict[str, List[sis.Hit]], p: sis.SisterParams,
+    derived: Optional[Dict[str, Set[str]]] = None,
 ) -> List[sis.UnitEvidence]:
+    """Evidence of every eligible sister unit (``SisterAssembly.covers``);
+    assemblies derived from the target's contigs, or it from theirs, are skipped."""
+    skip = {name} | (derived or {}).get(name, set())
+    sides = [(j.left.ref_id, j.left.subgenome), (j.right.ref_id, j.right.subgenome)]
     units = []
     for sname in sorted(sister_asms):
-        if sname == name:
+        if sname in skip:
             continue
+        s = sister_asms[sname]
         h = region_hits.get(sname, [])
-        for label, contigs in sorted(sister_asms[sname].units(j.subgenomes).items()):
-            units.append(sis.evaluate_unit(j, h, label, contigs, p))
+        for label, contigs in sorted(s.units(j.subgenomes).items()):
+            if s.covers(label, sides, p.min_chrom_frac):
+                units.append(sis.evaluate_unit(j, h, label, contigs, p))
     return units
 
 
@@ -673,7 +744,8 @@ def identify(
     partners: Dict[str, Dict[str, str]] = {}
     for name in sorted(inputs.targets):
         a = inputs.targets[name]
-        js = find_junctions(read_macro_blocks(a.macro_blocks),
+        _, chromosomes = read_reference_lengths(a.directory.parent)
+        js = find_junctions(read_macro_blocks(a.macro_blocks, chromosomes),
                             params.min_block_bp, params.min_side_bp)
         junctions[name] = js
         partners[name] = find_partners(js, params.partner_max_ref_dist)
@@ -715,7 +787,7 @@ def identify(
                 region = sis.region_for(regions, name, j)
                 rh = {s: hits[s].get(region.name, []) for s in hits} if region else {}
                 key = (name, j.junction_id)
-                units[key] = _sister_units(name, j, sister_asms, rh, sp)
+                units[key] = _sister_units(name, j, sister_asms, rh, sp, inputs.derived)
                 if any(u.status in ("carries", "nearby") for u in units[key]):
                     continue
                 breaks, core = locate_breaks(j, units[key], params.shared_min_bp)
@@ -760,6 +832,10 @@ def identify(
             jc.partner = partners[name].get(j.junction_id, "")
             mark_tandem(jc, seqs.get((name, j.contig)), params.reads)
             mark_telomere(jc, seqs.get((name, j.contig)), params)
+            calls.append(jc)
+        mark_short_inserts(calls, params.max_insert_bp)
+        for jc in calls:
+            j = jc.junction
             if bam is not None:
                 evs = []
                 for b in jc.breaks:
@@ -767,7 +843,6 @@ def identify(
                     evs.append(rd.read_evidence(bam, j.contig, b.lo, b.hi, span[0], span[1],
                                                 params.reads, b.tandem))
                 apply_reads(jc, evs, params.reads)
-            calls.append(jc)
         if bam is not None:
             bam.close()
         out[name] = calls

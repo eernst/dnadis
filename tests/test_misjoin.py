@@ -15,6 +15,8 @@ from dnadis.misjoin import reads as rd
 from dnadis.misjoin import sisters as sis
 from dnadis.misjoin.junctions import (
     Block,
+    Junction,
+    Side,
     build_runs,
     chromosome_number,
     find_junctions,
@@ -120,6 +122,34 @@ def test_organelle_blocks_are_ignored(tmp_path):
     blocks = read_macro_blocks(path)
     assert [b.ref_id for b in blocks["c1"]] == ["chr8P"]
     assert find_junctions(blocks) == []
+
+
+def test_unplaced_scaffold_blocks_are_transparent(tmp_path):
+    from dnadis.misjoin.junctions import read_reference_lengths
+    ref = tmp_path / "reference"
+    ref.mkdir()
+    (ref / "reference.ref_lengths.tsv").write_text(
+        "ref_id\tchrom_id\tsubgenome\tref_len\tkind\n"
+        "chr1A\tchr1\tA\t30000000\tnuclear\n"
+        "chr2A\tchr2\tA\t30000000\tnuclear\n"
+        "scaf_47\tscaf_47\tNA\t2000000\tother\n"
+        "scaf_59\tscaf_59\tNA\t2000000\tother\n")
+    lengths, nuclear = read_reference_lengths(tmp_path)
+    assert nuclear == {"chr1A", "chr2A"} and lengths["scaf_47"] == 2_000_000
+    path = tmp_path / "x.macro_blocks.tsv"
+    write_macro_blocks(path, [
+        blk("c1", "chr1A", "+", 0, 1_000_000, 0, 1_000_000),
+        blk("c1", "scaf_47", "+", 1_000_000, 1_400_000, 0, 400_000),     # knob array
+        blk("c1", "scaf_59", "-", 1_400_000, 1_800_000, 0, 400_000),
+        blk("c1", "chr1A", "+", 1_800_000, 3_000_000, 1_100_000, 2_300_000),
+        blk("c1", "scaf_59", "+", 3_000_000, 3_300_000, 500_000, 800_000),
+        blk("c1", "chr2A", "+", 3_300_000, 4_500_000, 5_000_000, 6_200_000),
+    ])
+    js = find_junctions(read_macro_blocks(path, nuclear))
+    assert [(j.left.ref_id, j.right.ref_id) for j in js] == [("chr1A", "chr2A")]
+    assert (js[0].start, js[0].end) == (3_000_000, 3_300_000)
+    # without the kind column every non-organelle block counts
+    assert len(find_junctions(read_macro_blocks(path))) == 5
 
 
 def test_chromosome_number():
@@ -251,6 +281,121 @@ def _units(statuses):
 def test_decide_carrier_keeps_the_join():
     jc = idf.decide("asm", _junction(), _units(["contradicts"] * 4 + ["carries"]), idf.IdentifyParams(), [])
     assert (jc.call, jc.action) == ("sister_supported", "keep")
+
+
+def _units_sg(spec):
+    """Units from (status, same_genotype) pairs."""
+    us = _units([s for s, _ in spec])
+    for u, (_, sg) in zip(us, spec):
+        u.same_genotype = sg
+    return us
+
+
+def test_decide_genotype_specific_when_same_genotype_assemblies_agree():
+    p = idf.IdentifyParams()
+    units = _units_sg([("carries_same_genotype", True)] * 3 + [("contradicts", False)] * 8)
+    jc = idf.decide("asm", _junction(), units, p, [])
+    assert (jc.call, jc.action) == ("genotype_specific", "review")
+    # one carrier of the same genotype could be built from the target's contigs
+    units = _units_sg([("carries_same_genotype", True)] + [("contradicts", False)] * 8)
+    assert idf.decide("asm", _junction(), units, p, []).call == "misjoin"
+
+
+def test_decide_same_genotype_contradiction_restores_the_misjoin():
+    units = _units_sg([("carries_same_genotype", True)] * 4 + [("contradicts", True)]
+                      + [("contradicts", False)] * 7)
+    jc = idf.decide("asm", _junction(), units, idf.IdentifyParams(), [])
+    assert (jc.call, jc.action, jc.confidence) == ("misjoin", "break", "high")
+
+
+def test_decide_units_that_end_lower_confidence():
+    p = idf.IdentifyParams()
+    jc = idf.decide("asm", _junction(), _units(["contradicts"] * 9 + ["ends"]), p, [])
+    assert jc.confidence == "high"
+    jc = idf.decide("asm", _junction(), _units(["contradicts"] * 8 + ["ends"] * 2), p, [])
+    assert (jc.call, jc.confidence) == ("misjoin", "medium")
+
+
+def test_decide_sparse_sides_are_reviewed():
+    blocks = [  # two runs of scattered hits, each ~4% aligned
+        blk("q", "chr8A", "+", 0, 100_000, 1_000, 101_000, length=12_000_000),
+        blk("q", "chr8A", "+", 2_900_000, 3_000_000, 2_000, 102_000, length=12_000_000),
+        blk("q", "chr9A", "+", 3_100_000, 3_160_000, 5_000, 65_000, length=12_000_000),
+        blk("q", "chr9A", "+", 4_500_000, 4_560_000, 9_000, 69_000, length=12_000_000),
+    ]
+    (j,) = find_junctions({"q": blocks})
+    units = [sis.UnitEvidence(f"u{i}", "contradicts", x_left=3_050_000, x_right=3_050_000,
+                              left_continues=True, right_continues=True) for i in range(4)]
+    jc = idf.decide("asm", j, units, idf.IdentifyParams(), [])
+    assert (jc.call, jc.action) == ("misjoin", "review") and "sparse_sides" in jc.flags
+    # one dense side is enough
+    jc = idf.decide("asm", _junction(), _units(["contradicts"] * 4), idf.IdentifyParams(), [])
+    assert jc.action == "break" and "sparse_sides" not in jc.flags
+
+
+def _call(contig, index, left, right, lq, rq, call="misjoin", flags=()):
+    side = lambda ref, q: Side(ref, "A", 0, "+", q[1] - q[0], q[0], q[1], 0, 1)  # noqa: E731
+    j = Junction(contig, 5_000_000, index, side(left, lq), side(right, rq), lq[1], rq[0])
+    action = "break" if call in ("misjoin", "repeat_misjoin") else "keep"
+    return idf.JunctionCall("asm", j, call, action, "high", [idf.Break(lq[1], lq[1], lq[1], "single")],
+                            flags=list(flags))
+
+
+def test_short_run_between_one_chromosome_is_an_insertion():
+    a = _call("c", 1, "chr1A", "chr2A", (0, 2_000_000), (2_010_000, 2_066_000))
+    b = _call("c", 2, "chr2A", "chr1A", (2_010_000, 2_066_000), (2_070_000, 5_000_000))
+    idf.mark_short_inserts([a, b], 300_000)
+    assert [(x.call, x.action) for x in (a, b)] == [("insertion", "review")] * 2
+    assert all("short_insert" in x.flags for x in (a, b))
+    # a long run, or one between two chromosomes, is left alone
+    a = _call("c", 1, "chr1A", "chr2A", (0, 2_000_000), (2_010_000, 2_500_000))
+    b = _call("c", 2, "chr2A", "chr1A", (2_010_000, 2_500_000), (2_510_000, 5_000_000))
+    c = _call("c", 3, "chr1A", "chr3A", (2_510_000, 4_000_000), (4_010_000, 4_050_000))
+    d = _call("c", 4, "chr3A", "chr4A", (4_010_000, 4_050_000), (4_060_000, 5_000_000))
+    idf.mark_short_inserts([a, b, c, d], 300_000)
+    assert [x.call for x in (a, b, c, d)] == ["misjoin"] * 4
+    # a scaffold join keeps its break: cutting both gaps lifts the contig out
+    a = _call("c", 1, "chr1A", "chr2A", (0, 2_000_000), (2_010_000, 2_066_000), flags=["scaffold_gap"])
+    b = _call("c", 2, "chr2A", "chr1A", (2_010_000, 2_066_000), (2_070_000, 5_000_000), flags=["scaffold_gap"])
+    idf.mark_short_inserts([a, b], 300_000)
+    assert [x.action for x in (a, b)] == ["break", "break"]
+
+
+def _sister(tmp_path, name, contigs, lengths):
+    s = sis.SisterAssembly(name, tmp_path / f"{name}.fa")
+    for cname, ref, sg, group, length in contigs:
+        s.contigs[cname] = sis.SisterContig(cname, sg, group, length, ref)
+    s.ref_lengths = lengths
+    return s
+
+
+def test_sister_units_need_the_junction_chromosomes(tmp_path):
+    lengths = {"chr10A": 20_000_000, "chr15A": 20_000_000}
+    full = _sister(tmp_path, "full", [("a", "chr10A", "A", "", 19_000_000),
+                                      ("b", "chr15A", "A", "", 12_000_000)], lengths)
+    empty = _sister(tmp_path, "empty", [("a", "chr10A", "A", "", 300_000),
+                                        ("b", "chr15A", "A", "", 2_000_000)], lengths)
+    other_ref = _sister(tmp_path, "other", [("a", "Chr10", "A", "", 300_000)], {"Chr10": 20_000_000})
+    derived = _sister(tmp_path, "scaf", [("a", "chr10A", "A", "", 19_000_000),
+                                         ("b", "chr15A", "A", "", 19_000_000)], lengths)
+    asms = {s.name: s for s in (full, empty, other_ref, derived)}
+    units = idf._sister_units("asm", _junction(), asms, {}, sis.SisterParams(),
+                              {"asm": {"scaf"}, "scaf": {"asm"}})
+    # untestable sides (another reference's names) do not exclude a unit
+    assert [u.unit for u in units] == ["full", "other"]
+    assert full.covers("full", [("chr10A", "A"), ("chr15P", "P")], 0.5)   # P not held
+
+
+def test_query_files_are_keyed_by_region_set(tmp_path):
+    s = _sister(tmp_path, "sis", [("a", "chr1A", "A", "", 1_000)], {})
+    seqs = {("t1", "c"): "ACGT" * 100, ("t2", "c"): "TTGA" * 100}
+    r1 = sis.Region("t1|c|0", "t1", "c", 0, 100, ("A",))
+    r2 = sis.Region("t2|c|0", "t2", "c", 0, 100, ("A",))
+    (_, q1, paf1), = idf._query_files({"sis": s}, [r1], seqs, tmp_path, "regions")
+    (_, q2, paf2), = idf._query_files({"sis": s}, [r2], seqs, tmp_path, "regions")
+    # another run's targets: another query and another PAF for the same sister
+    assert q1 != q2 and paf1 != paf2
+    assert idf._query_files({"sis": s}, [r1], seqs, tmp_path, "regions")[0][2] == paf1
 
 
 def test_decide_same_genotype_carrier_does_not_keep():

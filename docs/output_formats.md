@@ -422,7 +422,7 @@ Organelle columns: `chrC_found` / `chrM_found` are `yes` (one `organelle_complet
 | `break_id` | `junction_id`, or with suffix `a`/`b` for the two edges of a shared segment |
 | `break_pos`, `break_lo`, `break_hi` | Break position and the interval it lies in. Without sister or read evidence, the midpoint of the reference junction interval |
 | `break_kind` | `single`, or `shared_left_edge`/`shared_right_edge` |
-| `call` | `misjoin`, `repeat_misjoin`, `sister_supported`, `unresolved` or `reference_only` |
+| `call` | `misjoin`, `repeat_misjoin`, `insertion`, `sister_supported`, `genotype_specific`, `unresolved` or `reference_only` |
 | `action` | `break`, `keep` or `review`; `dnadis misjoin break` applies `break` rows by default |
 | `confidence` | `high`, `medium` or `low` |
 | `left_ref`, `right_ref` | Reference chromosome of the run of macro blocks left and right of the junction |
@@ -441,7 +441,7 @@ Organelle columns: `chrC_found` / `chrM_found` are `yes` (one `organelle_complet
 | `carriers`, `nearby`, `same_genotype_carriers`, `contradictors` | Unit labels per status (`<assembly>` or `<assembly>_<group>`) |
 | `reads_split`, `reads_split_pos`, `reads_spanning` | With `--bam`: reads in the largest clipped-end cluster and its position, and reads spanning the break (or the shared segment) |
 | `partner_junction` | Junction in another contig joining the same two chromosomes at nearby reference positions (the reciprocal product) |
-| `flags` | `homeolog_switch` (same chromosome number, different subgenomes), `reads_split`, `reads_span`, `reads_mixed`, `tandem_repeat` (a break inside a tandem array), `interstitial_telomere` (a telomere array at the break) |
+| `flags` | `homeolog_switch` (same chromosome number, different subgenomes), `reads_split`, `reads_span`, `reads_mixed`, `tandem_repeat` (a break inside a tandem array), `interstitial_telomere` (a telomere array at the break), `short_insert` (a short run of another chromosome between two runs of one chromosome), `sparse_sides` (both sides aligned over less than 10% of their extent; reviewed, not broken) |
 | `evidence` | The counts in words |
 
 ## cobionts.tsv

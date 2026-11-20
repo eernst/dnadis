@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 from dnadis.misjoin import breaker
 from dnadis.misjoin import identify as idf
@@ -59,6 +59,9 @@ def _identify_parser(sub) -> None:
     p.add_argument("--exclude-sister", action="append", default=[],
                    help="assembly not to use as a sister (repeatable), e.g. one built from "
                         "the same contigs")
+    p.add_argument("--derived", action="append", default=[], metavar="NAME=OF",
+                   help="NAME was built from OF's contigs (e.g. scaffolds of them), or OF from "
+                        "NAME's; neither is a sister of the other (repeatable)")
     p.add_argument("--no-sisters", action="store_true", help="reference evidence only")
     p.add_argument("--bam", action="append", metavar="NAME=PATH",
                    help="reads aligned to an assembly's input contigs (indexed BAM/CRAM)")
@@ -88,6 +91,18 @@ def _identify_parser(sub) -> None:
                    help="contradicting sister units needed to call a misjoin")
     g.add_argument("--repeat-min-copies", type=int, default=d.repeat_min_copies,
                    help="copies per sister that make the segment between the sides a repeat")
+    g.add_argument("--min-chrom-frac", type=float, default=s.min_chrom_frac,
+                   help="fraction of each junction chromosome a sister unit's chromosome "
+                        "contigs must hold for the unit to count")
+    g.add_argument("--min-genotype-carriers", type=int, default=d.min_genotype_carriers,
+                   help="same-genotype carriers (with no same-genotype contradiction) that "
+                        "make a join genotype_specific instead of a misjoin")
+    g.add_argument("--min-side-density", type=float, default=d.min_side_density,
+                   help="a junction whose two sides are both aligned over less than this "
+                        "fraction of their extent is reviewed, not broken")
+    g.add_argument("--max-insert-bp", type=int, default=d.max_insert_bp,
+                   help="a shorter run between two runs of one chromosome is an insertion, "
+                        "not a misjoin")
     g = p.add_argument_group("telomeres")
     g.add_argument("--telomere-motif", default=d.telomere_motif,
                    help="telomere repeat motif ('' to skip the telomere check)")
@@ -152,16 +167,27 @@ def run_identify(args) -> int:
 
     fastas = _fofn_paths(args.fofn)
     fastas.update(_name_path_pairs(args.fasta, "fasta"))
+    derived: Dict[str, Set[str]] = {}
+    for item in args.derived:
+        if "=" not in item:
+            raise SystemExit(f"--derived expects NAME=OF, got {item}")
+        a, b = item.split("=", 1)
+        derived.setdefault(a, set()).add(b)
+        derived.setdefault(b, set()).add(a)
     inputs = idf.IdentifyInputs(
         targets=targets, sisters=sisters, fastas=fastas,
         bams=_name_path_pairs(args.bam, "bam"), cram_reference=args.cram_reference,
+        derived=derived,
     )
     params = idf.IdentifyParams(
         min_block_bp=args.min_block_bp, min_side_bp=args.min_side_bp,
         min_contradict=args.min_contradict, repeat_min_copies=args.repeat_min_copies,
         telomere_motif=args.telomere_motif, telomere_min_bp=args.telomere_min_bp,
         telomere_window=args.telomere_window,
+        min_genotype_carriers=args.min_genotype_carriers, max_insert_bp=args.max_insert_bp,
+        min_side_density=args.min_side_density,
     )
+    params.sisters.min_chrom_frac = args.min_chrom_frac
     params.sisters.flank = args.flank
     params.sisters.min_identity = args.min_identity
     params.sisters.same_genotype_identity = args.same_genotype_identity

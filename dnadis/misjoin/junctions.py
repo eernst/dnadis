@@ -2,7 +2,10 @@
 
 A contig's macro blocks (``<asm>.macro_blocks.tsv``) are ordered along the
 contig and grouped into *runs* of consecutive blocks on one reference
-chromosome.  Runs with less than ``min_side_bp`` of aligned sequence are
+chromosome.  Only blocks on nuclear chromosomes count (``kind`` =
+``nuclear`` in the run's ``reference.ref_lengths.tsv``; without that
+column, organelle blocks are dropped): unplaced scaffolds and organelles are
+not chromosomes, so blocks on them neither split a run nor make a junction.  Runs with less than ``min_side_bp`` of aligned sequence are
 dropped, smallest first, and their neighbours re-merged, so short off-target
 blocks (repeats, small segments placed elsewhere by a divergent reference)
 do not split a run.  Each boundary between two remaining runs on different
@@ -21,7 +24,7 @@ import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Collection, Dict, Iterable, List, Optional, Tuple
 
 from dnadis.utils.io_utils import open_maybe_gzip
 from dnadis.utils.reference_utils import normalize_organelle_id
@@ -110,16 +113,45 @@ def _int(row: dict, key: str) -> int:
     return int(float(row[key]))
 
 
-def read_macro_blocks(path: Path, nuclear_only: bool = True) -> Dict[str, List[Block]]:
-    """contig -> its macro blocks, sorted along the contig.
+def read_reference_lengths(results_dir: Path) -> Tuple[Dict[str, int], Optional[set]]:
+    """Reference lengths and nuclear chromosome ids of a dnadis run.
 
-    With *nuclear_only*, blocks on organelle reference sequences are dropped
-    (organelle-derived insertions in nuclear sequence are expected).
+    From ``<results_dir>/reference/reference.ref_lengths.tsv``; the id set
+    is None when the file or its ``kind`` column is missing.
+    """
+    path = Path(results_dir) / "reference" / "reference.ref_lengths.tsv"
+    lengths: Dict[str, int] = {}
+    nuclear: Optional[set] = None
+    if not path.exists():
+        return lengths, nuclear
+    with open_maybe_gzip(path, "rt") as fh:
+        reader = csv.DictReader(fh, delimiter="\t")
+        has_kind = "kind" in (reader.fieldnames or [])
+        if has_kind:
+            nuclear = set()
+        for row in reader:
+            lengths[row["ref_id"]] = _int(row, "ref_len")
+            if has_kind and row["kind"] == "nuclear":
+                nuclear.add(row["ref_id"])
+    return lengths, nuclear
+
+
+def read_macro_blocks(
+    path: Path, chromosomes: Optional[Collection[str]] = None,
+) -> Dict[str, List[Block]]:
+    """contig -> its macro blocks on nuclear chromosomes, sorted along the contig.
+
+    With *chromosomes*, only blocks on those reference sequences are kept;
+    otherwise blocks on organelle sequences are dropped (organelle-derived
+    insertions in nuclear sequence are expected).
     """
     out: Dict[str, List[Block]] = defaultdict(list)
     with open_maybe_gzip(Path(path), "rt") as fh:
         for row in csv.DictReader(fh, delimiter="\t"):
-            if nuclear_only and normalize_organelle_id(row["ref_id"]):
+            if chromosomes is not None:
+                if row["ref_id"] not in chromosomes:
+                    continue
+            elif normalize_organelle_id(row["ref_id"]):
                 continue
             out[row["contig"]].append(Block(
                 contig=row["contig"],
