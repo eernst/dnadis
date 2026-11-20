@@ -2029,6 +2029,98 @@ def test_infer_query_subgenomes_no_split_similar_identities():
         )
 
 
+def _subgenome_k_inputs(scores_by_ref):
+    """(all scores, ref -> contigs, (contig, ref) -> score) for _select_subgenome_k."""
+    from dnadis.models import ContigClassification
+
+    all_scores, ref_to_clfs, scores = [], {}, {}
+    for ref_id, values in scores_by_ref.items():
+        ref_to_clfs[ref_id] = []
+        for j, value in enumerate(values):
+            name = f"{ref_id}_{j}"
+            scores[(name, ref_id)] = value
+            all_scores.append(value)
+            ref_to_clfs[ref_id].append(ContigClassification(
+                original_name=name, new_name="", classification="chrom_assigned",
+                reversed=False, cobiont_taxid=None, cobiont_sci=None,
+                assigned_ref_id=ref_id, ref_gene_proportion=0.5,
+                contig_len=1_000_000,
+            ))
+    return all_scores, ref_to_clfs, scores
+
+
+def test_cluster_separation_ashman_d():
+    import math
+    from dnadis.classification.classifier import _cluster_separation
+
+    assert _cluster_separation([0.95, 0.94], [0.002, 0.002]) == pytest.approx(5.0)
+    # Same mean, different widths: no separation
+    assert _cluster_separation([0.8935, 0.8935], [0.022, 0.012]) == 0.0
+    # Smallest adjacent pair decides for three clusters
+    assert _cluster_separation([0.95, 0.94, 0.90], [0.002, 0.002, 0.002]) == pytest.approx(5.0)
+    assert _cluster_separation([0.95, 0.94], [0.0, 0.0]) == math.inf
+
+
+def test_select_subgenome_k_rejects_overlapping_clusters():
+    """One skewed identity distribution, several overlapping contigs per chromosome.
+
+    Each chromosome carries contigs from every part of the distribution (as
+    leftover haplotigs and repeat-rich pieces do in a fragmented
+    single-genome assembly), so paired validation alone accepts a cut
+    through it; the separation test rejects it.
+    """
+    import math
+    from dnadis.classification.classifier import _select_subgenome_k
+
+    n = 80
+    values = [0.99 - 0.012 * -math.log(1 - (r + 0.5) / n) for r in range(n)]
+    by_ref = {f"chr{i}A": [values[i + 20 * q] for q in range(4)] for i in range(20)}
+    all_scores, ref_to_clfs, scores = _subgenome_k_inputs(by_ref)
+
+    k_unchecked, _, _ = _select_subgenome_k(
+        all_scores, ref_to_clfs, list(ref_to_clfs), scores, min_separation=0.0)
+    assert k_unchecked == 2
+    k, _, _ = _select_subgenome_k(all_scores, ref_to_clfs, list(ref_to_clfs), scores)
+    assert k == 1
+
+
+def test_select_subgenome_k_rejects_narrow_cluster_with_wide_tail():
+    """A narrow cluster beside a wide low tail fits two components at 2 < D < 3."""
+    from statistics import NormalDist
+    from dnadis.classification.classifier import (
+        _cluster_separation, _select_subgenome_k,
+    )
+
+    main = [NormalDist(0.975, 0.008).inv_cdf((r + 0.5) / 60) for r in range(60)]
+    tail = [NormalDist(0.940, 0.022).inv_cdf((r + 0.5) / 40) for r in range(40)]
+    by_ref = {
+        f"chr{i}A": [main[i], main[i + 20], main[i + 40], tail[i], tail[i + 20]]
+        for i in range(20)
+    }
+    all_scores, ref_to_clfs, scores = _subgenome_k_inputs(by_ref)
+
+    k2, means, stds = _select_subgenome_k(
+        all_scores, ref_to_clfs, list(ref_to_clfs), scores, min_separation=2.0)
+    assert k2 == 2
+    assert 2.0 < _cluster_separation(means, stds) < 3.0
+    k, _, _ = _select_subgenome_k(all_scores, ref_to_clfs, list(ref_to_clfs), scores)
+    assert k == 1
+
+
+def test_select_subgenome_k_keeps_tight_close_subgenomes():
+    """Two tight sets 1% identity apart are separated, however small the gap."""
+    from dnadis.classification.classifier import _select_subgenome_k
+
+    by_ref = {f"chr{i}A": [0.950 + (i % 3) * 0.001, 0.940 + (i % 3) * 0.001]
+              for i in range(20)}
+    all_scores, ref_to_clfs, scores = _subgenome_k_inputs(by_ref)
+
+    k, means, _ = _select_subgenome_k(all_scores, ref_to_clfs, list(ref_to_clfs), scores)
+    assert k == 2
+    assert means[0] == pytest.approx(0.951, abs=1e-3)
+    assert means[1] == pytest.approx(0.941, abs=1e-3)
+
+
 def test_infer_query_subgenomes_sets_identity():
     """Verify seq_identity_vs_ref is set for all contigs."""
     from dnadis.classification.classifier import infer_query_subgenomes
