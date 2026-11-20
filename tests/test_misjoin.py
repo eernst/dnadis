@@ -392,6 +392,72 @@ def test_apply_reads_overrides_action():
     assert jc.action == "keep" and "reads_mixed" in jc.flags
 
 
+def _array_contig(seed=7):
+    """30 kb unique, a 40,160 bp array of a 251 bp unit (1% substitutions), 30 kb unique."""
+    rng = random.Random(seed)
+    unit = "".join(rng.choice("ACGT") for _ in range(251))
+    arr = "".join(c if rng.random() > 0.01 else rng.choice("ACGT") for c in unit * 160)
+    left = "".join(rng.choice("ACGT") for _ in range(30_000))
+    right = "".join(rng.choice("ACGT") for _ in range(30_000))
+    return left + arr + right
+
+
+def test_tandem_run_finds_array():
+    seq = _array_contig()
+    p = rd.ReadParams()
+    lo, hi = rd.tandem_run(seq, 50_000, p)
+    assert 29_000 <= lo <= 31_000 and 69_000 <= hi <= 71_000
+    assert rd.tandem_run(seq, 31_500, p) == (lo, hi)      # near the edge
+    assert rd.tandem_run(seq, 10_000, p) is None
+    assert rd.tandem_run(seq, 85_000, p) is None
+
+
+def test_mark_tandem_flags_break():
+    seq = _array_contig()
+    jc = idf.decide("asm", _junction(), _units(["contradicts"] * 3), idf.IdentifyParams(), [])
+    jc.breaks[0].pos = 50_000
+    idf.mark_tandem(jc, seq, rd.ReadParams())
+    assert jc.breaks[0].tandem is not None and "tandem_repeat" in jc.flags
+    row = idf.call_rows(jc)[0]
+    assert row["tandem_start"] and "tandem array" in row["evidence"]
+
+
+def test_read_evidence_inside_tandem_array(tmp_path):
+    pysam = pytest.importorskip("pysam")
+    header = {"HD": {"VN": "1.6", "SO": "coordinate"}, "SQ": [{"SN": "ctg", "LN": 100_000}]}
+    path = tmp_path / "r.bam"
+    reads = []
+    # reads that lie inside the array (30-70 kb) and cover the break at 50 kb
+    for k in range(4):
+        reads.append((f"inside{k}", 32_000 + k, [(0, 36_000)]))
+    # reads clipped inside the array, as reads from another array would be
+    for k in range(5):
+        reads.append((f"clip{k}", 55_000 + k, [(4, 8_000), (0, 25_000)]))
+    # reads clipped at the array edge, and one read across the whole array
+    for k in range(3):
+        reads.append((f"edge{k}", 70_000, [(4, 5_000), (0, 10_000)]))
+    reads.append(("across", 25_000, [(0, 50_000)]))
+    with pysam.AlignmentFile(str(path), "wb", header=header) as out:
+        for name, start, cigar in sorted(reads, key=lambda x: x[1]):
+            a = pysam.AlignedSegment()
+            a.query_name = name
+            a.query_sequence = "A" * sum(n for op, n in cigar if op in (0, 4))
+            a.reference_id = 0
+            a.reference_start = start
+            a.cigartuples = cigar
+            a.mapping_quality = 60
+            out.write(a)
+    pysam.index(str(path))
+    bam = rd.open_alignments(path)
+    p = rd.ReadParams()
+    plain = rd.read_evidence(bam, "ctg", 49_000, 62_000, 50_000, 50_000, p)
+    assert (plain.split_reads, plain.split_pos, plain.spanning) == (5, 55_002, 5)
+    ev = rd.read_evidence(bam, "ctg", 49_000, 62_000, 50_000, 50_000, p, repeat=(30_000, 70_000))
+    assert ev.spanning == 1          # only "across" covers the array plus flank
+    ev = rd.read_evidence(bam, "ctg", 49_000, 72_000, 50_000, 50_000, p, repeat=(30_000, 70_000))
+    assert (ev.split_reads, ev.split_pos) == (3, 70_000)
+
+
 def test_read_evidence_from_bam(tmp_path):
     pysam = pytest.importorskip("pysam")
     header = {"HD": {"VN": "1.6", "SO": "coordinate"}, "SQ": [{"SN": "ctg", "LN": 100_000}]}

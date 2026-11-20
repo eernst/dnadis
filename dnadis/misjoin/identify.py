@@ -72,7 +72,7 @@ COLUMNS = [
     "right_ref", "right_ref_pos", "right_strand", "right_aligned_bp",
     "right_contig_start", "right_contig_end",
     "ref_gap_start", "ref_gap_end",
-    "core_type", "core_start", "core_end", "core_copies",
+    "core_type", "core_start", "core_end", "core_copies", "tandem_start", "tandem_end",
     "n_sister_units", "n_carry", "n_nearby", "n_carry_same_genotype", "n_spans", "n_contradict",
     "n_ends", "n_absent",
     "carriers", "nearby", "same_genotype_carriers", "contradictors",
@@ -102,6 +102,7 @@ class Break:
     lo: int
     hi: int
     kind: str          # single | shared_left_edge | shared_right_edge
+    tandem: Optional[Tuple[int, int]] = None   # tandem array at the break
 
 
 @dataclass
@@ -265,6 +266,17 @@ def decide(
     return jc
 
 
+def mark_tandem(jc: JunctionCall, seq: Optional[str], p: rd.ReadParams) -> None:
+    """Record the tandem array at each break (scaffold gaps excepted)."""
+    if seq is None:
+        return
+    for b in jc.breaks:
+        if b.kind != "scaffold_gap":
+            b.tandem = rd.tandem_run(seq, b.pos, p)
+    if any(b.tandem for b in jc.breaks):
+        jc.flags.append("tandem_repeat")
+
+
 def apply_reads(jc: JunctionCall, evs: List[Optional[rd.ReadEvidence]], p: rd.ReadParams) -> None:
     """Refine positions and override the action from read evidence."""
     jc.reads = evs
@@ -326,6 +338,8 @@ def _evidence_text(jc: JunctionCall) -> str:
                 "scaffold_gap": "scaffold gap"}[kind]
         cp = f", {jc.core_copies} copies per sister" if jc.core_copies is not None else ""
         parts.append(f"{hi - lo:,} bp {what}{cp}")
+    for t in dict.fromkeys(b.tandem for b in jc.breaks if b.tandem):
+        parts.append(f"break in a {t[1] - t[0]:,} bp tandem array")
     seen = [e for e in jc.reads if e is not None]
     if seen:
         parts.append("reads: " + "; ".join(
@@ -372,6 +386,8 @@ def call_rows(jc: JunctionCall) -> List[Dict[str, str]]:
             "core_start": jc.core[1] if jc.core else None,
             "core_end": jc.core[2] if jc.core else None,
             "core_copies": jc.core_copies,
+            "tandem_start": b.tandem[0] if b.tandem else None,
+            "tandem_end": b.tandem[1] if b.tandem else None,
             "n_sister_units": len(units),
             "n_carry": len(_status(units, "carries")),
             "n_nearby": len(_status(units, "nearby")),
@@ -611,15 +627,15 @@ def identify(
     units: Dict[Tuple[str, str], List[sis.UnitEvidence]] = {}
     repeats: Dict[Tuple[str, str], List[Tuple[int, int, int]]] = {}
     shared: Dict[Tuple[str, str], Tuple[int, int]] = {}
+    seqs: Dict[Tuple[str, str], str] = {}
+    for name, js in junctions.items():
+        if js:
+            got = load_contig_sequences(inputs.targets[name], {j.contig for j in js},
+                                        inputs.fastas.get(name))
+            seqs.update({(name, c): s for c, s in got.items()})
     if has_sisters and any(junctions.values()):
         sp = params.sisters
         regions = sis.build_regions(junctions, sp.flank)
-        seqs: Dict[Tuple[str, str], str] = {}
-        for name, js in junctions.items():
-            if js:
-                got = load_contig_sequences(inputs.targets[name], {j.contig for j in js},
-                                            inputs.fastas.get(name))
-                seqs.update({(name, c): s for c, s in got.items()})
         plan = _query_files(sister_asms, regions, seqs, work_dir, "regions")
         logger.info(f"Aligning {len(regions)} junction regions to {len(plan)} sister assemblies")
         pafs = _run_alignments(plan, sister_asms, threads, jobs, copies=False)
@@ -665,7 +681,6 @@ def identify(
                                                params.shared_min_bp, sp.profile_bin)
             shared.update(_partner_segments(junctions, partners, probe_of, interval_of,
                                             by_name, seqs, work_dir, params))
-        del seqs
 
     gaps = {name: read_gaps(inputs.targets[name].path("gaps.bed")) for name in junctions}
     out: Dict[str, List[JunctionCall]] = {}
@@ -679,12 +694,13 @@ def identify(
             jc = decide(name, j, units.get(key, []), params, repeats.get(key, []),
                         shared.get(key), gaps[name].get(j.contig, []))
             jc.partner = partners[name].get(j.junction_id, "")
+            mark_tandem(jc, seqs.get((name, j.contig)), params.reads)
             if bam is not None:
                 evs = []
                 for b in jc.breaks:
                     span = (jc.core[1], jc.core[2]) if b.kind != "single" and jc.core else (b.pos, b.pos)
                     evs.append(rd.read_evidence(bam, j.contig, b.lo, b.hi, span[0], span[1],
-                                                params.reads))
+                                                params.reads, b.tandem))
                 apply_reads(jc, evs, params.reads)
             calls.append(jc)
         if bam is not None:
