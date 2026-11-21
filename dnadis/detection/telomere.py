@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from dnadis.models import TelomereResult
 from dnadis.utils.logging_config import get_logger
@@ -71,6 +71,42 @@ def _telomere_runs(
             max_count = max(max_count, run_bp // len(m))
 
     return total_bp, max_count
+
+
+def telomere_arrays(
+    sequence: str,
+    motif: str = DEFAULT_TELOMERE_MOTIF,
+    min_repeats: int = 3,
+    max_gap: int = 500,
+    offset: int = 0,
+) -> List[Tuple[int, int, int, str]]:
+    """Telomere repeat arrays in a sequence: (start, end, run bp, strand).
+
+    Runs of ``min_repeats`` or more motif copies on one strand, with at most
+    ``max_gap`` bp between consecutive runs (variant repeats), form one
+    array.  Strand ``+`` (the motif) means the chromosome end lies to the
+    right of the array, ``-`` (its reverse complement) to the left.
+    Coordinates are 0-based, half-open, shifted by *offset*.
+    """
+    if not sequence or not motif:
+        return []
+    sequence = sequence.upper()
+    motif = motif.upper()
+    arrays: List[Tuple[int, int, int, str]] = []
+    for m, strand in ((motif, "+"), (reverse_complement(motif), "-")):
+        cur: Optional[List[int]] = None
+        for match in re.finditer(f"(?:{re.escape(m)}){{{min_repeats},}}", sequence):
+            s, e = match.start(), match.end()
+            if cur is not None and s - cur[1] <= max_gap:
+                cur[1] = e
+                cur[2] += e - s
+                continue
+            if cur is not None:
+                arrays.append((cur[0] + offset, cur[1] + offset, cur[2], strand))
+            cur = [s, e, e - s]
+        if cur is not None:
+            arrays.append((cur[0] + offset, cur[1] + offset, cur[2], strand))
+    return sorted(arrays)
 
 
 def detect_telomeres_single(

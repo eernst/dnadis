@@ -3,7 +3,8 @@
 
 Removes files that no later step reads and that a rerun recreates cheaply
 (copies of the input split by class, BLAST databases, RagTag work
-directories, compleasm's raw miniprot/hmmsearch output).  Keeps everything
+directories, compleasm's raw miniprot/hmmsearch output, ``misjoin identify``
+alignments).  Keeps everything
 the reports, comparison, phylogeny and rerun caches rely on: compleasm
 summaries, full tables and translated proteins; read-depth regions and their
 cache metadata; synteny PAFs; small cached alignment and centrifuger results.
@@ -157,6 +158,10 @@ def build_plan(
     pairwise = results_dir / "pairwise"
     if pairwise.is_dir():
         plan.add("pairwise PAFs", pairwise.rglob("*.paf.gz"))
+
+    misjoin = results_dir / "misjoin_work"
+    if misjoin.is_dir():
+        plan.add("misjoin alignments", [*misjoin.glob("*.fa"), misjoin / "paf"])
 
     if sister_anchors:
         sister = results_dir / "sister_anchoring"
