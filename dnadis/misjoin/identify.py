@@ -106,7 +106,7 @@ COLUMNS = [
     "n_sister_units", "n_carry", "n_nearby", "n_carry_same_genotype", "n_spans", "n_contradict",
     "n_ends", "n_absent",
     "carriers", "nearby", "same_genotype_carriers", "contradictors",
-    "reads_split", "reads_split_pos", "reads_spanning",
+    "reads_split", "reads_split_pos", "reads_split_through", "reads_spanning",
     "partner_junction", "flags", "evidence",
 ]
 
@@ -339,12 +339,17 @@ def mark_short_inserts(calls: Sequence[JunctionCall], max_bp: int) -> None:
 
 
 def mark_tandem(jc: JunctionCall, seq: Optional[str], p: rd.ReadParams) -> None:
-    """Record the tandem array at each break (scaffold gaps excepted)."""
+    """Record the tandem array at each break (scaffold gaps excepted): at
+    its position, else at an end of its interval, where sister alignments
+    stop at an array the junction lies in."""
     if seq is None:
         return
     for b in jc.breaks:
         if b.kind != "scaffold_gap":
-            b.tandem = rd.tandem_run(seq, b.pos, p)
+            for x in dict.fromkeys((b.pos, b.lo, b.hi)):
+                b.tandem = rd.tandem_run(seq, x, p)
+                if b.tandem:
+                    break
     if any(b.tandem for b in jc.breaks):
         jc.flags.append("tandem_repeat")
 
@@ -398,9 +403,9 @@ def apply_reads(jc: JunctionCall, evs: List[Optional[rd.ReadEvidence]], p: rd.Re
     seen = [e for b, e in zip(jc.breaks, evs) if e is not None and b.kind != "scaffold_gap"]
     if not seen:
         return
-    split = min(e.split_reads for e in seen)
+    split = all(e.split_supported(p) for e in seen)
     span = max(e.spanning for e in seen)
-    if split >= p.min_split and span >= 2:
+    if split and span >= 2:
         # reads both leave and cross the junction (two haplotypes, or reads
         # from another copy of a repeat): the break is not confirmed
         if jc.action == "break":
@@ -409,12 +414,16 @@ def apply_reads(jc: JunctionCall, evs: List[Optional[rd.ReadEvidence]], p: rd.Re
         jc.flags.append("reads_mixed")
         return
     for b, e in zip(jc.breaks, evs):
-        if b.kind != "scaffold_gap" and e and e.split_pos is not None and e.split_reads >= p.min_split:
+        if b.kind != "scaffold_gap" and e and e.split_pos is not None and e.split_supported(p):
             b.pos = e.split_pos
             b.lo, b.hi = min(b.lo, b.pos), max(b.hi, b.pos)
-    if split >= p.min_split:
-        jc.action = "break"
-        jc.confidence = "high"
+    if split:
+        # independent assemblies carry the join: reads ending at it may come
+        # from a second arrangement in the sample, so it is not broken
+        if jc.call == "sister_supported":
+            jc.action, jc.confidence = "review", "low"
+        else:
+            jc.action, jc.confidence = "break", "high"
         jc.flags.append("reads_split")
     elif span >= p.min_spanning:
         jc.action = "keep"
@@ -462,7 +471,8 @@ def _evidence_text(jc: JunctionCall) -> str:
     seen = [e for e in jc.reads if e is not None]
     if seen:
         parts.append("reads: " + "; ".join(
-            f"{e.split_reads} split, {e.spanning} spanning" for e in seen))
+            f"{e.split_reads} split ({e.split_through} through), {e.spanning} spanning"
+            for e in seen))
     return "; ".join(parts)
 
 
@@ -525,6 +535,7 @@ def call_rows(jc: JunctionCall) -> List[Dict[str, str]]:
             "contradictors": names("contradicts"),
             "reads_split": ev.split_reads if ev else None,
             "reads_split_pos": ev.split_pos if ev else None,
+            "reads_split_through": ev.split_through if ev and ev.split_pos is not None else None,
             "reads_spanning": ev.spanning if ev else None,
             "partner_junction": jc.partner,
             "flags": ",".join(jc.flags),
@@ -839,9 +850,12 @@ def identify(
             if bam is not None:
                 evs = []
                 for b in jc.breaks:
-                    span = (jc.core[1], jc.core[2]) if b.kind != "single" and jc.core else (b.pos, b.pos)
+                    # a single break: reads through every point of its interval;
+                    # a repeat break: reads across the whole shared segment
+                    whole = b.kind != "single" and jc.core is not None
+                    span = (jc.core[1], jc.core[2]) if whole else (b.lo, b.hi)
                     evs.append(rd.read_evidence(bam, j.contig, b.lo, b.hi, span[0], span[1],
-                                                params.reads, b.tandem))
+                                                params.reads, b.tandem, whole))
                 apply_reads(jc, evs, params.reads)
         if bam is not None:
             bam.close()

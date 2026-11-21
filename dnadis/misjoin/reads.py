@@ -6,11 +6,16 @@ examined around each break:
 * clipped alignment ends (primary or supplementary, MAPQ >= ``min_mapq``,
   clip >= ``min_clip``) inside the break interval, grouped by position
   (consecutive ends within ``bin_bp``); the largest group is the read-derived
-  break position.
-* spanning reads: primary alignments (MAPQ >= ``min_mapq``) that cover the
-  break, or the whole shared segment of a repeat break, with ``flank`` bp of
-  sequence on each side.  Uniquely placed reads through the point show that
-  the sequence is contiguous in the sample.
+  break position.  It is evidence of a break only when its reads are at least
+  ``min_split_share`` of the reads there (those ending in it plus those
+  running through its position): in repeats, reads from other copies end
+  where their copy differs while most reads run through.
+* spanning reads: primary alignments (MAPQ >= ``min_mapq``) through the
+  break with ``flank`` bp of sequence on each side.  For a single break the
+  count is the fewest reads through any point of its interval, since a
+  junction can lie anywhere in it; a repeat break needs reads that cover
+  the whole shared segment.  Uniquely placed reads through a point show that
+  the sequence is contiguous there in the sample.
 
 Inside a tandem array (``tandem_run()``: k-mers recurring within a few kb,
 from the contig sequence) reads from other arrays of the same repeat align
@@ -36,6 +41,7 @@ class ReadParams:
     flank: int = 2_000
     min_split: int = 3
     min_spanning: int = 3
+    min_split_share: float = 0.5
     tandem_k: int = 21
     tandem_bin: int = 1_000
     tandem_window: int = 10_000
@@ -48,7 +54,13 @@ class ReadParams:
 class ReadEvidence:
     split_reads: int = 0
     split_pos: Optional[int] = None
+    split_through: int = 0          # reads running through split_pos
     spanning: int = 0
+
+    def split_supported(self, p: "ReadParams") -> bool:
+        """Whether the clipped-end cluster is evidence of a break."""
+        n = self.split_reads
+        return n >= p.min_split and n >= p.min_split_share * (n + self.split_through)
 
 
 def _clip_ends(aln) -> List[Tuple[int, int]]:
@@ -137,17 +149,45 @@ def split_clusters(
     return out
 
 
-def spanning_reads(bam, contig: str, lo: int, hi: int, p: ReadParams) -> int:
-    """Primary reads covering [lo, hi] with *flank* bp on each side."""
-    n = 0
+def _through(bam, contig: str, lo: int, hi: int, p: ReadParams) -> List[Tuple[int, int]]:
+    """For primary reads overlapping [lo, hi]: the positions each runs
+    through with *flank* bp on both sides, as closed intervals."""
+    out = []
     for r in bam.fetch(contig, max(0, lo - 1), hi + 1):
         if r.is_secondary or r.is_supplementary or r.is_unmapped:
             continue
         if r.mapping_quality < p.min_mapq:
             continue
-        if r.reference_start <= lo - p.flank and r.reference_end >= hi + p.flank:
-            n += 1
-    return n
+        a, b = r.reference_start + p.flank, r.reference_end - p.flank
+        if a <= b:
+            out.append((a, b))
+    return out
+
+
+def spanning_reads(bam, contig: str, lo: int, hi: int, p: ReadParams) -> int:
+    """Primary reads covering [lo, hi] with *flank* bp on each side."""
+    return sum(1 for a, b in _through(bam, contig, lo, hi, p) if a <= lo and b >= hi)
+
+
+def tiled_reads(bam, contig: str, lo: int, hi: int, p: ReadParams) -> int:
+    """The fewest reads running through any point of [lo, hi] (with *flank*
+    bp on both sides of the point)."""
+    events: Counter = Counter()
+    for a, b in _through(bam, contig, lo, hi, p):
+        a, b = max(a, lo), min(b, hi)
+        if a <= b:
+            events[a] += 1
+            events[b + 1] -= 1
+    keys = sorted(k for k in events if k <= hi)
+    if not keys or keys[0] > lo:
+        return 0
+    depth, least = 0, None
+    for i, k in enumerate(keys):
+        depth += events[k]
+        nxt = keys[i + 1] if i + 1 < len(keys) else hi + 1
+        if nxt > k:                     # depth holds on [k, nxt - 1]
+            least = depth if least is None else min(least, depth)
+    return least or 0
 
 
 def open_alignments(path: Path, reference: Optional[Path] = None):
@@ -160,12 +200,14 @@ def open_alignments(path: Path, reference: Optional[Path] = None):
 
 def read_evidence(
     bam, contig: str, lo: int, hi: int, span_lo: int, span_hi: int, p: ReadParams,
-    repeat: Optional[Tuple[int, int]] = None,
+    repeat: Optional[Tuple[int, int]] = None, whole: bool = False,
 ) -> Optional[ReadEvidence]:
-    """Split reads in [lo, hi]; reads spanning [span_lo, span_hi].
+    """Split reads in [lo, hi]; reads through [span_lo, span_hi].
 
-    With *repeat* (a tandem array at the break), spanning reads must cover
-    the array too, and clipped ends inside it are not counted.  Returns None
+    Spanning reads are the fewest through any point of [span_lo, span_hi],
+    or with *whole* (a shared repeat segment) those covering all of it.
+    With *repeat* (a tandem array at the break) they must also cover the
+    whole array, and clipped ends inside it are not counted.  Returns None
     when *contig* is not in the alignment file.
     """
     if contig not in bam.references:
@@ -176,7 +218,13 @@ def read_evidence(
         pos, group = clusters[0]
         ev.split_reads = len({n for _, n in group})
         ev.split_pos = pos
-    if repeat:
-        span_lo, span_hi = min(span_lo, repeat[0]), max(span_hi, repeat[1])
-    ev.spanning = spanning_reads(bam, contig, span_lo, span_hi, p)
+        ev.split_through = spanning_reads(bam, contig, pos, pos, p)
+    if whole:
+        if repeat:
+            span_lo, span_hi = min(span_lo, repeat[0]), max(span_hi, repeat[1])
+        ev.spanning = spanning_reads(bam, contig, span_lo, span_hi, p)
+    else:
+        ev.spanning = tiled_reads(bam, contig, span_lo, span_hi, p)
+        if repeat:
+            ev.spanning = min(ev.spanning, spanning_reads(bam, contig, *repeat, p))
     return ev

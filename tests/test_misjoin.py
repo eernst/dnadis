@@ -687,6 +687,83 @@ def test_read_evidence_from_bam(tmp_path):
     assert rd.read_evidence(bam, "other", 0, 1, 0, 1, rd.ReadParams()) is None
 
 
+
+def _write_bam(path, reads, length=200_000):
+    """Indexed BAM of (name, start, cigar) primary alignments at MAPQ 60."""
+    pysam = pytest.importorskip("pysam")
+    header = {"HD": {"VN": "1.6", "SO": "coordinate"}, "SQ": [{"SN": "ctg", "LN": length}]}
+    with pysam.AlignmentFile(str(path), "wb", header=header) as out:
+        for name, start, cigar in sorted(reads, key=lambda x: x[1]):
+            a = pysam.AlignedSegment()
+            a.query_name = name
+            a.query_sequence = "A" * sum(n for op, n in cigar if op in (0, 4))
+            a.reference_id = 0
+            a.reference_start = start
+            a.cigartuples = cigar
+            a.mapping_quality = 60
+            out.write(a)
+    pysam.index(str(path))
+    return rd.open_alignments(path)
+
+
+def test_tiled_reads_need_every_point_of_the_interval(tmp_path):
+    # reads tile 50-150 kb, three deep, except for a stretch at 100-110 kb
+    # that only one read runs through
+    reads = [(f"r{k}{s}", s + k * 100, [(0, 20_000)])
+             for s in range(40_000, 150_000, 10_000) for k in range(3)
+             if not 90_000 <= s <= 100_000]
+    reads.append(("one", 95_000, [(0, 20_000)]))
+    bam = _write_bam(tmp_path / "t.bam", reads)
+    p = rd.ReadParams()
+    assert rd.tiled_reads(bam, "ctg", 60_000, 80_000, p) >= 3
+    assert rd.tiled_reads(bam, "ctg", 60_000, 140_000, p) == 1
+    assert rd.tiled_reads(bam, "ctg", 190_000, 195_000, p) == 0
+    ev = rd.read_evidence(bam, "ctg", 60_000, 140_000, 60_000, 140_000, p)
+    assert ev.spanning == 1
+    # the shared-segment rule: one read across all of it
+    ev = rd.read_evidence(bam, "ctg", 60_000, 80_000, 60_000, 80_000, p, whole=True)
+    assert ev.spanning == 0
+
+
+def test_split_cluster_with_reads_running_through_is_not_a_break(tmp_path):
+    # five reads end at 50 kb (clipped); 12 run through it
+    reads = [(f"split{k}", 40_000 + k * 10, [(0, 10_000 - k * 10), (4, 3_000)]) for k in range(5)]
+    reads += [(f"through{k}", 44_000 + k * 100, [(0, 12_000)]) for k in range(12)]
+    bam = _write_bam(tmp_path / "s.bam", reads)
+    p = rd.ReadParams()
+    ev = rd.read_evidence(bam, "ctg", 49_000, 51_000, 49_000, 51_000, p)
+    assert (ev.split_reads, ev.split_pos, ev.split_through) == (5, 50_000, 12)
+    assert not ev.split_supported(p)
+    assert rd.ReadEvidence(split_reads=5, split_through=4).split_supported(p)
+    # sisters call a misjoin; the reads neither confirm nor refute it
+    jc = idf.decide("asm", _junction(), _units(["contradicts"] * 3), idf.IdentifyParams(), [])
+    jc.breaks[0].lo, jc.breaks[0].hi = 2_900_000, 3_000_000
+    idf.apply_reads(jc, [rd.ReadEvidence(split_reads=80, split_pos=2_920_000,
+                                         split_through=120, spanning=0)], p)
+    assert jc.action == "break" and jc.breaks[0].pos == 2_950_000
+    assert not {"reads_split", "reads_mixed", "reads_span"} & set(jc.flags)
+
+
+def test_reads_do_not_break_a_sister_supported_join():
+    jc = idf.decide("asm", _junction(), _units(["carries"] * 3), idf.IdentifyParams(), [])
+    idf.apply_reads(jc, [rd.ReadEvidence(split_reads=12, split_pos=2_950_000, spanning=0)],
+                    rd.ReadParams())
+    assert (jc.action, jc.confidence) == ("review", "low") and "reads_split" in jc.flags
+
+
+def test_mark_tandem_finds_an_array_at_the_interval_end():
+    seq = _array_contig()            # array at 30,000-70,160
+    jc = idf.decide("asm", _junction(), _units(["contradicts"] * 3), idf.IdentifyParams(), [])
+    b = jc.breaks[0]
+    b.pos, b.lo, b.hi = 10_000, 5_000, 31_000
+    idf.mark_tandem(jc, seq, rd.ReadParams())
+    assert b.tandem is not None and b.tandem[0] <= 31_000 and "tandem_repeat" in jc.flags
+    b.tandem, b.hi = None, 20_000
+    jc.flags.remove("tandem_repeat")
+    idf.mark_tandem(jc, seq, rd.ReadParams())
+    assert b.tandem is None and "tandem_repeat" not in jc.flags
+
+
 # ---------------------------------------------------------------------------
 # Breaking
 # ---------------------------------------------------------------------------

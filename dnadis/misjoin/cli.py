@@ -115,6 +115,9 @@ def _identify_parser(sub) -> None:
     g.add_argument("--min-clip", type=int, default=r.min_clip)
     g.add_argument("--min-split", type=int, default=r.min_split,
                    help="split reads that confirm a break")
+    g.add_argument("--min-split-share", type=float, default=r.min_split_share,
+                   help="share of the reads at a split-read cluster that must end there "
+                        "(the rest run through its position)")
     g.add_argument("--min-spanning", type=int, default=r.min_spanning,
                    help="spanning reads that refute a break")
     p.add_argument("-v", "--verbose", action="store_true")
@@ -196,6 +199,7 @@ def run_identify(args) -> int:
     params.reads.min_clip = args.min_clip
     params.reads.min_split = args.min_split
     params.reads.min_spanning = args.min_spanning
+    params.reads.min_split_share = args.min_split_share
 
     work = args.work_dir or (args.results_dir / "misjoin_work")
     calls = idf.identify(inputs, work, params, threads=args.threads, jobs=args.jobs,
