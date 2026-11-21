@@ -240,7 +240,8 @@ class ContigClassification:
     redundancy_cov: Optional[float] = None  # fraction of this contig in that region
     redundancy_identity: Optional[float] = None  # gap-compressed identity there
     target_depth_ratio: Optional[float] = None  # median depth of the region / baseline
-    # Why scaffolding kept this contig out of joins (own_assembly_copy); None otherwise
+    # Why scaffolding kept this contig out of joins (own_assembly_copy,
+    # chimeric_fragment, gap_ambiguous, no_gap_bracket); None otherwise
     scaffold_exclusion: Optional[str] = None
     # Sister-assembly anchoring (multi-assembly second pass; None when not a candidate)
     sister_decision: Optional[str] = None  # assigned, reassigned, confirmed, conflict_keep_ref, no_call_*, no_vote

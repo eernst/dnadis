@@ -20,6 +20,30 @@ def _denormalize_ref_id(ref_id: str, ref_norm_to_orig: Optional[Dict[str, str]])
     return ref_norm_to_orig.get(ref_id, ref_id)
 
 
+def chimera_fractions(
+    total_aligned_bp: int,
+    n_ref_hits: int,
+    best_union_bp: int,
+    second_union_bp: int,
+    primary_frac_max: float,
+    secondary_frac_min: float,
+) -> Optional[Tuple[float, float]]:
+    """(primary_frac, secondary_frac) of a chimeric contig, or None.
+
+    A contig is chimeric (the ``chimeric`` column) when it has evidence on
+    more than one reference, its best reference holds less than
+    ``primary_frac_max`` of its aligned bp, and the second at least
+    ``secondary_frac_min`` (``--chimera-primary-frac``/``--chimera-secondary-frac``).
+    """
+    if total_aligned_bp <= 0 or n_ref_hits <= 1:
+        return None
+    primary_frac = best_union_bp / total_aligned_bp
+    secondary_frac = second_union_bp / total_aligned_bp
+    if primary_frac < float(primary_frac_max) and secondary_frac >= float(secondary_frac_min):
+        return primary_frac, secondary_frac
+    return None
+
+
 def _ref_fields_for_output(
     ref_id: str,
     ref_norm_to_orig: Optional[Dict[str, str]],
@@ -272,12 +296,13 @@ def write_contig_summary_tsv(
 
             chimeric = "no"
             chimera_reason = ""
-            if total_aligned_bp > 0 and n_ref_hits > 1:
-                primary_frac = (best_union_bp / total_aligned_bp) if total_aligned_bp > 0 else 0.0
-                secondary_frac = (second_union_bp / total_aligned_bp) if total_aligned_bp > 0 else 0.0
-                if (primary_frac < float(chimera_primary_frac)) and (secondary_frac >= float(chimera_secondary_frac)):
-                    chimeric = "yes"
-                    chimera_reason = f"primary_frac={primary_frac:.3f},secondary_frac={secondary_frac:.3f}"
+            fracs = chimera_fractions(
+                total_aligned_bp, n_ref_hits, best_union_bp, second_union_bp,
+                chimera_primary_frac, chimera_secondary_frac,
+            )
+            if fracs is not None:
+                chimeric = "yes"
+                chimera_reason = f"primary_frac={fracs[0]:.3f},secondary_frac={fracs[1]:.3f}"
 
             # Classification columns
             original_name = q
@@ -733,15 +758,15 @@ def compute_summary(
                 elif score_ratio < float(assign_min_ratio):
                     status = "AMBIG_LOW_RATIO"
 
-            # Chimeric flag based on union_bp fractions across refs (same logic as before)
             chimeric = "no"
             chimera_reason = ""
-            if total_aligned_bp > 0 and n_ref_hits > 1:
-                primary_frac = (best_union_bp / total_aligned_bp) if total_aligned_bp > 0 else 0.0
-                secondary_frac = (second_union_bp / total_aligned_bp) if total_aligned_bp > 0 else 0.0
-                if (primary_frac < float(chimera_primary_frac)) and (secondary_frac >= float(chimera_secondary_frac)):
-                    chimeric = "yes"
-                    chimera_reason = f"primary_frac={primary_frac:.3f},secondary_frac={secondary_frac:.3f}"
+            fracs = chimera_fractions(
+                total_aligned_bp, n_ref_hits, best_union_bp, second_union_bp,
+                chimera_primary_frac, chimera_secondary_frac,
+            )
+            if fracs is not None:
+                chimeric = "yes"
+                chimera_reason = f"primary_frac={fracs[0]:.3f},secondary_frac={fracs[1]:.3f}"
 
             out.write(
                 "\t".join(

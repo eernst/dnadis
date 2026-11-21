@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from dnadis.models import ContigClassification
-from dnadis.utils.io_utils import have_exe
+from dnadis.utils.io_utils import have_exe, merge_intervals
 from dnadis.utils.logging_config import get_logger
 from dnadis.utils.sequence_utils import (
     read_fasta_sequences,
@@ -208,6 +208,13 @@ BRACKET_SLACK = 50_000
 # on the reference.
 MIN_FLANK_BP = 20_000
 
+# A fragment with at least this much of its sequence in macro blocks on other
+# reference chromosomes (and in none on the group's) is not placed into a
+# gap, since placing it would insert that sequence into the chromosome.  It
+# equals BRACKET_SLACK: off-target sequence shorter than that is within the
+# reference imprecision placement accepts at each side of a gap.
+OFF_TARGET_MAX_BP = BRACKET_SLACK
+
 
 @dataclass(frozen=True)
 class _RefBlock:
@@ -342,6 +349,21 @@ def _dominant_strand(blocks: List[_RefBlock]) -> str:
     return "+" if plus >= minus else "-"
 
 
+def _off_target_bp(blocks_by_ref: Dict[str, List[_RefBlock]], ref_id: str) -> int:
+    """Contig bp in macro blocks on references other than ``ref_id`` and in
+    none on ``ref_id`` (block spans on the contig), from one contig's blocks
+    by reference."""
+    own = [(b.qstart, b.qend) for b in blocks_by_ref.get(ref_id, ())]
+    other = [
+        (b.qstart, b.qend)
+        for r, blocks in blocks_by_ref.items() if r != ref_id
+        for b in blocks
+    ]
+    if not other:
+        return 0
+    return merge_intervals(own + other)[1] - merge_intervals(own)[1]
+
+
 def _place_fragments_in_gaps(
     anchors: List[str],
     fragments: List[str],
@@ -349,8 +371,14 @@ def _place_fragments_in_gaps(
     query_gaps: Dict[str, List[Tuple[int, int]]],
     ref_blocks: Dict[Tuple[str, str], List[_RefBlock]],
     query_lengths: Dict[str, int],
+    chimeric: Optional[Set[str]] = None,
 ) -> Tuple[Dict[str, List[_Part]], Dict[str, str], Dict[str, str]]:
     """Place fragments into the input scaffold gaps of anchor contigs.
+
+    Fragments in ``chimeric`` (the contig_summary ``chimeric`` flag), and
+    fragments with at least ``OFF_TARGET_MAX_BP`` in macro blocks on other
+    references only (``_off_target_bp``), are not placed: their sequence
+    from other chromosomes would be inserted with them.
 
     A fragment's reference footprint on ``ref_id`` runs from its first to its
     last macro block, and its strand is the dominant one.  It is placed into
@@ -374,8 +402,9 @@ def _place_fragments_in_gaps(
         (composites, placed, unplaced) where ``composites`` maps an anchor to
         its parts with fragments in its gaps, ``placed`` maps each placed
         fragment to a log description, and ``unplaced`` maps each fragment
-        that was not placed to ``gap_ambiguous`` (it fits several gaps, or
-        overlaps another fragment fitting the same gap) or ``no_gap_bracket``.
+        that was not placed to ``chimeric_fragment``, ``gap_ambiguous`` (it
+        fits several gaps, or overlaps another fragment fitting the same gap)
+        or ``no_gap_bracket``.
     """
     brackets: List[_GapBracket] = []
     for anchor in anchors:
@@ -391,7 +420,22 @@ def _place_fragments_in_gaps(
         defaultdict(list)
     )
     bracket_of: Dict[Tuple[str, Tuple[int, int]], _GapBracket] = {}
+    chimeric = chimeric or set()
+    frag_set = set(fragments)
+    frag_blocks: Dict[str, Dict[str, List[_RefBlock]]] = defaultdict(dict)
+    for (contig, ref), blocks in ref_blocks.items():
+        if contig in frag_set:
+            frag_blocks[contig][ref] = blocks
     for frag in fragments:
+        off_target = _off_target_bp(frag_blocks.get(frag, {}), ref_id)
+        if frag in chimeric or off_target >= OFF_TARGET_MAX_BP:
+            unplaced[frag] = "chimeric_fragment"
+            logger.info(
+                f"Not placing {frag} into a gap: "
+                + ("flagged chimeric" if frag in chimeric else
+                   f"{off_target:,} bp aligned only to other references")
+            )
+            continue
         blocks = ref_blocks.get((frag, ref_id), [])
         hits = []
         if blocks:
@@ -1088,6 +1132,7 @@ def scaffold_chromosomes(
     no_join: Optional[Set[str]] = None,
     query_gaps: Optional[Dict[str, List[Tuple[int, int]]]] = None,
     macro_block_rows=None,
+    chimeric: Optional[Set[str]] = None,
 ) -> Tuple[Dict[str, str], List[str], Dict[str, Tuple[float, float, float]]]:
     """Produce scaffolded chromosome pseudomolecules.
 
@@ -1130,6 +1175,8 @@ def scaffold_chromosomes(
             a gap.
         macro_block_rows: Macro block tuples from chain parsing, which give
             the reference positions of gap flanks and fragments.
+        chimeric: Contigs flagged ``chimeric`` in contig_summary; they are
+            not placed into gaps.
 
     Returns:
         Tuple of (scaffolded_sequences, agp_lines, scaffold_confidences) where:
@@ -1213,6 +1260,7 @@ def scaffold_chromosomes(
                 continue
             fills, placed, unplaced = _place_fragments_in_gaps(
                 gapped, fragments, ref_id, query_gaps, ref_blocks, query_lengths,
+                chimeric=chimeric,
             )
             composites.update(fills)
             gap_unplaced.update(unplaced)
@@ -1300,11 +1348,13 @@ def scaffold_chromosomes(
                 if contig in gap_unplaced:
                     clf_lookup[contig].scaffold_exclusion = gap_unplaced[contig]
             if dropped:
-                n_gap = sum(1 for c in dropped if c in gap_unplaced)
-                reason = (
-                    f"T2T copy exists; {n_gap} fit no single input gap"
-                    if n_gap else "T2T copy exists"
-                )
+                n_chim = sum(1 for c in dropped if gap_unplaced.get(c) == "chimeric_fragment")
+                n_gap = sum(1 for c in dropped if c in gap_unplaced) - n_chim
+                reason = "T2T copy exists"
+                if n_gap:
+                    reason += f"; {n_gap} fit no single input gap"
+                if n_chim:
+                    reason += f"; {n_chim} chimeric"
                 logger.info(
                     f"{scaffold_name}: leaving {len(dropped)} fragment contig(s) "
                     f"unplaced ({reason})"

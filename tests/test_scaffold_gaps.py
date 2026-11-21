@@ -7,6 +7,8 @@ from dnadis.models import ContigClassification
 from dnadis.output import scaffolding
 from dnadis.output.scaffolding import (
     BRACKET_SLACK,
+    OFF_TARGET_MAX_BP,
+    _off_target_bp,
     _gap_bracket,
     _index_ref_blocks,
     _place_fragments_in_gaps,
@@ -15,14 +17,15 @@ from dnadis.output.scaffolding import (
     orientations_from_agp,
     scaffold_chromosomes,
 )
+from dnadis.output.tsv_output import chimera_fractions
 from dnadis.utils.sequence_utils import reverse_complement
 
 REF = "chr1A"
 
 
-def _row(contig, strand, qstart, qend, ref_start, ref_end, bp=100_000):
+def _row(contig, strand, qstart, qend, ref_start, ref_end, bp=100_000, ref=REF):
     """A 19-field macro block tuple as chain parsing writes it."""
-    return (contig, 0, REF, "chr1", "A", strand, 1, qstart, qend, qend - qstart,
+    return (contig, 0, ref, ref[:-1], ref[-1], strand, 1, qstart, qend, qend - qstart,
             bp, 0, 0, 0.9, 0.0, 1, 0, ref_start, ref_end)
 
 
@@ -114,10 +117,10 @@ def test_fit_with_flanks_on_opposite_strands():
 
 # --- Placement ---------------------------------------------------------------
 
-def _place(anchor_rows, frag_rows, gaps, lengths):
+def _place(anchor_rows, frag_rows, gaps, lengths, chimeric=None):
     blocks = _index_ref_blocks(anchor_rows + frag_rows)
     frags = sorted({r[0] for r in frag_rows} | {f for f in lengths if f != "a"})
-    return _place_fragments_in_gaps(["a"], frags, REF, gaps, blocks, lengths)
+    return _place_fragments_in_gaps(["a"], frags, REF, gaps, blocks, lengths, chimeric=chimeric)
 
 
 def test_fragment_placed_into_its_gap():
@@ -189,6 +192,79 @@ def test_fragments_beside_opposite_strand_flanks_keep_flank_order():
     ]
 
 
+# --- Fragments with sequence from other chromosomes --------------------------
+
+# Anchor "a" with one gap; reference 1.95-2.25 Mb lies between its flanks.
+_ANCHOR = [
+    _row("a", "+", 0, 900_000, 1_000_000, 1_900_000),
+    _row("a", "+", 1_100_000, 2_000_000, 2_300_000, 3_000_000),
+]
+_ANCHOR_GAPS = {"a": [(1_000_000, 1_000_100)]}
+
+
+def _fitting_fragment(length=400_000):
+    """A fragment whose first 300 kb fits the anchor's gap."""
+    return [_row("f", "+", 0, 300_000, 1_950_000, 2_250_000)], {"a": 2_000_000, "f": length}
+
+
+def test_off_target_bp_counts_sequence_on_other_references_only():
+    rows, _ = _fitting_fragment()
+    rows += [
+        _row("f", "+", 300_000, 330_000, 0, 30_000, ref="chr5A"),
+        _row("f", "-", 340_000, 380_000, 0, 40_000, ref="chr9B"),
+        # Aligned to another reference where it also aligns to its own (a
+        # homeolog): not off-target.
+        _row("f", "+", 0, 200_000, 1_950_000, 2_150_000, ref="chr1B"),
+        # Overlaps the chr5A block: counted once.
+        _row("f", "+", 320_000, 335_000, 500_000, 515_000, ref="chr2A"),
+    ]
+    by_ref = {ref: blocks for (_, ref), blocks in _index_ref_blocks(rows).items()}
+    assert _off_target_bp(by_ref, REF) == 35_000 + 40_000
+    assert _off_target_bp({REF: by_ref[REF]}, REF) == 0
+
+
+def test_fragment_with_other_chromosome_pieces_is_not_placed():
+    # Pieces between the fragment's internal gaps map to two other
+    # references, together above the limit.
+    rows, lengths = _fitting_fragment()
+    rows += [
+        _row("f", "+", 300_000, 330_000, 0, 30_000, ref="chr5A"),
+        _row("f", "-", 350_000, 380_000, 0, 30_000, ref="chr9B"),
+    ]
+    comps, placed, unplaced = _place(_ANCHOR, rows, _ANCHOR_GAPS, lengths)
+    assert comps == {} and placed == {}
+    assert unplaced == {"f": "chimeric_fragment"}
+
+
+def test_off_target_end_block_at_the_limit_is_not_placed():
+    # A gapless fragment whose end, which would face the gap flank, maps to
+    # another reference.
+    rows, lengths = _fitting_fragment()
+    end = [_row("f", "+", 300_000, 300_000 + OFF_TARGET_MAX_BP, 0, OFF_TARGET_MAX_BP, ref="chr5A")]
+    _, placed, unplaced = _place(_ANCHOR, rows + end, _ANCHOR_GAPS, lengths)
+    assert placed == {} and unplaced == {"f": "chimeric_fragment"}
+    # Just below the limit, it is placed.
+    end = [_row("f", "+", 300_000, 299_999 + OFF_TARGET_MAX_BP, 0, OFF_TARGET_MAX_BP, ref="chr5A")]
+    _, placed, unplaced = _place(_ANCHOR, rows + end, _ANCHOR_GAPS, lengths)
+    assert set(placed) == {"f"} and unplaced == {}
+
+
+def test_chimeric_flag_keeps_fragment_out_of_gaps():
+    rows, lengths = _fitting_fragment()
+    comps, placed, unplaced = _place(_ANCHOR, rows, _ANCHOR_GAPS, lengths, chimeric={"f"})
+    assert comps == {} and placed == {}
+    assert unplaced == {"f": "chimeric_fragment"}
+
+
+def test_chimera_fractions():
+    # Best reference 70% of aligned bp, second 25%: chimeric.
+    assert chimera_fractions(1_000, 2, 700, 250, 0.8, 0.2) == (0.7, 0.25)
+    # Second reference below its minimum, or a single reference: not.
+    assert chimera_fractions(1_000, 2, 700, 150, 0.8, 0.2) is None
+    assert chimera_fractions(1_000, 1, 500, 0, 0.8, 0.2) is None
+    assert chimera_fractions(0, 2, 0, 0, 0.8, 0.2) is None
+
+
 # --- Scaffolds ---------------------------------------------------------------
 
 def _gapped_inputs(tmp_path, t2t=True):
@@ -258,6 +334,20 @@ def test_t2t_scaffold_with_fragment_in_its_gap(tmp_path, monkeypatch):
     )
     assert scaffolded["chr1A"] == reverse_complement(filled)
     assert orientations_from_agp(agp) == {"a": True, "f": False, "g": False}
+
+
+def test_t2t_scaffold_keeps_chimeric_fragment_out_of_its_gap(tmp_path, monkeypatch):
+    monkeypatch.setattr(scaffolding, "have_exe", lambda exe: False)
+    seqs, clfs, kwargs = _gapped_inputs(tmp_path)
+    scaffolded, agp, _ = scaffold_chromosomes(
+        contig_orientations={"a": False, "f": False, "g": False},
+        work_dir=tmp_path / "s", chimeric={"f"}, **kwargs,
+    )
+    # The gap stays open; the fragment is written on its own.
+    assert scaffolded == {"chr1A": seqs["a"], "chr1A_f1": seqs["f"], "chr1A_f2": seqs["g"]}
+    assert {c.original_name: c.scaffold_exclusion for c in clfs} == {
+        "a": None, "f": "chimeric_fragment", "g": "no_gap_bracket",
+    }
 
 
 def test_gapless_t2t_is_unchanged(tmp_path, monkeypatch):

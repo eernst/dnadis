@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from dnadis.utils.reference_utils import is_nuclear_chromosome
+from dnadis.output.tsv_output import chimera_fractions
 from dnadis.models import (
     AssemblyResult,
     ChromRefSummary,
@@ -219,15 +220,14 @@ def build_assembly_result(
     n_chimeric = 0
     for clf in chrom_assigned:
         q = clf.original_name
-        total_aligned_bp = int(ev.contig_total.get(q, 0) or 0)
-        n_ref_hits = len(ev.contig_refs.get(q, set()) or set())
-        if total_aligned_bp > 0 and n_ref_hits > 1:
-            best_union_bp = int(ev.best_bp.get(q, 0) or 0)
-            second_union_bp = int(ev.second_bp.get(q, 0) or 0)
-            primary_frac = best_union_bp / total_aligned_bp
-            secondary_frac = second_union_bp / total_aligned_bp
-            if primary_frac < chimera_primary_frac and secondary_frac >= chimera_secondary_frac:
-                n_chimeric += 1
+        if chimera_fractions(
+            int(ev.contig_total.get(q, 0) or 0),
+            len(ev.contig_refs.get(q, set()) or set()),
+            int(ev.best_bp.get(q, 0) or 0),
+            int(ev.second_bp.get(q, 0) or 0),
+            chimera_primary_frac, chimera_secondary_frac,
+        ) is not None:
+            n_chimeric += 1
 
     # --- Quality metrics (chrom_assigned) ---
     identities = [c.seq_identity_vs_ref for c in chrom_assigned if c.seq_identity_vs_ref is not None]
